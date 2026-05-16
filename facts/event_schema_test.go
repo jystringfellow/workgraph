@@ -3,7 +3,7 @@ package facts
 import "testing"
 
 func TestEventRequiresIDSourceTypeTimestampPayload(t *testing.T) {
-	t.Skip("TBD: events require id, source, type, timestamp, and payload")
+	t.Skip("TBD: events require id, source, type, timestamp, and payload_json")
 }
 
 func TestEventCanIncludeProjectActorAndSummary(t *testing.T) {
@@ -16,4 +16,8 @@ func TestCanInsertAndReadEvent(t *testing.T) {
 
 func TestEventPayloadMustBeValidJSON(t *testing.T) {
 	t.Skip("TBD: event payload_json must be valid JSON")
+}
+
+func TestEventTimestampUsesRFC3339(t *testing.T) {
+	t.Skip("TBD: event timestamp uses RFC3339")
 }

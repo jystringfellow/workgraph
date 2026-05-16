@@ -12,6 +12,8 @@ The goal is not merely productivity tracking. WorkGraph is meant to become infra
 - `features/` describes user-visible behavior.
 - `facts/` contains executable facts that define what must not regress.
 
+Event semantics live in `specs/events.md`. Durable database contracts live in `specs/db-contracts.md`.
+
 The repository is currently in early specification mode: many facts are present as skipped Go tests until the implementation exists.
 
 ## How This Project Is Built
