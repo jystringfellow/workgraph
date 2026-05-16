@@ -10,6 +10,8 @@ write spec → write feature → write failing fact → implement → pass → c
 
 Specs explain intent. Features describe user-visible behavior. Facts enforce correctness.
 
+A failing fact must be executable and believable: it should contain assertions that fail before implementation and pass after implementation. Removing `t.Skip(...)` from an empty placeholder is not a failing fact.
+
 ```text
 principles = constraints (must stay true)
 roadmap = bets (likely to change)

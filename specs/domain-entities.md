@@ -5,7 +5,7 @@ These contracts describe the core WorkGraph concepts before storage.
 Entities marked `active` are implementation targets.
 Entities marked `draft` express product direction but are not required for Phase 0.
 
-A draft entity becomes active only when a fact test is unskipped.
+A draft entity becomes active only when a skipped placeholder is replaced with an executable failing fact.
 
 Storage details live in `specs/db-contracts.md`.
 

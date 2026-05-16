@@ -14,7 +14,7 @@ The goal is not merely productivity tracking. WorkGraph is meant to become infra
 
 Domain entity contracts live in `specs/domain-entities.md`. Durable database contracts live in `specs/db-contracts.md`.
 
-The repository is currently in early specification mode: many facts are present as skipped Go tests until the implementation exists.
+The repository is currently in early specification mode: many facts are present as skipped placeholders until they are converted into executable failing tests.
 
 ## How This Project Is Built
 
@@ -76,4 +76,4 @@ Run the facts with:
 go test ./...
 ```
 
-Skipped tests mark facts that are specified but not implemented yet.
+Skipped tests mark facts that are specified but not active yet. Before implementation, replace a skipped placeholder with real assertions and verify the test fails for the expected reason.

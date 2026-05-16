@@ -5,7 +5,7 @@ These contracts describe intended durable state for WorkGraph.
 Tables marked `active` are implementation targets.
 Tables marked `draft` express product direction but are not required for Phase 0.
 
-A draft contract becomes active only when a fact test is unskipped.
+A draft contract becomes active only when a skipped placeholder is replaced with an executable failing fact.
 
 The database is the durable operational memory for WorkGraph.
 

@@ -54,10 +54,12 @@ capture events → store → group → query (today / resume)
 
 Before implementing behavior:
 
-1. Write or unskip a test in `/facts`
-2. Ensure it fails
+1. Replace a skipped placeholder in `/facts` with a believable executable test
+2. Run it and verify it fails for the right reason
 3. Implement minimal code to pass
-4. Do not modify tests to pass unless the spec changed
+4. Do not weaken tests to pass unless the spec changed
+
+Deleting `t.Skip(...)` is not enough. A fact only becomes active when it contains real assertions that fail before implementation and pass after implementation.
 
 ## AI Usage Guidelines
 
