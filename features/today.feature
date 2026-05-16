@@ -6,6 +6,12 @@ Scenario: Show work from the current local day
   Then I see events from the current local day
   And I do not see events from previous local days
 
+Scenario: Show an empty state
+  Given WorkGraph has captured no events today
+  When I run "workgraph today"
+  Then the output includes a "Today" section
+  And the output says no activity has been captured yet
+
 Scenario: Group today's work into sessions
   Given WorkGraph has captured multiple events today
   When I run "workgraph today"
@@ -20,5 +26,12 @@ Scenario: Show predictable output sections
   Given WorkGraph has captured events today
   When I run "workgraph today"
   Then the output includes a "Today" section
-  And the output includes project names when known
+  And the output includes a "Projects" section when projects are known
+  And the output includes a "Sessions" section when sessions are known
   And the output includes unfinished work when known
+
+Scenario: Keep output simple for Phase 0
+  Given WorkGraph has captured events today
+  When I run "workgraph today"
+  Then the output is plain text
+  And the output does not require an LLM

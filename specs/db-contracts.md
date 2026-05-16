@@ -9,11 +9,15 @@ A draft contract becomes active only when a fact test is unskipped.
 
 The database is the durable operational memory for WorkGraph.
 
+Domain entity contracts are defined in `specs/domain-entities.md`. This document defines durable table contracts and query requirements.
+
 `workgraph init` creates the local SQLite database at:
 
 ```text
 ~/.workgraph/workgraph.db
 ```
+
+For Phase 0, `workgraph init` creates active tables as empty schema. It does not populate `events`, `sessions`, or `memory_docs`.
 
 ## Tables
 

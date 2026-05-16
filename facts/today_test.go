@@ -17,3 +17,15 @@ func TestTodayGroupsSessionsByProject(t *testing.T) {
 func TestTodayShowsUnfinishedWorkWhenKnown(t *testing.T) {
 	t.Skip("TBD: today command shows unfinished work when tasks or TODOs are known")
 }
+
+func TestTodayOutputIncludesExpectedSections(t *testing.T) {
+	t.Skip("TBD: today output includes Today, Projects, and Sessions sections when data exists")
+}
+
+func TestTodayShowsEmptyStateWhenNoEventsExist(t *testing.T) {
+	t.Skip("TBD: today output says no activity has been captured when no events exist today")
+}
+
+func TestTodayOutputIsPlainTextWithoutLLM(t *testing.T) {
+	t.Skip("TBD: today output is deterministic plain text and does not require an LLM")
+}

@@ -2,20 +2,26 @@ package facts
 
 import "testing"
 
+// Database contract facts cover durable SQLite tables, constraints, and queries.
+
 func TestEventsTableExists(t *testing.T) {
 	t.Skip("TBD: database has events table")
 }
 
-func TestEventsRequireIDSourceTypeTimestampPayloadCreatedAt(t *testing.T) {
-	t.Skip("TBD: events require id, source, type, timestamp, payload_json, created_at")
+func TestEventsTableHasRequiredColumns(t *testing.T) {
+	t.Skip("TBD: events table has id, source, type, timestamp, payload_json, created_at")
 }
 
-func TestEventIDIsUnique(t *testing.T) {
-	t.Skip("TBD: event id is unique")
+func TestEventsTableEnforcesUniqueID(t *testing.T) {
+	t.Skip("TBD: events table enforces unique event id")
 }
 
-func TestDatabaseEventPayloadMustBeValidJSON(t *testing.T) {
-	t.Skip("TBD: event payload_json must be valid JSON")
+func TestEventsTableRejectsInvalidPayloadJSON(t *testing.T) {
+	t.Skip("TBD: events table rejects invalid payload_json")
+}
+
+func TestEventsCanBeInsertedAndReadFromDatabase(t *testing.T) {
+	t.Skip("TBD: events can be inserted into and read from SQLite")
 }
 
 func TestEventsCanBeQueriedByProject(t *testing.T) {

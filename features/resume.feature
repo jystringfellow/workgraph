@@ -19,6 +19,7 @@ Scenario: Show predictable output sections
   When I run "workgraph resume <project>"
   Then the output includes a "Recent activity" section
   And the output includes a "Relevant files" section
+  And the output includes an "Open questions" section when evidence is incomplete
   And the output includes a "Suggested next step" section
 
 Scenario: Avoid unsupported speculation
@@ -26,3 +27,9 @@ Scenario: Avoid unsupported speculation
   When I run "workgraph resume <project>"
   Then the output only includes claims supported by events, files, or memory
   And uncertain next steps are labeled as suggestions
+
+Scenario: Show a missing project state
+  Given WorkGraph has no events for a project
+  When I run "workgraph resume <project>"
+  Then the output says no recent activity was found
+  And the output suggests checking the project name or running capture
