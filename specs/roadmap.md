@@ -1,7 +1,7 @@
 # WorkGraph Roadmap
 
 ## Phase 0: Core loop (weekend V1)
-- [ ] CLI: workgraph init
+- [x] CLI: workgraph init
 - [ ] CLI: workgraph run
 - [ ] CLI: workgraph today
 - [ ] CLI: workgraph resume <project>
