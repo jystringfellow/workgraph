@@ -58,7 +58,7 @@ WorkGraph helps answer:
 
 The weekend V1 roadmap starts with:
 
-- `workgraph init`
+- `workgraph init` (implemented)
 - `workgraph run`
 - `workgraph today`
 - `workgraph resume <project>`
@@ -67,6 +67,81 @@ The weekend V1 roadmap starts with:
 - Basic project inference
 - Time-based session grouping
 - Simple output without an LLM
+
+## Running Locally
+
+During Phase 0, the safest way to run WorkGraph is from source:
+
+```sh
+go run ./cmd/workgraph init
+```
+
+This creates:
+
+- `~/.workgraph/`
+- `~/.workgraph/workgraph.db`
+- `~/workgraph-memory/`
+
+To build a local binary:
+
+```sh
+go build -o ./bin/workgraph ./cmd/workgraph
+./bin/workgraph init
+```
+
+To install the CLI into your Go binary path:
+
+```sh
+go install ./cmd/workgraph
+workgraph init
+```
+
+Make sure your Go binary directory is on `PATH`. It is usually:
+
+```sh
+$(go env GOPATH)/bin
+```
+
+## Installing From GitHub
+
+Once the current code is pushed to GitHub, install it with:
+
+```sh
+go install github.com/jystringfellow/workgraph/cmd/workgraph@latest
+```
+
+Then run:
+
+```sh
+workgraph init
+```
+
+Published release binaries may come later. For now, source builds and `go install` are the expected install paths.
+
+## Inspecting The Database
+
+WorkGraph stores local operational memory in SQLite:
+
+```sh
+sqlite3 ~/.workgraph/workgraph.db
+```
+
+Useful SQLite commands:
+
+```sql
+.tables
+.schema events
+.schema sessions
+.schema memory_docs
+SELECT COUNT(*) FROM events;
+SELECT * FROM events ORDER BY timestamp DESC LIMIT 10;
+```
+
+For a one-off schema check:
+
+```sh
+sqlite3 ~/.workgraph/workgraph.db ".schema"
+```
 
 ## Verification
 
