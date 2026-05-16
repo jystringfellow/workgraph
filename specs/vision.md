@@ -1,8 +1,23 @@
 # WorkGraph Vision
 
-WorkGraph is a local-first personal work intelligence system.
+WorkGraph aims to become:
 
-It helps me understand:
+> the open substrate for personal work intelligence
+
+It is a local-first system that continuously captures operational context,
+maintains durable personal memory, restores context quickly, and helps people
+think, decide, and execute more effectively over time.
+
+The goal is not merely productivity tracking. The goal is:
+
+- continuity
+- clarity
+- accumulated leverage
+- strategic alignment
+- contextual intelligence
+- personalized execution assistance
+
+WorkGraph helps me understand:
 - what I did
 - why I did it
 - who I interacted with
@@ -12,6 +27,6 @@ It helps me understand:
 - how to resume context quickly
 
 It combines:
-- active memory: markdown files I intentionally maintain
+- active memory: markdown, html, and files I intentionally maintain
 - passive memory: events captured from tools and local activity
-- executable facts: tests that define what must remain true
+- executable facts: machine-verifiable behavior that must remain true

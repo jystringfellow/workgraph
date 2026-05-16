@@ -1,8 +1,10 @@
 # WorkGraph
 
-WorkGraph is a local-first personal work intelligence system.
+WorkGraph is a local-first attempt to build the open substrate for personal work intelligence.
 
-It captures local work activity, connects it to active memory, and helps restore context quickly so work can resume with less reconstruction.
+It captures operational context, connects it to durable personal memory, and helps restore the state of work so people can think, decide, and execute with more continuity.
+
+The goal is not merely productivity tracking. WorkGraph is meant to become infrastructure for contextual intelligence, strategic alignment, and personalized execution assistance over time.
 
 ## Current Shape
 
