@@ -27,6 +27,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runInit(args[1:], stdout, stderr)
 	case "run":
 		return runCapture(args[1:], stdout, stderr)
+	case "today":
+		return runToday(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command: %s\n", args[0])
 		return 2
@@ -109,6 +111,30 @@ func runCapture(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 	<-eventDone
 
+	return 0
+}
+
+func runToday(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("today", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "WorkGraph home directory")
+	databasePath := flags.String("database", "", "WorkGraph SQLite database path")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+
+	result, err := workgraph.Today(workgraph.TodayConfig{
+		HomeDir:      *homeDir,
+		DatabasePath: *databasePath,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph today: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
 	return 0
 }
 
