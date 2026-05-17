@@ -2,7 +2,9 @@
 
 ## Phase 0: Core loop (weekend V1)
 - [x] CLI: workgraph init
-- [ ] CLI: workgraph run
+- [x] CLI: workgraph run
+- [x] Foreground file capture
+- [ ] Background daemon controls
 - [ ] CLI: workgraph today
 - [ ] CLI: workgraph resume <project>
 - [ ] SQLite event store

@@ -82,6 +82,53 @@ This creates:
 - `~/.workgraph/workgraph.db`
 - `~/workgraph-memory/`
 
+To start foreground file capture for the current directory:
+
+```sh
+go run ./cmd/workgraph run --watch .
+```
+
+The command keeps running until you stop it with `Ctrl+C`. While it is running,
+create, modify, or delete a file under the watched directory. WorkGraph records
+those actions as local file events in SQLite and prints each captured event.
+
+For isolated testing, keep WorkGraph state and watched files inside a temporary
+directory:
+
+```sh
+tmpdir="$(mktemp -d /tmp/workgraph-run.XXXXXX)"
+echo "$tmpdir" > /tmp/workgraph-run-dir
+mkdir -p "$tmpdir/project"
+go run ./cmd/workgraph init --home "$tmpdir/.workgraph" --memory "$tmpdir/memory"
+go run ./cmd/workgraph run --home "$tmpdir/.workgraph" --watch "$tmpdir/project"
+```
+
+In another terminal, change a file under the watched project:
+
+```sh
+tmpdir="$(cat /tmp/workgraph-run-dir)"
+echo "first note" > "$tmpdir/project/notes.md"
+sleep 1
+echo "second note" >> "$tmpdir/project/notes.md"
+sleep 1
+rm "$tmpdir/project/notes.md"
+```
+
+Then stop `workgraph run` with `Ctrl+C`.
+
+The `workgraph run` terminal should print lines like:
+
+```text
+file.created /tmp/workgraph-run.abc123/project/notes.md
+file.modified /tmp/workgraph-run.abc123/project/notes.md
+file.deleted /tmp/workgraph-run.abc123/project/notes.md
+```
+
+The sleeps are only there to make the manual demo easy to inspect. Real file
+capture uses filesystem notifications, but operating systems may coalesce very
+fast write bursts, so a rapid create/write/delete sequence may not produce a
+separate `modified` event for every write.
+
 To build a local binary:
 
 ```sh
@@ -135,6 +182,14 @@ Useful SQLite commands:
 .schema memory_docs
 SELECT COUNT(*) FROM events;
 SELECT * FROM events ORDER BY timestamp DESC LIMIT 10;
+```
+
+To inspect captured file events from an isolated run:
+
+```sh
+tmpdir="$(cat /tmp/workgraph-run-dir)"
+sqlite3 "$tmpdir/.workgraph/workgraph.db" \
+  "SELECT type, json_extract(payload_json, '$.operation'), json_extract(payload_json, '$.path') FROM events ORDER BY timestamp;"
 ```
 
 For a one-off schema check:
