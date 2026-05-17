@@ -129,6 +129,16 @@ capture uses filesystem notifications, but operating systems may coalesce very
 fast write bursts, so a rapid create/write/delete sequence may not produce a
 separate `modified` event for every write.
 
+To inspect work captured during the current local day:
+
+```sh
+go run ./cmd/workgraph today
+```
+
+The output is deterministic plain text. When events exist, it includes `Today`,
+`Projects`, and `Sessions` sections. Sessions are inferred from same-project
+events that happen within 30 minutes of each other.
+
 To build a local binary:
 
 ```sh

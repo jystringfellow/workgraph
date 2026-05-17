@@ -5,13 +5,13 @@
 - [x] CLI: workgraph run
 - [x] Foreground file capture
 - [ ] Background daemon controls
-- [ ] CLI: workgraph today
+- [x] CLI: workgraph today
 - [ ] CLI: workgraph resume <project>
 - [ ] SQLite event store
 - [ ] File system watcher
 - [ ] Basic project inference (repo/folder name)
-- [ ] Session grouping (time-based)
-- [ ] Simple output (no LLM)
+- [x] Session grouping (time-based)
+- [x] Simple output (no LLM)
 
 ## Phase 1: External signals
 - [ ] Git integration (commits, branches)
