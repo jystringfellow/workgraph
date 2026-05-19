@@ -30,9 +30,10 @@ type InitResult struct {
 }
 
 type configFile struct {
-	WatchDirs   []string `json:"watch_dirs"`
-	IgnorePaths []string `json:"ignore_paths"`
-	IgnoreNames []string `json:"ignore_names"`
+	WatchDirs             []string `json:"watch_dirs"`
+	ConservativeWatchDirs []string `json:"conservative_watch_dirs,omitempty"`
+	IgnorePaths           []string `json:"ignore_paths"`
+	IgnoreNames           []string `json:"ignore_names"`
 }
 
 // Init creates the local WorkGraph home, config, SQLite database, and memory repo.
@@ -140,9 +141,10 @@ func createDefaultConfig(configPath string, homeDir string, force bool) error {
 	}
 
 	config := configFile{
-		WatchDirs:   watchDirs,
-		IgnorePaths: []string{workgraphHome},
-		IgnoreNames: defaultIgnoreNames(),
+		WatchDirs:             watchDirs,
+		ConservativeWatchDirs: append([]string(nil), watchDirs...),
+		IgnorePaths:           []string{workgraphHome},
+		IgnoreNames:           defaultIgnoreNames(),
 	}
 
 	contents, err := json.MarshalIndent(config, "", "  ")

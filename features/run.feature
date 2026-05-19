@@ -62,11 +62,47 @@ Scenario: Keep file descriptors available
   And WorkGraph reports the first directory outside the watch budget
   And WorkGraph keeps capture running for already watched directories
 
+Scenario: Register configured roots before deep traversal
+  Given WorkGraph is configured to watch multiple directories
+  And one configured directory contains a large nested tree
+  When capture starts with a limited watch budget
+  Then each configured root gets a watcher before deep descendants are registered
+
 Scenario: Prioritize user-facing folders
   Given WorkGraph is watching a home directory
   And the home directory contains both hidden caches and Desktop files
   When recursive watch setup has a limited resource budget
   Then WorkGraph watches Desktop before hidden cache subtrees
+
+Scenario: Skip implicit top-level hidden directories
+  Given WorkGraph is watching a broad local directory
+  And the broad directory contains a top-level hidden cache directory
+  When capture starts
+  Then WorkGraph does not implicitly watch the hidden cache directory
+
+Scenario: Explicitly watch a hidden directory
+  Given WorkGraph is configured to watch a hidden directory
+  When capture starts
+  Then WorkGraph watches the hidden directory
+
+Scenario: Traverse default roots conservatively
+  Given WorkGraph is configured to watch a broad default folder
+  And the default folder contains a nested folder-only app library
+  When capture starts
+  Then WorkGraph watches the default folder and its immediate child
+  And WorkGraph does not recursively watch the app library's descendants
+
+Scenario: Recurse into work-like folders under default roots
+  Given WorkGraph is configured to watch a broad default folder
+  And an immediate child folder contains ordinary documents
+  When capture starts
+  Then WorkGraph watches descendants of the work-like folder
+
+Scenario: Recurse into explicit watch roots
+  Given WorkGraph is configured to watch an explicit folder
+  And the explicit folder contains nested folders
+  When capture starts
+  Then WorkGraph watches descendants of the explicit folder
 
 Scenario: Stop gracefully
   Given WorkGraph is running

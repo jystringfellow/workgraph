@@ -57,6 +57,7 @@ func AddWatchDir(config ConfigWatchConfig) (ConfigWatchResult, error) {
 	}
 
 	localConfig.WatchDirs = prependUniquePath(watchDir, localConfig.WatchDirs)
+	localConfig.ConservativeWatchDirs = removePath(watchDir, localConfig.ConservativeWatchDirs)
 	if err := writeConfig(configPath, localConfig); err != nil {
 		return ConfigWatchResult{}, err
 	}
@@ -77,6 +78,17 @@ func AddWatchDir(config ConfigWatchConfig) (ConfigWatchResult, error) {
 
 func prependUniquePath(path string, paths []string) []string {
 	result := []string{path}
+	for _, existing := range paths {
+		if existing == path {
+			continue
+		}
+		result = append(result, existing)
+	}
+	return result
+}
+
+func removePath(path string, paths []string) []string {
+	result := []string{}
 	for _, existing := range paths {
 		if existing == path {
 			continue

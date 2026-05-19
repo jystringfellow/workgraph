@@ -121,11 +121,17 @@ func TestInitCreatesDefaultConfig(t *testing.T) {
 	if !reflect.DeepEqual(config.WatchDirs, expectedWatchDirs) {
 		t.Fatalf("expected default watch dirs %q, got %q", expectedWatchDirs, config.WatchDirs)
 	}
+	if !reflect.DeepEqual(config.ConservativeWatchDirs, expectedWatchDirs) {
+		t.Fatalf("expected default watch dirs to be conservative %q, got %q", expectedWatchDirs, config.ConservativeWatchDirs)
+	}
 	if !reflect.DeepEqual(config.IgnorePaths, []string{workgraphHome}) {
 		t.Fatalf("expected default ignore paths %q, got %q", []string{workgraphHome}, config.IgnorePaths)
 	}
 	if !reflect.DeepEqual(config.IgnoreNames, []string{".git", "node_modules", "DerivedData", ".noindex"}) {
 		t.Fatalf("expected default ignore names, got %q", config.IgnoreNames)
+	}
+	if containsString(config.IgnoreNames, "Native Instruments") {
+		t.Fatalf("expected default ignore names not to include app-specific user folders, got %q", config.IgnoreNames)
 	}
 }
 
@@ -305,10 +311,12 @@ func TestInitForceOverwritesExistingConfigWithDefaults(t *testing.T) {
 		t.Fatalf("resolve WorkGraph home: %v", err)
 	}
 
+	expectedWatchDirs := []string{filepath.Join(userHome, "Desktop"), filepath.Join(userHome, "Documents")}
 	expected := initConfigFile{
-		WatchDirs:   []string{filepath.Join(userHome, "Desktop"), filepath.Join(userHome, "Documents")},
-		IgnorePaths: []string{workgraphHome},
-		IgnoreNames: []string{".git", "node_modules", "DerivedData", ".noindex"},
+		WatchDirs:             expectedWatchDirs,
+		ConservativeWatchDirs: expectedWatchDirs,
+		IgnorePaths:           []string{workgraphHome},
+		IgnoreNames:           []string{".git", "node_modules", "DerivedData", ".noindex"},
 	}
 	if !reflect.DeepEqual(config, expected) {
 		t.Fatalf("expected force init to refresh config to %#v, got %#v", expected, config)
@@ -390,9 +398,10 @@ func TestInitOnMacOSSuggestsFullDiskAccess(t *testing.T) {
 }
 
 type initConfigFile struct {
-	WatchDirs   []string `json:"watch_dirs"`
-	IgnorePaths []string `json:"ignore_paths"`
-	IgnoreNames []string `json:"ignore_names"`
+	WatchDirs             []string `json:"watch_dirs"`
+	ConservativeWatchDirs []string `json:"conservative_watch_dirs,omitempty"`
+	IgnorePaths           []string `json:"ignore_paths"`
+	IgnoreNames           []string `json:"ignore_names"`
 }
 
 func readInitConfig(t *testing.T, path string) initConfigFile {
@@ -448,4 +457,13 @@ func fakeUserHomeWithDirs(t *testing.T, names ...string) string {
 		t.Fatalf("resolve fake user home: %v", err)
 	}
 	return resolved
+}
+
+func containsString(values []string, needle string) bool {
+	for _, value := range values {
+		if value == needle {
+			return true
+		}
+	}
+	return false
 }

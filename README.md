@@ -128,7 +128,8 @@ go run /path/to/workgraph/cmd/workgraph config add-watch /Volumes/Craig/Code
 
 Added watch roots are stored as absolute paths and placed before existing roots
 so a broad home-directory watch budget does not starve a project you explicitly
-added.
+added. Roots added with `config add-watch` are treated as explicit, so WorkGraph
+can recurse through them more fully than init-owned default folders.
 
 To start background file capture for the current directory:
 
@@ -146,7 +147,11 @@ reached`, capture is still running for already registered directories, but you
 should narrow `watch_dirs` to the folders you care about most. The output
 includes a small sample of registered directories and the first directory that
 was outside the watch budget. WorkGraph prioritizes user-facing folders such as
-Desktop, Documents, and Downloads before hidden cache directories.
+Desktop, Documents, and Downloads before hidden cache directories, and it skips
+top-level hidden folders under broad watched roots unless you explicitly add
+that hidden folder to `watch_dirs`. Init-owned default roots are traversed
+conservatively: WorkGraph watches the default root and its immediate children,
+then only recurses deeper into children that look like active work folders.
 
 Use `status` and `stop` to inspect or stop background capture:
 

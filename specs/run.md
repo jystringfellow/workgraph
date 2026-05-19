@@ -18,7 +18,10 @@ Capture control is responsible for:
 - skipping inaccessible subtrees under watched roots without aborting capture
 - skipping unsupported special files such as sockets without aborting capture
 - skipping generated index/build cache subtrees that would exhaust watcher resources
+- skipping top-level hidden directories under broad roots unless explicitly configured
+- traversing init-owned default roots conservatively
 - bounding recursive watch registration so capture does not exhaust process file descriptors
+- registering configured watch roots before recursively descending into any one root
 - preserving events already written when capture stops
 
 Background run output reports the configured paths and returns:
@@ -68,6 +71,17 @@ When a watched root contains both user-facing folders and hidden/cache folders,
 recursive setup should prioritize user-facing folders such as Desktop,
 Documents, Downloads, and visible project folders before hidden or cache-heavy
 subtrees.
+
+Top-level hidden directories under a broad watched root should not be traversed
+implicitly. If a hidden directory is explicitly listed in `watch_dirs`, that
+explicit watch root overrides the hidden-directory skip.
+
+Roots listed in `conservative_watch_dirs` are broad default roots. Capture
+should register the root and immediate child directories, but it should only
+recurse below an immediate child when that child looks like active work: it
+contains ordinary files, project marker files, or is a common work container.
+Folder-only app libraries and other deep containers should not consume the
+default watch budget unless the user explicitly adds them as watch roots.
 
 Path configuration uses this precedence:
 

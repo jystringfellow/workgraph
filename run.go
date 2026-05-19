@@ -28,9 +28,10 @@ var errWatchLimitReached = errors.New("watch limit reached")
 
 // RunConfig controls foreground event capture.
 type RunConfig struct {
-	HomeDir      string
-	DatabasePath string
-	WatchDirs    []string
+	HomeDir               string
+	DatabasePath          string
+	WatchDirs             []string
+	ConservativeWatchDirs []string
 	// MaxWatchEntries bounds recursive watcher setup. Zero uses the default.
 	MaxWatchEntries int
 	// PollInterval is kept for tests and future fallback capture modes.
@@ -39,17 +40,18 @@ type RunConfig struct {
 
 // RunStatus describes an active capture process.
 type RunStatus struct {
-	HomeDir             string
-	DatabasePath        string
-	WatchDirs           []string
-	IgnorePaths         []string
-	IgnoreNames         []string
-	WatchCount          int
-	WatchLimit          int
-	WatchLimitReached   bool
-	WatchLimitPath      string
-	RegisteredWatchDirs []string
-	Message             string
+	HomeDir               string
+	DatabasePath          string
+	WatchDirs             []string
+	ConservativeWatchDirs []string
+	IgnorePaths           []string
+	IgnoreNames           []string
+	WatchCount            int
+	WatchLimit            int
+	WatchLimitReached     bool
+	WatchLimitPath        string
+	RegisteredWatchDirs   []string
+	Message               string
 }
 
 // CapturedEvent describes an event written by the foreground capture process.
@@ -106,8 +108,24 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 	}
 
 	budget := newWatchBudget(config.MaxWatchEntries)
+	registeredRoots := []string{}
 	for _, watchDir := range status.WatchDirs {
-		if err := addWatchTree(watcher, watchDir, status.HomeDir, status.DatabasePath, status.IgnorePaths, status.IgnoreNames, budget); err != nil {
+		registered, err := addWatchRoot(watcher, watchDir, status.HomeDir, status.DatabasePath, status.IgnorePaths, status.IgnoreNames, budget)
+		if err != nil {
+			if errors.Is(err, errWatchLimitReached) {
+				break
+			}
+			watcher.Close()
+			db.Close()
+			return nil, err
+		}
+		if registered {
+			registeredRoots = append(registeredRoots, watchDir)
+		}
+	}
+	for _, watchDir := range registeredRoots {
+		conservative := containsPath(status.ConservativeWatchDirs, watchDir)
+		if err := addWatchChildren(watcher, watchDir, watchDir, status.HomeDir, status.DatabasePath, status.IgnorePaths, status.IgnoreNames, budget, conservative); err != nil {
 			watcher.Close()
 			db.Close()
 			return nil, err
@@ -348,10 +366,16 @@ func prepareRunStatus(config RunConfig) (RunStatus, error) {
 	}
 
 	watchDirsConfig := config.WatchDirs
+	conservativeWatchDirsConfig := config.ConservativeWatchDirs
 	if len(watchDirsConfig) == 0 && len(localConfig.WatchDirs) > 0 {
 		watchDirsConfig = localConfig.WatchDirs
+		conservativeWatchDirsConfig = localConfig.ConservativeWatchDirs
 	}
 	watchDirs, err := resolveWatchDirs(watchDirsConfig)
+	if err != nil {
+		return RunStatus{}, err
+	}
+	conservativeWatchDirs, err := resolveIgnorePaths(conservativeWatchDirsConfig)
 	if err != nil {
 		return RunStatus{}, err
 	}
@@ -361,11 +385,12 @@ func prepareRunStatus(config RunConfig) (RunStatus, error) {
 	}
 
 	return RunStatus{
-		HomeDir:      homeDir,
-		DatabasePath: dbPath,
-		WatchDirs:    watchDirs,
-		IgnorePaths:  ignorePaths,
-		IgnoreNames:  append([]string(nil), localConfig.IgnoreNames...),
+		HomeDir:               homeDir,
+		DatabasePath:          dbPath,
+		WatchDirs:             watchDirs,
+		ConservativeWatchDirs: conservativeWatchDirs,
+		IgnorePaths:           ignorePaths,
+		IgnoreNames:           append([]string(nil), localConfig.IgnoreNames...),
 	}, nil
 }
 
@@ -408,7 +433,10 @@ func resolveIgnorePaths(ignorePaths []string) ([]string, error) {
 }
 
 func addWatchTree(watcher *fsnotify.Watcher, root, homeDir, dbPath string, ignorePaths []string, ignoreNames []string, budget *watchBudget) error {
-	err := addWatchDir(watcher, root, homeDir, dbPath, ignorePaths, ignoreNames, budget)
+	registered, err := addWatchRoot(watcher, root, homeDir, dbPath, ignorePaths, ignoreNames, budget)
+	if err == nil && registered {
+		err = addWatchChildren(watcher, root, root, homeDir, dbPath, ignorePaths, ignoreNames, budget, false)
+	}
 	if errors.Is(err, errWatchLimitReached) {
 		return nil
 	}
@@ -419,28 +447,31 @@ func addWatchTree(watcher *fsnotify.Watcher, root, homeDir, dbPath string, ignor
 	return nil
 }
 
-func addWatchDir(watcher *fsnotify.Watcher, path, homeDir, dbPath string, ignorePaths []string, ignoreNames []string, budget *watchBudget) error {
+func addWatchRoot(watcher *fsnotify.Watcher, path, homeDir, dbPath string, ignorePaths []string, ignoreNames []string, budget *watchBudget) (bool, error) {
 	if shouldIgnorePath(path, homeDir, dbPath, ignorePaths, ignoreNames) {
-		return nil
+		return false, nil
 	}
 	if !canReadDirectory(path) {
-		return nil
+		return false, nil
 	}
 	if !budget.canAdd(path) {
-		return errWatchLimitReached
+		return false, errWatchLimitReached
 	}
 	if err := watcher.Add(path); err != nil {
 		if isPermissionError(err) || isUnsupportedSpecialFileError(err) {
-			return nil
+			return false, nil
 		}
 		if isResourceLimitError(err) {
 			budget.markReached(path)
-			return errWatchLimitReached
+			return false, errWatchLimitReached
 		}
-		return fmt.Errorf("watch directory %q: %w", path, err)
+		return false, fmt.Errorf("watch directory %q: %w", path, err)
 	}
 	budget.noteAdded(path)
+	return true, nil
+}
 
+func addWatchChildren(watcher *fsnotify.Watcher, root, path, homeDir, dbPath string, ignorePaths []string, ignoreNames []string, budget *watchBudget, conservativeRoot bool) error {
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		if isPermissionError(err) || isUnsupportedSpecialFileError(err) || isResourceLimitError(err) {
@@ -455,12 +486,90 @@ func addWatchDir(watcher *fsnotify.Watcher, path, homeDir, dbPath string, ignore
 			continue
 		}
 		child := filepath.Join(path, entry.Name())
-		if err := addWatchDir(watcher, child, homeDir, dbPath, ignorePaths, ignoreNames, budget); err != nil {
+		if shouldSkipImplicitTopLevelHiddenDir(root, path, child) {
+			continue
+		}
+		recurse := true
+		childConservative := conservativeRoot
+		if conservativeRoot && samePath(path, root) {
+			recurse = looksLikeWorkDirectory(child)
+			childConservative = false
+		}
+		if err := addWatchTreeUnderRoot(watcher, root, child, homeDir, dbPath, ignorePaths, ignoreNames, budget, childConservative, recurse); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func addWatchTreeUnderRoot(watcher *fsnotify.Watcher, root, path, homeDir, dbPath string, ignorePaths []string, ignoreNames []string, budget *watchBudget, conservativeRoot bool, recurse bool) error {
+	registered, err := addWatchRoot(watcher, path, homeDir, dbPath, ignorePaths, ignoreNames, budget)
+	if err == nil && registered && recurse {
+		err = addWatchChildren(watcher, root, path, homeDir, dbPath, ignorePaths, ignoreNames, budget, conservativeRoot)
+	}
+	if errors.Is(err, errWatchLimitReached) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("add watch tree %q: %w", path, err)
+	}
+
+	return nil
+}
+
+func shouldSkipImplicitTopLevelHiddenDir(root, parent, child string) bool {
+	if !samePath(parent, root) {
+		return false
+	}
+	if strings.HasPrefix(filepath.Base(root), ".") {
+		return false
+	}
+	return strings.HasPrefix(filepath.Base(child), ".")
+}
+
+func looksLikeWorkDirectory(path string) bool {
+	name := filepath.Base(path)
+	switch name {
+	case "Code", "Developer", "Projects", "Work", "repos", "source":
+		return true
+	}
+
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if isProjectMarkerName(entry.Name()) {
+			return true
+		}
+		if !entry.IsDir() && !isTransientEditorPath(entry.Name()) {
+			return true
+		}
+	}
+	return false
+}
+
+func isProjectMarkerName(name string) bool {
+	switch name {
+	case ".git", "go.mod", "package.json", "pyproject.toml", "Cargo.toml", "Gemfile", "composer.json", "pom.xml", "build.gradle", "mix.exs":
+		return true
+	default:
+		return false
+	}
+}
+
+func samePath(left, right string) bool {
+	return filepath.Clean(left) == filepath.Clean(right)
+}
+
+func containsPath(paths []string, target string) bool {
+	for _, path := range paths {
+		if samePath(path, target) {
+			return true
+		}
+	}
+	return false
 }
 
 func sortWatchEntries(entries []fs.DirEntry) {

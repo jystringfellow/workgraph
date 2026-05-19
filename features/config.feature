@@ -5,6 +5,7 @@ Scenario: Initialize default capture config
   When I run "workgraph init"
   Then WorkGraph creates a config file under the WorkGraph home
   And the config watches existing common user-facing folders
+  And the default watch folders are marked for conservative traversal
   And the config does not watch the entire home directory when common folders exist
   And the config ignores the WorkGraph home directory
 
@@ -51,4 +52,5 @@ Scenario: Add a specific directory as a watch root
   Given WorkGraph has been initialized
   When I run "workgraph config add-watch /path/to/project"
   Then "/path/to/project" is added to the front of watch_dirs
+  And "/path/to/project" is treated as an explicit watch root
   And running the command again does not duplicate it

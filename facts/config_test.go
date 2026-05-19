@@ -33,6 +33,9 @@ func TestInitCreatesConfigWithSaneDefaultWatchRoots(t *testing.T) {
 	if !reflect.DeepEqual(config.WatchDirs, expectedWatchDirs) {
 		t.Fatalf("expected config watch dirs %q, got %q", expectedWatchDirs, config.WatchDirs)
 	}
+	if !reflect.DeepEqual(config.ConservativeWatchDirs, expectedWatchDirs) {
+		t.Fatalf("expected default watch dirs to be conservative %q, got %q", expectedWatchDirs, config.ConservativeWatchDirs)
+	}
 }
 
 func TestConfigPersistsResolvedAbsoluteHomePath(t *testing.T) {
@@ -271,6 +274,9 @@ func TestConfigAddWatchPrependsResolvedDirectory(t *testing.T) {
 	expectedWatchDirs := append([]string{projectDir}, before.WatchDirs...)
 	if !reflect.DeepEqual(config.WatchDirs, expectedWatchDirs) {
 		t.Fatalf("expected watch dirs %q, got %q", expectedWatchDirs, config.WatchDirs)
+	}
+	if containsString(config.ConservativeWatchDirs, projectDir) {
+		t.Fatalf("expected added watch dir %q to be explicit, got conservative dirs %q", projectDir, config.ConservativeWatchDirs)
 	}
 	if !reflect.DeepEqual(config.IgnorePaths, before.IgnorePaths) {
 		t.Fatalf("expected ignore paths to be preserved")

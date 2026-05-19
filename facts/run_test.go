@@ -564,6 +564,59 @@ func TestRunStopsAddingWatchersAtResourceBudget(t *testing.T) {
 	}
 }
 
+func TestRunRegistersConfiguredRootsBeforeDescending(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	firstRoot := filepath.Join(tempDir, "Documents")
+	secondRoot := filepath.Join(tempDir, "Downloads")
+	if err := os.MkdirAll(filepath.Join(firstRoot, "large", "nested"), 0o755); err != nil {
+		t.Fatalf("create first root tree: %v", err)
+	}
+	if err := os.MkdirAll(secondRoot, 0o755); err != nil {
+		t.Fatalf("create second root: %v", err)
+	}
+
+	initResult, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir: homeDir,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:         homeDir,
+		DatabasePath:    initResult.DatabasePath,
+		WatchDirs:       []string{firstRoot, secondRoot},
+		MaxWatchEntries: 2,
+	})
+	if err != nil {
+		t.Fatalf("run start failed: %v", err)
+	}
+	go func() {
+		done <- capture.Run(ctx)
+	}()
+
+	expectedRegistered := []string{firstRoot, secondRoot}
+	if !sameStrings(capture.Status.RegisteredWatchDirs, expectedRegistered) {
+		t.Fatalf("expected configured roots to be registered before descendants as %q, got %q", expectedRegistered, capture.Status.RegisteredWatchDirs)
+	}
+
+	target := filepath.Join(secondRoot, "visible.md")
+	if err := os.WriteFile(target, []byte("visible"), 0o644); err != nil {
+		t.Fatalf("create file in second root: %v", err)
+	}
+	waitForEvent(t, initResult.DatabasePath, "created", target)
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+}
+
 func TestRunReportsRegisteredAndUnwatchedDirectoriesAtResourceBudget(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
@@ -663,6 +716,204 @@ func TestRunPrioritizesUserFacingDirectoriesBeforeHiddenCachesAtWatchBudget(t *t
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("run returned error: %v", err)
+	}
+}
+
+func TestRunSkipsImplicitTopLevelHiddenDirectories(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	watchDir := filepath.Join(tempDir, "home")
+	visibleDir := filepath.Join(watchDir, "Desktop")
+	hiddenDir := filepath.Join(watchDir, ".cache")
+	if err := os.MkdirAll(visibleDir, 0o755); err != nil {
+		t.Fatalf("create visible dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(hiddenDir, "runtime"), 0o755); err != nil {
+		t.Fatalf("create hidden dir: %v", err)
+	}
+
+	initResult, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir: homeDir,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:      homeDir,
+		DatabasePath: initResult.DatabasePath,
+		WatchDirs:    []string{watchDir},
+	})
+	if err != nil {
+		t.Fatalf("run start failed: %v", err)
+	}
+	defer capture.Close()
+
+	if containsString(capture.Status.RegisteredWatchDirs, hiddenDir) {
+		t.Fatalf("expected implicit top-level hidden dir %q not to be watched, got %q", hiddenDir, capture.Status.RegisteredWatchDirs)
+	}
+	if !containsString(capture.Status.RegisteredWatchDirs, visibleDir) {
+		t.Fatalf("expected visible dir %q to be watched, got %q", visibleDir, capture.Status.RegisteredWatchDirs)
+	}
+}
+
+func TestRunExplicitWatchRootOverridesTopLevelHiddenSkip(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	hiddenDir := filepath.Join(tempDir, "home", ".config")
+	if err := os.MkdirAll(hiddenDir, 0o755); err != nil {
+		t.Fatalf("create hidden dir: %v", err)
+	}
+
+	initResult, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir: homeDir,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:      homeDir,
+		DatabasePath: initResult.DatabasePath,
+		WatchDirs:    []string{hiddenDir},
+	})
+	if err != nil {
+		t.Fatalf("run start failed: %v", err)
+	}
+	go func() {
+		done <- capture.Run(ctx)
+	}()
+
+	if !containsString(capture.Status.RegisteredWatchDirs, hiddenDir) {
+		t.Fatalf("expected explicit hidden watch root %q to be watched, got %q", hiddenDir, capture.Status.RegisteredWatchDirs)
+	}
+
+	target := filepath.Join(hiddenDir, "settings.json")
+	if err := os.WriteFile(target, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("create hidden root file: %v", err)
+	}
+	waitForEvent(t, initResult.DatabasePath, "created", target)
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+}
+
+func TestRunConservativeRootStopsAtFolderOnlyChildren(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	documentsDir := filepath.Join(tempDir, "home", "Documents")
+	appLibraryDir := filepath.Join(documentsDir, "Native Instruments")
+	deepLibraryDir := filepath.Join(appLibraryDir, "Kontakt", "presets")
+	if err := os.MkdirAll(deepLibraryDir, 0o755); err != nil {
+		t.Fatalf("create app library tree: %v", err)
+	}
+
+	initResult, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir: homeDir,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	writeInitConfig(t, initResult.ConfigPath, initConfigFile{
+		WatchDirs:             []string{documentsDir},
+		ConservativeWatchDirs: []string{documentsDir},
+		IgnorePaths:           []string{homeDir},
+		IgnoreNames:           []string{".git", "node_modules"},
+	})
+
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:      homeDir,
+		DatabasePath: initResult.DatabasePath,
+	})
+	if err != nil {
+		t.Fatalf("run start failed: %v", err)
+	}
+	defer capture.Close()
+
+	if !containsString(capture.Status.RegisteredWatchDirs, documentsDir) {
+		t.Fatalf("expected conservative root %q to be watched, got %q", documentsDir, capture.Status.RegisteredWatchDirs)
+	}
+	if !containsString(capture.Status.RegisteredWatchDirs, appLibraryDir) {
+		t.Fatalf("expected immediate child %q to be watched, got %q", appLibraryDir, capture.Status.RegisteredWatchDirs)
+	}
+	if containsString(capture.Status.RegisteredWatchDirs, deepLibraryDir) {
+		t.Fatalf("expected folder-only app library descendants not to be watched, got %q", capture.Status.RegisteredWatchDirs)
+	}
+}
+
+func TestRunConservativeRootRecursesIntoWorkLikeChild(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	documentsDir := filepath.Join(tempDir, "home", "Documents")
+	clientDir := filepath.Join(documentsDir, "Client")
+	assetsDir := filepath.Join(clientDir, "assets")
+	if err := os.MkdirAll(assetsDir, 0o755); err != nil {
+		t.Fatalf("create client tree: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(clientDir, "brief.md"), []byte("notes"), 0o644); err != nil {
+		t.Fatalf("create client document: %v", err)
+	}
+
+	initResult, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir: homeDir,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	writeInitConfig(t, initResult.ConfigPath, initConfigFile{
+		WatchDirs:             []string{documentsDir},
+		ConservativeWatchDirs: []string{documentsDir},
+		IgnorePaths:           []string{homeDir},
+		IgnoreNames:           []string{".git", "node_modules"},
+	})
+
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:      homeDir,
+		DatabasePath: initResult.DatabasePath,
+	})
+	if err != nil {
+		t.Fatalf("run start failed: %v", err)
+	}
+	defer capture.Close()
+
+	if !containsString(capture.Status.RegisteredWatchDirs, assetsDir) {
+		t.Fatalf("expected work-like child descendants to be watched, got %q", capture.Status.RegisteredWatchDirs)
+	}
+}
+
+func TestRunExplicitRootRecursesIntoFolderOnlyChildren(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	explicitDir := filepath.Join(tempDir, "Native Instruments")
+	deepDir := filepath.Join(explicitDir, "Kontakt", "presets")
+	if err := os.MkdirAll(deepDir, 0o755); err != nil {
+		t.Fatalf("create explicit tree: %v", err)
+	}
+
+	initResult, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir: homeDir,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:      homeDir,
+		DatabasePath: initResult.DatabasePath,
+		WatchDirs:    []string{explicitDir},
+	})
+	if err != nil {
+		t.Fatalf("run start failed: %v", err)
+	}
+	defer capture.Close()
+
+	if !containsString(capture.Status.RegisteredWatchDirs, deepDir) {
+		t.Fatalf("expected explicit folder-only descendants to be watched, got %q", capture.Status.RegisteredWatchDirs)
 	}
 }
 
