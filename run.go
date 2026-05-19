@@ -8,9 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -21,21 +24,32 @@ import (
 // ErrNotInitialized is returned when capture starts before workgraph init.
 var ErrNotInitialized = errors.New("WorkGraph is not initialized")
 
+var errWatchLimitReached = errors.New("watch limit reached")
+
 // RunConfig controls foreground event capture.
 type RunConfig struct {
 	HomeDir      string
 	DatabasePath string
 	WatchDirs    []string
+	// MaxWatchEntries bounds recursive watcher setup. Zero uses the default.
+	MaxWatchEntries int
 	// PollInterval is kept for tests and future fallback capture modes.
 	PollInterval time.Duration
 }
 
 // RunStatus describes an active capture process.
 type RunStatus struct {
-	HomeDir      string
-	DatabasePath string
-	WatchDirs    []string
-	Message      string
+	HomeDir             string
+	DatabasePath        string
+	WatchDirs           []string
+	IgnorePaths         []string
+	IgnoreNames         []string
+	WatchCount          int
+	WatchLimit          int
+	WatchLimitReached   bool
+	WatchLimitPath      string
+	RegisteredWatchDirs []string
+	Message             string
 }
 
 // CapturedEvent describes an event written by the foreground capture process.
@@ -47,14 +61,19 @@ type CapturedEvent struct {
 
 // RunCapture watches local files and stores events until stopped.
 type RunCapture struct {
-	Status       RunStatus
-	Events       <-chan CapturedEvent
-	db           *sql.DB
-	watcher      *fsnotify.Watcher
-	homeDir      string
-	databasePath string
-	watchDirs    []string
-	events       chan CapturedEvent
+	Status              RunStatus
+	Events              <-chan CapturedEvent
+	db                  *sql.DB
+	watcher             *fsnotify.Watcher
+	homeDir             string
+	databasePath        string
+	watchDirs           []string
+	ignorePaths         []string
+	ignoreNames         []string
+	watchBudget         *watchBudget
+	suppressedCreates   map[string]time.Time
+	deleteCoalesceDelay time.Duration
+	events              chan CapturedEvent
 }
 
 type fileEventPayload struct {
@@ -65,37 +84,12 @@ type fileEventPayload struct {
 
 // StartRun prepares foreground capture and returns once the watcher is ready.
 func StartRun(config RunConfig) (*RunCapture, error) {
-	homeDir, err := resolveHomeDir(config.HomeDir)
-	if err != nil {
-		return nil, err
-	}
-	homeDir, err = filepath.Abs(homeDir)
-	if err != nil {
-		return nil, fmt.Errorf("resolve WorkGraph home: %w", err)
-	}
-
-	dbPath := config.DatabasePath
-	if dbPath == "" {
-		dbPath = filepath.Join(homeDir, "workgraph.db")
-	}
-	dbPath, err = filepath.Abs(dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("resolve database path: %w", err)
-	}
-
-	if _, err := os.Stat(dbPath); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("%w: run workgraph init", ErrNotInitialized)
-		}
-		return nil, fmt.Errorf("check database: %w", err)
-	}
-
-	watchDirs, err := resolveWatchDirs(config.WatchDirs)
+	status, err := prepareRunStatus(config)
 	if err != nil {
 		return nil, err
 	}
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite3", status.DatabasePath)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -111,31 +105,37 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 		return nil, fmt.Errorf("create file watcher: %w", err)
 	}
 
-	for _, watchDir := range watchDirs {
-		if err := addWatchTree(watcher, watchDir, homeDir, dbPath); err != nil {
+	budget := newWatchBudget(config.MaxWatchEntries)
+	for _, watchDir := range status.WatchDirs {
+		if err := addWatchTree(watcher, watchDir, status.HomeDir, status.DatabasePath, status.IgnorePaths, status.IgnoreNames, budget); err != nil {
 			watcher.Close()
 			db.Close()
 			return nil, err
 		}
 	}
+	status.WatchCount = budget.count
+	status.WatchLimit = budget.limit
+	status.WatchLimitReached = budget.reached
+	status.WatchLimitPath = budget.limitPath
+	status.RegisteredWatchDirs = append([]string(nil), budget.registered...)
 
-	status := RunStatus{
-		HomeDir:      homeDir,
-		DatabasePath: dbPath,
-		WatchDirs:    append([]string(nil), watchDirs...),
-	}
 	status.Message = runMessage(status)
 	events := make(chan CapturedEvent, 128)
 
 	return &RunCapture{
-		Status:       status,
-		Events:       events,
-		db:           db,
-		watcher:      watcher,
-		homeDir:      homeDir,
-		databasePath: dbPath,
-		watchDirs:    watchDirs,
-		events:       events,
+		Status:              status,
+		Events:              events,
+		db:                  db,
+		watcher:             watcher,
+		homeDir:             status.HomeDir,
+		databasePath:        status.DatabasePath,
+		watchDirs:           status.WatchDirs,
+		ignorePaths:         status.IgnorePaths,
+		ignoreNames:         status.IgnoreNames,
+		watchBudget:         budget,
+		suppressedCreates:   map[string]time.Time{},
+		deleteCoalesceDelay: 75 * time.Millisecond,
+		events:              events,
 	}, nil
 }
 
@@ -192,13 +192,24 @@ func (capture *RunCapture) Close() error {
 }
 
 func (capture *RunCapture) handleEvent(event fsnotify.Event) error {
-	if shouldIgnorePath(event.Name, capture.homeDir, capture.databasePath) {
+	if shouldIgnorePath(event.Name, capture.homeDir, capture.databasePath, capture.ignorePaths, capture.ignoreNames) {
+		return nil
+	}
+	if isTransientEditorPath(event.Name) {
 		return nil
 	}
 
 	if event.Has(fsnotify.Create) {
 		if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
-			return addWatchTree(capture.watcher, event.Name, capture.homeDir, capture.databasePath)
+			err := addWatchTree(capture.watcher, event.Name, capture.homeDir, capture.databasePath, capture.ignorePaths, capture.ignoreNames, capture.watchBudget)
+			capture.Status.WatchCount = capture.watchBudget.count
+			capture.Status.WatchLimitReached = capture.watchBudget.reached
+			capture.Status.WatchLimitPath = capture.watchBudget.limitPath
+			capture.Status.RegisteredWatchDirs = append([]string(nil), capture.watchBudget.registered...)
+			return err
+		}
+		if capture.shouldSuppressCreate(event.Name) {
+			return nil
 		}
 		if err := capture.recordFileEvent(time.Now().UTC(), "created", event.Name); err != nil {
 			return err
@@ -212,12 +223,41 @@ func (capture *RunCapture) handleEvent(event fsnotify.Event) error {
 	}
 
 	if event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename) {
-		if err := capture.recordFileEvent(time.Now().UTC(), "deleted", event.Name); err != nil {
+		if err := capture.recordDeleteOrReplace(event.Name); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func (capture *RunCapture) recordDeleteOrReplace(path string) error {
+	time.Sleep(capture.deleteCoalesceDelay)
+	if _, err := os.Stat(path); err == nil {
+		capture.suppressedCreates[path] = time.Now().Add(500 * time.Millisecond)
+		return capture.recordFileEvent(time.Now().UTC(), "modified", path)
+	}
+	return capture.recordFileEvent(time.Now().UTC(), "deleted", path)
+}
+
+func (capture *RunCapture) shouldSuppressCreate(path string) bool {
+	deadline, ok := capture.suppressedCreates[path]
+	if !ok {
+		return false
+	}
+	if time.Now().After(deadline) {
+		delete(capture.suppressedCreates, path)
+		return false
+	}
+	return true
+}
+
+func isTransientEditorPath(path string) bool {
+	name := filepath.Base(path)
+	if name == ".DS_Store" {
+		return true
+	}
+	return strings.Contains(name, ".sb-")
 }
 
 func (capture *RunCapture) recordFileEvent(now time.Time, operation string, path string) error {
@@ -259,6 +299,76 @@ func (capture *RunCapture) recordFileEvent(now time.Time, operation string, path
 	return nil
 }
 
+func readConfig(configPath string) (configFile, error) {
+	contents, err := os.ReadFile(configPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return configFile{}, nil
+		}
+		return configFile{}, fmt.Errorf("read config: %w", err)
+	}
+
+	var config configFile
+	if err := json.Unmarshal(contents, &config); err != nil {
+		return configFile{}, fmt.Errorf("parse config: %w", err)
+	}
+
+	return config, nil
+}
+
+func prepareRunStatus(config RunConfig) (RunStatus, error) {
+	homeDir, err := resolveHomeDir(config.HomeDir)
+	if err != nil {
+		return RunStatus{}, err
+	}
+	homeDir, err = filepath.Abs(homeDir)
+	if err != nil {
+		return RunStatus{}, fmt.Errorf("resolve WorkGraph home: %w", err)
+	}
+
+	dbPath := config.DatabasePath
+	if dbPath == "" {
+		dbPath = filepath.Join(homeDir, "workgraph.db")
+	}
+	dbPath, err = filepath.Abs(dbPath)
+	if err != nil {
+		return RunStatus{}, fmt.Errorf("resolve database path: %w", err)
+	}
+
+	if _, err := os.Stat(dbPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return RunStatus{}, fmt.Errorf("%w: run workgraph init", ErrNotInitialized)
+		}
+		return RunStatus{}, fmt.Errorf("check database: %w", err)
+	}
+
+	localConfig, err := readConfig(filepath.Join(homeDir, "config.json"))
+	if err != nil {
+		return RunStatus{}, err
+	}
+
+	watchDirsConfig := config.WatchDirs
+	if len(watchDirsConfig) == 0 && len(localConfig.WatchDirs) > 0 {
+		watchDirsConfig = localConfig.WatchDirs
+	}
+	watchDirs, err := resolveWatchDirs(watchDirsConfig)
+	if err != nil {
+		return RunStatus{}, err
+	}
+	ignorePaths, err := resolveIgnorePaths(localConfig.IgnorePaths)
+	if err != nil {
+		return RunStatus{}, err
+	}
+
+	return RunStatus{
+		HomeDir:      homeDir,
+		DatabasePath: dbPath,
+		WatchDirs:    watchDirs,
+		IgnorePaths:  ignorePaths,
+		IgnoreNames:  append([]string(nil), localConfig.IgnoreNames...),
+	}, nil
+}
+
 func resolveWatchDirs(watchDirs []string) ([]string, error) {
 	if len(watchDirs) == 0 {
 		watchDirs = []string{"."}
@@ -285,25 +395,23 @@ func resolveWatchDirs(watchDirs []string) ([]string, error) {
 	return resolved, nil
 }
 
-func addWatchTree(watcher *fsnotify.Watcher, root, homeDir, dbPath string) error {
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
+func resolveIgnorePaths(ignorePaths []string) ([]string, error) {
+	resolved := make([]string, 0, len(ignorePaths))
+	for _, ignorePath := range ignorePaths {
+		absPath, err := filepath.Abs(ignorePath)
+		if err != nil {
+			return nil, fmt.Errorf("resolve ignored path: %w", err)
 		}
-		if shouldIgnorePath(path, homeDir, dbPath) {
-			if entry.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !entry.IsDir() {
-			return nil
-		}
-		if err := watcher.Add(path); err != nil {
-			return fmt.Errorf("watch directory %q: %w", path, err)
-		}
+		resolved = append(resolved, absPath)
+	}
+	return resolved, nil
+}
+
+func addWatchTree(watcher *fsnotify.Watcher, root, homeDir, dbPath string, ignorePaths []string, ignoreNames []string, budget *watchBudget) error {
+	err := addWatchDir(watcher, root, homeDir, dbPath, ignorePaths, ignoreNames, budget)
+	if errors.Is(err, errWatchLimitReached) {
 		return nil
-	})
+	}
 	if err != nil {
 		return fmt.Errorf("add watch tree %q: %w", root, err)
 	}
@@ -311,11 +419,170 @@ func addWatchTree(watcher *fsnotify.Watcher, root, homeDir, dbPath string) error
 	return nil
 }
 
-func shouldIgnorePath(path, homeDir, dbPath string) bool {
+func addWatchDir(watcher *fsnotify.Watcher, path, homeDir, dbPath string, ignorePaths []string, ignoreNames []string, budget *watchBudget) error {
+	if shouldIgnorePath(path, homeDir, dbPath, ignorePaths, ignoreNames) {
+		return nil
+	}
+	if !canReadDirectory(path) {
+		return nil
+	}
+	if !budget.canAdd(path) {
+		return errWatchLimitReached
+	}
+	if err := watcher.Add(path); err != nil {
+		if isPermissionError(err) || isUnsupportedSpecialFileError(err) {
+			return nil
+		}
+		if isResourceLimitError(err) {
+			budget.markReached(path)
+			return errWatchLimitReached
+		}
+		return fmt.Errorf("watch directory %q: %w", path, err)
+	}
+	budget.noteAdded(path)
+
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		if isPermissionError(err) || isUnsupportedSpecialFileError(err) || isResourceLimitError(err) {
+			return nil
+		}
+		return err
+	}
+	sortWatchEntries(entries)
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		child := filepath.Join(path, entry.Name())
+		if err := addWatchDir(watcher, child, homeDir, dbPath, ignorePaths, ignoreNames, budget); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func sortWatchEntries(entries []fs.DirEntry) {
+	sort.SliceStable(entries, func(i, j int) bool {
+		left := entries[i].Name()
+		right := entries[j].Name()
+		leftPriority := watchEntryPriority(left)
+		rightPriority := watchEntryPriority(right)
+		if leftPriority != rightPriority {
+			return leftPriority < rightPriority
+		}
+		return left < right
+	})
+}
+
+func watchEntryPriority(name string) int {
+	switch name {
+	case "Desktop", "Documents", "Downloads", "Projects", "Code", "Work":
+		return 0
+	}
+	if strings.HasPrefix(name, ".") {
+		return 2
+	}
+	return 1
+}
+
+type watchBudget struct {
+	limit      int
+	count      int
+	reached    bool
+	limitPath  string
+	registered []string
+}
+
+func newWatchBudget(limit int) *watchBudget {
+	if limit <= 0 {
+		limit = defaultMaxWatchEntries()
+	}
+	return &watchBudget{limit: limit}
+}
+
+func defaultMaxWatchEntries() int {
+	if runtime.GOOS == "darwin" {
+		return 128
+	}
+	return 4096
+}
+
+func (budget *watchBudget) canAdd(path string) bool {
+	if budget.count >= budget.limit {
+		budget.reached = true
+		if budget.limitPath == "" {
+			budget.limitPath = path
+		}
+		return false
+	}
+	return true
+}
+
+func (budget *watchBudget) noteAdded(path string) {
+	budget.count++
+	budget.registered = append(budget.registered, path)
+}
+
+func (budget *watchBudget) markReached(path string) {
+	budget.reached = true
+	if budget.limitPath == "" {
+		budget.limitPath = path
+	}
+}
+
+func canReadDirectory(path string) bool {
+	dir, err := os.Open(path)
+	if err != nil {
+		return !isPermissionError(err)
+	}
+	defer dir.Close()
+
+	_, err = dir.Readdirnames(1)
+	return err == nil || errors.Is(err, io.EOF) || errors.Is(err, os.ErrNotExist) || errors.Is(err, fs.ErrNotExist)
+}
+
+func isPermissionError(err error) bool {
+	if errors.Is(err, fs.ErrPermission) || errors.Is(err, os.ErrPermission) {
+		return true
+	}
+	return runtime.GOOS == "darwin" && strings.Contains(strings.ToLower(err.Error()), "operation not permitted")
+}
+
+func isUnsupportedSpecialFileError(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "operation not supported on socket")
+}
+
+func isResourceLimitError(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "too many open files")
+}
+
+func shouldIgnorePath(path, homeDir, dbPath string, ignorePaths []string, ignoreNames []string) bool {
 	if sameOrChild(path, homeDir) {
 		return true
 	}
-	return path == dbPath
+	if path == dbPath {
+		return true
+	}
+	for _, ignorePath := range ignorePaths {
+		if sameOrChild(path, ignorePath) {
+			return true
+		}
+	}
+	return hasIgnoredName(path, ignoreNames)
+}
+
+func hasIgnoredName(path string, ignoreNames []string) bool {
+	for _, segment := range strings.Split(filepath.Clean(path), string(filepath.Separator)) {
+		for _, ignoreName := range ignoreNames {
+			if segment == ignoreName {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func sameOrChild(path, parent string) bool {
@@ -350,8 +617,30 @@ func runMessage(status RunStatus) string {
 	for _, watchDir := range status.WatchDirs {
 		lines = append(lines, "Watching: "+watchDir)
 	}
+	if status.WatchLimitReached {
+		lines = append(lines, fmt.Sprintf("Watch limit reached: %d/%d directories registered", status.WatchCount, status.WatchLimit))
+		lines = append(lines, "Registered watch directories:")
+		sample := watchDirectorySample(status.RegisteredWatchDirs)
+		for _, watchDir := range sample {
+			lines = append(lines, "Watching directory: "+watchDir)
+		}
+		if len(status.RegisteredWatchDirs) > len(sample) {
+			lines = append(lines, fmt.Sprintf("... and %d more", len(status.RegisteredWatchDirs)-len(sample)))
+		}
+		if status.WatchLimitPath != "" {
+			lines = append(lines, "First unwatched directory: "+status.WatchLimitPath)
+		}
+	}
 
 	return strings.Join(lines, "\n")
+}
+
+func watchDirectorySample(watchDirs []string) []string {
+	const maxSample = 10
+	if len(watchDirs) <= maxSample {
+		return watchDirs
+	}
+	return watchDirs[:maxSample]
 }
 
 func fileSize(path string) int64 {

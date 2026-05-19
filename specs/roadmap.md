@@ -4,12 +4,17 @@
 - [x] CLI: workgraph init
 - [x] CLI: workgraph run
 - [x] Foreground file capture
-- [ ] Background daemon controls
+- [x] Background capture controls
 - [x] CLI: workgraph today
 - [ ] CLI: workgraph resume <project>
+- [x] Local config file
+- [x] Sane default watch roots
+- [x] Configurable ignored paths and names
+- [ ] Suggest watch roots from external signals
 - [ ] SQLite event store
-- [ ] File system watcher
+- [x] File system watcher
 - [ ] Basic project inference (repo/folder name)
+- [ ] Git-root project inference
 - [x] Session grouping (time-based)
 - [x] Simple output (no LLM)
 

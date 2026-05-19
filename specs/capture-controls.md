@@ -1,0 +1,78 @@
+# Capture Control Commands
+
+WorkGraph controls local event capture with top-level commands:
+
+```text
+workgraph run
+workgraph status
+workgraph stop
+```
+
+Background capture is explicit. WorkGraph does not start capture silently during
+`init`, `today`, or other read commands.
+
+## Commands
+
+```text
+workgraph run
+workgraph status
+workgraph stop
+```
+
+## Start
+
+`workgraph run` starts local event capture in the background and returns after
+capture is ready.
+
+It must:
+
+- refuse to start before `workgraph init`
+- read watch and ignore rules from `~/.workgraph/config.json`
+- use configured watch roots when no `--watch` flag is provided
+- allow `--watch` flags to override configured watch roots for that run
+- write local capture state under the WorkGraph home
+- avoid recording events from ignored paths or names
+
+The default initialized config watches existing common user-facing folders, so a newly initialized WorkGraph can start background capture without trying to recursively watch the entire home directory.
+
+For debugging, `workgraph run --foreground` runs capture attached to the current
+terminal and prints captured events as they arrive.
+
+## Status
+
+`workgraph status` reports whether background capture is running.
+
+When running, status includes:
+
+- PID
+- WorkGraph home
+- database path
+- watched directories
+- ignored paths
+- ignored names
+
+When not running, status says background capture is not running.
+
+## Stop
+
+`workgraph stop` stops background capture explicitly and preserves events already written to SQLite.
+
+Stopping should remove stale capture state when the process exits cleanly.
+
+## Local State
+
+Capture state lives under the WorkGraph home. The expected files are:
+
+- `daemon.pid`
+- `daemon.log`
+
+The exact file names can change if the implementation needs it, but capture state must stay local, inspectable, and outside the captured user event stream.
+
+## Non-Goals
+
+Phase 0 background capture does not require:
+
+- launch agents or system services
+- privileged installation
+- cloud coordination
+- automatic start on login

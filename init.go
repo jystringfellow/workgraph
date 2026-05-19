@@ -2,9 +2,11 @@ package workgraph
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -15,6 +17,7 @@ type InitConfig struct {
 	HomeDir      string
 	DatabasePath string
 	MemoryDir    string
+	Force        bool
 }
 
 // InitResult describes the local paths initialized by WorkGraph.
@@ -22,10 +25,17 @@ type InitResult struct {
 	HomeDir      string
 	DatabasePath string
 	MemoryDir    string
+	ConfigPath   string
 	Message      string
 }
 
-// Init creates the local WorkGraph home and SQLite database.
+type configFile struct {
+	WatchDirs   []string `json:"watch_dirs"`
+	IgnorePaths []string `json:"ignore_paths"`
+	IgnoreNames []string `json:"ignore_names"`
+}
+
+// Init creates the local WorkGraph home, config, SQLite database, and memory repo.
 func Init(config InitConfig) (InitResult, error) {
 	homeDir, err := resolveHomeDir(config.HomeDir)
 	if err != nil {
@@ -34,6 +44,11 @@ func Init(config InitConfig) (InitResult, error) {
 
 	if err := os.MkdirAll(homeDir, 0o755); err != nil {
 		return InitResult{}, fmt.Errorf("create WorkGraph home: %w", err)
+	}
+
+	configPath := filepath.Join(homeDir, "config.json")
+	if err := createDefaultConfig(configPath, homeDir, config.Force); err != nil {
+		return InitResult{}, fmt.Errorf("create config: %w", err)
 	}
 
 	dbPath := config.DatabasePath
@@ -71,6 +86,7 @@ func Init(config InitConfig) (InitResult, error) {
 		HomeDir:      homeDir,
 		DatabasePath: dbPath,
 		MemoryDir:    memoryDir,
+		ConfigPath:   configPath,
 	}
 	result.Message = initMessage(result)
 
@@ -103,12 +119,116 @@ func resolveMemoryDir(memoryDir string) (string, error) {
 	return filepath.Join(userHome, "workgraph-memory"), nil
 }
 
+func createDefaultConfig(configPath string, homeDir string, force bool) error {
+	workgraphHome, err := filepath.Abs(homeDir)
+	if err != nil {
+		return fmt.Errorf("resolve WorkGraph home: %w", err)
+	}
+
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("find user home: %w", err)
+	}
+	userHome, err = filepath.Abs(userHome)
+	if err != nil {
+		return fmt.Errorf("resolve user home: %w", err)
+	}
+
+	watchDirs, err := defaultWatchDirs(userHome)
+	if err != nil {
+		return err
+	}
+
+	config := configFile{
+		WatchDirs:   watchDirs,
+		IgnorePaths: []string{workgraphHome},
+		IgnoreNames: defaultIgnoreNames(),
+	}
+
+	contents, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode default config: %w", err)
+	}
+	contents = append(contents, '\n')
+
+	flags := os.O_WRONLY | os.O_CREATE | os.O_EXCL
+	if force {
+		flags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	}
+
+	file, err := os.OpenFile(configPath, flags, 0o644)
+	if err != nil {
+		if os.IsExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer file.Close()
+
+	if _, err := file.Write(contents); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func defaultIgnoreNames() []string {
+	return []string{".git", "node_modules", "DerivedData", ".noindex"}
+}
+
+func defaultWatchDirs(userHome string) ([]string, error) {
+	candidates := []string{
+		"Desktop",
+		"Documents",
+		"Downloads",
+		"Code",
+		"Projects",
+		"Developer",
+		"Work",
+		"source",
+		"repos",
+	}
+
+	watchDirs := []string{}
+	for _, name := range candidates {
+		path := filepath.Join(userHome, name)
+		info, err := os.Stat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("check default watch directory %q: %w", path, err)
+		}
+		if !info.IsDir() {
+			continue
+		}
+		path, err = filepath.Abs(path)
+		if err != nil {
+			return nil, fmt.Errorf("resolve default watch directory: %w", err)
+		}
+		watchDirs = append(watchDirs, path)
+	}
+
+	if len(watchDirs) == 0 {
+		return []string{userHome}, nil
+	}
+	return watchDirs, nil
+}
+
 func initMessage(result InitResult) string {
 	lines := []string{
 		"WorkGraph initialized",
 		"Home: " + result.HomeDir,
 		"Database: " + result.DatabasePath,
 		"Memory: " + result.MemoryDir,
+		"Config: " + result.ConfigPath,
+	}
+	if runtime.GOOS == "darwin" {
+		lines = append(lines,
+			"",
+			"macOS note: WorkGraph watches common folders such as Desktop, Documents, and Downloads by default. macOS may prompt for access to protected folders.",
+			"To avoid repeated prompts, grant Full Disk Access once to your terminal app or installed WorkGraph binary in System Settings > Privacy & Security > Full Disk Access.",
+		)
 	}
 
 	return strings.Join(lines, "\n")
