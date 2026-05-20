@@ -20,7 +20,7 @@
 - [x] Simple output (no LLM)
 
 ## Phase 1: External signals
-- [ ] Git integration (commits, branches)
+- [x] Git integration (commits, branches)
 - [ ] GitHub ingestion (PRs, issues)
 - [ ] Slack ingestion (messages, threads)
 

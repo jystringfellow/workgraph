@@ -27,6 +27,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runInit(args[1:], stdout, stderr)
 	case "config":
 		return runConfig(args[1:], stdout, stderr)
+	case "git":
+		return runGit(args[1:], stdout, stderr)
 	case "run":
 		return runCapture(args[1:], stdout, stderr)
 	case "status":
@@ -64,6 +66,47 @@ func runInit(args []string, stdout io.Writer, stderr io.Writer) int {
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph init: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runGit(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph git <command>")
+		return 2
+	}
+
+	switch args[0] {
+	case "capture":
+		return runGitCapture(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "unknown git command: %s\n", args[0])
+		return 2
+	}
+}
+
+func runGitCapture(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("git capture", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "WorkGraph home directory")
+	databasePath := flags.String("database", "", "WorkGraph SQLite database path")
+	maxCommits := flags.Int("max-commits", 50, "Maximum recent commits to read per repository")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+
+	result, err := workgraph.CaptureGitCommits(workgraph.GitCaptureConfig{
+		HomeDir:      *homeDir,
+		DatabasePath: *databasePath,
+		MaxCommits:   *maxCommits,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph git capture: %v\n", err)
 		return 1
 	}
 
