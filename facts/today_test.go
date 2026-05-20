@@ -153,6 +153,41 @@ func TestTodayGroupsSessionsByProject(t *testing.T) {
 	}
 }
 
+func TestTodayDisplaysGitCommitEventsWithBranchAndShortSHA(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	result, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir: homeDir,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	now := time.Date(2026, 5, 20, 14, 30, 0, 0, time.Local)
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "git-commit-1",
+		Source:    "git",
+		Type:      "git.commit",
+		Timestamp: now.Add(-time.Hour),
+		Project:   "Cupcake",
+		Payload:   `{"repo_path":"/tmp/Code/Cupcake","commit":"abcdef1234567890","branch":"main","subject":"Add cupcake API","author_name":"Dev User","author_email":"dev@example.test"}`,
+		Summary:   "Add cupcake API",
+	})
+
+	today, err := workgraph.Today(workgraph.TodayConfig{
+		HomeDir:      homeDir,
+		DatabasePath: result.DatabasePath,
+		Now:          now,
+	})
+	if err != nil {
+		t.Fatalf("today failed: %v", err)
+	}
+
+	if !strings.Contains(today.Message, "git.commit Add cupcake API (main abcdef1)") {
+		t.Fatalf("expected git commit event with branch and short SHA, got:\n%s", today.Message)
+	}
+}
+
 func TestTodayShowsUnfinishedWorkWhenKnown(t *testing.T) {
 	t.Skip("TBD: today command shows unfinished work when tasks or TODOs are known")
 }
@@ -273,10 +308,12 @@ func TestTodayOutputIsPlainTextWithoutLLM(t *testing.T) {
 
 type storedEvent struct {
 	ID        string
+	Source    string
 	Type      string
 	Timestamp time.Time
 	Project   string
 	Payload   string
+	Summary   string
 }
 
 func insertEvent(t *testing.T, dbPath string, event storedEvent) {
@@ -288,15 +325,21 @@ func insertEvent(t *testing.T, dbPath string, event storedEvent) {
 	}
 	defer db.Close()
 
+	source := event.Source
+	if source == "" {
+		source = "file"
+	}
+
 	_, err = db.Exec(`INSERT INTO events
-		(id, source, type, timestamp, payload_json, project, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		(id, source, type, timestamp, payload_json, project, summary, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.ID,
-		"file",
+		source,
 		event.Type,
 		event.Timestamp.Format(time.RFC3339Nano),
 		event.Payload,
 		event.Project,
+		event.Summary,
 		event.Timestamp.Format(time.RFC3339Nano),
 	)
 	if err != nil {

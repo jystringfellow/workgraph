@@ -61,6 +61,8 @@ type CapturedEvent struct {
 	Type      string
 	Operation string
 	Path      string
+	Project   string
+	Summary   string
 }
 
 // RunCapture watches local files and stores events until stopped.
@@ -195,12 +197,18 @@ func (capture *RunCapture) Run(ctx context.Context) error {
 }
 
 func (capture *RunCapture) captureGitCommits() error {
-	_, err := CaptureGitCommits(GitCaptureConfig{
+	result, err := CaptureGitCommits(GitCaptureConfig{
 		HomeDir:      capture.homeDir,
 		DatabasePath: capture.databasePath,
 		WatchDirs:    capture.watchDirs,
 		MaxCommits:   20,
 	})
+	if err != nil {
+		return err
+	}
+	for _, event := range result.Events {
+		capture.events <- event
+	}
 	return err
 }
 

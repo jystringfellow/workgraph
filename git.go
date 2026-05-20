@@ -30,6 +30,7 @@ type GitCaptureResult struct {
 	DatabasePath  string
 	Repositories  []string
 	CommitsStored int
+	Events        []CapturedEvent
 	Message       string
 }
 
@@ -78,6 +79,7 @@ func CaptureGitCommits(config GitCaptureConfig) (GitCaptureResult, error) {
 	}
 
 	stored := 0
+	var events []CapturedEvent
 	for _, repo := range repos {
 		branch := gitBranch(repo)
 		commits, err := gitRecentCommits(repo, maxCommits)
@@ -85,12 +87,13 @@ func CaptureGitCommits(config GitCaptureConfig) (GitCaptureResult, error) {
 			continue
 		}
 		for _, commit := range commits {
-			inserted, err := storeGitCommit(db, repo, branch, commit)
+			inserted, event, err := storeGitCommit(db, repo, branch, commit)
 			if err != nil {
 				return GitCaptureResult{}, err
 			}
 			if inserted {
 				stored++
+				events = append(events, event)
 			}
 		}
 	}
@@ -100,6 +103,7 @@ func CaptureGitCommits(config GitCaptureConfig) (GitCaptureResult, error) {
 		DatabasePath:  status.DatabasePath,
 		Repositories:  repos,
 		CommitsStored: stored,
+		Events:        events,
 	}
 	result.Message = gitCaptureMessage(result)
 	return result, nil
@@ -194,7 +198,7 @@ func gitRecentCommits(repoPath string, maxCommits int) ([]gitCommit, error) {
 	return commits, nil
 }
 
-func storeGitCommit(db *sql.DB, repoPath, branch string, commit gitCommit) (bool, error) {
+func storeGitCommit(db *sql.DB, repoPath, branch string, commit gitCommit) (bool, CapturedEvent, error) {
 	payload, err := json.Marshal(gitCommitPayload{
 		RepoPath:    repoPath,
 		Commit:      commit.SHA,
@@ -204,8 +208,9 @@ func storeGitCommit(db *sql.DB, repoPath, branch string, commit gitCommit) (bool
 		AuthorEmail: commit.AuthorEmail,
 	})
 	if err != nil {
-		return false, fmt.Errorf("encode git commit event: %w", err)
+		return false, CapturedEvent{}, fmt.Errorf("encode git commit event: %w", err)
 	}
+	project := filepath.Base(repoPath)
 
 	result, err := db.Exec(`INSERT OR IGNORE INTO events
 		(id, source, type, timestamp, payload_json, project, actor, summary, created_at)
@@ -215,19 +220,24 @@ func storeGitCommit(db *sql.DB, repoPath, branch string, commit gitCommit) (bool
 		"git.commit",
 		time.Unix(commit.UnixTime, 0).UTC().Format(time.RFC3339Nano),
 		string(payload),
-		filepath.Base(repoPath),
+		project,
 		commit.AuthorEmail,
 		commit.Subject,
 		time.Now().UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
-		return false, fmt.Errorf("store git commit event: %w", err)
+		return false, CapturedEvent{}, fmt.Errorf("store git commit event: %w", err)
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return false, fmt.Errorf("store git commit event: %w", err)
+		return false, CapturedEvent{}, fmt.Errorf("store git commit event: %w", err)
 	}
-	return rows > 0, nil
+	event := CapturedEvent{
+		Type:    "git.commit",
+		Project: project,
+		Summary: commit.Subject,
+	}
+	return rows > 0, event, nil
 }
 
 func gitCaptureMessage(result GitCaptureResult) string {

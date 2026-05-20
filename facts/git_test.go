@@ -137,6 +137,51 @@ func TestRunCapturesGitCommitsWhileActive(t *testing.T) {
 	}
 }
 
+func TestRunReportsGitCommitsWhileForegroundCaptureIsActive(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	codeDir := filepath.Join(tempDir, "Code")
+	repoDir := filepath.Join(codeDir, "Cupcake")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("create repo dir: %v", err)
+	}
+	initGitRepo(t, repoDir)
+
+	initResult, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir: homeDir,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:         homeDir,
+		DatabasePath:    initResult.DatabasePath,
+		WatchDirs:       []string{codeDir},
+		GitPollInterval: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("run start failed: %v", err)
+	}
+	go func() {
+		done <- capture.Run(ctx)
+	}()
+
+	commitGitFile(t, repoDir, "README.md", "# Cupcake\n", "Add cupcake API")
+	event := waitForCapturedEvent(t, capture.Events, "git.commit", "Add cupcake API")
+	if event.Project != "Cupcake" {
+		t.Fatalf("expected captured git project Cupcake, got %q", event.Project)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+}
+
 type storedGitCommitEvent struct {
 	Project     string
 	Actor       string
@@ -193,6 +238,22 @@ func waitForGitCommitEvent(t *testing.T, dbPath, commitSHA string) {
 	}
 
 	t.Fatalf("timed out waiting for git commit event %s", commitSHA)
+}
+
+func waitForCapturedEvent(t *testing.T, events <-chan workgraph.CapturedEvent, eventType, summary string) workgraph.CapturedEvent {
+	t.Helper()
+
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-events:
+			if event.Type == eventType && event.Summary == summary {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for captured %s event %q", eventType, summary)
+		}
+	}
 }
 
 func runGit(t *testing.T, dir string, args ...string) []byte {

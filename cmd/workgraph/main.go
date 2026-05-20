@@ -216,7 +216,7 @@ func runCapture(args []string, stdout io.Writer, stderr io.Writer) int {
 				if !ok {
 					return
 				}
-				fmt.Fprintf(stdout, "%s %s\n", event.Type, event.Path)
+				fmt.Fprintln(stdout, formatCapturedEvent(event))
 			}
 		}
 	}()
@@ -228,6 +228,18 @@ func runCapture(args []string, stdout io.Writer, stderr io.Writer) int {
 	<-eventDone
 
 	return 0
+}
+
+func formatCapturedEvent(event workgraph.CapturedEvent) string {
+	if event.Type == "git.commit" {
+		if event.Project != "" && event.Summary != "" {
+			return fmt.Sprintf("%s %s %s", event.Type, event.Project, event.Summary)
+		}
+		if event.Summary != "" {
+			return fmt.Sprintf("%s %s", event.Type, event.Summary)
+		}
+	}
+	return fmt.Sprintf("%s %s", event.Type, event.Path)
 }
 
 func runCaptureStatus(args []string, stdout io.Writer, stderr io.Writer) int {
