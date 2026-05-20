@@ -14,8 +14,8 @@
 - [ ] Suggest ignore rules from noisy tracked activity
 - [ ] SQLite event store
 - [x] File system watcher
-- [ ] Basic project inference (repo/folder name)
-- [ ] Git-root project inference
+- [x] Basic project inference (repo/folder name)
+- [x] Git-root project inference
 - [x] Session grouping (time-based)
 - [x] Simple output (no LLM)
 
