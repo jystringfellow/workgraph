@@ -6,7 +6,7 @@
 - [x] Foreground file capture
 - [x] Background capture controls
 - [x] CLI: workgraph today
-- [ ] CLI: workgraph resume <project>
+- [x] CLI: workgraph resume <project>
 - [x] Local config file
 - [x] Sane default watch roots
 - [x] Configurable ignored paths and names

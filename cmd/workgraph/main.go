@@ -39,6 +39,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runCaptureStop(args[1:], stdout, stderr)
 	case "today":
 		return runToday(args[1:], stdout, stderr)
+	case "resume":
+		return runResume(args[1:], stdout, stderr)
 	case "__capture-worker":
 		return runCaptureWorker(args[1:], stderr)
 	default:
@@ -334,6 +336,40 @@ func runToday(args []string, stdout io.Writer, stderr io.Writer) int {
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph today: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runResume(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("resume", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "WorkGraph home directory")
+	databasePath := flags.String("database", "", "WorkGraph SQLite database path")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() > 1 {
+		fmt.Fprintln(stderr, "usage: workgraph resume [project]")
+		return 2
+	}
+
+	project := ""
+	if flags.NArg() == 1 {
+		project = flags.Arg(0)
+	}
+
+	result, err := workgraph.Resume(workgraph.ResumeConfig{
+		HomeDir:      *homeDir,
+		DatabasePath: *databasePath,
+		Project:      project,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph resume: %v\n", err)
 		return 1
 	}
 
