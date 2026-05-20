@@ -1,9 +1,8 @@
 Feature: GitHub integration
 
 Scenario: Capture GitHub pull request activity
-  Given WorkGraph is connected to GitHub
-  And a repository has pull request activity
-  When I run "workgraph github capture"
+  Given WorkGraph has a GitHub event export with pull request activity
+  When I run "workgraph github capture --events-file github-events.json"
   Then WorkGraph stores a GitHub pull request event
   And the event includes repository, PR number, URL, state, actor, and title
 
@@ -20,8 +19,27 @@ Scenario: Link GitHub activity to a local project by commit
   Then the GitHub event project matches the local git commit project
 
 Scenario: Capture GitHub issues
-  Given WorkGraph is connected to GitHub
-  And a repository has issue activity
-  When I run "workgraph github capture"
+  Given WorkGraph has a GitHub event export with issue activity
+  When I run "workgraph github capture --events-file github-events.json"
   Then WorkGraph stores a GitHub issue event
   And the event includes repository, issue number, URL, state, actor, and title
+
+Scenario: Capture GitHub activity while run is active
+  Given WorkGraph is running
+  And a configured local git repository has a GitHub remote
+  And the GitHub CLI reports pull request activity for that repository
+  When GitHub polling runs
+  Then WorkGraph stores the GitHub pull request event without a manual capture command
+
+Scenario: Skip GitHub polling when rate limit is low
+  Given WorkGraph is running
+  And the GitHub CLI reports a low remaining API rate limit
+  When GitHub polling runs
+  Then WorkGraph does not query repository activity
+  And WorkGraph keeps capture running
+
+Scenario: Bound GitHub polling work per tick
+  Given WorkGraph is watching many local repositories with GitHub remotes
+  When GitHub polling runs
+  Then WorkGraph queries only a bounded number of repositories
+  And WorkGraph keeps capture running

@@ -3,17 +3,32 @@
 WorkGraph should ingest GitHub activity as cloud-side work events that connect
 back to local projects when possible.
 
-GitHub ingestion should start with explicit capture:
+GitHub ingestion should start with explicit capture from a local exported event
+file:
 
 ```text
-workgraph github capture
+workgraph github capture --events-file github-events.json
 ```
 
-The first MVP should ingest:
+This gives WorkGraph a deterministic ingestion seam before adding network
+authentication and API pagination. A later provider can fetch the same event
+shape from GitHub directly.
+
+`workgraph run` should also poll GitHub activity through the authenticated
+GitHub CLI (`gh`) when it is available. The daemon must be conservative:
+
+- discover GitHub repositories from configured local git remotes
+- check GitHub rate-limit state before querying repository activity
+- skip GitHub polling when the remaining request budget is low
+- query a bounded number of repositories per poll
+- use a low-frequency polling interval by default
+- store events through the same ingestion path as exported events
+- avoid duplicate events across polling cycles
+
+The first MVP ingests:
 
 - pull requests
 - issues
-- review comments or PR comments when available
 
 GitHub events should be stored in the existing event store:
 

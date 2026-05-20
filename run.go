@@ -38,6 +38,10 @@ type RunConfig struct {
 	PollInterval time.Duration
 	// GitPollInterval controls local git commit capture while running.
 	GitPollInterval time.Duration
+	// GitHubPollInterval controls GitHub activity capture while running.
+	GitHubPollInterval time.Duration
+	// GitHubCommand is the gh-compatible executable used for GitHub polling.
+	GitHubCommand string
 }
 
 // RunStatus describes an active capture process.
@@ -78,6 +82,8 @@ type RunCapture struct {
 	ignoreNames         []string
 	watchBudget         *watchBudget
 	gitPollInterval     time.Duration
+	githubPollInterval  time.Duration
+	githubCommand       string
 	suppressedCreates   map[string]time.Time
 	deleteCoalesceDelay time.Duration
 	events              chan CapturedEvent
@@ -157,6 +163,8 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 		ignoreNames:         status.IgnoreNames,
 		watchBudget:         budget,
 		gitPollInterval:     gitPollInterval(config.GitPollInterval),
+		githubPollInterval:  githubPollInterval(config.GitHubPollInterval),
+		githubCommand:       config.GitHubCommand,
 		suppressedCreates:   map[string]time.Time{},
 		deleteCoalesceDelay: 75 * time.Millisecond,
 		events:              events,
@@ -169,6 +177,8 @@ func (capture *RunCapture) Run(ctx context.Context) error {
 
 	gitTicker := time.NewTicker(capture.gitPollInterval)
 	defer gitTicker.Stop()
+	githubTicker := time.NewTicker(capture.githubPollInterval)
+	defer githubTicker.Stop()
 
 	for {
 		select {
@@ -176,6 +186,10 @@ func (capture *RunCapture) Run(ctx context.Context) error {
 			return nil
 		case <-gitTicker.C:
 			if err := capture.captureGitCommits(); err != nil {
+				return err
+			}
+		case <-githubTicker.C:
+			if err := capture.captureGitHubEvents(); err != nil {
 				return err
 			}
 		case event, ok := <-capture.watcher.Events:
@@ -209,6 +223,16 @@ func (capture *RunCapture) captureGitCommits() error {
 	for _, event := range result.Events {
 		capture.events <- event
 	}
+	return err
+}
+
+func (capture *RunCapture) captureGitHubEvents() error {
+	_, err := CaptureGitHubFromGH(GitHubCaptureConfig{
+		HomeDir:       capture.homeDir,
+		DatabasePath:  capture.databasePath,
+		WatchDirs:     capture.watchDirs,
+		GitHubCommand: capture.githubCommand,
+	})
 	return err
 }
 
@@ -650,6 +674,13 @@ func defaultMaxWatchEntries() int {
 func gitPollInterval(interval time.Duration) time.Duration {
 	if interval <= 0 {
 		return 30 * time.Second
+	}
+	return interval
+}
+
+func githubPollInterval(interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return 5 * time.Minute
 	}
 	return interval
 }
