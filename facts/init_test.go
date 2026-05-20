@@ -3,8 +3,11 @@ package facts
 import (
 	"bytes"
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -89,6 +92,106 @@ func TestInitCreatesMemoryRepo(t *testing.T) {
 	}
 }
 
+func TestInitCreatesDefaultConfig(t *testing.T) {
+	tempDir := t.TempDir()
+	userHome := fakeUserHomeWithDirs(t, "Desktop", "Documents", "Downloads", "Code")
+	homeDir := filepath.Join(tempDir, ".workgraph")
+
+	_, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir: homeDir,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	configPath := filepath.Join(homeDir, "config.json")
+	config := readInitConfig(t, configPath)
+
+	workgraphHome, err := filepath.Abs(homeDir)
+	if err != nil {
+		t.Fatalf("resolve WorkGraph home: %v", err)
+	}
+	expectedWatchDirs := []string{
+		filepath.Join(userHome, "Desktop"),
+		filepath.Join(userHome, "Documents"),
+		filepath.Join(userHome, "Downloads"),
+		filepath.Join(userHome, "Code"),
+	}
+
+	if !reflect.DeepEqual(config.WatchDirs, expectedWatchDirs) {
+		t.Fatalf("expected default watch dirs %q, got %q", expectedWatchDirs, config.WatchDirs)
+	}
+	if !reflect.DeepEqual(config.ConservativeWatchDirs, expectedWatchDirs) {
+		t.Fatalf("expected default watch dirs to be conservative %q, got %q", expectedWatchDirs, config.ConservativeWatchDirs)
+	}
+	if !reflect.DeepEqual(config.IgnorePaths, []string{workgraphHome}) {
+		t.Fatalf("expected default ignore paths %q, got %q", []string{workgraphHome}, config.IgnorePaths)
+	}
+	expectedIgnoreNames := []string{".git", "node_modules", "DerivedData", ".noindex", "xcuserdata", "bin", "obj", "dist", "build", "target", ".build", ".gradle"}
+	if !reflect.DeepEqual(config.IgnoreNames, expectedIgnoreNames) {
+		t.Fatalf("expected default ignore names, got %q", config.IgnoreNames)
+	}
+	if containsString(config.IgnoreNames, "Native Instruments") {
+		t.Fatalf("expected default ignore names not to include app-specific user folders, got %q", config.IgnoreNames)
+	}
+}
+
+func TestInitDefaultConfigWatchesCommonUserFolders(t *testing.T) {
+	userHome := fakeUserHomeWithDirs(t, "Desktop", "Documents", "Downloads", "Projects")
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+
+	_, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir: homeDir,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	config := readInitConfig(t, filepath.Join(homeDir, "config.json"))
+	expectedWatchDirs := []string{
+		filepath.Join(userHome, "Desktop"),
+		filepath.Join(userHome, "Documents"),
+		filepath.Join(userHome, "Downloads"),
+		filepath.Join(userHome, "Projects"),
+	}
+
+	if !reflect.DeepEqual(config.WatchDirs, expectedWatchDirs) {
+		t.Fatalf("expected default watch dirs %q, got %q", expectedWatchDirs, config.WatchDirs)
+	}
+	for _, watchDir := range config.WatchDirs {
+		if !filepath.IsAbs(watchDir) {
+			t.Fatalf("expected watch dir to be absolute, got %q", watchDir)
+		}
+		if strings.Contains(watchDir, "$HOME") || strings.Contains(watchDir, "~") {
+			t.Fatalf("expected resolved watch dir, got %q", watchDir)
+		}
+	}
+}
+
+func TestInitDefaultConfigIgnoresWorkGraphHome(t *testing.T) {
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+
+	_, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir: homeDir,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	config := readInitConfig(t, filepath.Join(homeDir, "config.json"))
+	workgraphHome, err := filepath.Abs(homeDir)
+	if err != nil {
+		t.Fatalf("resolve WorkGraph home: %v", err)
+	}
+
+	if !reflect.DeepEqual(config.IgnorePaths, []string{workgraphHome}) {
+		t.Fatalf("expected default ignore paths %q, got %q", []string{workgraphHome}, config.IgnorePaths)
+	}
+	if !filepath.IsAbs(config.IgnorePaths[0]) {
+		t.Fatalf("expected ignore path to be absolute, got %q", config.IgnorePaths[0])
+	}
+}
+
 func TestInitIsIdempotent(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
@@ -151,6 +254,76 @@ func TestInitIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestInitPreservesExistingConfig(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	configPath := filepath.Join(homeDir, "config.json")
+	existing := initConfigFile{
+		WatchDirs:   []string{filepath.Join(tempDir, "watched")},
+		IgnorePaths: []string{filepath.Join(tempDir, "private")},
+		IgnoreNames: []string{".git", "node_modules", "dist"},
+	}
+
+	if err := os.MkdirAll(homeDir, 0o755); err != nil {
+		t.Fatalf("create WorkGraph home: %v", err)
+	}
+	writeInitConfig(t, configPath, existing)
+
+	_, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir: homeDir,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	config := readInitConfig(t, configPath)
+	if !reflect.DeepEqual(config, existing) {
+		t.Fatalf("expected existing config to be preserved, got %#v", config)
+	}
+}
+
+func TestInitForceOverwritesExistingConfigWithDefaults(t *testing.T) {
+	tempDir := t.TempDir()
+	userHome := fakeUserHomeWithDirs(t, "Desktop", "Documents")
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	configPath := filepath.Join(homeDir, "config.json")
+	oldConfig := initConfigFile{
+		WatchDirs:   []string{filepath.Join(tempDir, "old-watch")},
+		IgnorePaths: []string{filepath.Join(tempDir, "old-ignore")},
+		IgnoreNames: []string{".git", "node_modules"},
+	}
+
+	if err := os.MkdirAll(homeDir, 0o755); err != nil {
+		t.Fatalf("create WorkGraph home: %v", err)
+	}
+	writeInitConfig(t, configPath, oldConfig)
+
+	_, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir: homeDir,
+		Force:   true,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	config := readInitConfig(t, configPath)
+	workgraphHome, err := filepath.Abs(homeDir)
+	if err != nil {
+		t.Fatalf("resolve WorkGraph home: %v", err)
+	}
+
+	expectedWatchDirs := []string{filepath.Join(userHome, "Desktop"), filepath.Join(userHome, "Documents")}
+	expected := initConfigFile{
+		WatchDirs:             expectedWatchDirs,
+		ConservativeWatchDirs: expectedWatchDirs,
+		IgnorePaths:           []string{workgraphHome},
+		IgnoreNames:           []string{".git", "node_modules", "DerivedData", ".noindex", "xcuserdata", "bin", "obj", "dist", "build", "target", ".build", ".gradle"},
+	}
+	if !reflect.DeepEqual(config, expected) {
+		t.Fatalf("expected force init to refresh config to %#v, got %#v", expected, config)
+	}
+}
+
 func TestInitReportsInitializedPaths(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
@@ -182,4 +355,116 @@ func TestInitReportsInitializedPaths(t *testing.T) {
 	if !strings.Contains(result.Message, result.MemoryDir) {
 		t.Fatalf("expected result message to include memory path, got %q", result.Message)
 	}
+}
+
+func TestInitReportsConfigPath(t *testing.T) {
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	configPath := filepath.Join(homeDir, "config.json")
+
+	result, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir: homeDir,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	if result.ConfigPath != configPath {
+		t.Fatalf("expected config path %q, got %q", configPath, result.ConfigPath)
+	}
+	if !strings.Contains(result.Message, configPath) {
+		t.Fatalf("expected result message to include config path %q, got %q", configPath, result.Message)
+	}
+	if !strings.Contains(result.Message, "Config: "+configPath) {
+		t.Fatalf("expected result message to label config path, got %q", result.Message)
+	}
+}
+
+func TestInitOnMacOSSuggestsFullDiskAccess(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS-specific privacy guidance")
+	}
+
+	result, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir: filepath.Join(t.TempDir(), ".workgraph"),
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	for _, expected := range []string{"macOS", "Full Disk Access", "Documents", "Desktop", "Downloads"} {
+		if !strings.Contains(result.Message, expected) {
+			t.Fatalf("expected init message to include %q, got %q", expected, result.Message)
+		}
+	}
+}
+
+type initConfigFile struct {
+	WatchDirs             []string `json:"watch_dirs"`
+	ConservativeWatchDirs []string `json:"conservative_watch_dirs,omitempty"`
+	IgnorePaths           []string `json:"ignore_paths"`
+	IgnoreNames           []string `json:"ignore_names"`
+}
+
+func readInitConfig(t *testing.T, path string) initConfigFile {
+	t.Helper()
+
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+
+	var config initConfigFile
+	if err := json.Unmarshal(contents, &config); err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+
+	return config
+}
+
+func writeInitConfig(t *testing.T, path string, config initConfigFile) {
+	t.Helper()
+
+	contents, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		t.Fatalf("encode config: %v", err)
+	}
+
+	if err := os.WriteFile(path, append(contents, '\n'), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+}
+
+func fakeUserHomeWithDirs(t *testing.T, names ...string) string {
+	t.Helper()
+
+	originalHome, _ := os.UserHomeDir()
+	userHome := filepath.Join(t.TempDir(), "user-home")
+	if err := os.MkdirAll(userHome, 0o755); err != nil {
+		t.Fatalf("create fake user home: %v", err)
+	}
+	for _, name := range names {
+		if err := os.MkdirAll(filepath.Join(userHome, name), 0o755); err != nil {
+			t.Fatalf("create fake user home dir %q: %v", name, err)
+		}
+	}
+	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
+	if os.Getenv("GOMODCACHE") == "" && originalHome != "" {
+		t.Setenv("GOMODCACHE", filepath.Join(originalHome, "go", "pkg", "mod"))
+	}
+
+	resolved, err := filepath.Abs(userHome)
+	if err != nil {
+		t.Fatalf("resolve fake user home: %v", err)
+	}
+	return resolved
+}
+
+func containsString(values []string, needle string) bool {
+	for _, value := range values {
+		if value == needle {
+			return true
+		}
+	}
+	return false
 }

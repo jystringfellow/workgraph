@@ -17,6 +17,18 @@ Scenario: Ignore WorkGraph internal files
   When a file changes inside "~/.workgraph"
   Then WorkGraph does not record a user work event
 
+Scenario: Ignore configured paths
+  Given WorkGraph is running
+  And the config ignores a local directory
+  When a file changes inside that ignored directory
+  Then WorkGraph does not record a user work event
+
+Scenario: Ignore configured names
+  Given WorkGraph is running
+  And the config ignores the name ".git"
+  When a file changes under a path segment named ".git"
+  Then WorkGraph does not record a user work event
+
 Scenario: Infer project from a git repository
   Given WorkGraph is running
   And a file changes inside a git repository

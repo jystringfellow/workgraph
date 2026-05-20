@@ -80,17 +80,96 @@ This creates:
 
 - `~/.workgraph/`
 - `~/.workgraph/workgraph.db`
+- `~/.workgraph/config.json`
 - `~/workgraph-memory/`
 
-To start foreground file capture for the current directory:
+The default config watches existing common folders such as Desktop, Documents,
+Downloads, Code, Projects, Developer, Work, source, and repos, and ignores
+WorkGraph internal storage. Paths are stored as resolved absolute paths so the
+same behavior works on macOS, Linux, and Windows without relying on shell
+expansion of `$HOME`. WorkGraph avoids recursively watching the entire home
+directory when those common folders exist.
+
+On macOS, watching protected folders such as Documents, Desktop, and Downloads
+can trigger privacy prompts. To avoid approving each folder one by one, grant
+Full Disk Access once to your terminal app or installed WorkGraph binary in
+System Settings → Privacy & Security → Full Disk Access.
+
+The config shape is:
+
+```json
+{
+  "watch_dirs": ["/Users/craig/Desktop", "/Users/craig/Documents", "/Users/craig/Downloads", "/Users/craig/Code"],
+  "ignore_paths": ["/Users/craig/.workgraph"],
+  "ignore_names": [".git", "node_modules", "DerivedData", ".noindex", "xcuserdata", "bin", "obj", "dist", "build", "target", ".build", ".gradle"]
+}
+```
+
+If you want to pick up the latest default config after a WorkGraph update, run:
+
+```sh
+go run ./cmd/workgraph init --force
+```
+
+This refreshes `~/.workgraph/config.json` while preserving captured events and
+memory files.
+
+To add the directory you are currently working in to the watched roots:
+
+```sh
+go run /path/to/workgraph/cmd/workgraph config add-watch
+```
+
+You can also add a specific folder:
+
+```sh
+go run /path/to/workgraph/cmd/workgraph config add-watch /Volumes/Craig/Code
+```
+
+Added watch roots are stored as absolute paths and placed before existing roots
+so a broad home-directory watch budget does not starve a project you explicitly
+added. Roots added with `config add-watch` are treated as explicit, so WorkGraph
+can recurse through them more fully than init-owned default folders.
+
+To start background file capture for the current directory:
 
 ```sh
 go run ./cmd/workgraph run --watch .
 ```
 
-The command keeps running until you stop it with `Ctrl+C`. While it is running,
-create, modify, or delete a file under the watched directory. WorkGraph records
-those actions as local file events in SQLite and prints each captured event.
+If no `--watch` flag is provided, background capture uses the configured
+`watch_dirs`. Configured `ignore_paths` and `ignore_names` apply either way.
+The command returns after capture is ready.
+
+When a watched tree is very large, WorkGraph caps recursive watch registration
+to keep file descriptors available for the process. If output says `Watch limit
+reached`, capture is still running for already registered directories, but you
+should narrow `watch_dirs` to the folders you care about most. The output
+includes a small sample of registered directories and the first directory that
+was outside the watch budget. WorkGraph prioritizes user-facing folders such as
+Desktop, Documents, and Downloads before hidden cache directories, and it skips
+top-level hidden folders under broad watched roots unless you explicitly add
+that hidden folder to `watch_dirs`. Init-owned default roots are traversed
+conservatively: WorkGraph watches the default root and its immediate children,
+then only recurses deeper into children that look like active work folders.
+
+Use `status` and `stop` to inspect or stop background capture:
+
+```sh
+go run ./cmd/workgraph status
+go run ./cmd/workgraph stop
+```
+
+For debugging, add `--foreground` to keep capture attached to the current
+terminal and print captured events:
+
+```sh
+go run ./cmd/workgraph run --foreground --watch .
+```
+
+Some editors save by writing a temporary scratch file and replacing the original
+document. WorkGraph normalizes that safe-save pattern into `file.modified` for
+the document and ignores editor scratch files and `.DS_Store` metadata noise.
 
 For isolated testing, keep WorkGraph state and watched files inside a temporary
 directory:
@@ -114,9 +193,19 @@ sleep 1
 rm "$tmpdir/project/notes.md"
 ```
 
-Then stop `workgraph run` with `Ctrl+C`.
+Then stop background capture:
 
-The `workgraph run` terminal should print lines like:
+```sh
+go run ./cmd/workgraph stop --home "$tmpdir/.workgraph"
+```
+
+To watch events stream live instead, run foreground capture:
+
+```sh
+go run ./cmd/workgraph run --foreground --home "$tmpdir/.workgraph" --watch "$tmpdir/project"
+```
+
+The foreground terminal should print lines like:
 
 ```text
 file.created /tmp/workgraph-run.abc123/project/notes.md
@@ -138,6 +227,11 @@ go run ./cmd/workgraph today
 The output is deterministic plain text. When events exist, it includes `Today`,
 `Projects`, and `Sessions` sections. Sessions are inferred from same-project
 events that happen within 30 minutes of each other.
+
+Background capture uses the same configured watch and ignore rules as
+foreground capture. It does not start silently during `init`; capture is always
+an explicit command. Capture state is stored under the WorkGraph home as local
+PID, log, and state files.
 
 To build a local binary:
 
