@@ -39,6 +39,7 @@ type TodayEvent struct {
 	Project   string
 	Path      string
 	Summary   string
+	Payload   string
 }
 
 // TodaySession is a time-based grouping inferred from today's events.
@@ -148,6 +149,7 @@ func loadTodayEvents(db *sql.DB, now time.Time) ([]TodayEvent, error) {
 			Type:      stored.Type,
 			Timestamp: localTimestamp,
 			Path:      eventPath(stored.PayloadJSON),
+			Payload:   stored.PayloadJSON,
 		}
 		if stored.Project.Valid {
 			event.Project = stored.Project.String
@@ -285,6 +287,53 @@ func projectLabel(project string) string {
 }
 
 func eventLabel(event TodayEvent) string {
+	if event.Type == "git.commit" {
+		return gitCommitEventLabel(event)
+	}
+	if event.Summary != "" {
+		return event.Summary
+	}
+	if event.Path != "" {
+		return event.Path
+	}
+	return event.ID
+}
+
+func gitCommitEventLabel(event TodayEvent) string {
+	var payload struct {
+		Commit  string `json:"commit"`
+		Branch  string `json:"branch"`
+		Subject string `json:"subject"`
+	}
+	if err := json.Unmarshal([]byte(event.Payload), &payload); err != nil {
+		return eventLabelWithoutGitDecoration(event)
+	}
+
+	subject := payload.Subject
+	if subject == "" {
+		subject = event.Summary
+	}
+	if subject == "" {
+		subject = event.ID
+	}
+
+	shortCommit := payload.Commit
+	if len(shortCommit) > 7 {
+		shortCommit = shortCommit[:7]
+	}
+	if payload.Branch == "" && shortCommit == "" {
+		return subject
+	}
+	if payload.Branch == "" {
+		return fmt.Sprintf("%s (%s)", subject, shortCommit)
+	}
+	if shortCommit == "" {
+		return fmt.Sprintf("%s (%s)", subject, payload.Branch)
+	}
+	return fmt.Sprintf("%s (%s %s)", subject, payload.Branch, shortCommit)
+}
+
+func eventLabelWithoutGitDecoration(event TodayEvent) string {
 	if event.Summary != "" {
 		return event.Summary
 	}

@@ -36,6 +36,8 @@ type RunConfig struct {
 	MaxWatchEntries int
 	// PollInterval is kept for tests and future fallback capture modes.
 	PollInterval time.Duration
+	// GitPollInterval controls local git commit capture while running.
+	GitPollInterval time.Duration
 }
 
 // RunStatus describes an active capture process.
@@ -59,6 +61,8 @@ type CapturedEvent struct {
 	Type      string
 	Operation string
 	Path      string
+	Project   string
+	Summary   string
 }
 
 // RunCapture watches local files and stores events until stopped.
@@ -73,6 +77,7 @@ type RunCapture struct {
 	ignorePaths         []string
 	ignoreNames         []string
 	watchBudget         *watchBudget
+	gitPollInterval     time.Duration
 	suppressedCreates   map[string]time.Time
 	deleteCoalesceDelay time.Duration
 	events              chan CapturedEvent
@@ -151,6 +156,7 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 		ignorePaths:         status.IgnorePaths,
 		ignoreNames:         status.IgnoreNames,
 		watchBudget:         budget,
+		gitPollInterval:     gitPollInterval(config.GitPollInterval),
 		suppressedCreates:   map[string]time.Time{},
 		deleteCoalesceDelay: 75 * time.Millisecond,
 		events:              events,
@@ -161,10 +167,17 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 func (capture *RunCapture) Run(ctx context.Context) error {
 	defer capture.Close()
 
+	gitTicker := time.NewTicker(capture.gitPollInterval)
+	defer gitTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-gitTicker.C:
+			if err := capture.captureGitCommits(); err != nil {
+				return err
+			}
 		case event, ok := <-capture.watcher.Events:
 			if !ok {
 				return nil
@@ -181,6 +194,22 @@ func (capture *RunCapture) Run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func (capture *RunCapture) captureGitCommits() error {
+	result, err := CaptureGitCommits(GitCaptureConfig{
+		HomeDir:      capture.homeDir,
+		DatabasePath: capture.databasePath,
+		WatchDirs:    capture.watchDirs,
+		MaxCommits:   20,
+	})
+	if err != nil {
+		return err
+	}
+	for _, event := range result.Events {
+		capture.events <- event
+	}
+	return err
 }
 
 // Close releases resources held by the capture process.
@@ -616,6 +645,13 @@ func defaultMaxWatchEntries() int {
 		return 128
 	}
 	return 4096
+}
+
+func gitPollInterval(interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return 30 * time.Second
+	}
+	return interval
 }
 
 func (budget *watchBudget) canAdd(path string) bool {
