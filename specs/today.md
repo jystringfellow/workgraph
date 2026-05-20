@@ -19,6 +19,14 @@ When events exist, output includes:
 
 When no events exist for the local day, output includes `Today` and says no activity has been captured today.
 
+## Event Labels
+
+`today` keeps event labels compact while preserving the identifiers that make a line useful:
+
+- file events use their captured path when no summary exists
+- git commits use the commit subject plus branch and short SHA when available
+- GitHub pull requests and issues use the title plus number and state when available
+
 ## Sessions
 
 For Phase 0, sessions are inferred at query time. Consecutive events stay in the same session when:

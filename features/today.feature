@@ -22,6 +22,12 @@ Scenario: Group sessions by project
   When I run "workgraph today"
   Then I see sessions grouped by project
 
+Scenario: Show GitHub activity with useful labels
+  Given WorkGraph has captured GitHub pull request and issue events today
+  When I run "workgraph today"
+  Then GitHub pull requests include title, number, and state
+  And GitHub issues include title, number, and state
+
 Scenario: Show predictable output sections
   Given WorkGraph has captured events today
   When I run "workgraph today"
