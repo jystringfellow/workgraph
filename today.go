@@ -290,6 +290,9 @@ func eventLabel(event TodayEvent) string {
 	if event.Type == "git.commit" {
 		return gitCommitEventLabel(event)
 	}
+	if event.Type == "github.pull_request" || event.Type == "github.issue" {
+		return githubEventLabel(event)
+	}
 	if event.Summary != "" {
 		return event.Summary
 	}
@@ -331,6 +334,36 @@ func gitCommitEventLabel(event TodayEvent) string {
 		return fmt.Sprintf("%s (%s)", subject, payload.Branch)
 	}
 	return fmt.Sprintf("%s (%s %s)", subject, payload.Branch, shortCommit)
+}
+
+func githubEventLabel(event TodayEvent) string {
+	var payload struct {
+		Number int    `json:"number"`
+		State  string `json:"state"`
+		Title  string `json:"title"`
+	}
+	if err := json.Unmarshal([]byte(event.Payload), &payload); err != nil {
+		return eventLabelWithoutGitDecoration(event)
+	}
+
+	title := payload.Title
+	if title == "" {
+		title = event.Summary
+	}
+	if title == "" {
+		title = event.ID
+	}
+
+	if payload.Number == 0 && payload.State == "" {
+		return title
+	}
+	if payload.Number == 0 {
+		return fmt.Sprintf("%s (%s)", title, payload.State)
+	}
+	if payload.State == "" {
+		return fmt.Sprintf("%s (#%d)", title, payload.Number)
+	}
+	return fmt.Sprintf("%s (#%d %s)", title, payload.Number, payload.State)
 }
 
 func eventLabelWithoutGitDecoration(event TodayEvent) string {

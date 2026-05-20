@@ -188,6 +188,76 @@ func TestTodayDisplaysGitCommitEventsWithBranchAndShortSHA(t *testing.T) {
 	}
 }
 
+func TestTodayDisplaysGitHubPullRequestEventsWithNumberAndState(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	result, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir: homeDir,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	now := time.Date(2026, 5, 20, 15, 0, 0, 0, time.Local)
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "github-pr-42",
+		Source:    "github",
+		Type:      "github.pull_request",
+		Timestamp: now.Add(-30 * time.Minute),
+		Project:   "Cupcake",
+		Payload:   `{"repository":"jystringfellow/Cupcake","number":42,"url":"https://github.com/jystringfellow/Cupcake/pull/42","state":"open","actor":"octocat","title":"Add cupcake API","branch":"feature/cupcake-api","commit":"abcdef1234567890"}`,
+		Summary:   "Add cupcake API",
+	})
+
+	today, err := workgraph.Today(workgraph.TodayConfig{
+		HomeDir:      homeDir,
+		DatabasePath: result.DatabasePath,
+		Now:          now,
+	})
+	if err != nil {
+		t.Fatalf("today failed: %v", err)
+	}
+
+	if !strings.Contains(today.Message, "github.pull_request Add cupcake API (#42 open)") {
+		t.Fatalf("expected GitHub pull request event with number and state, got:\n%s", today.Message)
+	}
+}
+
+func TestTodayDisplaysGitHubIssueEventsWithNumberAndState(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	result, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir: homeDir,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	now := time.Date(2026, 5, 20, 15, 0, 0, 0, time.Local)
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "github-issue-12",
+		Source:    "github",
+		Type:      "github.issue",
+		Timestamp: now.Add(-20 * time.Minute),
+		Project:   "Cupcake",
+		Payload:   `{"repository":"jystringfellow/Cupcake","number":12,"url":"https://github.com/jystringfellow/Cupcake/issues/12","state":"open","actor":"octocat","title":"Bug in cupcake frosting"}`,
+		Summary:   "Bug in cupcake frosting",
+	})
+
+	today, err := workgraph.Today(workgraph.TodayConfig{
+		HomeDir:      homeDir,
+		DatabasePath: result.DatabasePath,
+		Now:          now,
+	})
+	if err != nil {
+		t.Fatalf("today failed: %v", err)
+	}
+
+	if !strings.Contains(today.Message, "github.issue Bug in cupcake frosting (#12 open)") {
+		t.Fatalf("expected GitHub issue event with number and state, got:\n%s", today.Message)
+	}
+}
+
 func TestTodayShowsUnfinishedWorkWhenKnown(t *testing.T) {
 	t.Skip("TBD: today command shows unfinished work when tasks or TODOs are known")
 }
