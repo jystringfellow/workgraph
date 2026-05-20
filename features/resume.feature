@@ -1,5 +1,12 @@
 Feature: Resume work
 
+Scenario: List resumable projects
+  Given WorkGraph has captured events for multiple projects
+  When I run "workgraph resume"
+  Then I see projects ordered by recent activity
+  And I see how many events each project has
+  And I see how to resume a specific project
+
 Scenario: Resume a project from recent activity
   Given WorkGraph has captured file events for a project
   When I run "workgraph resume <project>"
@@ -13,6 +20,7 @@ Scenario: Prioritize recent evidence
   When I run "workgraph resume <project>"
   Then the most recent activity appears first
   And older activity appears only when it is relevant
+  And the activity list is capped with an older event count when needed
 
 Scenario: Show predictable output sections
   Given WorkGraph has captured events for a project
