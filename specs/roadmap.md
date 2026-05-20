@@ -21,7 +21,7 @@
 
 ## Phase 1: External signals
 - [x] Git integration (commits, branches)
-- [ ] GitHub ingestion (PRs, issues)
+- [x] GitHub ingestion (PRs, issues)
 - [ ] Slack ingestion (messages, threads)
 
 ## Phase 2: Memory layer

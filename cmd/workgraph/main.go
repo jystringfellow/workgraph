@@ -29,6 +29,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runConfig(args[1:], stdout, stderr)
 	case "git":
 		return runGit(args[1:], stdout, stderr)
+	case "github":
+		return runGitHub(args[1:], stdout, stderr)
 	case "run":
 		return runCapture(args[1:], stdout, stderr)
 	case "status":
@@ -66,6 +68,47 @@ func runInit(args []string, stdout io.Writer, stderr io.Writer) int {
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph init: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runGitHub(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph github <command>")
+		return 2
+	}
+
+	switch args[0] {
+	case "capture":
+		return runGitHubCapture(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "unknown github command: %s\n", args[0])
+		return 2
+	}
+}
+
+func runGitHubCapture(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("github capture", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "WorkGraph home directory")
+	databasePath := flags.String("database", "", "WorkGraph SQLite database path")
+	eventsFile := flags.String("events-file", "", "GitHub event export JSON file")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+
+	result, err := workgraph.CaptureGitHubEvents(workgraph.GitHubCaptureConfig{
+		HomeDir:      *homeDir,
+		DatabasePath: *databasePath,
+		EventsFile:   *eventsFile,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph github capture: %v\n", err)
 		return 1
 	}
 
