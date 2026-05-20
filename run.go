@@ -709,12 +709,32 @@ func sameOrChild(path, parent string) bool {
 }
 
 func inferProject(path string, watchDirs []string) string {
+	if gitRoot := nearestGitRoot(path); gitRoot != "" {
+		return filepath.Base(gitRoot)
+	}
 	for _, watchDir := range watchDirs {
 		if sameOrChild(path, watchDir) {
 			return filepath.Base(watchDir)
 		}
 	}
 	return filepath.Base(filepath.Dir(path))
+}
+
+func nearestGitRoot(path string) string {
+	current := path
+	if info, err := os.Stat(current); err == nil && !info.IsDir() {
+		current = filepath.Dir(current)
+	}
+	for {
+		if info, err := os.Stat(filepath.Join(current, ".git")); err == nil && info.IsDir() {
+			return current
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return ""
+		}
+		current = parent
+	}
 }
 
 func runMessage(status RunStatus) string {
