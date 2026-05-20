@@ -126,7 +126,7 @@ func TestInitCommandForceRefreshesConfig(t *testing.T) {
 	expected := cliInitConfigFile{
 		WatchDirs:   []string{filepath.Join(userHome, "Desktop"), filepath.Join(userHome, "Documents"), filepath.Join(userHome, "Downloads")},
 		IgnorePaths: []string{workgraphHome},
-		IgnoreNames: []string{".git", "node_modules", "DerivedData", ".noindex"},
+		IgnoreNames: []string{".git", "node_modules", "DerivedData", ".noindex", "xcuserdata", "bin", "obj", "dist", "build", "target", ".build", ".gradle"},
 	}
 	config := readCLIInitConfig(t, configPath)
 	if !reflect.DeepEqual(config, expected) {

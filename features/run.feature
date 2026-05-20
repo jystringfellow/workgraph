@@ -104,6 +104,13 @@ Scenario: Recurse into explicit watch roots
   When capture starts
   Then WorkGraph watches descendants of the explicit folder
 
+Scenario: Skip generated build output under explicit watch roots
+  Given WorkGraph is configured to watch an explicit code folder
+  And the code folder contains source files and generated build output
+  When capture starts
+  Then WorkGraph watches the source folders
+  And WorkGraph skips the generated build output folders
+
 Scenario: Stop gracefully
   Given WorkGraph is running
   When I stop the foreground command with Ctrl+C or SIGTERM

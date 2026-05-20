@@ -917,6 +917,51 @@ func TestRunExplicitRootRecursesIntoFolderOnlyChildren(t *testing.T) {
 	}
 }
 
+func TestRunExplicitCodeRootSkipsGeneratedBuildOutput(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	codeDir := filepath.Join(tempDir, "Code")
+	sourceDir := filepath.Join(codeDir, "Cupcake", "Cupcake.API", "Controllers")
+	buildDir := filepath.Join(codeDir, "Cupcake", "Cupcake.Tests", "bin", "Debug", "netcoreapp3.1")
+	xcodeUserDataDir := filepath.Join(codeDir, "MacsyZones", "MacsyZones.xcodeproj", "project.xcworkspace", "xcuserdata")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatalf("create source tree: %v", err)
+	}
+	if err := os.MkdirAll(buildDir, 0o755); err != nil {
+		t.Fatalf("create build output tree: %v", err)
+	}
+	if err := os.MkdirAll(xcodeUserDataDir, 0o755); err != nil {
+		t.Fatalf("create Xcode user state tree: %v", err)
+	}
+
+	initResult, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir: homeDir,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:      homeDir,
+		DatabasePath: initResult.DatabasePath,
+		WatchDirs:    []string{codeDir},
+	})
+	if err != nil {
+		t.Fatalf("run start failed: %v", err)
+	}
+	defer capture.Close()
+
+	if !containsString(capture.Status.RegisteredWatchDirs, sourceDir) {
+		t.Fatalf("expected source directory %q to be watched, got %q", sourceDir, capture.Status.RegisteredWatchDirs)
+	}
+	if containsString(capture.Status.RegisteredWatchDirs, buildDir) {
+		t.Fatalf("expected generated build output %q not to be watched, got %q", buildDir, capture.Status.RegisteredWatchDirs)
+	}
+	if containsString(capture.Status.RegisteredWatchDirs, xcodeUserDataDir) {
+		t.Fatalf("expected Xcode user state %q not to be watched, got %q", xcodeUserDataDir, capture.Status.RegisteredWatchDirs)
+	}
+}
+
 func waitForEvent(t *testing.T, dbPath, operation, path string) {
 	t.Helper()
 

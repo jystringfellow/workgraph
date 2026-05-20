@@ -175,7 +175,7 @@ func createDefaultConfig(configPath string, homeDir string, force bool) error {
 }
 
 func defaultIgnoreNames() []string {
-	return []string{".git", "node_modules", "DerivedData", ".noindex"}
+	return []string{".git", "node_modules", "DerivedData", ".noindex", "xcuserdata", "bin", "obj", "dist", "build", "target", ".build", ".gradle"}
 }
 
 func defaultWatchDirs(userHome string) ([]string, error) {

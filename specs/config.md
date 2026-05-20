@@ -35,7 +35,7 @@ Example on macOS:
   "watch_dirs": ["/Users/craig/Desktop", "/Users/craig/Documents", "/Users/craig/Downloads", "/Users/craig/Code"],
   "conservative_watch_dirs": ["/Users/craig/Desktop", "/Users/craig/Documents", "/Users/craig/Downloads", "/Users/craig/Code"],
   "ignore_paths": ["/Users/craig/.workgraph"],
-  "ignore_names": [".git", "node_modules", "DerivedData", ".noindex"]
+  "ignore_names": [".git", "node_modules", "DerivedData", ".noindex", "xcuserdata", "bin", "obj", "dist", "build", "target", ".build", ".gradle"]
 }
 ```
 
@@ -46,7 +46,7 @@ Example on Windows:
   "watch_dirs": ["C:\\Users\\Craig\\Desktop", "C:\\Users\\Craig\\Documents", "C:\\Users\\Craig\\Downloads", "C:\\Users\\Craig\\repos"],
   "conservative_watch_dirs": ["C:\\Users\\Craig\\Desktop", "C:\\Users\\Craig\\Documents", "C:\\Users\\Craig\\Downloads", "C:\\Users\\Craig\\repos"],
   "ignore_paths": ["C:\\Users\\Craig\\.workgraph"],
-  "ignore_names": [".git", "node_modules", "DerivedData", ".noindex"]
+  "ignore_names": [".git", "node_modules", "DerivedData", ".noindex", "xcuserdata", "bin", "obj", "dist", "build", "target", ".build", ".gradle"]
 }
 ```
 
@@ -93,7 +93,7 @@ This field is for user-owned directories or files that should never be tracked, 
 
 `ignore_names` is a list of file or directory basenames. A captured source path is ignored when any path segment matches one of these names.
 
-This field is for high-noise project internals and generated content that commonly appear under watched roots, such as `.git`, `node_modules`, Xcode `DerivedData`, and Apple `.noindex` directories.
+This field is for high-noise project internals and generated content that commonly appear under watched roots, such as `.git`, `node_modules`, Xcode `DerivedData`, Xcode `xcuserdata`, Apple `.noindex` directories, and common build output names including `bin`, `obj`, `dist`, `build`, `target`, `.build`, and `.gradle`.
 
 ## Precedence
 

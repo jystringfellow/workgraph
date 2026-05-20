@@ -127,7 +127,8 @@ func TestInitCreatesDefaultConfig(t *testing.T) {
 	if !reflect.DeepEqual(config.IgnorePaths, []string{workgraphHome}) {
 		t.Fatalf("expected default ignore paths %q, got %q", []string{workgraphHome}, config.IgnorePaths)
 	}
-	if !reflect.DeepEqual(config.IgnoreNames, []string{".git", "node_modules", "DerivedData", ".noindex"}) {
+	expectedIgnoreNames := []string{".git", "node_modules", "DerivedData", ".noindex", "xcuserdata", "bin", "obj", "dist", "build", "target", ".build", ".gradle"}
+	if !reflect.DeepEqual(config.IgnoreNames, expectedIgnoreNames) {
 		t.Fatalf("expected default ignore names, got %q", config.IgnoreNames)
 	}
 	if containsString(config.IgnoreNames, "Native Instruments") {
@@ -316,7 +317,7 @@ func TestInitForceOverwritesExistingConfigWithDefaults(t *testing.T) {
 		WatchDirs:             expectedWatchDirs,
 		ConservativeWatchDirs: expectedWatchDirs,
 		IgnorePaths:           []string{workgraphHome},
-		IgnoreNames:           []string{".git", "node_modules", "DerivedData", ".noindex"},
+		IgnoreNames:           []string{".git", "node_modules", "DerivedData", ".noindex", "xcuserdata", "bin", "obj", "dist", "build", "target", ".build", ".gradle"},
 	}
 	if !reflect.DeepEqual(config, expected) {
 		t.Fatalf("expected force init to refresh config to %#v, got %#v", expected, config)

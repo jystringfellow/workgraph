@@ -11,6 +11,7 @@
 - [x] Sane default watch roots
 - [x] Configurable ignored paths and names
 - [ ] Suggest watch roots from external signals
+- [ ] Suggest ignore rules from noisy tracked activity
 - [ ] SQLite event store
 - [x] File system watcher
 - [ ] Basic project inference (repo/folder name)

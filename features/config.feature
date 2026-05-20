@@ -27,6 +27,12 @@ Scenario: Ignore high-noise names
   When a file changes under a directory named "node_modules"
   Then WorkGraph does not record a user work event
 
+Scenario: Ignore generated build output by default
+  Given WorkGraph has been initialized
+  When I inspect the config file
+  Then the config ignores common generated build directory names
+  And the config ignores Xcode user state directories
+
 Scenario: Use config when no watch flag is provided
   Given WorkGraph has been initialized
   And the config contains watch directories

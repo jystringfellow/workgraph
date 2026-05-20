@@ -36,6 +36,11 @@ func TestInitCreatesConfigWithSaneDefaultWatchRoots(t *testing.T) {
 	if !reflect.DeepEqual(config.ConservativeWatchDirs, expectedWatchDirs) {
 		t.Fatalf("expected default watch dirs to be conservative %q, got %q", expectedWatchDirs, config.ConservativeWatchDirs)
 	}
+	for _, ignoredName := range []string{"xcuserdata", "bin", "obj", "dist", "build", "target", ".build", ".gradle"} {
+		if !containsString(config.IgnoreNames, ignoredName) {
+			t.Fatalf("expected default ignore names to include generated output %q, got %q", ignoredName, config.IgnoreNames)
+		}
+	}
 }
 
 func TestConfigPersistsResolvedAbsoluteHomePath(t *testing.T) {

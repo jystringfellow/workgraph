@@ -101,7 +101,7 @@ The config shape is:
 {
   "watch_dirs": ["/Users/craig/Desktop", "/Users/craig/Documents", "/Users/craig/Downloads", "/Users/craig/Code"],
   "ignore_paths": ["/Users/craig/.workgraph"],
-  "ignore_names": [".git", "node_modules", "DerivedData", ".noindex"]
+  "ignore_names": [".git", "node_modules", "DerivedData", ".noindex", "xcuserdata", "bin", "obj", "dist", "build", "target", ".build", ".gradle"]
 }
 ```
 

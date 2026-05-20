@@ -32,7 +32,7 @@ The default config:
 - avoids recursively watching the entire home directory when common folders exist
 - ignores the WorkGraph home directory
 - stores watch and ignore paths as normalized absolute paths
-- includes high-noise ignored names such as `.git` and `node_modules`
+- includes high-noise ignored names such as `.git`, `node_modules`, and common build output directories
 
 Init must not overwrite an existing config file by default. User edits to watch
 roots or ignore rules are preserved.
