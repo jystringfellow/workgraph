@@ -168,6 +168,52 @@ func TestResumeCapsRecentActivityWithOlderEventCount(t *testing.T) {
 	}
 }
 
+func TestResumeOmitsTransientFileEvidenceBeforeCappingActivity(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	result, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir: homeDir,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	now := time.Date(2026, 5, 21, 16, 0, 0, 0, time.Local)
+	for index := 0; index < 10; index++ {
+		insertEvent(t, result.DatabasePath, storedEvent{
+			ID:        "fractile-transient-" + string(rune('a'+index)),
+			Type:      "file.created",
+			Timestamp: now.Add(-time.Duration(index) * time.Minute),
+			Project:   "FracTile",
+			Payload:   `{"path":"/tmp/FracTile/.dat.nosync101E8.QvsH8z","operation":"created"}`,
+		})
+	}
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "fractile-readme",
+		Type:      "file.modified",
+		Timestamp: now.Add(-11 * time.Minute),
+		Project:   "FracTile",
+		Payload:   `{"path":"/tmp/FracTile/README.md","operation":"modified"}`,
+	})
+
+	resume, err := workgraph.Resume(workgraph.ResumeConfig{
+		HomeDir:      homeDir,
+		DatabasePath: result.DatabasePath,
+		Project:      "FracTile",
+		Now:          now,
+	})
+	if err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+
+	if !strings.Contains(resume.Message, "README.md") {
+		t.Fatalf("expected durable edit to survive transient activity, got:\n%s", resume.Message)
+	}
+	if strings.Contains(resume.Message, ".dat.nosync") {
+		t.Fatalf("expected transient local paths to be omitted, got:\n%s", resume.Message)
+	}
+}
+
 func TestResumeIncludesRelevantFiles(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
@@ -202,6 +248,88 @@ func TestResumeIncludesRelevantFiles(t *testing.T) {
 	}
 	if !strings.Contains(resume.Message, "- /tmp/Cupcake/api.go") {
 		t.Fatalf("expected touched file path, got:\n%s", resume.Message)
+	}
+}
+
+func TestResumeShowsKnownOpenGitHubWorkOutsideRecentActivityCap(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	result, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir: homeDir,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	now := time.Date(2026, 5, 21, 16, 0, 0, 0, time.Local)
+	for index := 0; index < 10; index++ {
+		insertEvent(t, result.DatabasePath, storedEvent{
+			ID:        "cupcake-recent-file-" + string(rune('a'+index)),
+			Type:      "file.modified",
+			Timestamp: now.Add(-time.Duration(index) * time.Minute),
+			Project:   "Cupcake",
+			Payload:   `{"path":"/tmp/Cupcake/file.go","operation":"modified"}`,
+			Summary:   "Recent file event",
+		})
+	}
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "cupcake-open-pr",
+		Source:    "github",
+		Type:      "github.pull_request",
+		Timestamp: now.Add(-time.Hour),
+		Project:   "Cupcake",
+		Payload:   `{"repository":"jystringfellow/Cupcake","number":42,"state":"open","title":"Add cupcake API"}`,
+		Summary:   "Add cupcake API",
+	})
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "cupcake-open-issue",
+		Source:    "github",
+		Type:      "github.issue",
+		Timestamp: now.Add(-2 * time.Hour),
+		Project:   "Cupcake",
+		Payload:   `{"repository":"jystringfellow/Cupcake","number":12,"state":"open","title":"Bug in cupcake frosting"}`,
+		Summary:   "Bug in cupcake frosting",
+	})
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "cupcake-merged-pr",
+		Source:    "github",
+		Type:      "github.pull_request",
+		Timestamp: now.Add(-3 * time.Hour),
+		Project:   "Cupcake",
+		Payload:   `{"repository":"jystringfellow/Cupcake","number":7,"state":"merged","title":"Ship old cupcake work"}`,
+		Summary:   "Ship old cupcake work",
+	})
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "other-open-issue",
+		Source:    "github",
+		Type:      "github.issue",
+		Timestamp: now.Add(-4 * time.Hour),
+		Project:   "workgraph",
+		Payload:   `{"repository":"jystringfellow/workgraph","number":9,"state":"open","title":"Other project work"}`,
+		Summary:   "Other project work",
+	})
+
+	resume, err := workgraph.Resume(workgraph.ResumeConfig{
+		HomeDir:      homeDir,
+		DatabasePath: result.DatabasePath,
+		Project:      "Cupcake",
+		Now:          now,
+	})
+	if err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+
+	if !strings.Contains(resume.Message, "Open GitHub work") {
+		t.Fatalf("expected open GitHub work section, got:\n%s", resume.Message)
+	}
+	if !strings.Contains(resume.Message, "github.pull_request Add cupcake API (#42 open)") {
+		t.Fatalf("expected open PR outside activity cap, got:\n%s", resume.Message)
+	}
+	if !strings.Contains(resume.Message, "github.issue Bug in cupcake frosting (#12 open)") {
+		t.Fatalf("expected open issue outside activity cap, got:\n%s", resume.Message)
+	}
+	if strings.Contains(resume.Message, "Ship old cupcake work") || strings.Contains(resume.Message, "Other project work") {
+		t.Fatalf("expected closed and other-project GitHub work to be omitted, got:\n%s", resume.Message)
 	}
 }
 

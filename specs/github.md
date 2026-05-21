@@ -25,6 +25,11 @@ GitHub CLI (`gh`) when it is available. The daemon must be conservative:
 - store events through the same ingestion path as exported events
 - avoid duplicate events across polling cycles
 
+GitHub capture keeps one stored work snapshot per repository PR or issue
+identity. Recapturing the same PR or issue with a newer GitHub `updated_at`
+refreshes the stored timestamp, state, title, actor, and payload without
+creating a duplicate row. Older snapshots must not replace newer GitHub state.
+
 The first MVP ingests:
 
 - pull requests

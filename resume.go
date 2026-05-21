@@ -2,6 +2,7 @@ package workgraph
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -30,6 +31,7 @@ type ResumeResult struct {
 	Projects []ResumeProject
 	Events   []ResumeEvent
 	Files    []string
+	GitHub   []ResumeEvent
 	Omitted  int
 	Message  string
 }
@@ -88,6 +90,7 @@ func Resume(config ResumeConfig) (ResumeResult, error) {
 	}
 
 	projectEvents := resumeProjectEvents(events, config.Project)
+	result.GitHub = resumeOpenGitHubWork(projectEvents)
 	result.Events, result.Omitted = limitResumeEvents(projectEvents, resumeActivityLimit(config.MaxEvents))
 	result.Files = resumeRelevantFiles(result.Events)
 	result.Message = resumeProjectMessage(result, location)
@@ -203,11 +206,25 @@ func resumableProjects(events []ResumeEvent) []ResumeProject {
 func resumeProjectEvents(events []ResumeEvent, project string) []ResumeEvent {
 	var filtered []ResumeEvent
 	for _, event := range events {
-		if event.Project == project {
-			filtered = append(filtered, event)
+		if event.Project != project {
+			continue
 		}
+		if isTransientResumePath(event.Path) {
+			continue
+		}
+		filtered = append(filtered, event)
 	}
 	return filtered
+}
+
+func isTransientResumePath(path string) bool {
+	if path == "" {
+		return false
+	}
+	if isTransientEditorPath(path) {
+		return true
+	}
+	return strings.HasPrefix(filepath.Base(path), ".dat.nosync")
 }
 
 func resumeActivityLimit(configured int) int {
@@ -235,6 +252,27 @@ func resumeRelevantFiles(events []ResumeEvent) []string {
 		files = append(files, event.Path)
 	}
 	return files
+}
+
+func resumeOpenGitHubWork(events []ResumeEvent) []ResumeEvent {
+	var work []ResumeEvent
+	for _, event := range events {
+		if event.Type != "github.pull_request" && event.Type != "github.issue" {
+			continue
+		}
+
+		var payload struct {
+			State string `json:"state"`
+		}
+		if err := json.Unmarshal([]byte(event.Payload), &payload); err != nil {
+			continue
+		}
+		if payload.State != "open" {
+			continue
+		}
+		work = append(work, event)
+	}
+	return work
 }
 
 func resumeProjectsMessage(projects []ResumeProject, location *time.Location) string {
@@ -273,6 +311,13 @@ func resumeProjectMessage(result ResumeResult, location *time.Location) string {
 		lines = append(lines, "", "Relevant files")
 		for _, file := range result.Files {
 			lines = append(lines, "- "+file)
+		}
+	}
+
+	if len(result.GitHub) > 0 {
+		lines = append(lines, "", "Open GitHub work")
+		for _, event := range result.GitHub {
+			lines = append(lines, fmt.Sprintf("- %s %s", event.Type, resumeEventLabel(event)))
 		}
 	}
 

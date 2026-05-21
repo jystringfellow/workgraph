@@ -24,6 +24,13 @@ Scenario: Capture GitHub issues
   Then WorkGraph stores a GitHub issue event
   And the event includes repository, issue number, URL, state, actor, and title
 
+Scenario: Refresh GitHub work state
+  Given WorkGraph already captured open GitHub work
+  And GitHub reports a newer closed state for that work
+  When WorkGraph captures the GitHub activity again
+  Then the stored GitHub event state is refreshed
+  And WorkGraph does not create a duplicate GitHub event
+
 Scenario: Capture GitHub activity while run is active
   Given WorkGraph is running
   And a configured local git repository has a GitHub remote
