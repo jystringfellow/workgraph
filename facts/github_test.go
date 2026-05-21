@@ -214,6 +214,106 @@ func TestGitHubCaptureStoresIssueEvent(t *testing.T) {
 	}
 }
 
+func TestGitHubCaptureRefreshesNewerWorkStateWithoutDuplicateEvent(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	eventsPath := filepath.Join(tempDir, "github-events.json")
+	if err := os.WriteFile(eventsPath, []byte(`[
+  {
+    "kind": "issue",
+    "repository": "jystringfellow/Cupcake",
+    "number": 12,
+    "url": "https://github.com/jystringfellow/Cupcake/issues/12",
+    "state": "open",
+    "actor": "octocat",
+    "title": "Bug in cupcake frosting",
+    "updated_at": "2026-05-20T14:45:00Z"
+  }
+]`), 0o644); err != nil {
+		t.Fatalf("write open github events: %v", err)
+	}
+
+	repoRoot := repoRoot(t)
+	if output, err := runWorkGraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	if output, err := runWorkGraph(t, repoRoot, "github", "capture", "--home", homeDir, "--events-file", eventsPath); err != nil {
+		t.Fatalf("workgraph github capture open state failed: %v\n%s", err, output)
+	}
+
+	if err := os.WriteFile(eventsPath, []byte(`[
+  {
+    "kind": "issue",
+    "repository": "jystringfellow/Cupcake",
+    "number": 12,
+    "url": "https://github.com/jystringfellow/Cupcake/issues/12",
+    "state": "closed",
+    "actor": "dev-user",
+    "title": "Fix cupcake frosting",
+    "updated_at": "2026-05-21T09:00:00Z"
+  }
+]`), 0o644); err != nil {
+		t.Fatalf("write closed github events: %v", err)
+	}
+	if output, err := runWorkGraph(t, repoRoot, "github", "capture", "--home", homeDir, "--events-file", eventsPath); err != nil {
+		t.Fatalf("workgraph github capture closed state failed: %v\n%s", err, output)
+	}
+
+	databasePath := filepath.Join(homeDir, "workgraph.db")
+	event := githubEvent(t, databasePath, "github.issue", "jystringfellow/Cupcake", 12)
+	for _, expected := range []string{
+		`"state":"closed"`,
+		`"actor":"dev-user"`,
+		`"title":"Fix cupcake frosting"`,
+	} {
+		if !strings.Contains(event.PayloadJSON, expected) {
+			t.Fatalf("expected refreshed payload to include %s, got %s", expected, event.PayloadJSON)
+		}
+	}
+	if event.Actor != "dev-user" || event.Summary != "Fix cupcake frosting" {
+		t.Fatalf("expected refreshed actor and summary, got actor %q summary %q", event.Actor, event.Summary)
+	}
+	if count := githubEventCount(t, databasePath); count != 1 {
+		t.Fatalf("expected refreshed GitHub work to keep one event, got %d", count)
+	}
+
+	if err := os.WriteFile(eventsPath, []byte(`[
+  {
+    "kind": "issue",
+    "repository": "jystringfellow/Cupcake",
+    "number": 12,
+    "url": "https://github.com/jystringfellow/Cupcake/issues/12",
+    "state": "open",
+    "actor": "octocat",
+    "title": "Bug in cupcake frosting",
+    "updated_at": "2026-05-20T14:45:00Z"
+  }
+]`), 0o644); err != nil {
+		t.Fatalf("write stale github events: %v", err)
+	}
+	if output, err := runWorkGraph(t, repoRoot, "github", "capture", "--home", homeDir, "--events-file", eventsPath); err != nil {
+		t.Fatalf("workgraph github capture stale state failed: %v\n%s", err, output)
+	}
+
+	stillClosed := githubEvent(t, databasePath, "github.issue", "jystringfellow/Cupcake", 12)
+	if !strings.Contains(stillClosed.PayloadJSON, `"state":"closed"`) {
+		t.Fatalf("expected stale GitHub state not to reopen work, got %s", stillClosed.PayloadJSON)
+	}
+
+	resume, err := workgraph.Resume(workgraph.ResumeConfig{
+		HomeDir:      homeDir,
+		DatabasePath: databasePath,
+		Project:      "Cupcake",
+		Now:          time.Date(2026, 5, 21, 10, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("resume refreshed GitHub state: %v", err)
+	}
+	if strings.Contains(resume.Message, "Open GitHub work") {
+		t.Fatalf("expected refreshed closed GitHub work not to stay open in resume, got:\n%s", resume.Message)
+	}
+}
+
 func TestRunCapturesGitHubPullRequestsThroughGHCLI(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")

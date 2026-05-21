@@ -291,9 +291,16 @@ func storeGitHubEvent(db *sql.DB, event githubExportEvent, project string) (bool
 		timestamp = parsed
 	}
 
-	result, err := db.Exec(`INSERT OR IGNORE INTO events
+	result, err := db.Exec(`INSERT INTO events
 		(id, source, type, timestamp, payload_json, project, actor, summary, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			timestamp = excluded.timestamp,
+			payload_json = excluded.payload_json,
+			project = excluded.project,
+			actor = excluded.actor,
+			summary = excluded.summary
+		WHERE excluded.timestamp > events.timestamp`,
 		fmt.Sprintf("%s:%s:%d", eventType, event.Repository, event.Number),
 		"github",
 		eventType,

@@ -22,6 +22,19 @@ Scenario: Prioritize recent evidence
   And older activity appears only when it is relevant
   And the activity list is capped with an older event count when needed
 
+Scenario: Omit transient file evidence
+  Given WorkGraph has captured durable project edits and transient local file churn
+  When I run "workgraph resume <project>"
+  Then the durable edits appear in recent activity
+  And transient file paths do not appear in recent activity or relevant files
+
+Scenario: Show known open GitHub work
+  Given WorkGraph has captured open and closed GitHub work for a project
+  When I run "workgraph resume <project>"
+  Then open GitHub pull requests and issues appear in their own section
+  And closed or merged GitHub work does not appear in that section
+  And open GitHub work is not hidden by the recent activity cap
+
 Scenario: Show predictable output sections
   Given WorkGraph has captured events for a project
   When I run "workgraph resume <project>"
