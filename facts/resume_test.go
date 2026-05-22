@@ -1,6 +1,7 @@
 package facts
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -330,6 +331,152 @@ func TestResumeShowsKnownOpenGitHubWorkOutsideRecentActivityCap(t *testing.T) {
 	}
 	if strings.Contains(resume.Message, "Ship old cupcake work") || strings.Contains(resume.Message, "Other project work") {
 		t.Fatalf("expected closed and other-project GitHub work to be omitted, got:\n%s", resume.Message)
+	}
+}
+
+func TestResumeIncludesProjectMemoryWhenPresent(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	memoryDir := filepath.Join(tempDir, "workgraph-memory")
+	result, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir:   homeDir,
+		MemoryDir: memoryDir,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	memoryPath := filepath.Join(memoryDir, "projects", "cupcake.md")
+	if err := os.WriteFile(memoryPath, []byte("# Cupcake\n\n## Current priorities\n- Finish auth first.\n"), 0o644); err != nil {
+		t.Fatalf("write project memory: %v", err)
+	}
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "cupcake-project-memory",
+		Type:      "file.modified",
+		Timestamp: time.Date(2026, 5, 22, 12, 0, 0, 0, time.Local),
+		Project:   "Cupcake",
+		Payload:   `{"path":"/tmp/Cupcake/api.go","operation":"modified"}`,
+	})
+
+	resume, err := workgraph.Resume(workgraph.ResumeConfig{
+		HomeDir:      homeDir,
+		DatabasePath: result.DatabasePath,
+		MemoryDir:    memoryDir,
+		Project:      "Cupcake",
+	})
+	if err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+	for _, expected := range []string{"Recent activity", "Project memory", "Current priorities", "Finish auth first."} {
+		if !strings.Contains(resume.Message, expected) {
+			t.Fatalf("expected resume to include %q, got:\n%s", expected, resume.Message)
+		}
+	}
+}
+
+func TestResumePointsAtMissingProjectMemory(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	memoryDir := filepath.Join(tempDir, "workgraph-memory")
+	result, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir:   homeDir,
+		MemoryDir: memoryDir,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "cupcake-no-project-memory",
+		Type:      "file.modified",
+		Timestamp: time.Date(2026, 5, 22, 12, 0, 0, 0, time.Local),
+		Project:   "Cupcake",
+		Payload:   `{"path":"/tmp/Cupcake/api.go","operation":"modified"}`,
+	})
+
+	resume, err := workgraph.Resume(workgraph.ResumeConfig{
+		HomeDir:      homeDir,
+		DatabasePath: result.DatabasePath,
+		MemoryDir:    memoryDir,
+		Project:      "Cupcake",
+	})
+	if err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+	expectedPath := filepath.Join(memoryDir, "projects", "cupcake.md")
+	if !strings.Contains(resume.Message, "Add project memory: "+expectedPath) {
+		t.Fatalf("expected resume to point at %q, got:\n%s", expectedPath, resume.Message)
+	}
+}
+
+func TestResumeDoesNotReadProjectMemoryOutsideMemoryRepo(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	memoryDir := filepath.Join(tempDir, "workgraph-memory")
+	result, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir:   homeDir,
+		MemoryDir: memoryDir,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(memoryDir, "Outside.md"), []byte("Should stay outside project memory."), 0o644); err != nil {
+		t.Fatalf("write outside memory: %v", err)
+	}
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "unsafe-project-memory",
+		Type:      "file.modified",
+		Timestamp: time.Date(2026, 5, 22, 12, 0, 0, 0, time.Local),
+		Project:   "../Outside",
+		Payload:   `{"path":"/tmp/Outside/api.go","operation":"modified"}`,
+	})
+
+	resume, err := workgraph.Resume(workgraph.ResumeConfig{
+		HomeDir:      homeDir,
+		DatabasePath: result.DatabasePath,
+		MemoryDir:    memoryDir,
+		Project:      "../Outside",
+	})
+	if err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+	if strings.Contains(resume.Message, "Should stay outside project memory.") {
+		t.Fatalf("expected resume not to read outside project memory, got:\n%s", resume.Message)
+	}
+}
+
+func TestResumeUsesLowerKebabProjectMemoryPath(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	memoryDir := filepath.Join(tempDir, "workgraph-memory")
+	result, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir:   homeDir,
+		MemoryDir: memoryDir,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	memoryPath := filepath.Join(memoryDir, "projects", "cupcake-api.md")
+	if err := os.WriteFile(memoryPath, []byte("Kebab memory path."), 0o644); err != nil {
+		t.Fatalf("write project memory: %v", err)
+	}
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "kebab-project-memory",
+		Type:      "file.modified",
+		Timestamp: time.Date(2026, 5, 22, 12, 0, 0, 0, time.Local),
+		Project:   "Cupcake API",
+		Payload:   `{"path":"/tmp/Cupcake/api.go","operation":"modified"}`,
+	})
+
+	resume, err := workgraph.Resume(workgraph.ResumeConfig{
+		HomeDir:      homeDir,
+		DatabasePath: result.DatabasePath,
+		MemoryDir:    memoryDir,
+		Project:      "Cupcake API",
+	})
+	if err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+	if !strings.Contains(resume.Message, "Kebab memory path.") {
+		t.Fatalf("expected resume to load %q, got:\n%s", memoryPath, resume.Message)
 	}
 }
 

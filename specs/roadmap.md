@@ -25,8 +25,8 @@
 - [ ] Slack ingestion (messages, threads)
 
 ## Phase 2: Memory layer
-- [ ] Markdown memory repo
-- [ ] Load memory into system
+- [x] Markdown memory repo
+- [x] Load memory into system
 - [ ] Link events ↔ memory (projects, people)
 
 ## Phase 3: Intelligence

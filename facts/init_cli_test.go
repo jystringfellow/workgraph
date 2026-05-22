@@ -40,7 +40,7 @@ func TestInitCommandCreatesConfiguredPathsAndReportsThem(t *testing.T) {
 		}
 	}
 
-	for _, path := range []string{homeDir, dbPath, memoryDir} {
+	for _, path := range []string{homeDir, dbPath, memoryDir, filepath.Join(memoryDir, "projects")} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected init to create %q: %v", path, err)
 		}

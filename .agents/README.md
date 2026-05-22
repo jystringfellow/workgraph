@@ -16,4 +16,10 @@ Current capability docs:
 - `summarize.md`: summarize event groups into sessions
 - `resume.md`: reconstruct project context for restarting work
 
-For now, `.agents/` documents future capabilities only. It is not a runtime, orchestration system, or tool registry.
+Reusable agent skills live under `skills/` so users can symlink or copy them
+into their preferred AI tool:
+
+- `skills/workgraph-memory/`: draft and edit WorkGraph project memory
+
+For now, `.agents/` is an agent-facing workspace, not a runtime or orchestration
+system.

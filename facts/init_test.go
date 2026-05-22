@@ -90,6 +90,15 @@ func TestInitCreatesMemoryRepo(t *testing.T) {
 	if !info.IsDir() {
 		t.Fatalf("expected memory repo to be a directory")
 	}
+
+	projectsDir := filepath.Join(memoryDir, "projects")
+	info, err = os.Stat(projectsDir)
+	if err != nil {
+		t.Fatalf("expected project memory directory to exist: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("expected project memory directory to be a directory")
+	}
 }
 
 func TestInitCreatesDefaultConfig(t *testing.T) {
@@ -354,6 +363,9 @@ func TestInitReportsInitializedPaths(t *testing.T) {
 	}
 	if !strings.Contains(result.Message, result.MemoryDir) {
 		t.Fatalf("expected result message to include memory path, got %q", result.Message)
+	}
+	if !strings.Contains(result.Message, filepath.Join(result.MemoryDir, "projects")) {
+		t.Fatalf("expected result message to include project memory path, got %q", result.Message)
 	}
 }
 
