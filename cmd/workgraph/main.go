@@ -31,6 +31,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runGit(args[1:], stdout, stderr)
 	case "github":
 		return runGitHub(args[1:], stdout, stderr)
+	case "memory":
+		return runMemory(args[1:], stdout, stderr)
 	case "run":
 		return runCapture(args[1:], stdout, stderr)
 	case "status":
@@ -131,6 +133,50 @@ func runGit(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unknown git command: %s\n", args[0])
 		return 2
 	}
+}
+
+func runMemory(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph memory <command>")
+		return 2
+	}
+
+	switch args[0] {
+	case "init":
+		return runMemoryInit(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "unknown memory command: %s\n", args[0])
+		return 2
+	}
+}
+
+func runMemoryInit(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("memory init", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "WorkGraph home directory")
+	memoryDir := flags.String("memory", "", "WorkGraph memory directory")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 1 {
+		fmt.Fprintln(stderr, "usage: workgraph memory init [--home path] [--memory path] <project>")
+		return 2
+	}
+
+	result, err := workgraph.InitProjectMemory(workgraph.ProjectMemoryInitConfig{
+		HomeDir:   *homeDir,
+		MemoryDir: *memoryDir,
+		Project:   flags.Arg(0),
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph memory init: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
 }
 
 func runGitCapture(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -349,6 +395,7 @@ func runResume(args []string, stdout io.Writer, stderr io.Writer) int {
 
 	homeDir := flags.String("home", "", "WorkGraph home directory")
 	databasePath := flags.String("database", "", "WorkGraph SQLite database path")
+	memoryDir := flags.String("memory", "", "WorkGraph memory directory")
 
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -366,6 +413,7 @@ func runResume(args []string, stdout io.Writer, stderr io.Writer) int {
 	result, err := workgraph.Resume(workgraph.ResumeConfig{
 		HomeDir:      *homeDir,
 		DatabasePath: *databasePath,
+		MemoryDir:    *memoryDir,
 		Project:      project,
 	})
 	if err != nil {

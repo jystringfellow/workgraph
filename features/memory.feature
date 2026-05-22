@@ -16,3 +16,34 @@ Scenario: Treat memory as user-owned context
   When WorkGraph uses memory for context
   Then memory supports explanations and suggestions
   And captured events remain the source of truth for behavior
+
+Scenario: Resume with project memory
+  Given WorkGraph has captured events for a project
+  And the memory repo contains Markdown memory for that project
+  When I run "workgraph resume <project>"
+  Then the output includes the project memory
+  And the captured events remain visible as recent activity
+
+Scenario: Point project resume at missing memory
+  Given WorkGraph has captured events for a project
+  And the memory repo has no Markdown memory for that project
+  When I run "workgraph resume <project>"
+  Then the output explains where to add project memory
+
+Scenario: Initialize starter project memory
+  Given WorkGraph has been initialized
+  When I run "workgraph memory init <project>"
+  Then project memory exists at a lower-kebab-case Markdown path
+  And the memory contains starter headings for context
+
+Scenario: Preserve existing project memory
+  Given WorkGraph has been initialized
+  And the project memory already exists
+  When I run "workgraph memory init <project>"
+  Then the existing project memory is preserved
+  And the output reports its path
+
+Scenario: Require base initialization for project memory
+  Given WorkGraph has not been initialized
+  When I run "workgraph memory init <project>"
+  Then the output tells me to run "workgraph init"

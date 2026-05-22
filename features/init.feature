@@ -15,6 +15,7 @@ Scenario: Create the local memory repo
   Given WorkGraph has not been initialized
   When I run "workgraph init"
   Then the local memory repo exists at "~/workgraph-memory"
+  And the project memory directory exists at "~/workgraph-memory/projects"
 
 Scenario: Create default config
   Given WorkGraph has not been initialized
@@ -47,6 +48,7 @@ Scenario: Report initialized paths
   Then the output includes the WorkGraph home path
   And the output includes the database path
   And the output includes the memory repo path
+  And the output explains where project memory lives
   And the output includes the config path
 
 Scenario: Explain macOS folder access setup

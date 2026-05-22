@@ -82,6 +82,12 @@ This creates:
 - `~/.workgraph/workgraph.db`
 - `~/.workgraph/config.json`
 - `~/workgraph-memory/`
+- `~/workgraph-memory/projects/`
+
+Project memory is user-owned Markdown under
+`~/workgraph-memory/projects/<project-slug>.md`. It is a place to keep context
+that captured events cannot know on their own, such as priorities, decisions,
+constraints, and open questions. Project slugs are lowercase kebab-case.
 
 The default config watches existing common folders such as Desktop, Documents,
 Downloads, Code, Projects, Developer, Work, source, and repos, and ignores
@@ -227,6 +233,26 @@ go run ./cmd/workgraph today
 The output is deterministic plain text. When events exist, it includes `Today`,
 `Projects`, and `Sessions` sections. Sessions are inferred from same-project
 events that happen within 30 minutes of each other.
+
+To resume a project from captured events and explicit project memory:
+
+```sh
+go run ./cmd/workgraph resume workgraph
+```
+
+To create the starter memory template for a project:
+
+```sh
+go run ./cmd/workgraph memory init "WorkGraph"
+```
+
+The command creates `~/workgraph-memory/projects/workgraph.md` if it is missing
+and reports the existing path without overwriting it when memory is already
+present.
+
+When matching project memory exists, resume includes it beside recent activity.
+When activity exists but memory does not, resume prints the Markdown path where
+that project context can be added.
 
 Background capture uses the same configured watch and ignore rules as
 foreground capture. It does not start silently during `init`; capture is always

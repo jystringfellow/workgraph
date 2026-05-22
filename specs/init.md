@@ -15,6 +15,7 @@ By default, init creates:
 - `~/.workgraph/workgraph.db`
 - `~/.workgraph/config.json`
 - `~/workgraph-memory/`
+- `~/workgraph-memory/projects/`
 
 The home, database, and memory paths may be overridden by CLI flags.
 
@@ -50,6 +51,7 @@ Init reports the initialized paths:
 - WorkGraph home
 - database
 - memory repo
+- project memory directory
 - config file
 
 On macOS, init also explains that capture may need access to protected folders

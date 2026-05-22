@@ -20,6 +20,7 @@ const defaultResumeActivityLimit = 10
 type ResumeConfig struct {
 	HomeDir      string
 	DatabasePath string
+	MemoryDir    string
 	Project      string
 	Now          time.Time
 	MaxEvents    int
@@ -27,13 +28,15 @@ type ResumeConfig struct {
 
 // ResumeResult describes resumable work in deterministic plain text.
 type ResumeResult struct {
-	Project  string
-	Projects []ResumeProject
-	Events   []ResumeEvent
-	Files    []string
-	GitHub   []ResumeEvent
-	Omitted  int
-	Message  string
+	Project    string
+	Projects   []ResumeProject
+	Events     []ResumeEvent
+	Files      []string
+	GitHub     []ResumeEvent
+	Memory     *MemoryDoc
+	MemoryPath string
+	Omitted    int
+	Message    string
 }
 
 // ResumeProject is a project with captured activity.
@@ -93,6 +96,14 @@ func Resume(config ResumeConfig) (ResumeResult, error) {
 	result.GitHub = resumeOpenGitHubWork(projectEvents)
 	result.Events, result.Omitted = limitResumeEvents(projectEvents, resumeActivityLimit(config.MaxEvents))
 	result.Files = resumeRelevantFiles(result.Events)
+	memoryDir, err := resolveMemoryDir(config.MemoryDir)
+	if err != nil {
+		return ResumeResult{}, err
+	}
+	result.Memory, result.MemoryPath, err = loadProjectMemory(memoryDir, config.Project)
+	if err != nil {
+		return ResumeResult{}, err
+	}
 	result.Message = resumeProjectMessage(result, location)
 	return result, nil
 }
@@ -319,6 +330,12 @@ func resumeProjectMessage(result ResumeResult, location *time.Location) string {
 		for _, event := range result.GitHub {
 			lines = append(lines, fmt.Sprintf("- %s %s", event.Type, resumeEventLabel(event)))
 		}
+	}
+
+	if result.Memory != nil {
+		lines = append(lines, "", "Project memory", result.Memory.Content)
+	} else if result.MemoryPath != "" {
+		lines = append(lines, "", "Add project memory: "+result.MemoryPath)
 	}
 
 	return strings.Join(lines, "\n")

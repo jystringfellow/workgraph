@@ -82,6 +82,9 @@ func Init(config InitConfig) (InitResult, error) {
 	if err := os.MkdirAll(memoryDir, 0o755); err != nil {
 		return InitResult{}, fmt.Errorf("create memory repo: %w", err)
 	}
+	if err := os.MkdirAll(projectMemoryDir(memoryDir), 0o755); err != nil {
+		return InitResult{}, fmt.Errorf("create project memory directory: %w", err)
+	}
 
 	result := InitResult{
 		HomeDir:      homeDir,
@@ -223,6 +226,7 @@ func initMessage(result InitResult) string {
 		"Home: " + result.HomeDir,
 		"Database: " + result.DatabasePath,
 		"Memory: " + result.MemoryDir,
+		"Project memory: " + projectMemoryDir(result.MemoryDir),
 		"Config: " + result.ConfigPath,
 	}
 	if runtime.GOOS == "darwin" {
