@@ -10,9 +10,7 @@
 - [x] Local config file
 - [x] Sane default watch roots
 - [x] Configurable ignored paths and names
-- [ ] Suggest watch roots from external signals
-- [ ] Suggest ignore rules from noisy tracked activity
-- [ ] SQLite event store
+- [x] SQLite event store
 - [x] File system watcher
 - [x] Basic project inference (repo/folder name)
 - [x] Git-root project inference
@@ -30,7 +28,9 @@
 - [x] Resume explicit project from memory-only context
 - [ ] Link events ↔ memory (projects, people)
 
-## Phase 3: Intelligence
+## Phase 3: Suggestions and intelligence
+- [ ] Suggest watch roots from external signals
+- [ ] Suggest ignore rules from noisy tracked activity
 - [ ] Session summaries
 - [ ] Task extraction
 - [ ] “What next?” suggestions
