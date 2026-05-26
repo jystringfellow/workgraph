@@ -17,18 +17,29 @@
 - [x] Session grouping (time-based)
 - [x] Simple output (no LLM)
 
-## Phase 1: External signals
+## Phase 1: Initial integrations
 - [x] Git integration (commits, branches)
 - [x] GitHub ingestion (PRs, issues)
-- [ ] Slack ingestion (messages, threads)
 
-## Phase 2: Memory layer
+## Phase 2: Active memory layer
 - [x] Markdown memory repo
 - [x] Load memory into system
 - [x] Resume explicit project from memory-only context
+- [ ] Personal memory (priorities, principles, preferences, working style)
+- [ ] Organization memory (strategy memos, planning docs, operating principles)
+- [ ] Team memory (squad strategy, rituals, ownership, current goals)
+- [ ] Evidence can suggest memory updates without becoming memory automatically
 - [ ] Link events ↔ memory (projects, people)
 
-## Phase 3: Suggestions and intelligence
+## Phase 3: Connectors
+- [ ] Slack ingestion (messages, threads)
+- [ ] Calendar ingestion (Google Calendar, Outlook Calendar)
+- [ ] Meeting ingestion (Zoom, Google Meet, Microsoft Teams metadata/transcripts when explicitly available)
+- [ ] Work tracking ingestion (Jira, Azure DevOps, Linear)
+- [ ] Knowledge base ingestion (Notion, Confluence, Google Docs/Drive)
+- [ ] Configurable connector framework
+
+## Phase 4: Suggestions and intelligence
 - [ ] Suggest watch roots from external signals
 - [ ] Suggest ignore rules from noisy tracked activity
 - [ ] Session summaries
@@ -36,19 +47,18 @@
 - [ ] “What next?” suggestions
 - [ ] Resume improvements
 
-## Phase 4: Personalization
+## Phase 5: Personalization
 - [ ] Voice/tone learning
 - [ ] Preference modeling
 - [ ] Decision heuristics
 
-## Phase 5: Actions
+## Phase 6: Actions
 - [ ] Draft responses (Slack/GitHub)
 - [ ] Draft PR comments
 - [ ] Suggested commits
 - [ ] Approval-based execution
 
-## Phase 6: Platform
+## Phase 7: Platform
 - [ ] Plugin system
-- [ ] Configurable connectors
 - [ ] Desktop UI (Tauri)
 - [ ] Open-source release
