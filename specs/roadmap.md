@@ -27,6 +27,7 @@
 ## Phase 2: Memory layer
 - [x] Markdown memory repo
 - [x] Load memory into system
+- [x] Resume explicit project from memory-only context
 - [ ] Link events ↔ memory (projects, people)
 
 ## Phase 3: Intelligence

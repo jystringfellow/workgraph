@@ -24,6 +24,13 @@ Scenario: Resume with project memory
   Then the output includes the project memory
   And the captured events remain visible as recent activity
 
+Scenario: Resume initialized memory before captured activity
+  Given WorkGraph has initialized project memory
+  And WorkGraph has captured no events for that project
+  When I run "workgraph resume <project>"
+  Then the output includes the project memory
+  And the output says no recent activity was found
+
 Scenario: Point project resume at missing memory
   Given WorkGraph has captured events for a project
   And the memory repo has no Markdown memory for that project
