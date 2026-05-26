@@ -373,6 +373,44 @@ func TestResumeIncludesProjectMemoryWhenPresent(t *testing.T) {
 	}
 }
 
+func TestResumeIncludesProjectMemoryWithoutCapturedActivity(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	memoryDir := filepath.Join(tempDir, "workgraph-memory")
+	result, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir:   homeDir,
+		MemoryDir: memoryDir,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	memoryPath := filepath.Join(memoryDir, "projects", "cupcake.md")
+	if err := os.WriteFile(memoryPath, []byte("# Cupcake\n\n## Context\nMemory-first project.\n"), 0o644); err != nil {
+		t.Fatalf("write project memory: %v", err)
+	}
+
+	resume, err := workgraph.Resume(workgraph.ResumeConfig{
+		HomeDir:      homeDir,
+		DatabasePath: result.DatabasePath,
+		MemoryDir:    memoryDir,
+		Project:      "Cupcake",
+		Now:          time.Date(2026, 5, 22, 12, 0, 0, 0, time.Local),
+	})
+	if err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+
+	for _, expected := range []string{
+		"No recent activity found for Cupcake.",
+		"Project memory",
+		"Memory-first project.",
+	} {
+		if !strings.Contains(resume.Message, expected) {
+			t.Fatalf("expected resume to include %q, got:\n%s", expected, resume.Message)
+		}
+	}
+}
+
 func TestResumePointsAtMissingProjectMemory(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")

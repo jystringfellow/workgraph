@@ -53,6 +53,10 @@ The command:
 When `workgraph resume <project>` finds matching project memory, the output
 includes that explicit context beside recent captured activity.
 
+When matching project memory exists but no events have been captured for the
+project, resume still includes the project memory and clearly reports that no
+recent activity was found.
+
 When a project has recent activity but no matching project memory, resume points
 to the path where a user can add it.
 

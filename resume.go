@@ -307,6 +307,9 @@ func resumeProjectMessage(result ResumeResult, location *time.Location) string {
 			fmt.Sprintf("No recent activity found for %s.", result.Project),
 			"Check the project name or run workgraph run to capture activity.",
 		)
+		if result.Memory != nil {
+			lines = append(lines, "", "Project memory", result.Memory.Content)
+		}
 		return strings.Join(lines, "\n")
 	}
 

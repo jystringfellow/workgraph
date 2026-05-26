@@ -50,4 +50,7 @@ the requested project name with the same lowercase kebab-case rule used by
 memory does not, resume points to that path so the user can keep explicit
 context such as priorities, decisions, constraints, and open questions.
 
-When no events exist for the requested project, the output says no recent activity was found and suggests checking the project name or running capture.
+When no events exist for the requested project, the output says no recent
+activity was found and suggests checking the project name or running capture. If
+matching project memory exists, the output includes it even though captured
+events remain absent.
