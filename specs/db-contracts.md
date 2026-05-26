@@ -80,6 +80,12 @@ Contract:
 Status: active
 
 Memory docs represent active memory loaded from markdown, HTML, or other local files.
+They preserve user-owned source material for personal, organization, team, and
+project memory.
+
+External source artifacts can support or suggest updates to memory docs, but
+they are not memory docs unless the user explicitly promotes or curates them
+into active memory.
 
 Required fields:
 
@@ -183,6 +189,8 @@ Contracts:
 
 - `kind` is non-empty
 - `uri` is unique when present
+- artifacts can represent local files, external docs, work items, meetings, or
+  communication threads
 
 ### entity_links
 
@@ -269,7 +277,31 @@ Fields:
 Contracts:
 
 - `title` is non-empty
-- `scope` is one of: `personal`, `team`, `company`
+- `scope` is one of: `personal`, `team`, `organization`, `project`
+
+### preferences
+
+Status: draft
+
+Represents durable principles, preferences, working style, and decision
+heuristics.
+
+Fields:
+
+- `id`
+- `scope`
+- `subject`
+- `statement`
+- `source_memory_doc_id`
+- `created_at`
+- `updated_at`
+
+Contracts:
+
+- `statement` is non-empty
+- `scope` is one of: `personal`, `team`, `organization`
+- inferred preferences require an explicit source memory document or user
+  approval before becoming durable
 
 ## Phase 0 Scope
 
