@@ -15,6 +15,8 @@ workgraph-memory/
   personal.md
   organizations/
     <organization-slug>.md
+  teams/
+    <team-slug>.md
   projects/
     <project-slug>.md
 ```
@@ -28,6 +30,11 @@ organization name passed to `workgraph memory init --scope organization
 <organization>`. Organization memory stores strategy, planning notes, operating
 principles, current priorities, constraints, and open questions. Missing
 organization memory is normal.
+
+`<team-slug>.md` is a lowercase kebab-case filename derived from the team name
+passed to `workgraph memory init --scope team <team>`. Team memory stores squad
+strategy, rituals, ownership, current goals, constraints, and open questions.
+Missing team memory is normal.
 
 `<project-slug>.md` is a lowercase kebab-case filename derived from the
 project name passed to `workgraph memory init <project>` or
@@ -77,6 +84,22 @@ The command:
 - accepts explicit WorkGraph home and memory directory paths for non-default
   local state
 - does not infer organization memory from captured events or external sources
+
+## Initialize Team Memory
+
+`workgraph memory init --scope team <team>` creates a starter team memory file
+after `workgraph init` has created the base local WorkGraph state.
+
+The command:
+
+- creates team memory for any valid team name
+- writes a Markdown starter with headings for strategy, rituals, ownership,
+  current goals, constraints, and open questions
+- reports the existing team memory path without overwriting when the file is
+  already present
+- accepts explicit WorkGraph home and memory directory paths for non-default
+  local state
+- does not infer team memory from captured events or external sources
 
 ## Initialize Project Memory
 
