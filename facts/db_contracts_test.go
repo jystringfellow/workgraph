@@ -176,6 +176,29 @@ func TestMemoryDocPathIsUnique(t *testing.T) {
 	}
 }
 
+func TestMemoryLinksTableExists(t *testing.T) {
+	db := openContractDatabase(t)
+
+	var name string
+	if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_links'`).Scan(&name); err != nil {
+		t.Fatalf("expected memory_links table to exist: %v", err)
+	}
+	if name != "memory_links" {
+		t.Fatalf("expected memory_links table, got %q", name)
+	}
+}
+
+func TestMemoryLinksTableHasRequiredColumns(t *testing.T) {
+	db := openContractDatabase(t)
+
+	columns := tableColumns(t, db, "memory_links")
+	for _, column := range []string{"id", "memory_doc_path", "event_id", "relation", "created_at"} {
+		if !columns[column] {
+			t.Fatalf("expected memory_links table to have column %q, got %#v", column, columns)
+		}
+	}
+}
+
 func TestDraftTablesDocumentFutureIntent(t *testing.T) {
 	t.Skip("TBD: draft tables are documented but not required for Phase 0")
 }

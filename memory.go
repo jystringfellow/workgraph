@@ -127,6 +127,33 @@ type MemoryPromoteResult struct {
 	Message    string
 }
 
+// MemoryLinksConfig controls listing links between memory and evidence.
+type MemoryLinksConfig struct {
+	HomeDir      string
+	DatabasePath string
+	MemoryDir    string
+	Scope        string
+	Project      string
+}
+
+// MemoryLinksResult describes durable links for a memory document.
+type MemoryLinksResult struct {
+	Scope      string
+	Project    string
+	MemoryPath string
+	Links      []MemoryLink
+	Message    string
+}
+
+// MemoryLink connects one memory document to one evidence event.
+type MemoryLink struct {
+	ID            string
+	MemoryDocPath string
+	EventID       string
+	Relation      string
+	CreatedAt     time.Time
+}
+
 func projectMemoryDir(memoryDir string) string {
 	return filepath.Join(memoryDir, projectMemoryDirName)
 }
@@ -330,6 +357,9 @@ func PromoteMemory(config MemoryPromoteConfig) (MemoryPromoteResult, error) {
 	if _, err := file.WriteString(entry); err != nil {
 		return MemoryPromoteResult{}, fmt.Errorf("append project memory: %w", err)
 	}
+	if err := storeMemoryLink(config, memoryPath, event.ID, "supported_by"); err != nil {
+		return MemoryPromoteResult{}, err
+	}
 
 	result := MemoryPromoteResult{
 		Scope:      scope,
@@ -338,6 +368,79 @@ func PromoteMemory(config MemoryPromoteConfig) (MemoryPromoteResult, error) {
 		EvidenceID: config.EvidenceID,
 	}
 	result.Message = memoryPromoteMessage(result)
+	return result, nil
+}
+
+// ListMemoryLinks returns durable links for project memory evidence.
+func ListMemoryLinks(config MemoryLinksConfig) (MemoryLinksResult, error) {
+	scope := config.Scope
+	if scope == "" {
+		scope = "project"
+	}
+	if scope != "project" {
+		return MemoryLinksResult{}, fmt.Errorf("memory links scope %q is not supported yet", scope)
+	}
+	if strings.TrimSpace(config.Project) == "" {
+		return MemoryLinksResult{}, fmt.Errorf("project is required for project memory links")
+	}
+
+	memoryDir, err := resolveMemoryDir(config.MemoryDir)
+	if err != nil {
+		return MemoryLinksResult{}, err
+	}
+	memoryPath, ok := projectMemoryPath(memoryDir, config.Project)
+	if !ok {
+		return MemoryLinksResult{}, fmt.Errorf("project name %q cannot form a memory filename", config.Project)
+	}
+
+	dbPath, err := resumeDatabasePath(ResumeConfig{
+		HomeDir:      config.HomeDir,
+		DatabasePath: config.DatabasePath,
+	})
+	if err != nil {
+		return MemoryLinksResult{}, err
+	}
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		return MemoryLinksResult{}, fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+	if err := db.Ping(); err != nil {
+		return MemoryLinksResult{}, fmt.Errorf("open database: %w", err)
+	}
+
+	rows, err := db.Query(`SELECT id, memory_doc_path, event_id, relation, created_at
+		FROM memory_links
+		WHERE memory_doc_path = ?
+		ORDER BY created_at, id`, memoryPath)
+	if err != nil {
+		return MemoryLinksResult{}, fmt.Errorf("query memory links: %w", err)
+	}
+	defer rows.Close()
+
+	result := MemoryLinksResult{
+		Scope:      scope,
+		Project:    config.Project,
+		MemoryPath: memoryPath,
+	}
+	for rows.Next() {
+		var link MemoryLink
+		var createdAt string
+		if err := rows.Scan(&link.ID, &link.MemoryDocPath, &link.EventID, &link.Relation, &createdAt); err != nil {
+			return MemoryLinksResult{}, fmt.Errorf("scan memory link: %w", err)
+		}
+		parsed, err := time.Parse(time.RFC3339Nano, createdAt)
+		if err != nil {
+			return MemoryLinksResult{}, fmt.Errorf("parse memory link timestamp %q: %w", link.ID, err)
+		}
+		link.CreatedAt = parsed
+		result.Links = append(result.Links, link)
+	}
+	if err := rows.Err(); err != nil {
+		return MemoryLinksResult{}, fmt.Errorf("query memory links: %w", err)
+	}
+
+	result.Message = memoryLinksMessage(result)
 	return result, nil
 }
 
@@ -668,6 +771,62 @@ func memoryPromoteMessage(result MemoryPromoteResult) string {
 		"Path: " + result.MemoryPath,
 		"Evidence: " + result.EvidenceID,
 	}, "\n")
+}
+
+func storeMemoryLink(config MemoryPromoteConfig, memoryPath string, eventID string, relation string) error {
+	dbPath, err := resumeDatabasePath(ResumeConfig{
+		HomeDir:      config.HomeDir,
+		DatabasePath: config.DatabasePath,
+	})
+	if err != nil {
+		return err
+	}
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+	if err := db.Ping(); err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	id := memoryLinkID(memoryPath, eventID, relation)
+	_, err = db.Exec(`INSERT OR IGNORE INTO memory_links
+		(id, memory_doc_path, event_id, relation, created_at)
+		VALUES (?, ?, ?, ?, ?)`,
+		id,
+		memoryPath,
+		eventID,
+		relation,
+		now,
+	)
+	if err != nil {
+		return fmt.Errorf("store memory link: %w", err)
+	}
+	return nil
+}
+
+func memoryLinkID(memoryPath string, eventID string, relation string) string {
+	return relation + ":" + eventID + ":" + memoryPath
+}
+
+func memoryLinksMessage(result MemoryLinksResult) string {
+	lines := []string{
+		"Project memory links",
+		"Project: " + result.Project,
+		"Path: " + result.MemoryPath,
+	}
+	if len(result.Links) == 0 {
+		lines = append(lines, "", "No memory links found.")
+		return strings.Join(lines, "\n")
+	}
+
+	lines = append(lines, "", "Links")
+	for _, link := range result.Links {
+		lines = append(lines, fmt.Sprintf("- %s %s", link.Relation, link.EventID))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func organizationMemoryTemplate(organization string) string {

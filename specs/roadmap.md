@@ -29,7 +29,7 @@
 - [x] Organization memory (strategy memos, planning docs, operating principles)
 - [x] Team memory (squad strategy, rituals, ownership, current goals)
 - [x] Evidence can suggest memory updates without becoming memory automatically
-- [ ] Link events ↔ memory (projects, people)
+- [x] Link events ↔ memory (projects, people)
 
 ## Phase 3: Connectors
 - [ ] Slack ingestion (messages, threads)

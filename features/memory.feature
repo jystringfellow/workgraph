@@ -80,7 +80,14 @@ Scenario: Promote project memory from evidence
   When I run "workgraph memory promote --scope project <project> --evidence <event-id> --text <memory text>"
   Then the memory text is appended to project memory
   And the promoted entry records the event evidence
+  And WorkGraph stores a link from project memory to the event
   And existing project memory is preserved
+
+Scenario: List project memory links
+  Given project memory was promoted from event evidence
+  When I run "workgraph memory links --scope project <project>"
+  Then the output includes the project memory path
+  And the output includes the linked event evidence
 
 Scenario: Require base initialization for project memory
   Given WorkGraph has not been initialized
