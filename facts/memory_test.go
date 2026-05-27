@@ -402,6 +402,24 @@ func TestMemoryPromoteProjectAppendsCuratedTextWithEvidence(t *testing.T) {
 			t.Fatalf("expected promote output to include %q, got:\n%s", expected, result.Message)
 		}
 	}
+
+	links, err := workgraph.ListMemoryLinks(workgraph.MemoryLinksConfig{
+		HomeDir:      homeDir,
+		DatabasePath: initResult.DatabasePath,
+		MemoryDir:    memoryDir,
+		Scope:        "project",
+		Project:      "Cupcake API",
+	})
+	if err != nil {
+		t.Fatalf("list memory links failed: %v", err)
+	}
+	if len(links.Links) != 1 {
+		t.Fatalf("expected one memory link, got %#v", links.Links)
+	}
+	link := links.Links[0]
+	if link.MemoryDocPath != projectMemoryPath || link.EventID != "event-promote-decision" || link.Relation != "supported_by" {
+		t.Fatalf("expected project memory supported_by link, got %#v", link)
+	}
 }
 
 func TestMemoryPromoteProjectCreatesMissingProjectMemoryWithEvidence(t *testing.T) {
@@ -702,6 +720,65 @@ func TestMemoryPromoteCommandAppendsProjectMemory(t *testing.T) {
 	for _, expected := range []string{"Decision: auth migration has landed.", "Evidence: event-cli-promote github.pull_request Merged auth migration."} {
 		if !strings.Contains(string(contents), expected) {
 			t.Fatalf("expected promoted memory to include %q, got:\n%s", expected, contents)
+		}
+	}
+}
+
+func TestMemoryLinksCommandReportsProjectEvidenceLinks(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	memoryDir := filepath.Join(tempDir, "workgraph-memory")
+	repoRoot := repoRoot(t)
+
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir, MemoryDir: memoryDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	insertEvent(t, initResult.DatabasePath, storedEvent{
+		ID:        "event-cli-link",
+		Type:      "github.issue",
+		Timestamp: time.Date(2026, 5, 27, 13, 0, 0, 0, time.UTC),
+		Project:   "Cupcake API",
+		Payload:   `{"title":"Link memory evidence","state":"closed"}`,
+		Summary:   "Closed issue after linking memory evidence.",
+	})
+	_, err = workgraph.PromoteMemory(workgraph.MemoryPromoteConfig{
+		HomeDir:      homeDir,
+		DatabasePath: initResult.DatabasePath,
+		MemoryDir:    memoryDir,
+		Scope:        "project",
+		Project:      "Cupcake API",
+		EvidenceID:   "event-cli-link",
+		Text:         "Decision: memory promotions keep evidence links.",
+	})
+	if err != nil {
+		t.Fatalf("memory promote failed: %v", err)
+	}
+
+	binary := filepath.Join(tempDir, "workgraph")
+	build := exec.Command("go", "build", "-o", binary, "./cmd/workgraph")
+	build.Dir = repoRoot
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build workgraph failed: %v\n%s", err, output)
+	}
+
+	cmd := exec.Command(binary,
+		"memory", "links",
+		"--home", homeDir,
+		"--memory", memoryDir,
+		"--database", initResult.DatabasePath,
+		"--scope", "project",
+		"Cupcake API",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("workgraph memory links failed: %v\n%s", err, output)
+	}
+
+	expectedPath := filepath.Join(memoryDir, "projects", "cupcake-api.md")
+	for _, expected := range []string{"Project memory links", expectedPath, "supported_by", "event-cli-link"} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected links output to include %q, got:\n%s", expected, output)
 		}
 	}
 }

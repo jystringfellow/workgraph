@@ -144,6 +144,8 @@ func runMemory(args []string, stdout io.Writer, stderr io.Writer) int {
 	switch args[0] {
 	case "init":
 		return runMemoryInit(args[1:], stdout, stderr)
+	case "links":
+		return runMemoryLinks(args[1:], stdout, stderr)
 	case "promote":
 		return runMemoryPromote(args[1:], stdout, stderr)
 	case "suggest":
@@ -262,6 +264,39 @@ func runMemorySuggest(args []string, stdout io.Writer, stderr io.Writer) int {
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph memory suggest: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runMemoryLinks(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("memory links", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "WorkGraph home directory")
+	memoryDir := flags.String("memory", "", "WorkGraph memory directory")
+	databasePath := flags.String("database", "", "WorkGraph SQLite database path")
+	scope := flags.String("scope", "project", "Memory link scope")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if *scope != "project" || flags.NArg() != 1 {
+		fmt.Fprintln(stderr, "usage: workgraph memory links [--home path] [--memory path] [--database path] --scope project <project>")
+		return 2
+	}
+
+	result, err := workgraph.ListMemoryLinks(workgraph.MemoryLinksConfig{
+		HomeDir:      *homeDir,
+		DatabasePath: *databasePath,
+		MemoryDir:    *memoryDir,
+		Scope:        *scope,
+		Project:      flags.Arg(0),
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph memory links: %v\n", err)
 		return 1
 	}
 

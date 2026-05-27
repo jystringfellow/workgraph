@@ -268,6 +268,14 @@ func createSchema(db *sql.DB) error {
 			content TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS memory_links (
+			id TEXT PRIMARY KEY,
+			memory_doc_path TEXT NOT NULL,
+			event_id TEXT NOT NULL,
+			relation TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			UNIQUE (memory_doc_path, event_id, relation)
+		);`,
 	}
 
 	for _, statement := range statements {

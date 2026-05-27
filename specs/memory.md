@@ -146,7 +146,20 @@ The command:
 - creates project memory with the starter template when the file is missing
 - appends promoted memory without overwriting existing content
 - records the evidence id beside the promoted memory entry
+- stores a durable `supported_by` link from the project memory file to the
+  evidence event
 - does not treat the event payload itself as active memory
+
+## List Project Memory Links
+
+`workgraph memory links --scope project <project>` lists durable links from a
+project memory file to captured event evidence.
+
+The command:
+
+- reads links for the matching project memory path
+- includes relation and event id for every link
+- does not modify memory files or events
 
 ## Resume
 

@@ -102,6 +102,29 @@ Contract:
 - `content` may be empty
 - `updated_at` is valid RFC3339
 
+### memory_links
+
+Status: active
+
+Memory links connect active memory documents to captured evidence without
+rewriting the evidence itself.
+
+Required fields:
+
+- `id`
+- `memory_doc_path`
+- `event_id`
+- `relation`
+- `created_at`
+
+Contract:
+
+- `id` is unique
+- `memory_doc_path` is non-empty
+- `event_id` is non-empty
+- `relation` is non-empty, such as `supported_by`
+- `created_at` is valid RFC3339
+
 ## Draft Future Tables
 
 ### tasks
