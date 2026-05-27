@@ -28,7 +28,7 @@
 - [x] Personal memory (priorities, principles, preferences, working style)
 - [x] Organization memory (strategy memos, planning docs, operating principles)
 - [x] Team memory (squad strategy, rituals, ownership, current goals)
-- [ ] Evidence can suggest memory updates without becoming memory automatically
+- [x] Evidence can suggest memory updates without becoming memory automatically
 - [ ] Link events ↔ memory (projects, people)
 
 ## Phase 3: Connectors

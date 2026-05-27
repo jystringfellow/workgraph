@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	workgraph "github.com/jystringfellow/workgraph"
 )
@@ -296,6 +297,55 @@ func TestMemoryInitRequiresWorkGraphInit(t *testing.T) {
 	}
 }
 
+func TestMemorySuggestProjectEmitsDraftsWithEvidenceWithoutWritingMemory(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	memoryDir := filepath.Join(tempDir, "workgraph-memory")
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir, MemoryDir: memoryDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	projectMemoryPath := filepath.Join(memoryDir, "projects", "cupcake-api.md")
+	insertEvent(t, initResult.DatabasePath, storedEvent{
+		ID:        "event-auth-decision",
+		Type:      "file.modified",
+		Timestamp: time.Date(2026, 5, 27, 9, 30, 0, 0, time.UTC),
+		Project:   "Cupcake API",
+		Payload:   `{"path":"/tmp/cupcake/auth.go","operation":"modified"}`,
+		Summary:   "Updated auth flow after deciding to require passkeys.",
+	})
+
+	result, err := workgraph.SuggestMemoryUpdates(workgraph.MemorySuggestConfig{
+		HomeDir:      homeDir,
+		DatabasePath: initResult.DatabasePath,
+		MemoryDir:    memoryDir,
+		Scope:        "project",
+		Project:      "Cupcake API",
+	})
+	if err != nil {
+		t.Fatalf("memory suggest failed: %v", err)
+	}
+
+	if result.MemoryPath != projectMemoryPath {
+		t.Fatalf("expected memory path %q, got %q", projectMemoryPath, result.MemoryPath)
+	}
+	if len(result.Suggestions) != 1 {
+		t.Fatalf("expected one draft suggestion, got %#v", result.Suggestions)
+	}
+	if result.Suggestions[0].EvidenceID != "event-auth-decision" {
+		t.Fatalf("expected suggestion evidence id, got %#v", result.Suggestions[0])
+	}
+	for _, expected := range []string{"Draft memory update suggestions", "Status: draft suggestions only", "event-auth-decision", "Updated auth flow", "No memory files were changed"} {
+		if !strings.Contains(result.Message, expected) {
+			t.Fatalf("expected suggestion output to include %q, got:\n%s", expected, result.Message)
+		}
+	}
+	if _, err := os.Stat(projectMemoryPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected project memory not to be created, stat err: %v", err)
+	}
+}
+
 func TestMemoryInitCommandReportsStarterProjectMemory(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
@@ -417,5 +467,48 @@ func TestMemoryInitCommandReportsStarterTeamMemory(t *testing.T) {
 		if !strings.Contains(string(output), expected) {
 			t.Fatalf("expected command output to include %q, got:\n%s", expected, output)
 		}
+	}
+}
+
+func TestMemorySuggestCommandReportsDraftProjectSuggestions(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	memoryDir := filepath.Join(tempDir, "workgraph-memory")
+	repoRoot := repoRoot(t)
+
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir, MemoryDir: memoryDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	insertEvent(t, initResult.DatabasePath, storedEvent{
+		ID:        "event-cli-suggest",
+		Type:      "github.issue",
+		Timestamp: time.Date(2026, 5, 27, 10, 15, 0, 0, time.UTC),
+		Project:   "Cupcake API",
+		Payload:   `{"title":"Document auth constraints","state":"open"}`,
+		Summary:   "Opened issue to document auth constraints.",
+	})
+
+	binary := filepath.Join(tempDir, "workgraph")
+	build := exec.Command("go", "build", "-o", binary, "./cmd/workgraph")
+	build.Dir = repoRoot
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build workgraph failed: %v\n%s", err, output)
+	}
+
+	cmd := exec.Command(binary, "memory", "suggest", "--home", homeDir, "--memory", memoryDir, "--database", initResult.DatabasePath, "--scope", "project", "Cupcake API")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("workgraph memory suggest failed: %v\n%s", err, output)
+	}
+
+	expectedPath := filepath.Join(memoryDir, "projects", "cupcake-api.md")
+	for _, expected := range []string{"Draft memory update suggestions", "Status: draft suggestions only", expectedPath, "event-cli-suggest", "No memory files were changed"} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected command output to include %q, got:\n%s", expected, output)
+		}
+	}
+	if _, err := os.Stat(expectedPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected project memory not to be created, stat err: %v", err)
 	}
 }

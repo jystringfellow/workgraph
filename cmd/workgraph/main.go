@@ -144,6 +144,8 @@ func runMemory(args []string, stdout io.Writer, stderr io.Writer) int {
 	switch args[0] {
 	case "init":
 		return runMemoryInit(args[1:], stdout, stderr)
+	case "suggest":
+		return runMemorySuggest(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown memory command: %s\n", args[0])
 		return 2
@@ -230,6 +232,39 @@ func runMemoryInit(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unknown memory scope: %s\n", *scope)
 		return 2
 	}
+}
+
+func runMemorySuggest(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("memory suggest", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "WorkGraph home directory")
+	memoryDir := flags.String("memory", "", "WorkGraph memory directory")
+	databasePath := flags.String("database", "", "WorkGraph SQLite database path")
+	scope := flags.String("scope", "project", "Memory suggestion scope")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if *scope != "project" || flags.NArg() != 1 {
+		fmt.Fprintln(stderr, "usage: workgraph memory suggest [--home path] [--memory path] [--database path] --scope project <project>")
+		return 2
+	}
+
+	result, err := workgraph.SuggestMemoryUpdates(workgraph.MemorySuggestConfig{
+		HomeDir:      *homeDir,
+		DatabasePath: *databasePath,
+		MemoryDir:    *memoryDir,
+		Scope:        *scope,
+		Project:      flags.Arg(0),
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph memory suggest: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
 }
 
 func runGitCapture(args []string, stdout io.Writer, stderr io.Writer) int {

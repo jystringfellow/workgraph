@@ -68,6 +68,13 @@ Scenario: Preserve existing project memory
   Then the existing project memory is preserved
   And the output reports its path
 
+Scenario: Suggest project memory updates from evidence
+  Given WorkGraph has captured events for a project
+  When I run "workgraph memory suggest --scope project <project>"
+  Then the output includes draft memory update suggestions
+  And every suggestion includes event evidence
+  And project memory is not created or modified
+
 Scenario: Require base initialization for project memory
   Given WorkGraph has not been initialized
   When I run "workgraph memory init <project>"
