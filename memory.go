@@ -1,10 +1,12 @@
 package workgraph
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -79,6 +81,32 @@ type TeamMemoryInitResult struct {
 	Message string
 }
 
+// MemorySuggestConfig controls draft memory update suggestions from evidence.
+type MemorySuggestConfig struct {
+	HomeDir      string
+	DatabasePath string
+	MemoryDir    string
+	Scope        string
+	Project      string
+	MaxEvents    int
+}
+
+// MemorySuggestResult describes draft suggestions without mutating memory.
+type MemorySuggestResult struct {
+	Scope       string
+	Project     string
+	MemoryPath  string
+	Suggestions []MemorySuggestion
+	Message     string
+}
+
+// MemorySuggestion is a draft update backed by one captured event.
+type MemorySuggestion struct {
+	Draft      string
+	EvidenceID string
+	Evidence   string
+}
+
 func projectMemoryDir(memoryDir string) string {
 	return filepath.Join(memoryDir, projectMemoryDirName)
 }
@@ -151,6 +179,76 @@ func loadProjectMemory(memoryDir string, project string) (*MemoryDoc, string, er
 		Content:   string(content),
 		UpdatedAt: info.ModTime(),
 	}, path, nil
+}
+
+// SuggestMemoryUpdates emits draft, evidence-backed memory suggestions without writing memory files.
+func SuggestMemoryUpdates(config MemorySuggestConfig) (MemorySuggestResult, error) {
+	scope := config.Scope
+	if scope == "" {
+		scope = "project"
+	}
+	if scope != "project" {
+		return MemorySuggestResult{}, fmt.Errorf("memory suggest scope %q is not supported yet", scope)
+	}
+	if strings.TrimSpace(config.Project) == "" {
+		return MemorySuggestResult{}, fmt.Errorf("project is required for project memory suggestions")
+	}
+
+	memoryDir, err := resolveMemoryDir(config.MemoryDir)
+	if err != nil {
+		return MemorySuggestResult{}, err
+	}
+	memoryPath, ok := projectMemoryPath(memoryDir, config.Project)
+	if !ok {
+		return MemorySuggestResult{}, fmt.Errorf("project name %q cannot form a memory filename", config.Project)
+	}
+
+	dbPath, err := resumeDatabasePath(ResumeConfig{
+		HomeDir:      config.HomeDir,
+		DatabasePath: config.DatabasePath,
+	})
+	if err != nil {
+		return MemorySuggestResult{}, err
+	}
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		return MemorySuggestResult{}, fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+	if err := db.Ping(); err != nil {
+		return MemorySuggestResult{}, fmt.Errorf("open database: %w", err)
+	}
+
+	events, err := loadResumeEvents(db, time.Local)
+	if err != nil {
+		return MemorySuggestResult{}, err
+	}
+	projectEvents := resumeProjectEvents(events, config.Project)
+	sort.Slice(projectEvents, func(i, j int) bool {
+		if projectEvents[i].Timestamp.Equal(projectEvents[j].Timestamp) {
+			return projectEvents[i].ID < projectEvents[j].ID
+		}
+		return projectEvents[i].Timestamp.After(projectEvents[j].Timestamp)
+	})
+
+	result := MemorySuggestResult{
+		Scope:      scope,
+		Project:    config.Project,
+		MemoryPath: memoryPath,
+	}
+	limit := memorySuggestLimit(config.MaxEvents)
+	for _, event := range projectEvents {
+		if len(result.Suggestions) >= limit {
+			break
+		}
+		result.Suggestions = append(result.Suggestions, MemorySuggestion{
+			Draft:      "Consider whether this changes project context, priorities, decisions, constraints, or open questions.",
+			EvidenceID: event.ID,
+			Evidence:   memorySuggestionEvidence(event),
+		})
+	}
+	result.Message = memorySuggestMessage(result)
+	return result, nil
 }
 
 // InitPersonalMemory creates starter Markdown for personal memory without overwriting.
@@ -394,6 +492,44 @@ func personalMemoryTemplate() string {
 		"## Constraints",
 		"",
 	}, "\n")
+}
+
+func memorySuggestLimit(configured int) int {
+	if configured > 0 {
+		return configured
+	}
+	return 5
+}
+
+func memorySuggestionEvidence(event ResumeEvent) string {
+	label := event.Summary
+	if label == "" {
+		label = resumeEventLabel(event)
+	}
+	return fmt.Sprintf("%s %s", event.Type, label)
+}
+
+func memorySuggestMessage(result MemorySuggestResult) string {
+	lines := []string{
+		"Draft memory update suggestions",
+		"Scope: " + result.Scope,
+		"Project: " + result.Project,
+		"Project memory: " + result.MemoryPath,
+		"Status: draft suggestions only; No memory files were changed.",
+	}
+	if len(result.Suggestions) == 0 {
+		lines = append(lines, "", "No suggestions found from recent captured evidence.")
+		return strings.Join(lines, "\n")
+	}
+
+	lines = append(lines, "", "Suggestions")
+	for _, suggestion := range result.Suggestions {
+		lines = append(lines,
+			"- "+suggestion.Draft,
+			"  Evidence: "+suggestion.EvidenceID+" "+suggestion.Evidence,
+		)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func organizationMemoryTemplate(organization string) string {

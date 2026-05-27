@@ -117,6 +117,21 @@ The command:
   local state
 - does not modify Git state or `.gitignore`
 
+## Suggest Project Memory Updates
+
+`workgraph memory suggest --scope project <project>` reviews captured evidence
+for a project and prints draft memory update suggestions.
+
+The command:
+
+- reads recent captured events for the project
+- points at the matching project memory path when known
+- emits draft suggestions only
+- includes event evidence for every suggestion
+- does not create, overwrite, or edit memory files
+- does not promote captured events or external artifacts into active memory
+  without explicit user action
+
 ## Resume
 
 When `workgraph resume <project>` finds matching project memory, the output
