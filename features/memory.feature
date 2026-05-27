@@ -75,6 +75,13 @@ Scenario: Suggest project memory updates from evidence
   And every suggestion includes event evidence
   And project memory is not created or modified
 
+Scenario: Promote project memory from evidence
+  Given WorkGraph has captured events for a project
+  When I run "workgraph memory promote --scope project <project> --evidence <event-id> --text <memory text>"
+  Then the memory text is appended to project memory
+  And the promoted entry records the event evidence
+  And existing project memory is preserved
+
 Scenario: Require base initialization for project memory
   Given WorkGraph has not been initialized
   When I run "workgraph memory init <project>"

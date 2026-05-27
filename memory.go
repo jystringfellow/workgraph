@@ -107,6 +107,26 @@ type MemorySuggestion struct {
 	Evidence   string
 }
 
+// MemoryPromoteConfig controls explicit promotion of curated text into memory.
+type MemoryPromoteConfig struct {
+	HomeDir      string
+	DatabasePath string
+	MemoryDir    string
+	Scope        string
+	Project      string
+	EvidenceID   string
+	Text         string
+}
+
+// MemoryPromoteResult describes a successful explicit memory promotion.
+type MemoryPromoteResult struct {
+	Scope      string
+	Project    string
+	MemoryPath string
+	EvidenceID string
+	Message    string
+}
+
 func projectMemoryDir(memoryDir string) string {
 	return filepath.Join(memoryDir, projectMemoryDirName)
 }
@@ -248,6 +268,76 @@ func SuggestMemoryUpdates(config MemorySuggestConfig) (MemorySuggestResult, erro
 		})
 	}
 	result.Message = memorySuggestMessage(result)
+	return result, nil
+}
+
+// PromoteMemory appends user-curated memory text with an evidence link.
+func PromoteMemory(config MemoryPromoteConfig) (MemoryPromoteResult, error) {
+	scope := config.Scope
+	if scope == "" {
+		scope = "project"
+	}
+	if scope != "project" {
+		return MemoryPromoteResult{}, fmt.Errorf("memory promote scope %q is not supported yet", scope)
+	}
+	if strings.TrimSpace(config.Project) == "" {
+		return MemoryPromoteResult{}, fmt.Errorf("project is required for project memory promotion")
+	}
+	if strings.TrimSpace(config.EvidenceID) == "" {
+		return MemoryPromoteResult{}, fmt.Errorf("evidence id is required for memory promotion")
+	}
+	text := strings.TrimSpace(config.Text)
+	if text == "" {
+		return MemoryPromoteResult{}, fmt.Errorf("memory text is required for promotion")
+	}
+
+	memoryDir, err := resolveMemoryDir(config.MemoryDir)
+	if err != nil {
+		return MemoryPromoteResult{}, err
+	}
+	memoryPath, ok := projectMemoryPath(memoryDir, config.Project)
+	if !ok {
+		return MemoryPromoteResult{}, fmt.Errorf("project name %q cannot form a memory filename", config.Project)
+	}
+
+	event, err := memoryPromotionEvidence(config)
+	if err != nil {
+		return MemoryPromoteResult{}, err
+	}
+	if event.Project != config.Project {
+		return MemoryPromoteResult{}, fmt.Errorf("evidence %q belongs to project %q, not %q", config.EvidenceID, event.Project, config.Project)
+	}
+
+	if err := os.MkdirAll(projectMemoryDir(memoryDir), 0o755); err != nil {
+		return MemoryPromoteResult{}, fmt.Errorf("create project memory directory: %w", err)
+	}
+	if _, err := os.Stat(memoryPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			if err := os.WriteFile(memoryPath, []byte(projectMemoryTemplate(config.Project)), 0o644); err != nil {
+				return MemoryPromoteResult{}, fmt.Errorf("create project memory: %w", err)
+			}
+		} else {
+			return MemoryPromoteResult{}, fmt.Errorf("check project memory: %w", err)
+		}
+	}
+
+	entry := promotedMemoryEntry(text, event)
+	file, err := os.OpenFile(memoryPath, os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return MemoryPromoteResult{}, fmt.Errorf("open project memory: %w", err)
+	}
+	defer file.Close()
+	if _, err := file.WriteString(entry); err != nil {
+		return MemoryPromoteResult{}, fmt.Errorf("append project memory: %w", err)
+	}
+
+	result := MemoryPromoteResult{
+		Scope:      scope,
+		Project:    config.Project,
+		MemoryPath: memoryPath,
+		EvidenceID: config.EvidenceID,
+	}
+	result.Message = memoryPromoteMessage(result)
 	return result, nil
 }
 
@@ -530,6 +620,54 @@ func memorySuggestMessage(result MemorySuggestResult) string {
 		)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func memoryPromotionEvidence(config MemoryPromoteConfig) (ResumeEvent, error) {
+	dbPath, err := resumeDatabasePath(ResumeConfig{
+		HomeDir:      config.HomeDir,
+		DatabasePath: config.DatabasePath,
+	})
+	if err != nil {
+		return ResumeEvent{}, err
+	}
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		return ResumeEvent{}, fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+	if err := db.Ping(); err != nil {
+		return ResumeEvent{}, fmt.Errorf("open database: %w", err)
+	}
+
+	events, err := loadResumeEvents(db, time.Local)
+	if err != nil {
+		return ResumeEvent{}, err
+	}
+	for _, event := range events {
+		if event.ID == config.EvidenceID {
+			return event, nil
+		}
+	}
+	return ResumeEvent{}, fmt.Errorf("evidence event %q was not found", config.EvidenceID)
+}
+
+func promotedMemoryEntry(text string, event ResumeEvent) string {
+	return strings.Join([]string{
+		"",
+		"## Promoted evidence",
+		"",
+		"- " + text,
+		"  Evidence: " + event.ID + " " + memorySuggestionEvidence(event),
+		"",
+	}, "\n")
+}
+
+func memoryPromoteMessage(result MemoryPromoteResult) string {
+	return strings.Join([]string{
+		"Promoted project memory",
+		"Path: " + result.MemoryPath,
+		"Evidence: " + result.EvidenceID,
+	}, "\n")
 }
 
 func organizationMemoryTemplate(organization string) string {

@@ -346,6 +346,141 @@ func TestMemorySuggestProjectEmitsDraftsWithEvidenceWithoutWritingMemory(t *test
 	}
 }
 
+func TestMemoryPromoteProjectAppendsCuratedTextWithEvidence(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	memoryDir := filepath.Join(tempDir, "workgraph-memory")
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir, MemoryDir: memoryDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	projectMemoryPath := filepath.Join(memoryDir, "projects", "cupcake-api.md")
+	if err := os.WriteFile(projectMemoryPath, []byte("# Cupcake API\n\n## Context\nExisting context.\n"), 0o644); err != nil {
+		t.Fatalf("write existing project memory: %v", err)
+	}
+	insertEvent(t, initResult.DatabasePath, storedEvent{
+		ID:        "event-promote-decision",
+		Type:      "github.issue",
+		Timestamp: time.Date(2026, 5, 27, 11, 0, 0, 0, time.UTC),
+		Project:   "Cupcake API",
+		Payload:   `{"title":"Use passkeys for login","state":"closed"}`,
+		Summary:   "Closed issue after deciding passkeys are required for login.",
+	})
+
+	result, err := workgraph.PromoteMemory(workgraph.MemoryPromoteConfig{
+		HomeDir:      homeDir,
+		DatabasePath: initResult.DatabasePath,
+		MemoryDir:    memoryDir,
+		Scope:        "project",
+		Project:      "Cupcake API",
+		EvidenceID:   "event-promote-decision",
+		Text:         "Decision: Cupcake API requires passkeys for login.",
+	})
+	if err != nil {
+		t.Fatalf("memory promote failed: %v", err)
+	}
+
+	if result.MemoryPath != projectMemoryPath {
+		t.Fatalf("expected memory path %q, got %q", projectMemoryPath, result.MemoryPath)
+	}
+	contents, err := os.ReadFile(projectMemoryPath)
+	if err != nil {
+		t.Fatalf("read promoted memory: %v", err)
+	}
+	for _, expected := range []string{
+		"Existing context.",
+		"## Promoted evidence",
+		"Decision: Cupcake API requires passkeys for login.",
+		"Evidence: event-promote-decision github.issue Closed issue after deciding passkeys are required for login.",
+	} {
+		if !strings.Contains(string(contents), expected) {
+			t.Fatalf("expected promoted memory to include %q, got:\n%s", expected, contents)
+		}
+	}
+	for _, expected := range []string{"Promoted project memory", projectMemoryPath, "event-promote-decision"} {
+		if !strings.Contains(result.Message, expected) {
+			t.Fatalf("expected promote output to include %q, got:\n%s", expected, result.Message)
+		}
+	}
+}
+
+func TestMemoryPromoteProjectCreatesMissingProjectMemoryWithEvidence(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	memoryDir := filepath.Join(tempDir, "workgraph-memory")
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir, MemoryDir: memoryDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	insertEvent(t, initResult.DatabasePath, storedEvent{
+		ID:        "event-promote-new-memory",
+		Type:      "file.modified",
+		Timestamp: time.Date(2026, 5, 27, 11, 30, 0, 0, time.UTC),
+		Project:   "Cupcake API",
+		Payload:   `{"path":"/tmp/cupcake/routing.go","operation":"modified"}`,
+		Summary:   "Added routing constraints for beta customers.",
+	})
+
+	_, err = workgraph.PromoteMemory(workgraph.MemoryPromoteConfig{
+		HomeDir:      homeDir,
+		DatabasePath: initResult.DatabasePath,
+		MemoryDir:    memoryDir,
+		Scope:        "project",
+		Project:      "Cupcake API",
+		EvidenceID:   "event-promote-new-memory",
+		Text:         "Constraint: beta customer routing must stay isolated.",
+	})
+	if err != nil {
+		t.Fatalf("memory promote failed: %v", err)
+	}
+
+	projectMemoryPath := filepath.Join(memoryDir, "projects", "cupcake-api.md")
+	contents, err := os.ReadFile(projectMemoryPath)
+	if err != nil {
+		t.Fatalf("read created project memory: %v", err)
+	}
+	for _, expected := range []string{"# Cupcake API", "## Context", "Constraint: beta customer routing must stay isolated.", "Evidence: event-promote-new-memory"} {
+		if !strings.Contains(string(contents), expected) {
+			t.Fatalf("expected created promoted memory to include %q, got:\n%s", expected, contents)
+		}
+	}
+}
+
+func TestMemoryPromoteRejectsEvidenceFromAnotherProject(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	memoryDir := filepath.Join(tempDir, "workgraph-memory")
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir, MemoryDir: memoryDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	insertEvent(t, initResult.DatabasePath, storedEvent{
+		ID:        "event-other-project",
+		Type:      "github.issue",
+		Timestamp: time.Date(2026, 5, 27, 12, 0, 0, 0, time.UTC),
+		Project:   "Other Project",
+		Payload:   `{"title":"Wrong project","state":"open"}`,
+		Summary:   "Belongs elsewhere.",
+	})
+
+	_, err = workgraph.PromoteMemory(workgraph.MemoryPromoteConfig{
+		HomeDir:      homeDir,
+		DatabasePath: initResult.DatabasePath,
+		MemoryDir:    memoryDir,
+		Scope:        "project",
+		Project:      "Cupcake API",
+		EvidenceID:   "event-other-project",
+		Text:         "This should not be promoted.",
+	})
+	if err == nil {
+		t.Fatalf("expected promote to reject evidence from another project")
+	}
+	projectMemoryPath := filepath.Join(memoryDir, "projects", "cupcake-api.md")
+	if _, err := os.Stat(projectMemoryPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected rejected promote not to create memory, stat err: %v", err)
+	}
+}
+
 func TestMemoryInitCommandReportsStarterProjectMemory(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
@@ -510,5 +645,63 @@ func TestMemorySuggestCommandReportsDraftProjectSuggestions(t *testing.T) {
 	}
 	if _, err := os.Stat(expectedPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected project memory not to be created, stat err: %v", err)
+	}
+}
+
+func TestMemoryPromoteCommandAppendsProjectMemory(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	memoryDir := filepath.Join(tempDir, "workgraph-memory")
+	repoRoot := repoRoot(t)
+
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir, MemoryDir: memoryDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	insertEvent(t, initResult.DatabasePath, storedEvent{
+		ID:        "event-cli-promote",
+		Type:      "github.pull_request",
+		Timestamp: time.Date(2026, 5, 27, 12, 30, 0, 0, time.UTC),
+		Project:   "Cupcake API",
+		Payload:   `{"title":"Add auth migration","state":"merged"}`,
+		Summary:   "Merged auth migration.",
+	})
+
+	binary := filepath.Join(tempDir, "workgraph")
+	build := exec.Command("go", "build", "-o", binary, "./cmd/workgraph")
+	build.Dir = repoRoot
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build workgraph failed: %v\n%s", err, output)
+	}
+
+	cmd := exec.Command(binary,
+		"memory", "promote",
+		"--home", homeDir,
+		"--memory", memoryDir,
+		"--database", initResult.DatabasePath,
+		"--scope", "project",
+		"--evidence", "event-cli-promote",
+		"--text", "Decision: auth migration has landed.",
+		"Cupcake API",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("workgraph memory promote failed: %v\n%s", err, output)
+	}
+
+	expectedPath := filepath.Join(memoryDir, "projects", "cupcake-api.md")
+	for _, expected := range []string{"Promoted project memory", expectedPath, "event-cli-promote"} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected command output to include %q, got:\n%s", expected, output)
+		}
+	}
+	contents, err := os.ReadFile(expectedPath)
+	if err != nil {
+		t.Fatalf("read promoted memory: %v", err)
+	}
+	for _, expected := range []string{"Decision: auth migration has landed.", "Evidence: event-cli-promote github.pull_request Merged auth migration."} {
+		if !strings.Contains(string(contents), expected) {
+			t.Fatalf("expected promoted memory to include %q, got:\n%s", expected, contents)
+		}
 	}
 }
