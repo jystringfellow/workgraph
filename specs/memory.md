@@ -13,6 +13,8 @@ The first memory contracts are user-owned Markdown files:
 ```text
 workgraph-memory/
   personal.md
+  organizations/
+    <organization-slug>.md
   projects/
     <project-slug>.md
 ```
@@ -20,6 +22,12 @@ workgraph-memory/
 `personal.md` stores personal active memory: priorities, principles,
 preferences, working style, and constraints. It is intentionally curated by the
 user and is not inferred from captured events.
+
+`<organization-slug>.md` is a lowercase kebab-case filename derived from the
+organization name passed to `workgraph memory init --scope organization
+<organization>`. Organization memory stores strategy, planning notes, operating
+principles, current priorities, constraints, and open questions. Missing
+organization memory is normal.
 
 `<project-slug>.md` is a lowercase kebab-case filename derived from the
 project name passed to `workgraph memory init <project>` or
@@ -52,6 +60,23 @@ The command:
 - accepts explicit WorkGraph home and memory directory paths for non-default
   local state
 - does not infer personal memory from captured events or external sources
+
+## Initialize Organization Memory
+
+`workgraph memory init --scope organization <organization>` creates a starter
+organization memory file after `workgraph init` has created the base local
+WorkGraph state.
+
+The command:
+
+- creates organization memory for any valid organization name
+- writes a Markdown starter with headings for strategy, planning notes,
+  operating principles, current priorities, constraints, and open questions
+- reports the existing organization memory path without overwriting when the
+  file is already present
+- accepts explicit WorkGraph home and memory directory paths for non-default
+  local state
+- does not infer organization memory from captured events or external sources
 
 ## Initialize Project Memory
 

@@ -11,6 +11,7 @@ import (
 )
 
 const projectMemoryDirName = "projects"
+const organizationMemoryDirName = "organizations"
 const personalMemoryFileName = "personal.md"
 
 // MemoryDoc is user-owned context loaded from a local memory file.
@@ -49,12 +50,39 @@ type PersonalMemoryInitResult struct {
 	Message string
 }
 
+// OrganizationMemoryInitConfig controls creation of starter organization memory.
+type OrganizationMemoryInitConfig struct {
+	HomeDir      string
+	MemoryDir    string
+	Organization string
+}
+
+// OrganizationMemoryInitResult describes initialized organization memory.
+type OrganizationMemoryInitResult struct {
+	Path    string
+	Created bool
+	Message string
+}
+
 func projectMemoryDir(memoryDir string) string {
 	return filepath.Join(memoryDir, projectMemoryDirName)
 }
 
+func organizationMemoryDir(memoryDir string) string {
+	return filepath.Join(memoryDir, organizationMemoryDirName)
+}
+
 func personalMemoryPath(memoryDir string) string {
 	return filepath.Join(memoryDir, personalMemoryFileName)
+}
+
+func organizationMemoryPath(memoryDir string, organization string) (string, bool) {
+	slug := projectSlug(organization)
+	if slug == "" {
+		return "", false
+	}
+
+	return filepath.Join(organizationMemoryDir(memoryDir), slug+".md"), true
 }
 
 func projectMemoryPath(memoryDir string, project string) (string, bool) {
@@ -137,6 +165,52 @@ func InitPersonalMemory(config PersonalMemoryInitConfig) (PersonalMemoryInitResu
 
 	result := PersonalMemoryInitResult{Path: path, Created: true}
 	result.Message = personalMemoryInitMessage(result)
+	return result, nil
+}
+
+// InitOrganizationMemory creates starter Markdown for one organization without overwriting.
+func InitOrganizationMemory(config OrganizationMemoryInitConfig) (OrganizationMemoryInitResult, error) {
+	homeDir, err := resolveHomeDir(config.HomeDir)
+	if err != nil {
+		return OrganizationMemoryInitResult{}, err
+	}
+	homeDir, err = filepath.Abs(homeDir)
+	if err != nil {
+		return OrganizationMemoryInitResult{}, fmt.Errorf("resolve WorkGraph home: %w", err)
+	}
+	if err := requireMemoryInitHome(homeDir); err != nil {
+		return OrganizationMemoryInitResult{}, err
+	}
+
+	memoryDir, err := resolveMemoryDir(config.MemoryDir)
+	if err != nil {
+		return OrganizationMemoryInitResult{}, err
+	}
+	path, ok := organizationMemoryPath(memoryDir, config.Organization)
+	if !ok {
+		return OrganizationMemoryInitResult{}, fmt.Errorf("organization name %q cannot form a memory filename", config.Organization)
+	}
+	if err := os.MkdirAll(organizationMemoryDir(memoryDir), 0o755); err != nil {
+		return OrganizationMemoryInitResult{}, fmt.Errorf("create organization memory directory: %w", err)
+	}
+
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			result := OrganizationMemoryInitResult{Path: path}
+			result.Message = organizationMemoryInitMessage(result)
+			return result, nil
+		}
+		return OrganizationMemoryInitResult{}, fmt.Errorf("create organization memory: %w", err)
+	}
+	defer file.Close()
+
+	if _, err := file.WriteString(organizationMemoryTemplate(config.Organization)); err != nil {
+		return OrganizationMemoryInitResult{}, fmt.Errorf("write organization memory: %w", err)
+	}
+
+	result := OrganizationMemoryInitResult{Path: path, Created: true}
+	result.Message = organizationMemoryInitMessage(result)
 	return result, nil
 }
 
@@ -248,12 +322,45 @@ func personalMemoryTemplate() string {
 	}, "\n")
 }
 
+func organizationMemoryTemplate(organization string) string {
+	return strings.Join([]string{
+		"# " + strings.TrimSpace(organization),
+		"",
+		"## Strategy",
+		"",
+		"## Planning notes",
+		"",
+		"## Operating principles",
+		"",
+		"## Current priorities",
+		"",
+		"## Constraints",
+		"",
+		"## Open questions",
+		"",
+	}, "\n")
+}
+
 func projectMemoryInitMessage(result ProjectMemoryInitResult) string {
 	heading := "Project memory already exists"
 	hint := "Add or edit context, priorities, decisions, constraints, and open questions."
 	if result.Created {
 		heading = "Project memory initialized"
 		hint = "Starter template added for context, priorities, decisions, constraints, and open questions."
+	}
+	return strings.Join([]string{
+		heading,
+		"Path: " + result.Path,
+		hint,
+	}, "\n")
+}
+
+func organizationMemoryInitMessage(result OrganizationMemoryInitResult) string {
+	heading := "Organization memory already exists"
+	hint := "Add or edit strategy, planning notes, operating principles, current priorities, constraints, and open questions."
+	if result.Created {
+		heading = "Organization memory initialized"
+		hint = "Starter template added for strategy, planning notes, operating principles, current priorities, constraints, and open questions."
 	}
 	return strings.Join([]string{
 		heading,

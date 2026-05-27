@@ -49,6 +49,12 @@ Scenario: Initialize starter personal memory
   Then personal memory exists at "personal.md"
   And the memory contains starter headings for priorities and working style
 
+Scenario: Initialize starter organization memory
+  Given WorkGraph has been initialized
+  When I run "workgraph memory init --scope organization <organization>"
+  Then organization memory exists at a lower-kebab-case Markdown path
+  And the memory contains starter headings for strategy and operating principles
+
 Scenario: Preserve existing project memory
   Given WorkGraph has been initialized
   And the project memory already exists

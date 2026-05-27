@@ -178,6 +178,22 @@ func runMemoryInit(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		fmt.Fprintln(stdout, result.Message)
 		return 0
+	case "organization":
+		if flags.NArg() != 1 {
+			fmt.Fprintln(stderr, "usage: workgraph memory init [--home path] [--memory path] --scope organization <organization>")
+			return 2
+		}
+		result, err := workgraph.InitOrganizationMemory(workgraph.OrganizationMemoryInitConfig{
+			HomeDir:      *homeDir,
+			MemoryDir:    *memoryDir,
+			Organization: flags.Arg(0),
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "workgraph memory init: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(stdout, result.Message)
+		return 0
 	case "project":
 		if flags.NArg() != 1 {
 			fmt.Fprintln(stderr, "usage: workgraph memory init [--home path] [--memory path] [--scope project] <project>")

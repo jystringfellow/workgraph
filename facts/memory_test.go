@@ -74,6 +74,38 @@ func TestMemoryInitCreatesStarterPersonalMemory(t *testing.T) {
 	}
 }
 
+func TestMemoryInitCreatesStarterOrganizationMemoryAtSlugPath(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	memoryDir := filepath.Join(tempDir, "workgraph-memory")
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir, MemoryDir: memoryDir}); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	result, err := workgraph.InitOrganizationMemory(workgraph.OrganizationMemoryInitConfig{
+		HomeDir:      homeDir,
+		MemoryDir:    memoryDir,
+		Organization: "Cupcake Labs",
+	})
+	if err != nil {
+		t.Fatalf("organization memory init failed: %v", err)
+	}
+
+	expectedPath := filepath.Join(memoryDir, "organizations", "cupcake-labs.md")
+	if result.Path != expectedPath || !result.Created {
+		t.Fatalf("expected created organization memory path %q, got %#v", expectedPath, result)
+	}
+	contents, err := os.ReadFile(expectedPath)
+	if err != nil {
+		t.Fatalf("read organization memory: %v", err)
+	}
+	for _, expected := range []string{"# Cupcake Labs", "## Strategy", "## Planning notes", "## Operating principles", "## Current priorities", "## Constraints", "## Open questions"} {
+		if !strings.Contains(string(contents), expected) {
+			t.Fatalf("expected starter organization memory to include %q, got:\n%s", expected, contents)
+		}
+	}
+}
+
 func TestMemoryInitPreservesExistingProjectMemory(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
@@ -137,6 +169,45 @@ func TestMemoryInitPreservesExistingPersonalMemory(t *testing.T) {
 	}
 	if string(contents) != "existing personal memory" {
 		t.Fatalf("expected existing personal memory preserved, got %q", contents)
+	}
+	if !strings.Contains(result.Message, path) {
+		t.Fatalf("expected result message to report %q, got %q", path, result.Message)
+	}
+}
+
+func TestMemoryInitPreservesExistingOrganizationMemory(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	memoryDir := filepath.Join(tempDir, "workgraph-memory")
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir, MemoryDir: memoryDir}); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	organizationsDir := filepath.Join(memoryDir, "organizations")
+	if err := os.MkdirAll(organizationsDir, 0o755); err != nil {
+		t.Fatalf("create organizations memory dir: %v", err)
+	}
+	path := filepath.Join(organizationsDir, "cupcake-labs.md")
+	if err := os.WriteFile(path, []byte("existing organization memory"), 0o644); err != nil {
+		t.Fatalf("write existing organization memory: %v", err)
+	}
+	result, err := workgraph.InitOrganizationMemory(workgraph.OrganizationMemoryInitConfig{
+		HomeDir:      homeDir,
+		MemoryDir:    memoryDir,
+		Organization: "Cupcake Labs",
+	})
+	if err != nil {
+		t.Fatalf("organization memory init failed: %v", err)
+	}
+	if result.Created {
+		t.Fatalf("expected existing organization memory not to be recreated")
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read existing organization memory: %v", err)
+	}
+	if string(contents) != "existing organization memory" {
+		t.Fatalf("expected existing organization memory preserved, got %q", contents)
 	}
 	if !strings.Contains(result.Message, path) {
 		t.Fatalf("expected result message to report %q, got %q", path, result.Message)
@@ -210,6 +281,37 @@ func TestMemoryInitCommandReportsStarterPersonalMemory(t *testing.T) {
 
 	expectedPath := filepath.Join(memoryDir, "personal.md")
 	for _, expected := range []string{"Personal memory initialized", expectedPath, "Starter template"} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected command output to include %q, got:\n%s", expected, output)
+		}
+	}
+}
+
+func TestMemoryInitCommandReportsStarterOrganizationMemory(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	memoryDir := filepath.Join(tempDir, "workgraph-memory")
+	repoRoot := repoRoot(t)
+
+	binary := filepath.Join(tempDir, "workgraph")
+	build := exec.Command("go", "build", "-o", binary, "./cmd/workgraph")
+	build.Dir = repoRoot
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build workgraph failed: %v\n%s", err, output)
+	}
+	init := exec.Command(binary, "init", "--home", homeDir, "--memory", memoryDir)
+	if output, err := init.CombinedOutput(); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	cmd := exec.Command(binary, "memory", "init", "--home", homeDir, "--memory", memoryDir, "--scope", "organization", "Cupcake Labs")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("workgraph memory init --scope organization failed: %v\n%s", err, output)
+	}
+
+	expectedPath := filepath.Join(memoryDir, "organizations", "cupcake-labs.md")
+	for _, expected := range []string{"Organization memory initialized", expectedPath, "Starter template"} {
 		if !strings.Contains(string(output), expected) {
 			t.Fatalf("expected command output to include %q, got:\n%s", expected, output)
 		}

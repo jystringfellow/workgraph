@@ -26,7 +26,7 @@
 - [x] Load memory into system
 - [x] Resume explicit project from memory-only context
 - [x] Personal memory (priorities, principles, preferences, working style)
-- [ ] Organization memory (strategy memos, planning docs, operating principles)
+- [x] Organization memory (strategy memos, planning docs, operating principles)
 - [ ] Team memory (squad strategy, rituals, ownership, current goals)
 - [ ] Evidence can suggest memory updates without becoming memory automatically
 - [ ] Link events ↔ memory (projects, people)
