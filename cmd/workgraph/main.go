@@ -156,7 +156,7 @@ func runMemoryInit(args []string, stdout io.Writer, stderr io.Writer) int {
 
 	homeDir := flags.String("home", "", "WorkGraph home directory")
 	memoryDir := flags.String("memory", "", "WorkGraph memory directory")
-	scope := flags.String("scope", "project", "Memory scope: project or personal")
+	scope := flags.String("scope", "project", "Memory scope: project, personal, organization, or team")
 
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -187,6 +187,22 @@ func runMemoryInit(args []string, stdout io.Writer, stderr io.Writer) int {
 			HomeDir:      *homeDir,
 			MemoryDir:    *memoryDir,
 			Organization: flags.Arg(0),
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "workgraph memory init: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(stdout, result.Message)
+		return 0
+	case "team":
+		if flags.NArg() != 1 {
+			fmt.Fprintln(stderr, "usage: workgraph memory init [--home path] [--memory path] --scope team <team>")
+			return 2
+		}
+		result, err := workgraph.InitTeamMemory(workgraph.TeamMemoryInitConfig{
+			HomeDir:   *homeDir,
+			MemoryDir: *memoryDir,
+			Team:      flags.Arg(0),
 		})
 		if err != nil {
 			fmt.Fprintf(stderr, "workgraph memory init: %v\n", err)

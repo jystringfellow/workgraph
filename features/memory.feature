@@ -55,6 +55,12 @@ Scenario: Initialize starter organization memory
   Then organization memory exists at a lower-kebab-case Markdown path
   And the memory contains starter headings for strategy and operating principles
 
+Scenario: Initialize starter team memory
+  Given WorkGraph has been initialized
+  When I run "workgraph memory init --scope team <team>"
+  Then team memory exists at a lower-kebab-case Markdown path
+  And the memory contains starter headings for rituals and ownership
+
 Scenario: Preserve existing project memory
   Given WorkGraph has been initialized
   And the project memory already exists

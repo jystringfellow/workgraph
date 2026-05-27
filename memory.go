@@ -12,6 +12,7 @@ import (
 
 const projectMemoryDirName = "projects"
 const organizationMemoryDirName = "organizations"
+const teamMemoryDirName = "teams"
 const personalMemoryFileName = "personal.md"
 
 // MemoryDoc is user-owned context loaded from a local memory file.
@@ -64,12 +65,30 @@ type OrganizationMemoryInitResult struct {
 	Message string
 }
 
+// TeamMemoryInitConfig controls creation of starter team memory.
+type TeamMemoryInitConfig struct {
+	HomeDir   string
+	MemoryDir string
+	Team      string
+}
+
+// TeamMemoryInitResult describes initialized team memory.
+type TeamMemoryInitResult struct {
+	Path    string
+	Created bool
+	Message string
+}
+
 func projectMemoryDir(memoryDir string) string {
 	return filepath.Join(memoryDir, projectMemoryDirName)
 }
 
 func organizationMemoryDir(memoryDir string) string {
 	return filepath.Join(memoryDir, organizationMemoryDirName)
+}
+
+func teamMemoryDir(memoryDir string) string {
+	return filepath.Join(memoryDir, teamMemoryDirName)
 }
 
 func personalMemoryPath(memoryDir string) string {
@@ -83,6 +102,15 @@ func organizationMemoryPath(memoryDir string, organization string) (string, bool
 	}
 
 	return filepath.Join(organizationMemoryDir(memoryDir), slug+".md"), true
+}
+
+func teamMemoryPath(memoryDir string, team string) (string, bool) {
+	slug := projectSlug(team)
+	if slug == "" {
+		return "", false
+	}
+
+	return filepath.Join(teamMemoryDir(memoryDir), slug+".md"), true
 }
 
 func projectMemoryPath(memoryDir string, project string) (string, bool) {
@@ -214,6 +242,52 @@ func InitOrganizationMemory(config OrganizationMemoryInitConfig) (OrganizationMe
 	return result, nil
 }
 
+// InitTeamMemory creates starter Markdown for one team without overwriting.
+func InitTeamMemory(config TeamMemoryInitConfig) (TeamMemoryInitResult, error) {
+	homeDir, err := resolveHomeDir(config.HomeDir)
+	if err != nil {
+		return TeamMemoryInitResult{}, err
+	}
+	homeDir, err = filepath.Abs(homeDir)
+	if err != nil {
+		return TeamMemoryInitResult{}, fmt.Errorf("resolve WorkGraph home: %w", err)
+	}
+	if err := requireMemoryInitHome(homeDir); err != nil {
+		return TeamMemoryInitResult{}, err
+	}
+
+	memoryDir, err := resolveMemoryDir(config.MemoryDir)
+	if err != nil {
+		return TeamMemoryInitResult{}, err
+	}
+	path, ok := teamMemoryPath(memoryDir, config.Team)
+	if !ok {
+		return TeamMemoryInitResult{}, fmt.Errorf("team name %q cannot form a memory filename", config.Team)
+	}
+	if err := os.MkdirAll(teamMemoryDir(memoryDir), 0o755); err != nil {
+		return TeamMemoryInitResult{}, fmt.Errorf("create team memory directory: %w", err)
+	}
+
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			result := TeamMemoryInitResult{Path: path}
+			result.Message = teamMemoryInitMessage(result)
+			return result, nil
+		}
+		return TeamMemoryInitResult{}, fmt.Errorf("create team memory: %w", err)
+	}
+	defer file.Close()
+
+	if _, err := file.WriteString(teamMemoryTemplate(config.Team)); err != nil {
+		return TeamMemoryInitResult{}, fmt.Errorf("write team memory: %w", err)
+	}
+
+	result := TeamMemoryInitResult{Path: path, Created: true}
+	result.Message = teamMemoryInitMessage(result)
+	return result, nil
+}
+
 // InitProjectMemory creates starter Markdown for one project without overwriting.
 func InitProjectMemory(config ProjectMemoryInitConfig) (ProjectMemoryInitResult, error) {
 	homeDir, err := resolveHomeDir(config.HomeDir)
@@ -341,12 +415,45 @@ func organizationMemoryTemplate(organization string) string {
 	}, "\n")
 }
 
+func teamMemoryTemplate(team string) string {
+	return strings.Join([]string{
+		"# " + strings.TrimSpace(team),
+		"",
+		"## Strategy",
+		"",
+		"## Rituals",
+		"",
+		"## Ownership",
+		"",
+		"## Current goals",
+		"",
+		"## Constraints",
+		"",
+		"## Open questions",
+		"",
+	}, "\n")
+}
+
 func projectMemoryInitMessage(result ProjectMemoryInitResult) string {
 	heading := "Project memory already exists"
 	hint := "Add or edit context, priorities, decisions, constraints, and open questions."
 	if result.Created {
 		heading = "Project memory initialized"
 		hint = "Starter template added for context, priorities, decisions, constraints, and open questions."
+	}
+	return strings.Join([]string{
+		heading,
+		"Path: " + result.Path,
+		hint,
+	}, "\n")
+}
+
+func teamMemoryInitMessage(result TeamMemoryInitResult) string {
+	heading := "Team memory already exists"
+	hint := "Add or edit strategy, rituals, ownership, current goals, constraints, and open questions."
+	if result.Created {
+		heading = "Team memory initialized"
+		hint = "Starter template added for strategy, rituals, ownership, current goals, constraints, and open questions."
 	}
 	return strings.Join([]string{
 		heading,

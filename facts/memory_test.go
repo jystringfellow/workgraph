@@ -106,6 +106,38 @@ func TestMemoryInitCreatesStarterOrganizationMemoryAtSlugPath(t *testing.T) {
 	}
 }
 
+func TestMemoryInitCreatesStarterTeamMemoryAtSlugPath(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	memoryDir := filepath.Join(tempDir, "workgraph-memory")
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir, MemoryDir: memoryDir}); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	result, err := workgraph.InitTeamMemory(workgraph.TeamMemoryInitConfig{
+		HomeDir:   homeDir,
+		MemoryDir: memoryDir,
+		Team:      "Platform Team",
+	})
+	if err != nil {
+		t.Fatalf("team memory init failed: %v", err)
+	}
+
+	expectedPath := filepath.Join(memoryDir, "teams", "platform-team.md")
+	if result.Path != expectedPath || !result.Created {
+		t.Fatalf("expected created team memory path %q, got %#v", expectedPath, result)
+	}
+	contents, err := os.ReadFile(expectedPath)
+	if err != nil {
+		t.Fatalf("read team memory: %v", err)
+	}
+	for _, expected := range []string{"# Platform Team", "## Strategy", "## Rituals", "## Ownership", "## Current goals", "## Constraints", "## Open questions"} {
+		if !strings.Contains(string(contents), expected) {
+			t.Fatalf("expected starter team memory to include %q, got:\n%s", expected, contents)
+		}
+	}
+}
+
 func TestMemoryInitPreservesExistingProjectMemory(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
@@ -214,6 +246,45 @@ func TestMemoryInitPreservesExistingOrganizationMemory(t *testing.T) {
 	}
 }
 
+func TestMemoryInitPreservesExistingTeamMemory(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	memoryDir := filepath.Join(tempDir, "workgraph-memory")
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir, MemoryDir: memoryDir}); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	teamsDir := filepath.Join(memoryDir, "teams")
+	if err := os.MkdirAll(teamsDir, 0o755); err != nil {
+		t.Fatalf("create teams memory dir: %v", err)
+	}
+	path := filepath.Join(teamsDir, "platform-team.md")
+	if err := os.WriteFile(path, []byte("existing team memory"), 0o644); err != nil {
+		t.Fatalf("write existing team memory: %v", err)
+	}
+	result, err := workgraph.InitTeamMemory(workgraph.TeamMemoryInitConfig{
+		HomeDir:   homeDir,
+		MemoryDir: memoryDir,
+		Team:      "Platform Team",
+	})
+	if err != nil {
+		t.Fatalf("team memory init failed: %v", err)
+	}
+	if result.Created {
+		t.Fatalf("expected existing team memory not to be recreated")
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read existing team memory: %v", err)
+	}
+	if string(contents) != "existing team memory" {
+		t.Fatalf("expected existing team memory preserved, got %q", contents)
+	}
+	if !strings.Contains(result.Message, path) {
+		t.Fatalf("expected result message to report %q, got %q", path, result.Message)
+	}
+}
+
 func TestMemoryInitRequiresWorkGraphInit(t *testing.T) {
 	_, err := workgraph.InitProjectMemory(workgraph.ProjectMemoryInitConfig{
 		HomeDir:   filepath.Join(t.TempDir(), ".workgraph"),
@@ -312,6 +383,37 @@ func TestMemoryInitCommandReportsStarterOrganizationMemory(t *testing.T) {
 
 	expectedPath := filepath.Join(memoryDir, "organizations", "cupcake-labs.md")
 	for _, expected := range []string{"Organization memory initialized", expectedPath, "Starter template"} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected command output to include %q, got:\n%s", expected, output)
+		}
+	}
+}
+
+func TestMemoryInitCommandReportsStarterTeamMemory(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	memoryDir := filepath.Join(tempDir, "workgraph-memory")
+	repoRoot := repoRoot(t)
+
+	binary := filepath.Join(tempDir, "workgraph")
+	build := exec.Command("go", "build", "-o", binary, "./cmd/workgraph")
+	build.Dir = repoRoot
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build workgraph failed: %v\n%s", err, output)
+	}
+	init := exec.Command(binary, "init", "--home", homeDir, "--memory", memoryDir)
+	if output, err := init.CombinedOutput(); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	cmd := exec.Command(binary, "memory", "init", "--home", homeDir, "--memory", memoryDir, "--scope", "team", "Platform Team")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("workgraph memory init --scope team failed: %v\n%s", err, output)
+	}
+
+	expectedPath := filepath.Join(memoryDir, "teams", "platform-team.md")
+	for _, expected := range []string{"Team memory initialized", expectedPath, "Starter template"} {
 		if !strings.Contains(string(output), expected) {
 			t.Fatalf("expected command output to include %q, got:\n%s", expected, output)
 		}
