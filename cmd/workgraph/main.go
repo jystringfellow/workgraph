@@ -144,6 +144,8 @@ func runMemory(args []string, stdout io.Writer, stderr io.Writer) int {
 	switch args[0] {
 	case "init":
 		return runMemoryInit(args[1:], stdout, stderr)
+	case "promote":
+		return runMemoryPromote(args[1:], stdout, stderr)
 	case "suggest":
 		return runMemorySuggest(args[1:], stdout, stderr)
 	default:
@@ -260,6 +262,43 @@ func runMemorySuggest(args []string, stdout io.Writer, stderr io.Writer) int {
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph memory suggest: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runMemoryPromote(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("memory promote", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "WorkGraph home directory")
+	memoryDir := flags.String("memory", "", "WorkGraph memory directory")
+	databasePath := flags.String("database", "", "WorkGraph SQLite database path")
+	scope := flags.String("scope", "project", "Memory promotion scope")
+	evidenceID := flags.String("evidence", "", "Event id supporting the promoted memory")
+	text := flags.String("text", "", "Curated memory text to promote")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if *scope != "project" || flags.NArg() != 1 || *evidenceID == "" || *text == "" {
+		fmt.Fprintln(stderr, "usage: workgraph memory promote [--home path] [--memory path] [--database path] --scope project --evidence event-id --text text <project>")
+		return 2
+	}
+
+	result, err := workgraph.PromoteMemory(workgraph.MemoryPromoteConfig{
+		HomeDir:      *homeDir,
+		DatabasePath: *databasePath,
+		MemoryDir:    *memoryDir,
+		Scope:        *scope,
+		Project:      flags.Arg(0),
+		EvidenceID:   *evidenceID,
+		Text:         *text,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph memory promote: %v\n", err)
 		return 1
 	}
 

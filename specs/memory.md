@@ -132,6 +132,22 @@ The command:
 - does not promote captured events or external artifacts into active memory
   without explicit user action
 
+## Promote Project Memory
+
+`workgraph memory promote --scope project <project> --evidence <event-id>
+--text <memory text>` appends user-curated memory to project memory with a link
+back to the supporting event.
+
+The command:
+
+- requires explicit memory text from the user or calling command
+- requires an event id as supporting evidence
+- verifies the event belongs to the target project
+- creates project memory with the starter template when the file is missing
+- appends promoted memory without overwriting existing content
+- records the evidence id beside the promoted memory entry
+- does not treat the event payload itself as active memory
+
 ## Resume
 
 When `workgraph resume <project>` finds matching project memory, the output
