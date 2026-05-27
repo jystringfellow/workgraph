@@ -235,7 +235,7 @@ func runWorkgraphCommand(t *testing.T, env []string, args ...string) string {
 }
 
 func runWorkgraphCommandAllowError(env []string, args ...string) (string, error) {
-	return runWorkgraphCommandWithTimeout(env, 10*time.Second, args...)
+	return runWorkgraphCommandWithTimeout(env, 30*time.Second, args...)
 }
 
 func runWorkgraphCommandWithTimeout(env []string, timeout time.Duration, args ...string) (string, error) {

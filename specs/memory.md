@@ -8,13 +8,18 @@ decisions, constraints, and open questions.
 
 ## Project Markdown
 
-The first memory contract is project-scoped Markdown:
+The first memory contracts are user-owned Markdown files:
 
 ```text
 workgraph-memory/
+  personal.md
   projects/
     <project-slug>.md
 ```
+
+`personal.md` stores personal active memory: priorities, principles,
+preferences, working style, and constraints. It is intentionally curated by the
+user and is not inferred from captured events.
 
 `<project-slug>.md` is a lowercase kebab-case filename derived from the
 project name passed to `workgraph memory init <project>` or
@@ -31,6 +36,22 @@ include:
 
 This slice treats project memory as readable Markdown content. It does not
 require frontmatter, infer aliases, or generate memory with an LLM.
+
+## Initialize Personal Memory
+
+`workgraph memory init --scope personal` creates a starter personal memory file
+after `workgraph init` has created the base local WorkGraph state.
+
+The command:
+
+- creates personal memory at `workgraph-memory/personal.md`
+- writes a Markdown starter with headings for priorities, principles,
+  preferences, working style, and constraints
+- reports the existing personal memory path without overwriting when the file
+  is already present
+- accepts explicit WorkGraph home and memory directory paths for non-default
+  local state
+- does not infer personal memory from captured events or external sources
 
 ## Initialize Project Memory
 
