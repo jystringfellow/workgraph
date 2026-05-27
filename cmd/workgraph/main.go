@@ -156,27 +156,48 @@ func runMemoryInit(args []string, stdout io.Writer, stderr io.Writer) int {
 
 	homeDir := flags.String("home", "", "WorkGraph home directory")
 	memoryDir := flags.String("memory", "", "WorkGraph memory directory")
+	scope := flags.String("scope", "project", "Memory scope: project or personal")
 
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
-	if flags.NArg() != 1 {
-		fmt.Fprintln(stderr, "usage: workgraph memory init [--home path] [--memory path] <project>")
+
+	switch *scope {
+	case "personal":
+		if flags.NArg() != 0 {
+			fmt.Fprintln(stderr, "usage: workgraph memory init [--home path] [--memory path] --scope personal")
+			return 2
+		}
+		result, err := workgraph.InitPersonalMemory(workgraph.PersonalMemoryInitConfig{
+			HomeDir:   *homeDir,
+			MemoryDir: *memoryDir,
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "workgraph memory init: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(stdout, result.Message)
+		return 0
+	case "project":
+		if flags.NArg() != 1 {
+			fmt.Fprintln(stderr, "usage: workgraph memory init [--home path] [--memory path] [--scope project] <project>")
+			return 2
+		}
+		result, err := workgraph.InitProjectMemory(workgraph.ProjectMemoryInitConfig{
+			HomeDir:   *homeDir,
+			MemoryDir: *memoryDir,
+			Project:   flags.Arg(0),
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "workgraph memory init: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(stdout, result.Message)
+		return 0
+	default:
+		fmt.Fprintf(stderr, "unknown memory scope: %s\n", *scope)
 		return 2
 	}
-
-	result, err := workgraph.InitProjectMemory(workgraph.ProjectMemoryInitConfig{
-		HomeDir:   *homeDir,
-		MemoryDir: *memoryDir,
-		Project:   flags.Arg(0),
-	})
-	if err != nil {
-		fmt.Fprintf(stderr, "workgraph memory init: %v\n", err)
-		return 1
-	}
-
-	fmt.Fprintln(stdout, result.Message)
-	return 0
 }
 
 func runGitCapture(args []string, stdout io.Writer, stderr io.Writer) int {

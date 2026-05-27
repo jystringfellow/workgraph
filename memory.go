@@ -11,6 +11,7 @@ import (
 )
 
 const projectMemoryDirName = "projects"
+const personalMemoryFileName = "personal.md"
 
 // MemoryDoc is user-owned context loaded from a local memory file.
 type MemoryDoc struct {
@@ -35,8 +36,25 @@ type ProjectMemoryInitResult struct {
 	Message string
 }
 
+// PersonalMemoryInitConfig controls creation of starter personal memory.
+type PersonalMemoryInitConfig struct {
+	HomeDir   string
+	MemoryDir string
+}
+
+// PersonalMemoryInitResult describes initialized personal memory.
+type PersonalMemoryInitResult struct {
+	Path    string
+	Created bool
+	Message string
+}
+
 func projectMemoryDir(memoryDir string) string {
 	return filepath.Join(memoryDir, projectMemoryDirName)
+}
+
+func personalMemoryPath(memoryDir string) string {
+	return filepath.Join(memoryDir, personalMemoryFileName)
 }
 
 func projectMemoryPath(memoryDir string, project string) (string, bool) {
@@ -77,6 +95,49 @@ func loadProjectMemory(memoryDir string, project string) (*MemoryDoc, string, er
 		Content:   string(content),
 		UpdatedAt: info.ModTime(),
 	}, path, nil
+}
+
+// InitPersonalMemory creates starter Markdown for personal memory without overwriting.
+func InitPersonalMemory(config PersonalMemoryInitConfig) (PersonalMemoryInitResult, error) {
+	homeDir, err := resolveHomeDir(config.HomeDir)
+	if err != nil {
+		return PersonalMemoryInitResult{}, err
+	}
+	homeDir, err = filepath.Abs(homeDir)
+	if err != nil {
+		return PersonalMemoryInitResult{}, fmt.Errorf("resolve WorkGraph home: %w", err)
+	}
+	if err := requireMemoryInitHome(homeDir); err != nil {
+		return PersonalMemoryInitResult{}, err
+	}
+
+	memoryDir, err := resolveMemoryDir(config.MemoryDir)
+	if err != nil {
+		return PersonalMemoryInitResult{}, err
+	}
+	if err := os.MkdirAll(memoryDir, 0o755); err != nil {
+		return PersonalMemoryInitResult{}, fmt.Errorf("create memory repo: %w", err)
+	}
+
+	path := personalMemoryPath(memoryDir)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			result := PersonalMemoryInitResult{Path: path}
+			result.Message = personalMemoryInitMessage(result)
+			return result, nil
+		}
+		return PersonalMemoryInitResult{}, fmt.Errorf("create personal memory: %w", err)
+	}
+	defer file.Close()
+
+	if _, err := file.WriteString(personalMemoryTemplate()); err != nil {
+		return PersonalMemoryInitResult{}, fmt.Errorf("write personal memory: %w", err)
+	}
+
+	result := PersonalMemoryInitResult{Path: path, Created: true}
+	result.Message = personalMemoryInitMessage(result)
+	return result, nil
 }
 
 // InitProjectMemory creates starter Markdown for one project without overwriting.
@@ -170,12 +231,43 @@ func projectMemoryTemplate(project string) string {
 	}, "\n")
 }
 
+func personalMemoryTemplate() string {
+	return strings.Join([]string{
+		"# Personal memory",
+		"",
+		"## Priorities",
+		"",
+		"## Principles",
+		"",
+		"## Preferences",
+		"",
+		"## Working style",
+		"",
+		"## Constraints",
+		"",
+	}, "\n")
+}
+
 func projectMemoryInitMessage(result ProjectMemoryInitResult) string {
 	heading := "Project memory already exists"
 	hint := "Add or edit context, priorities, decisions, constraints, and open questions."
 	if result.Created {
 		heading = "Project memory initialized"
 		hint = "Starter template added for context, priorities, decisions, constraints, and open questions."
+	}
+	return strings.Join([]string{
+		heading,
+		"Path: " + result.Path,
+		hint,
+	}, "\n")
+}
+
+func personalMemoryInitMessage(result PersonalMemoryInitResult) string {
+	heading := "Personal memory already exists"
+	hint := "Add or edit priorities, principles, preferences, working style, and constraints."
+	if result.Created {
+		heading = "Personal memory initialized"
+		hint = "Starter template added for priorities, principles, preferences, working style, and constraints."
 	}
 	return strings.Join([]string{
 		heading,
