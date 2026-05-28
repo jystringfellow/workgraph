@@ -43,6 +43,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runToday(args[1:], stdout, stderr)
 	case "resume":
 		return runResume(args[1:], stdout, stderr)
+	case "slack":
+		return runSlack(args[1:], stdout, stderr)
 	case "__capture-worker":
 		return runCaptureWorker(args[1:], stderr)
 	default:
@@ -72,6 +74,47 @@ func runInit(args []string, stdout io.Writer, stderr io.Writer) int {
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph init: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runSlack(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph slack <command>")
+		return 2
+	}
+
+	switch args[0] {
+	case "capture":
+		return runSlackCapture(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "unknown slack command: %s\n", args[0])
+		return 2
+	}
+}
+
+func runSlackCapture(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("slack capture", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "WorkGraph home directory")
+	databasePath := flags.String("database", "", "WorkGraph SQLite database path")
+	eventsFile := flags.String("events-file", "", "Slack event export JSON file")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+
+	result, err := workgraph.CaptureSlackEvents(workgraph.SlackCaptureConfig{
+		HomeDir:      *homeDir,
+		DatabasePath: *databasePath,
+		EventsFile:   *eventsFile,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph slack capture: %v\n", err)
 		return 1
 	}
 
