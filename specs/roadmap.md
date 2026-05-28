@@ -32,7 +32,7 @@
 - [x] Link events ↔ memory (projects, people)
 
 ## Phase 3: Connectors
-- [ ] Slack ingestion (messages, threads)
+- [x] Slack ingestion (messages, threads)
 - [ ] Calendar ingestion (Google Calendar, Outlook Calendar)
 - [ ] Meeting ingestion (Zoom, Google Meet, Microsoft Teams metadata/transcripts when explicitly available)
 - [ ] Work tracking ingestion (Jira, Azure DevOps, Linear)
