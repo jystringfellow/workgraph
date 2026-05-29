@@ -33,6 +33,7 @@
 
 ## Phase 3: Connectors
 - [x] Slack ingestion (messages, threads)
+   - [] Fix Slack thread polling so replies added to already-seen parent messages are captured.
 - [ ] Calendar ingestion (Google Calendar, Outlook Calendar)
 - [ ] Meeting ingestion (Zoom, Google Meet, Microsoft Teams metadata/transcripts when explicitly available)
 - [ ] Work tracking ingestion (Jira, Azure DevOps, Linear)

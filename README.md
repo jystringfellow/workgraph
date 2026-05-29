@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="public/assets/workgraph-lockup.png" alt="workgraph" width="160">
+  <img src="public/assets/workgraph-lockup.png" alt="workgraph" width="480">
 </p>
 
 # workgraph
