@@ -20,6 +20,7 @@ Scenario: Daemon collects configured Slack messages
   When I run "workgraph run"
   Then workgraph periodically collects new Slack messages from that channel
   And workgraph stores available thread replies
+  And workgraph captures later replies added to already-seen thread parents
   And workgraph does not post or react in Slack
 
 Scenario: Opt into Slack direct messages

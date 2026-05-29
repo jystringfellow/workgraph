@@ -54,20 +54,22 @@ type SlackCaptureResult struct {
 
 // SlackAPICaptureConfig controls read-only Slack API polling.
 type SlackAPICaptureConfig struct {
-	HomeDir      string
-	DatabasePath string
-	Token        string
-	Channels     []string
-	IncludeDMs   bool
-	APIBaseURL   string
-	HTTPClient   *http.Client
-	Cursors      map[string]string
+	HomeDir       string
+	DatabasePath  string
+	Token         string
+	Channels      []string
+	IncludeDMs    bool
+	APIBaseURL    string
+	HTTPClient    *http.Client
+	Cursors       map[string]string
+	ThreadCursors map[string]string
 }
 
 // SlackAPICaptureResult describes a Slack API capture run.
 type SlackAPICaptureResult struct {
-	EventsStored int
-	Cursors      map[string]string
+	EventsStored  int
+	Cursors       map[string]string
+	ThreadCursors map[string]string
 }
 
 type SlackChannel struct {
@@ -542,6 +544,10 @@ func CaptureSlackFromAPI(config SlackAPICaptureConfig) (SlackAPICaptureResult, e
 	for channel, cursor := range config.Cursors {
 		cursors[channel] = cursor
 	}
+	threadCursors := map[string]string{}
+	for threadKey, cursor := range config.ThreadCursors {
+		threadCursors[threadKey] = cursor
+	}
 
 	channels := explicitSlackChannels(config.Channels)
 	if len(channels) == 0 {
@@ -552,6 +558,7 @@ func CaptureSlackFromAPI(config SlackAPICaptureConfig) (SlackAPICaptureResult, e
 	}
 
 	stored := 0
+	checkedThreads := map[string]bool{}
 	for _, channel := range channels {
 		messages, err := fetchSlackHistory(config, channel.ID, cursors[channel.ID])
 		if err != nil {
@@ -573,33 +580,48 @@ func CaptureSlackFromAPI(config SlackAPICaptureConfig) (SlackAPICaptureResult, e
 			if message.ReplyCount <= 0 {
 				continue
 			}
-			replies, err := fetchSlackReplies(config, channel.ID, message.TS)
+			threadKey := slackThreadCursorKey(channel.ID, message.TS)
+			if _, ok := threadCursors[threadKey]; !ok {
+				threadCursors[threadKey] = message.TS
+			}
+			replyStored, latestReply, err := captureSlackThreadReplies(db, config, channel, message.TS, threadCursors[threadKey])
 			if err != nil {
 				return SlackAPICaptureResult{}, err
 			}
-			for _, reply := range replies {
-				if reply.TS == message.TS {
-					continue
-				}
-				replyEvent := slackEventFromAPIMessage(channel.ID, channel.Name, reply, message.TS)
-				inserted, err := storeSlackEvent(db, replyEvent)
-				if err != nil {
-					return SlackAPICaptureResult{}, err
-				}
-				if inserted {
-					stored++
-				}
-				if slackTSAfter(replyEvent.TS, newest) {
-					newest = replyEvent.TS
-				}
+			stored += replyStored
+			threadCursors[threadKey] = latestReply
+			if slackTSAfter(latestReply, newest) {
+				newest = latestReply
 			}
+			checkedThreads[threadKey] = true
 		}
 		cursors[channel.ID] = newest
 	}
+	for _, channel := range channels {
+		for threadKey, cursor := range threadCursors {
+			if checkedThreads[threadKey] {
+				continue
+			}
+			threadChannelID, threadTS, ok := parseSlackThreadCursorKey(threadKey)
+			if !ok || threadChannelID != channel.ID {
+				continue
+			}
+			replyStored, latestReply, err := captureSlackThreadReplies(db, config, channel, threadTS, cursor)
+			if err != nil {
+				return SlackAPICaptureResult{}, err
+			}
+			stored += replyStored
+			threadCursors[threadKey] = latestReply
+			if slackTSAfter(latestReply, cursors[channel.ID]) {
+				cursors[channel.ID] = latestReply
+			}
+		}
+	}
 
 	return SlackAPICaptureResult{
-		EventsStored: stored,
-		Cursors:      cursors,
+		EventsStored:  stored,
+		Cursors:       cursors,
+		ThreadCursors: threadCursors,
 	}, nil
 }
 
@@ -835,6 +857,46 @@ func fetchSlackReplies(config SlackAPICaptureConfig, channel string, ts string) 
 	values.Set("ts", ts)
 	values.Set("limit", "50")
 	return fetchSlackMessages(config, "conversations.replies", values)
+}
+
+func captureSlackThreadReplies(db *sql.DB, config SlackAPICaptureConfig, channel SlackChannel, threadTS string, newest string) (int, string, error) {
+	replies, err := fetchSlackReplies(config, channel.ID, threadTS)
+	if err != nil {
+		return 0, newest, err
+	}
+	stored := 0
+	for _, reply := range replies {
+		if reply.TS == threadTS {
+			continue
+		}
+		if !slackTSAfter(reply.TS, newest) {
+			continue
+		}
+		replyEvent := slackEventFromAPIMessage(channel.ID, channel.Name, reply, threadTS)
+		inserted, err := storeSlackEvent(db, replyEvent)
+		if err != nil {
+			return stored, newest, err
+		}
+		if inserted {
+			stored++
+		}
+		if slackTSAfter(replyEvent.TS, newest) {
+			newest = replyEvent.TS
+		}
+	}
+	return stored, newest, nil
+}
+
+func slackThreadCursorKey(channelID string, threadTS string) string {
+	return channelID + "\x00" + threadTS
+}
+
+func parseSlackThreadCursorKey(key string) (string, string, bool) {
+	parts := strings.SplitN(key, "\x00", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
 }
 
 func fetchSlackMessages(config SlackAPICaptureConfig, method string, values url.Values) ([]slackAPIMessage, error) {

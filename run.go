@@ -104,6 +104,7 @@ type RunCapture struct {
 	slackAPIBaseURL     string
 	slackHTTPClient     *http.Client
 	slackCursors        map[string]string
+	slackThreadCursors  map[string]string
 	suppressedCreates   map[string]time.Time
 	deleteCoalesceDelay time.Duration
 	events              chan CapturedEvent
@@ -207,6 +208,7 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 		slackAPIBaseURL:     slackAPIBaseURL,
 		slackHTTPClient:     config.SlackHTTPClient,
 		slackCursors:        map[string]string{},
+		slackThreadCursors:  map[string]string{},
 		suppressedCreates:   map[string]time.Time{},
 		deleteCoalesceDelay: 75 * time.Millisecond,
 		events:              events,
@@ -289,19 +291,21 @@ func (capture *RunCapture) captureSlackEvents() error {
 		return nil
 	}
 	result, err := CaptureSlackFromAPI(SlackAPICaptureConfig{
-		HomeDir:      capture.homeDir,
-		DatabasePath: capture.databasePath,
-		Token:        capture.slackToken,
-		Channels:     capture.slackChannels,
-		IncludeDMs:   capture.slackIncludeDMs,
-		APIBaseURL:   capture.slackAPIBaseURL,
-		HTTPClient:   capture.slackHTTPClient,
-		Cursors:      capture.slackCursors,
+		HomeDir:       capture.homeDir,
+		DatabasePath:  capture.databasePath,
+		Token:         capture.slackToken,
+		Channels:      capture.slackChannels,
+		IncludeDMs:    capture.slackIncludeDMs,
+		APIBaseURL:    capture.slackAPIBaseURL,
+		HTTPClient:    capture.slackHTTPClient,
+		Cursors:       capture.slackCursors,
+		ThreadCursors: capture.slackThreadCursors,
 	})
 	if err != nil {
 		return err
 	}
 	capture.slackCursors = result.Cursors
+	capture.slackThreadCursors = result.ThreadCursors
 	return nil
 }
 

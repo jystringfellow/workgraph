@@ -101,6 +101,8 @@ The daemon:
   capture is running
 - polls IM and MPIM conversations only when the user has explicitly opted in
 - fetches channel messages and available thread replies
+- continues polling known thread parents so replies added after the parent
+  message was first seen are captured
 - stores events through the same ingestion path as exported Slack events
 - avoids duplicates across polling cycles
 - does not read channels outside the authorized user's Slack visibility

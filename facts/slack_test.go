@@ -192,6 +192,79 @@ func TestRunCollectsConfiguredSlackMessagesAndThreadReplies(t *testing.T) {
 	}
 }
 
+func TestRunCollectsLaterSlackThreadRepliesForAlreadySeenParents(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	transport := &fakeSlackTransport{}
+	client := &http.Client{Transport: transport}
+	transport.handle = func(request *http.Request) string {
+		if got := request.Header.Get("Authorization"); got != "Bearer test-token" {
+			t.Fatalf("expected bearer token, got %q", got)
+		}
+		if request.URL.Query().Get("channel") != "C123" {
+			t.Fatalf("expected configured channel C123, got %q", request.URL.Query().Get("channel"))
+		}
+		switch request.URL.Path {
+		case "/api/conversations.history":
+			transport.historyRequests++
+			if transport.historyRequests == 1 {
+				return `{"ok":true,"messages":[{"type":"message","user":"U456","text":"Parent thread.","ts":"1716215400.000100","reply_count":1}]}`
+			}
+			return `{"ok":true,"messages":[]}`
+		case "/api/conversations.replies":
+			transport.repliesRequests++
+			if request.URL.Query().Get("ts") != "1716215400.000100" {
+				t.Fatalf("expected thread ts, got %q", request.URL.Query().Get("ts"))
+			}
+			if transport.repliesRequests == 1 {
+				return `{"ok":true,"messages":[{"type":"message","user":"U456","text":"Parent thread.","ts":"1716215400.000100"}]}`
+			}
+			return `{"ok":true,"messages":[{"type":"message","user":"U456","text":"Parent thread.","ts":"1716215400.000100"},{"type":"message","user":"U789","text":"Late reply.","ts":"1716215600.000300","thread_ts":"1716215400.000100"}]}`
+		default:
+			t.Fatalf("unexpected Slack API path %s", request.URL.Path)
+		}
+		return `{"ok":false,"error":"unexpected_request"}`
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:           homeDir,
+		DatabasePath:      initResult.DatabasePath,
+		WatchDirs:         []string{tempDir},
+		SlackToken:        "test-token",
+		SlackChannels:     []string{"C123"},
+		SlackAPIBaseURL:   "https://slack.test/api",
+		SlackHTTPClient:   client,
+		SlackPollInterval: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("run start failed: %v", err)
+	}
+	go func() {
+		done <- capture.Run(ctx)
+	}()
+
+	waitForSlackEventOrRunError(t, initResult.DatabasePath, "slack.thread_reply", "C123", "1716215600.000300", done, transport)
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	if transport.historyRequests < 2 {
+		t.Fatalf("expected multiple Slack history polls, got %d", transport.historyRequests)
+	}
+	if transport.repliesRequests < 2 {
+		t.Fatalf("expected known thread parent to be repolled, got %d reply requests", transport.repliesRequests)
+	}
+}
+
 func TestRunDiscoversSlackChannelsWhenNoneAreConfigured(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
