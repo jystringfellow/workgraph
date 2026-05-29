@@ -35,10 +35,10 @@ func TestGitHubCaptureStoresPullRequestEvent(t *testing.T) {
 	}
 
 	repoRoot := repoRoot(t)
-	if output, err := runWorkGraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
 		t.Fatalf("workgraph init failed: %v\n%s", err, output)
 	}
-	output, err := runWorkGraph(t, repoRoot, "github", "capture", "--home", homeDir, "--events-file", eventsPath)
+	output, err := runworkgraph(t, repoRoot, "github", "capture", "--home", homeDir, "--events-file", eventsPath)
 	if err != nil {
 		t.Fatalf("workgraph github capture failed: %v\n%s", err, output)
 	}
@@ -100,13 +100,13 @@ func TestGitHubCaptureLinksProjectByLocalRemote(t *testing.T) {
 	}
 
 	repoRoot := repoRoot(t)
-	if output, err := runWorkGraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
 		t.Fatalf("workgraph init failed: %v\n%s", err, output)
 	}
-	if _, err := runWorkGraph(t, repoRoot, "config", "add-watch", "--home", homeDir, codeDir); err != nil {
+	if _, err := runworkgraph(t, repoRoot, "config", "add-watch", "--home", homeDir, codeDir); err != nil {
 		t.Fatalf("workgraph config add-watch failed: %v", err)
 	}
-	if output, err := runWorkGraph(t, repoRoot, "github", "capture", "--home", homeDir, "--events-file", eventsPath); err != nil {
+	if output, err := runworkgraph(t, repoRoot, "github", "capture", "--home", homeDir, "--events-file", eventsPath); err != nil {
 		t.Fatalf("workgraph github capture failed: %v\n%s", err, output)
 	}
 
@@ -144,16 +144,16 @@ func TestGitHubCaptureLinksProjectByCommitSHA(t *testing.T) {
 	}
 
 	repoRoot := repoRoot(t)
-	if output, err := runWorkGraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
 		t.Fatalf("workgraph init failed: %v\n%s", err, output)
 	}
-	if _, err := runWorkGraph(t, repoRoot, "config", "add-watch", "--home", homeDir, codeDir); err != nil {
+	if _, err := runworkgraph(t, repoRoot, "config", "add-watch", "--home", homeDir, codeDir); err != nil {
 		t.Fatalf("workgraph config add-watch failed: %v", err)
 	}
-	if output, err := runWorkGraph(t, repoRoot, "git", "capture", "--home", homeDir); err != nil {
+	if output, err := runworkgraph(t, repoRoot, "git", "capture", "--home", homeDir); err != nil {
 		t.Fatalf("workgraph git capture failed: %v\n%s", err, output)
 	}
-	if output, err := runWorkGraph(t, repoRoot, "github", "capture", "--home", homeDir, "--events-file", eventsPath); err != nil {
+	if output, err := runworkgraph(t, repoRoot, "github", "capture", "--home", homeDir, "--events-file", eventsPath); err != nil {
 		t.Fatalf("workgraph github capture failed: %v\n%s", err, output)
 	}
 
@@ -183,10 +183,10 @@ func TestGitHubCaptureStoresIssueEvent(t *testing.T) {
 	}
 
 	repoRoot := repoRoot(t)
-	if output, err := runWorkGraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
 		t.Fatalf("workgraph init failed: %v\n%s", err, output)
 	}
-	if output, err := runWorkGraph(t, repoRoot, "github", "capture", "--home", homeDir, "--events-file", eventsPath); err != nil {
+	if output, err := runworkgraph(t, repoRoot, "github", "capture", "--home", homeDir, "--events-file", eventsPath); err != nil {
 		t.Fatalf("workgraph github capture failed: %v\n%s", err, output)
 	}
 
@@ -234,10 +234,10 @@ func TestGitHubCaptureRefreshesNewerWorkStateWithoutDuplicateEvent(t *testing.T)
 	}
 
 	repoRoot := repoRoot(t)
-	if output, err := runWorkGraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
 		t.Fatalf("workgraph init failed: %v\n%s", err, output)
 	}
-	if output, err := runWorkGraph(t, repoRoot, "github", "capture", "--home", homeDir, "--events-file", eventsPath); err != nil {
+	if output, err := runworkgraph(t, repoRoot, "github", "capture", "--home", homeDir, "--events-file", eventsPath); err != nil {
 		t.Fatalf("workgraph github capture open state failed: %v\n%s", err, output)
 	}
 
@@ -255,7 +255,7 @@ func TestGitHubCaptureRefreshesNewerWorkStateWithoutDuplicateEvent(t *testing.T)
 ]`), 0o644); err != nil {
 		t.Fatalf("write closed github events: %v", err)
 	}
-	if output, err := runWorkGraph(t, repoRoot, "github", "capture", "--home", homeDir, "--events-file", eventsPath); err != nil {
+	if output, err := runworkgraph(t, repoRoot, "github", "capture", "--home", homeDir, "--events-file", eventsPath); err != nil {
 		t.Fatalf("workgraph github capture closed state failed: %v\n%s", err, output)
 	}
 
@@ -291,7 +291,7 @@ func TestGitHubCaptureRefreshesNewerWorkStateWithoutDuplicateEvent(t *testing.T)
 ]`), 0o644); err != nil {
 		t.Fatalf("write stale github events: %v", err)
 	}
-	if output, err := runWorkGraph(t, repoRoot, "github", "capture", "--home", homeDir, "--events-file", eventsPath); err != nil {
+	if output, err := runworkgraph(t, repoRoot, "github", "capture", "--home", homeDir, "--events-file", eventsPath); err != nil {
 		t.Fatalf("workgraph github capture stale state failed: %v\n%s", err, output)
 	}
 

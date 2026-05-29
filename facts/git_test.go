@@ -24,14 +24,14 @@ func TestGitCaptureStoresLocalCommitEvent(t *testing.T) {
 	commitSHA := createGitCommit(t, repoDir, "Add cupcake API")
 
 	repoRoot := repoRoot(t)
-	if output, err := runWorkGraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
 		t.Fatalf("workgraph init failed: %v\n%s", err, output)
 	}
-	if _, err := runWorkGraph(t, repoRoot, "config", "add-watch", "--home", homeDir, codeDir); err != nil {
+	if _, err := runworkgraph(t, repoRoot, "config", "add-watch", "--home", homeDir, codeDir); err != nil {
 		t.Fatalf("workgraph config add-watch failed: %v", err)
 	}
 
-	output, err := runWorkGraph(t, repoRoot, "git", "capture", "--home", homeDir)
+	output, err := runworkgraph(t, repoRoot, "git", "capture", "--home", homeDir)
 	if err != nil {
 		t.Fatalf("workgraph git capture failed: %v\n%s", err, output)
 	}
@@ -75,17 +75,17 @@ func TestGitCaptureDoesNotDuplicateCommitEvents(t *testing.T) {
 	commitSHA := createGitCommit(t, repoDir, "Add cupcake API")
 
 	repoRoot := repoRoot(t)
-	if output, err := runWorkGraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
 		t.Fatalf("workgraph init failed: %v\n%s", err, output)
 	}
-	if _, err := runWorkGraph(t, repoRoot, "config", "add-watch", "--home", homeDir, codeDir); err != nil {
+	if _, err := runworkgraph(t, repoRoot, "config", "add-watch", "--home", homeDir, codeDir); err != nil {
 		t.Fatalf("workgraph config add-watch failed: %v", err)
 	}
 
-	if output, err := runWorkGraph(t, repoRoot, "git", "capture", "--home", homeDir); err != nil {
+	if output, err := runworkgraph(t, repoRoot, "git", "capture", "--home", homeDir); err != nil {
 		t.Fatalf("first git capture failed: %v\n%s", err, output)
 	}
-	if output, err := runWorkGraph(t, repoRoot, "git", "capture", "--home", homeDir); err != nil {
+	if output, err := runworkgraph(t, repoRoot, "git", "capture", "--home", homeDir); err != nil {
 		t.Fatalf("second git capture failed: %v\n%s", err, output)
 	}
 
@@ -189,7 +189,7 @@ type storedGitCommitEvent struct {
 	PayloadJSON string
 }
 
-func runWorkGraph(t *testing.T, repoRoot string, args ...string) ([]byte, error) {
+func runworkgraph(t *testing.T, repoRoot string, args ...string) ([]byte, error) {
 	t.Helper()
 
 	cmd := exec.Command("go", append([]string{"run", "./cmd/workgraph"}, args...)...)

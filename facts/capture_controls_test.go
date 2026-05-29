@@ -42,10 +42,10 @@ func TestRunStartsBackgroundCaptureWithConfiguredWatchDirs(t *testing.T) {
 		t.Fatalf("expected start output to include configured watch dir %q, got:\n%s", watchDir, output)
 	}
 	if _, err := os.Stat(filepath.Join(homeDir, "daemon.pid")); err != nil {
-		t.Fatalf("expected capture pid under WorkGraph home: %v", err)
+		t.Fatalf("expected capture pid under workgraph home: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(homeDir, "daemon.log")); err != nil {
-		t.Fatalf("expected capture log under WorkGraph home: %v", err)
+		t.Fatalf("expected capture log under workgraph home: %v", err)
 	}
 }
 

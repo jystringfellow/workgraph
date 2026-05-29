@@ -95,7 +95,7 @@ func TestInitCommandForceRefreshesConfig(t *testing.T) {
 	}
 
 	if err := os.MkdirAll(homeDir, 0o755); err != nil {
-		t.Fatalf("create WorkGraph home: %v", err)
+		t.Fatalf("create workgraph home: %v", err)
 	}
 	writeCLIInitConfig(t, configPath, oldConfig)
 
@@ -120,7 +120,7 @@ func TestInitCommandForceRefreshesConfig(t *testing.T) {
 
 	workgraphHome, err := filepath.Abs(homeDir)
 	if err != nil {
-		t.Fatalf("resolve WorkGraph home: %v", err)
+		t.Fatalf("resolve workgraph home: %v", err)
 	}
 
 	expected := cliInitConfigFile{

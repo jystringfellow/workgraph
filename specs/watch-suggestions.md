@@ -1,9 +1,9 @@
 # Watch Suggestions
 
-WorkGraph should use higher-signal activity sources to suggest local watch roots.
+workgraph should use higher-signal activity sources to suggest local watch roots.
 
 When another capture mechanism observes work in a local directory that is not
-already watched, WorkGraph should create a pending suggestion instead of
+already watched, workgraph should create a pending suggestion instead of
 modifying config silently.
 
 Examples:
@@ -21,4 +21,4 @@ Suggestion behavior:
 - approving the suggestion uses the same behavior as `workgraph config add-watch`
 - duplicate suggestions for the same directory should be coalesced
 
-This preserves the WorkGraph rule: suggest -> draft -> approve -> act.
+This preserves the workgraph rule: suggest -> draft -> approve -> act.

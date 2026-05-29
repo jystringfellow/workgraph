@@ -1,10 +1,10 @@
 # Ignore Suggestions
 
-WorkGraph should use captured event volume to suggest ignore rules for noisy
+workgraph should use captured event volume to suggest ignore rules for noisy
 local paths.
 
 When file capture observes more activity under a directory than seems plausibly
-human-authored, WorkGraph should create a pending ignore suggestion instead of
+human-authored, workgraph should create a pending ignore suggestion instead of
 modifying config silently.
 
 Examples:
@@ -32,4 +32,4 @@ untracked meaningful activity -> suggest watch root
 tracked noisy activity -> suggest ignore rule
 ```
 
-This preserves the WorkGraph rule: suggest -> draft -> approve -> act.
+This preserves the workgraph rule: suggest -> draft -> approve -> act.

@@ -1,16 +1,16 @@
 <p align="center">
-  <img src="public/assets/workgraph-lockup.png" alt="WorkGraph" width="160">
+  <img src="public/assets/workgraph-lockup.png" alt="workgraph" width="160">
 </p>
 
-# WorkGraph
+# workgraph
 
-WorkGraph is a local-first attempt to build the open substrate for personal work intelligence.
+workgraph is a local-first attempt to build the open substrate for personal work intelligence.
 
 Web: https://workgraph.pages.dev
 
 It captures operational context, connects it to durable personal memory, and helps restore the state of work so people can think, decide, and execute with more continuity.
 
-The goal is not merely productivity tracking. WorkGraph is meant to become infrastructure for contextual intelligence, strategic alignment, and personalized execution assistance over time.
+The goal is not merely productivity tracking. workgraph is meant to become infrastructure for contextual intelligence, strategic alignment, and personalized execution assistance over time.
 
 ## Current Shape
 
@@ -24,7 +24,7 @@ The repository is currently in early specification mode: many facts are present 
 
 ## How This Project Is Built
 
-WorkGraph uses a facts-first development loop:
+workgraph uses a facts-first development loop:
 
 ```text
 write spec → write feature → write failing fact → implement → pass → cross off roadmap
@@ -50,7 +50,7 @@ When prose and facts disagree, the facts win for behavior. Prose should then be 
 
 ## Project Goals
 
-WorkGraph helps answer:
+workgraph helps answer:
 
 - What did I do?
 - Why did I do it?
@@ -76,7 +76,7 @@ The weekend V1 roadmap starts with:
 
 ## Running Locally
 
-During Phase 0, the safest way to run WorkGraph is from source:
+During Phase 0, the safest way to run workgraph is from source:
 
 ```sh
 go run ./cmd/workgraph init
@@ -97,14 +97,14 @@ constraints, and open questions. Project slugs are lowercase kebab-case.
 
 The default config watches existing common folders such as Desktop, Documents,
 Downloads, Code, Projects, Developer, Work, source, and repos, and ignores
-WorkGraph internal storage. Paths are stored as resolved absolute paths so the
+workgraph internal storage. Paths are stored as resolved absolute paths so the
 same behavior works on macOS, Linux, and Windows without relying on shell
-expansion of `$HOME`. WorkGraph avoids recursively watching the entire home
+expansion of `$HOME`. workgraph avoids recursively watching the entire home
 directory when those common folders exist.
 
 On macOS, watching protected folders such as Documents, Desktop, and Downloads
 can trigger privacy prompts. To avoid approving each folder one by one, grant
-Full Disk Access once to your terminal app or installed WorkGraph binary in
+Full Disk Access once to your terminal app or installed workgraph binary in
 System Settings → Privacy & Security → Full Disk Access.
 
 The config shape is:
@@ -117,7 +117,7 @@ The config shape is:
 }
 ```
 
-If you want to pick up the latest default config after a WorkGraph update, run:
+If you want to pick up the latest default config after a workgraph update, run:
 
 ```sh
 go run ./cmd/workgraph init --force
@@ -140,7 +140,7 @@ go run /path/to/workgraph/cmd/workgraph config add-watch /Volumes/Craig/Code
 
 Added watch roots are stored as absolute paths and placed before existing roots
 so a broad home-directory watch budget does not starve a project you explicitly
-added. Roots added with `config add-watch` are treated as explicit, so WorkGraph
+added. Roots added with `config add-watch` are treated as explicit, so workgraph
 can recurse through them more fully than init-owned default folders.
 
 To start background file capture for the current directory:
@@ -153,16 +153,16 @@ If no `--watch` flag is provided, background capture uses the configured
 `watch_dirs`. Configured `ignore_paths` and `ignore_names` apply either way.
 The command returns after capture is ready.
 
-When a watched tree is very large, WorkGraph caps recursive watch registration
+When a watched tree is very large, workgraph caps recursive watch registration
 to keep file descriptors available for the process. If output says `Watch limit
 reached`, capture is still running for already registered directories, but you
 should narrow `watch_dirs` to the folders you care about most. The output
 includes a small sample of registered directories and the first directory that
-was outside the watch budget. WorkGraph prioritizes user-facing folders such as
+was outside the watch budget. workgraph prioritizes user-facing folders such as
 Desktop, Documents, and Downloads before hidden cache directories, and it skips
 top-level hidden folders under broad watched roots unless you explicitly add
 that hidden folder to `watch_dirs`. Init-owned default roots are traversed
-conservatively: WorkGraph watches the default root and its immediate children,
+conservatively: workgraph watches the default root and its immediate children,
 then only recurses deeper into children that look like active work folders.
 
 Use `status` and `stop` to inspect or stop background capture:
@@ -180,10 +180,10 @@ go run ./cmd/workgraph run --foreground --watch .
 ```
 
 Some editors save by writing a temporary scratch file and replacing the original
-document. WorkGraph normalizes that safe-save pattern into `file.modified` for
+document. workgraph normalizes that safe-save pattern into `file.modified` for
 the document and ignores editor scratch files and `.DS_Store` metadata noise.
 
-For isolated testing, keep WorkGraph state and watched files inside a temporary
+For isolated testing, keep workgraph state and watched files inside a temporary
 directory:
 
 ```sh
@@ -249,7 +249,7 @@ go run ./cmd/workgraph resume workgraph
 To create the starter memory template for a project:
 
 ```sh
-go run ./cmd/workgraph memory init "WorkGraph"
+go run ./cmd/workgraph memory init "workgraph"
 ```
 
 The command creates `~/workgraph-memory/projects/workgraph.md` if it is missing
@@ -262,7 +262,7 @@ that project context can be added.
 
 Background capture uses the same configured watch and ignore rules as
 foreground capture. It does not start silently during `init`; capture is always
-an explicit command. Capture state is stored under the WorkGraph home as local
+an explicit command. Capture state is stored under the workgraph home as local
 PID, log, and state files.
 
 To build a local binary:
@@ -303,7 +303,7 @@ Published release binaries may come later. For now, source builds and `go instal
 
 ## Inspecting The Database
 
-WorkGraph stores local operational memory in SQLite:
+workgraph stores local operational memory in SQLite:
 
 ```sh
 sqlite3 ~/.workgraph/workgraph.db

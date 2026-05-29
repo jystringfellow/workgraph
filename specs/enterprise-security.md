@@ -1,11 +1,11 @@
 # Enterprise Security and Compliance
 
-WorkGraph's connector model asks for sensitive local context, especially when
+workgraph's connector model asks for sensitive local context, especially when
 Slack uses user scopes to collect work context without manual bot invitations.
 Enterprise users and IT administrators need clear guarantees about where data
 lives, how it is protected, and what leaves the machine.
 
-This spec captures security and compliance requirements before WorkGraph is
+This spec captures security and compliance requirements before workgraph is
 positioned for enterprise use.
 
 ## Goals
@@ -20,7 +20,7 @@ positioned for enterprise use.
 
 ## Local Data Protection
 
-WorkGraph should support encrypted local storage for captured events and
+workgraph should support encrypted local storage for captured events and
 connector data.
 
 Requirements:
@@ -29,16 +29,16 @@ Requirements:
 - store encryption keys in the operating system credential store, such as macOS
   Keychain or Windows Credential Manager
 - avoid storing raw connector tokens in world-readable files
-- preserve local-first operation without a WorkGraph cloud service
+- preserve local-first operation without a workgraph cloud service
 - document backup and recovery implications for encrypted local state
 
 Markdown memory files are user-owned local files. If they contain sensitive
-company context, WorkGraph should document how users can place the memory repo
+company context, workgraph should document how users can place the memory repo
 inside their organization's approved encrypted storage location.
 
 ## Outbound AI Filtering
 
-If WorkGraph integrates hosted LLM providers, it must filter outbound text
+If workgraph integrates hosted LLM providers, it must filter outbound text
 locally before sending requests.
 
 Requirements:
@@ -55,7 +55,7 @@ will be removed.
 
 ## Network Transparency
 
-WorkGraph should document and expose the network destinations it contacts.
+workgraph should document and expose the network destinations it contacts.
 
 Initial expected destinations:
 
@@ -64,7 +64,7 @@ Initial expected destinations:
 - user-selected LLM provider endpoints only when AI features are explicitly
   configured
 
-WorkGraph should not send raw captured work context to a WorkGraph-operated
+workgraph should not send raw captured work context to a workgraph-operated
 cloud service as a requirement for core local functionality.
 
 ## IT-Friendly Compliance Document
@@ -78,9 +78,9 @@ The document should explain:
 - that raw captured data is stored locally by default
 - where SQLite, connector config, and memory files live
 - how local encryption works once implemented
-- what network destinations WorkGraph contacts
+- what network destinations workgraph contacts
 - how hosted AI use is configured, filtered, and disabled
-- what actions WorkGraph cannot take without explicit user approval
+- what actions workgraph cannot take without explicit user approval
 
 The document should be usable by an employee when requesting approval to install
 the Slack app in an enterprise workspace.

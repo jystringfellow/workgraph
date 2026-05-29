@@ -1,12 +1,12 @@
 # Configuration
 
-WorkGraph keeps local configuration in the WorkGraph home:
+workgraph keeps local configuration in the workgraph home:
 
 ```text
 ~/.workgraph/config.json
 ```
 
-The config file answers what local paths WorkGraph watches and what paths it must never record.
+The config file answers what local paths workgraph watches and what paths it must never record.
 
 Connector-specific secrets are stored separately from `config.json`. Slack OAuth
 setup writes local connector settings to:
@@ -22,7 +22,7 @@ with user-only file permissions.
 
 `workgraph init` creates `config.json` when it does not already exist.
 
-By default, WorkGraph watches existing common user-facing folders under the current user's home directory instead of recursively watching the entire home directory. Paths are resolved with Go's `os.UserHomeDir()` and persisted as absolute paths, not as shell tokens such as `$HOME`.
+By default, workgraph watches existing common user-facing folders under the current user's home directory instead of recursively watching the entire home directory. Paths are resolved with Go's `os.UserHomeDir()` and persisted as absolute paths, not as shell tokens such as `$HOME`.
 
 Default candidates include:
 
@@ -36,7 +36,7 @@ Default candidates include:
 - source
 - repos
 
-Only candidates that already exist are included. If none exist, WorkGraph falls back to the user home directory so the config is still usable.
+Only candidates that already exist are included. If none exist, workgraph falls back to the user home directory so the config is still usable.
 
 Example on macOS:
 
@@ -60,7 +60,7 @@ Example on Windows:
 }
 ```
 
-The default must always ignore the WorkGraph home directory so database writes, logs, PID files, and config updates do not recursively become user work events.
+The default must always ignore the workgraph home directory so database writes, logs, PID files, and config updates do not recursively become user work events.
 
 ## Fields
 
@@ -78,7 +78,7 @@ Documents from spending the watch budget on app libraries or nested folder-only
 containers.
 
 Explicit watch roots added by users are not added to `conservative_watch_dirs`.
-If a user adds a directory with `workgraph config add-watch`, WorkGraph treats
+If a user adds a directory with `workgraph config add-watch`, workgraph treats
 that path as intentional and may recurse normally, subject to ignore rules and
 the watch budget.
 
@@ -97,7 +97,7 @@ Adding a path that is already watched is idempotent.
 
 `ignore_paths` is a list of absolute paths. A captured source path is ignored when it is the same as an ignored path or is a descendant of an ignored path.
 
-This field is for user-owned directories or files that should never be tracked, such as caches, private folders, generated output, or the WorkGraph home.
+This field is for user-owned directories or files that should never be tracked, such as caches, private folders, generated output, or the workgraph home.
 
 ### ignore_names
 

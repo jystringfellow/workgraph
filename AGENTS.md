@@ -1,8 +1,8 @@
-# WorkGraph Agents Guide
+# workgraph Agents Guide
 
 ## Purpose
 
-This repository builds WorkGraph:
+This repository builds workgraph:
 
 > the open substrate for personal work intelligence
 
@@ -20,7 +20,7 @@ Facts are the source of truth for behavior.
 
 ## Architecture Overview
 
-WorkGraph consists of:
+workgraph consists of:
 
 - local daemon in Go
 - SQLite event store

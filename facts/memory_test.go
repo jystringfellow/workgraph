@@ -154,7 +154,7 @@ func TestMemoryInitPreservesExistingProjectMemory(t *testing.T) {
 	result, err := workgraph.InitProjectMemory(workgraph.ProjectMemoryInitConfig{
 		HomeDir:   homeDir,
 		MemoryDir: memoryDir,
-		Project:   "WorkGraph",
+		Project:   "workgraph",
 	})
 	if err != nil {
 		t.Fatalf("memory init failed: %v", err)
@@ -286,7 +286,7 @@ func TestMemoryInitPreservesExistingTeamMemory(t *testing.T) {
 	}
 }
 
-func TestMemoryInitRequiresWorkGraphInit(t *testing.T) {
+func TestMemoryInitRequiresworkgraphInit(t *testing.T) {
 	_, err := workgraph.InitProjectMemory(workgraph.ProjectMemoryInitConfig{
 		HomeDir:   filepath.Join(t.TempDir(), ".workgraph"),
 		MemoryDir: filepath.Join(t.TempDir(), "workgraph-memory"),

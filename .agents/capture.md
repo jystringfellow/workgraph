@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Normalize incoming operational signals into WorkGraph events.
+Normalize incoming operational signals into workgraph events.
 
 ## Input
 

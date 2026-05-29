@@ -25,12 +25,12 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// DefaultSlackClientID is set by official WorkGraph builds for Slack PKCE OAuth.
+// DefaultSlackClientID is set by official workgraph builds for Slack PKCE OAuth.
 // Local development builds can pass a client id explicitly.
 var DefaultSlackClientID string
 
 // DefaultSlackRedirectURI is the public HTTPS relay URL used for Slack PKCE OAuth.
-// Official builds should set this to a WorkGraph-controlled HTTPS endpoint.
+// Official builds should set this to a workgraph-controlled HTTPS endpoint.
 var DefaultSlackRedirectURI = "https://workgraph.pages.dev/slack/callback"
 
 // DefaultSlackLocalCallbackURI is where the HTTPS relay returns the browser.
@@ -247,7 +247,7 @@ func ConnectSlack(config SlackConnectConfig) (SlackConnectResult, error) {
 	}
 	homeDir, err = filepath.Abs(homeDir)
 	if err != nil {
-		return SlackConnectResult{}, fmt.Errorf("resolve WorkGraph home: %w", err)
+		return SlackConnectResult{}, fmt.Errorf("resolve workgraph home: %w", err)
 	}
 	if _, err := os.Stat(filepath.Join(homeDir, "workgraph.db")); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -331,7 +331,7 @@ func ConnectSlackWithBrowser(ctx context.Context, config SlackConnectConfig) (Sl
 	}
 	homeDir, err = filepath.Abs(homeDir)
 	if err != nil {
-		return SlackConnectResult{}, fmt.Errorf("resolve WorkGraph home: %w", err)
+		return SlackConnectResult{}, fmt.Errorf("resolve workgraph home: %w", err)
 	}
 	if _, err := os.Stat(filepath.Join(homeDir, "workgraph.db")); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -452,7 +452,7 @@ func ConfigureSlack(config SlackConfigureConfig) (SlackConfigureResult, error) {
 	}
 	homeDir, err = filepath.Abs(homeDir)
 	if err != nil {
-		return SlackConfigureResult{}, fmt.Errorf("resolve WorkGraph home: %w", err)
+		return SlackConfigureResult{}, fmt.Errorf("resolve workgraph home: %w", err)
 	}
 	stored, err := readSlackConnectorConfig(homeDir)
 	if err != nil {
@@ -946,7 +946,7 @@ func slackOAuthCallbackHandler(expectedState string, codeCh chan<- string, errCh
 			return
 		}
 		response.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprintf(response, "<!doctype html><title>WorkGraph Slack Connected</title><p>%s</p>", html.EscapeString("Slack connected. You can close this window and return to WorkGraph."))
+		fmt.Fprintf(response, "<!doctype html><title>workgraph Slack Connected</title><p>%s</p>", html.EscapeString("Slack connected. You can close this window and return to workgraph."))
 		codeCh <- code
 	})
 }

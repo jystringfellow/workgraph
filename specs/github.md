@@ -1,6 +1,6 @@
 # GitHub Integration
 
-WorkGraph should ingest GitHub activity as cloud-side work events that connect
+workgraph should ingest GitHub activity as cloud-side work events that connect
 back to local projects when possible.
 
 GitHub ingestion should start with explicit capture from a local exported event
@@ -10,7 +10,7 @@ file:
 workgraph github capture --events-file github-events.json
 ```
 
-This gives WorkGraph a deterministic ingestion seam before adding network
+This gives workgraph a deterministic ingestion seam before adding network
 authentication and API pagination. A later provider can fetch the same event
 shape from GitHub directly.
 

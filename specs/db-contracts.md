@@ -1,13 +1,13 @@
 # Database Contracts
 
-These contracts describe intended durable state for WorkGraph.
+These contracts describe intended durable state for workgraph.
 
 Tables marked `active` are implementation targets.
 Tables marked `draft` express product direction but are not required for Phase 0.
 
 A draft contract becomes active only when a skipped placeholder is replaced with an executable failing fact.
 
-The database is the durable operational memory for WorkGraph.
+The database is the durable operational memory for workgraph.
 
 Domain entity contracts are defined in `specs/domain-entities.md`. This document defines durable table contracts and query requirements.
 

@@ -1,6 +1,6 @@
-# WorkGraph Agents
+# workgraph Agents
 
-Agents are reusable capabilities for reasoning over WorkGraph data.
+Agents are reusable capabilities for reasoning over workgraph data.
 
 They are not autonomous systems. They are invoked tools with clear inputs and outputs.
 
@@ -19,7 +19,7 @@ Current capability docs:
 Reusable agent skills live under `skills/` so users can symlink or copy them
 into their preferred AI tool:
 
-- `skills/workgraph-memory/`: draft and edit WorkGraph project memory
+- `skills/workgraph-memory/`: draft and edit workgraph project memory
 
 For now, `.agents/` is an agent-facing workspace, not a runtime or orchestration
 system.
