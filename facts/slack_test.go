@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -442,6 +443,131 @@ func TestSlackConnectRequestsDMScopeOnlyWhenOptedIn(t *testing.T) {
 	}
 }
 
+func TestSlackConnectDMEnabledMessageExplainsDisconnectBeforeRemovingDMScopes(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	transport := &fakeSlackTransport{}
+	client := &http.Client{Transport: transport}
+	transport.handle = func(request *http.Request) string {
+		return `{"ok":true,"authed_user":{"id":"U123","access_token":"xoxp-installed","scope":"channels:history,channels:read,groups:history,groups:read,im:history,im:read,mpim:history,mpim:read"},"team":{"id":"T123","name":"Cupcake Labs"}}`
+	}
+
+	result, err := workgraph.ConnectSlack(workgraph.SlackConnectConfig{
+		HomeDir:       homeDir,
+		ClientID:      "client-id",
+		ClientSecret:  "client-secret",
+		RedirectURI:   workgraph.DefaultSlackRedirectURI,
+		Code:          "oauth-code",
+		State:         "fixed-state",
+		ExpectedState: "fixed-state",
+		IncludeDMs:    true,
+		APIBaseURL:    "https://slack.test/api",
+		HTTPClient:    client,
+	})
+	if err != nil {
+		t.Fatalf("slack connect failed: %v", err)
+	}
+	if !strings.Contains(result.Message, "To remove Slack DM access later, run workgraph slack disconnect, then reconnect without --include-dms.") {
+		t.Fatalf("expected disconnect guidance for DM-enabled connect, got:\n%s", result.Message)
+	}
+}
+
+func TestSlackConnectWithoutDMsMessageExplainsReconnectPath(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	transport := &fakeSlackTransport{}
+	client := &http.Client{Transport: transport}
+	transport.handle = func(request *http.Request) string {
+		return `{"ok":true,"authed_user":{"id":"U123","access_token":"xoxp-installed","scope":"channels:history,channels:read,groups:history,groups:read"},"team":{"id":"T123","name":"Cupcake Labs"}}`
+	}
+
+	result, err := workgraph.ConnectSlack(workgraph.SlackConnectConfig{
+		HomeDir:       homeDir,
+		ClientID:      "client-id",
+		ClientSecret:  "client-secret",
+		RedirectURI:   workgraph.DefaultSlackRedirectURI,
+		Code:          "oauth-code",
+		State:         "fixed-state",
+		ExpectedState: "fixed-state",
+		APIBaseURL:    "https://slack.test/api",
+		HTTPClient:    client,
+	})
+	if err != nil {
+		t.Fatalf("slack connect failed: %v", err)
+	}
+	if !strings.Contains(result.Message, "To include DMs later, run workgraph slack disconnect, then reconnect with --include-dms.") {
+		t.Fatalf("expected reconnect guidance for channel-only connect, got:\n%s", result.Message)
+	}
+}
+
+func TestSlackDisconnectRevokesTokenRemovesConfigAndRestartsDaemon(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	watchDir := filepath.Join(tempDir, "project")
+	if err := os.MkdirAll(watchDir, 0o755); err != nil {
+		t.Fatalf("create watch dir: %v", err)
+	}
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	writeInitConfig(t, initResult.ConfigPath, initConfigFile{
+		WatchDirs:   []string{watchDir},
+		IgnorePaths: []string{homeDir},
+		IgnoreNames: []string{".git", "node_modules"},
+	})
+	configPath := filepath.Join(homeDir, "slack.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "access_token": "xoxp-installed",
+  "channels": [],
+  "include_dms": true,
+  "user_scopes": ["channels:history", "channels:read", "groups:history", "groups:read", "im:history", "im:read", "mpim:history", "mpim:read"],
+  "api_base_url": "https://slack.test/api"
+}
+`), 0o600); err != nil {
+		t.Fatalf("write slack config: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/auth.revoke" {
+			t.Fatalf("unexpected Slack API path %s", request.URL.Path)
+		}
+		if got := request.Header.Get("Authorization"); got != "Bearer xoxp-installed" {
+			t.Fatalf("expected revoke bearer token, got %q", got)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"ok":true,"revoked":true}`))
+	}))
+	defer server.Close()
+
+	runWorkgraphCommand(t, nil, "run", "--home", homeDir, "--database", initResult.DatabasePath)
+	defer runWorkgraphCommand(t, nil, "stop", "--home", homeDir)
+	beforePID := readDaemonPID(t, homeDir)
+
+	output := runWorkgraphCommand(t, nil, "slack", "disconnect", "--home", homeDir, "--slack-api-base", server.URL)
+	if !strings.Contains(output, "Slack disconnected") {
+		t.Fatalf("expected disconnect message, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Slack token revoked") {
+		t.Fatalf("expected revoke confirmation, got:\n%s", output)
+	}
+	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+		t.Fatalf("expected slack config removed, stat err: %v", err)
+	}
+	afterPID := readDaemonPID(t, homeDir)
+	if afterPID == beforePID {
+		t.Fatalf("expected daemon pid to change after Slack disconnect restart, still %s", afterPID)
+	}
+}
+
 func TestSlackConnectExchangesCodeAndStoresConnectorConfig(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
@@ -467,7 +593,7 @@ func TestSlackConnectExchangesCodeAndStoresConnectorConfig(t *testing.T) {
 		if request.Form.Get("redirect_uri") != workgraph.DefaultSlackRedirectURI {
 			t.Fatalf("expected redirect URI form value, got %q", request.Form.Get("redirect_uri"))
 		}
-		return `{"ok":true,"authed_user":{"id":"U123","access_token":"xoxp-installed"},"team":{"id":"T123","name":"Cupcake Labs"}}`
+		return `{"ok":true,"authed_user":{"id":"U123","access_token":"xoxp-installed","scope":"channels:history,channels:read,groups:history,groups:read"},"team":{"id":"T123","name":"Cupcake Labs"}}`
 	}
 
 	result, err := workgraph.ConnectSlack(workgraph.SlackConnectConfig{
@@ -512,6 +638,7 @@ func TestSlackConnectExchangesCodeAndStoresConnectorConfig(t *testing.T) {
 		TeamID      string   `json:"team_id"`
 		TeamName    string   `json:"team_name"`
 		Channels    []string `json:"channels"`
+		UserScopes  []string `json:"user_scopes"`
 		APIBaseURL  string   `json:"api_base_url"`
 	}
 	if err := json.Unmarshal(contents, &stored); err != nil {
@@ -522,6 +649,9 @@ func TestSlackConnectExchangesCodeAndStoresConnectorConfig(t *testing.T) {
 	}
 	if strings.Join(stored.Channels, ",") != "C123,C456" {
 		t.Fatalf("expected stored channels, got %#v", stored.Channels)
+	}
+	if strings.Join(stored.UserScopes, ",") != "channels:history,channels:read,groups:history,groups:read" {
+		t.Fatalf("expected stored OAuth user scopes, got %#v", stored.UserScopes)
 	}
 	if stored.APIBaseURL != "https://slack.test/api" {
 		t.Fatalf("expected API base URL, got %q", stored.APIBaseURL)
@@ -560,50 +690,6 @@ func TestSlackConnectReportsAutoDiscoveryInsteadOfZeroChannels(t *testing.T) {
 	}
 	if !strings.Contains(result.Message, "Collection: auto-discover visible public and private channels") {
 		t.Fatalf("expected auto-discovery collection message, got:\n%s", result.Message)
-	}
-}
-
-func TestSlackConfigureOptsIntoDMsAfterConnect(t *testing.T) {
-	tempDir := t.TempDir()
-	homeDir := filepath.Join(tempDir, ".workgraph")
-	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
-		t.Fatalf("init failed: %v", err)
-	}
-	configPath := filepath.Join(homeDir, "slack.json")
-	if err := os.WriteFile(configPath, []byte(`{
-  "access_token": "xoxp-installed",
-  "channels": []
-}
-`), 0o600); err != nil {
-		t.Fatalf("write slack config: %v", err)
-	}
-
-	result, err := workgraph.ConfigureSlack(workgraph.SlackConfigureConfig{
-		HomeDir:    homeDir,
-		IncludeDMs: true,
-	})
-	if err != nil {
-		t.Fatalf("slack configure failed: %v", err)
-	}
-	if !strings.Contains(result.Message, "Slack configuration updated") {
-		t.Fatalf("expected configure message, got:\n%s", result.Message)
-	}
-	if !strings.Contains(result.Message, "opted-in DMs and group DMs") {
-		t.Fatalf("expected configure message to mention DM opt-in, got:\n%s", result.Message)
-	}
-
-	contents, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("read slack config: %v", err)
-	}
-	var stored struct {
-		IncludeDMs bool `json:"include_dms"`
-	}
-	if err := json.Unmarshal(contents, &stored); err != nil {
-		t.Fatalf("parse slack config: %v", err)
-	}
-	if !stored.IncludeDMs {
-		t.Fatalf("expected configure to persist include_dms")
 	}
 }
 
@@ -702,6 +788,16 @@ func (transport *fakeSlackTransport) RoundTrip(request *http.Request) (*http.Res
 		Body:       io.NopCloser(strings.NewReader(body)),
 		Request:    request,
 	}, nil
+}
+
+func readDaemonPID(t *testing.T, homeDir string) string {
+	t.Helper()
+
+	contents, err := os.ReadFile(filepath.Join(homeDir, "daemon.pid"))
+	if err != nil {
+		t.Fatalf("read daemon pid: %v", err)
+	}
+	return strings.TrimSpace(string(contents))
 }
 
 type storedSlackEvent struct {

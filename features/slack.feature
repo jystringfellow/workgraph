@@ -26,18 +26,21 @@ Scenario: Opt into Slack direct messages
   Given workgraph has been initialized
   When I run "workgraph slack connect --include-dms"
   Then workgraph requests Slack direct-message history scopes
+  And the output explains how to disconnect before reconnecting without DM scopes
   And the daemon can discover IM and MPIM conversations
   And direct messages are not collected without that opt-in
 
-Scenario: Configure Slack direct messages after connecting
-  Given Slack is already connected
-  When I run "workgraph slack configure --include-dms"
-  Then workgraph stores the direct-message opt-in locally
-  And the output explains that DMs and group DMs are enabled
+Scenario: Disconnect Slack
+  Given Slack is already connected with direct-message scopes
+  When I run "workgraph slack disconnect"
+  Then workgraph revokes the stored Slack token
+  And workgraph removes local Slack connector settings
+  And a running background daemon is restarted to stop Slack polling
 
 Scenario: Connect Slack with OAuth
   Given workgraph has been initialized
   When I run "workgraph slack connect"
   Then workgraph opens Slack in the browser for authorization
   And approving access stores local Slack connector settings
+  And the output explains that enabling DMs later requires disconnecting and reconnecting
   And the daemon can discover visible Slack channels without repeated token flags

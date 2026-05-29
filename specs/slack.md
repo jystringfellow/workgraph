@@ -42,15 +42,25 @@ must explicitly opt in with `--include-dms` during connect or
 `im:*` and `mpim:*` read/history scopes and includes `im` and `mpim`
 conversations in discovery.
 
-After Slack is connected, users can change local Slack collection preferences:
+Slack OAuth scopes are additive. To remove Slack-granted DM access, the user
+must disconnect, which revokes the stored Slack token, and then reconnect
+without `--include-dms`:
 
 ```text
-workgraph slack configure --include-dms
+workgraph slack disconnect
+workgraph slack connect
 ```
 
-This updates local connector settings. If Slack was originally authorized
-without DM scopes, the user may need to reconnect with `--include-dms` so Slack
-grants those additional user scopes.
+After connecting with `--include-dms`, workgraph tells the user to run
+`workgraph slack disconnect` before reconnecting without DM scopes if they
+later want to remove Slack-granted DM access. After connecting without
+`--include-dms`, workgraph tells the user that enabling DMs later requires
+disconnecting and reconnecting with `--include-dms`.
+
+When Slack connect or disconnect updates local connector settings and
+background capture is already running, workgraph restarts that background
+daemon so the Slack token, channels, and permission state take effect without a manual
+`workgraph stop` and `workgraph run`.
 
 The default OAuth redirect URL for public distribution is a workgraph-controlled
 HTTPS relay:
@@ -81,7 +91,9 @@ Slack app.
 On successful authorization, workgraph stores Slack connector settings under
 the local workgraph home with user-only file permissions. The daemon can then
 use the stored token and channels without requiring daily exports or repeated
-token flags.
+token flags. The stored connector settings include Slack user scopes granted by
+the OAuth response so status and messaging can distinguish channel-only
+connections from DM-enabled connections.
 
 The daemon:
 
