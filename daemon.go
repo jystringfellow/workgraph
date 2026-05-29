@@ -16,9 +16,13 @@ import (
 
 // DaemonConfig controls background event capture.
 type DaemonConfig struct {
-	HomeDir      string
-	DatabasePath string
-	WatchDirs    []string
+	HomeDir         string
+	DatabasePath    string
+	WatchDirs       []string
+	SlackToken      string
+	SlackChannels   []string
+	SlackIncludeDMs bool
+	SlackAPIBaseURL string
 }
 
 // DaemonStatus describes the current background capture process.
@@ -79,9 +83,22 @@ func StartDaemon(config DaemonConfig) (DaemonStatus, error) {
 	for _, watchDir := range config.WatchDirs {
 		args = append(args, "--watch", watchDir)
 	}
+	if config.SlackAPIBaseURL != "" {
+		args = append(args, "--slack-api-base", config.SlackAPIBaseURL)
+	}
+	for _, channel := range config.SlackChannels {
+		args = append(args, "--slack-channel", channel)
+	}
+	if config.SlackIncludeDMs {
+		args = append(args, "--slack-include-dms")
+	}
+	env := os.Environ()
+	if config.SlackToken != "" {
+		env = append(env, "WORKGRAPH_SLACK_TOKEN="+config.SlackToken)
+	}
 
 	process, err := os.StartProcess(executable, args, &os.ProcAttr{
-		Env:   os.Environ(),
+		Env:   env,
 		Files: []*os.File{devNull, logFile, logFile},
 	})
 	if err != nil {
@@ -106,9 +123,13 @@ func RunDaemon(config DaemonConfig) error {
 	defer stop()
 
 	capture, err := StartRun(RunConfig{
-		HomeDir:      config.HomeDir,
-		DatabasePath: config.DatabasePath,
-		WatchDirs:    config.WatchDirs,
+		HomeDir:         config.HomeDir,
+		DatabasePath:    config.DatabasePath,
+		WatchDirs:       config.WatchDirs,
+		SlackToken:      config.SlackToken,
+		SlackChannels:   config.SlackChannels,
+		SlackIncludeDMs: config.SlackIncludeDMs,
+		SlackAPIBaseURL: config.SlackAPIBaseURL,
 	})
 	if err != nil {
 		return err

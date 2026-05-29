@@ -45,6 +45,15 @@ CLI flags can choose watch roots for a single run:
 workgraph run --home ~/.workgraph --database ~/.workgraph/workgraph.db --watch .
 ```
 
+CLI flags can also opt into read-only Slack collection for explicit channels:
+
+```text
+WORKGRAPH_SLACK_TOKEN=xoxb-... workgraph run --slack-channel C123
+```
+
+Slack collection only reads the configured channel ids, stores message and
+thread-reply events, and does not post, react, or otherwise act in Slack.
+
 For debugging, `workgraph run --foreground` keeps capture attached to the
 current terminal and prints one line per captured file event:
 

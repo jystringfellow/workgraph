@@ -90,10 +90,38 @@ func runSlack(args []string, stdout io.Writer, stderr io.Writer) int {
 	switch args[0] {
 	case "capture":
 		return runSlackCapture(args[1:], stdout, stderr)
+	case "configure":
+		return runSlackConfigure(args[1:], stdout, stderr)
+	case "connect":
+		return runSlackConnect(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown slack command: %s\n", args[0])
 		return 2
 	}
+}
+
+func runSlackConfigure(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("slack configure", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "WorkGraph home directory")
+	includeDMs := flags.Bool("include-dms", false, "Opt into collecting Slack direct and group direct messages")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+
+	result, err := workgraph.ConfigureSlack(workgraph.SlackConfigureConfig{
+		HomeDir:    *homeDir,
+		IncludeDMs: *includeDMs,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph slack configure: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
 }
 
 func runSlackCapture(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -115,6 +143,55 @@ func runSlackCapture(args []string, stdout io.Writer, stderr io.Writer) int {
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph slack capture: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runSlackConnect(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("slack connect", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "WorkGraph home directory")
+	clientID := flags.String("client-id", os.Getenv("WORKGRAPH_SLACK_CLIENT_ID"), "Slack app client id")
+	clientSecret := flags.String("client-secret", os.Getenv("WORKGRAPH_SLACK_CLIENT_SECRET"), "Slack app client secret")
+	redirectURI := flags.String("redirect-uri", workgraph.DefaultSlackRedirectURI, "Slack OAuth redirect URI")
+	localCallbackURI := flags.String("local-callback-uri", workgraph.DefaultSlackLocalCallbackURI, "Local Slack OAuth callback URI")
+	code := flags.String("code", "", "Slack OAuth code returned to the redirect URI")
+	state := flags.String("state", "", "Slack OAuth state returned to the redirect URI")
+	slackAPIBaseURL := flags.String("slack-api-base", "", "Slack API base URL")
+	channels := watchDirFlags{}
+	flags.Var(&channels, "channel", "Slack channel id to collect after connecting")
+	includeDMs := flags.Bool("include-dms", false, "Opt into collecting Slack direct and group direct messages")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+
+	config := workgraph.SlackConnectConfig{
+		HomeDir:          *homeDir,
+		ClientID:         *clientID,
+		ClientSecret:     *clientSecret,
+		RedirectURI:      *redirectURI,
+		LocalCallbackURI: *localCallbackURI,
+		Code:             *code,
+		State:            *state,
+		ExpectedState:    *state,
+		Channels:         channels,
+		IncludeDMs:       *includeDMs,
+		APIBaseURL:       *slackAPIBaseURL,
+	}
+	var result workgraph.SlackConnectResult
+	var err error
+	if *code == "" {
+		result, err = workgraph.ConnectSlackWithBrowser(context.Background(), config)
+	} else {
+		result, err = workgraph.ConnectSlack(config)
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph slack connect: %v\n", err)
 		return 1
 	}
 
@@ -466,6 +543,11 @@ func runCapture(args []string, stdout io.Writer, stderr io.Writer) int {
 	foreground := flags.Bool("foreground", false, "Run capture attached to the current terminal")
 	watchDirs := watchDirFlags{}
 	flags.Var(&watchDirs, "watch", "Directory to watch for local work activity")
+	slackToken := flags.String("slack-token", os.Getenv("WORKGRAPH_SLACK_TOKEN"), "Slack API token for read-only message collection")
+	slackAPIBaseURL := flags.String("slack-api-base", "", "Slack API base URL")
+	slackChannels := watchDirFlags{}
+	flags.Var(&slackChannels, "slack-channel", "Slack channel id to collect while running")
+	slackIncludeDMs := flags.Bool("slack-include-dms", false, "Opt into collecting Slack direct and group direct messages")
 
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -473,9 +555,13 @@ func runCapture(args []string, stdout io.Writer, stderr io.Writer) int {
 
 	if !*foreground {
 		status, err := workgraph.StartDaemon(workgraph.DaemonConfig{
-			HomeDir:      *homeDir,
-			DatabasePath: *databasePath,
-			WatchDirs:    watchDirs,
+			HomeDir:         *homeDir,
+			DatabasePath:    *databasePath,
+			WatchDirs:       watchDirs,
+			SlackToken:      *slackToken,
+			SlackChannels:   slackChannels,
+			SlackIncludeDMs: *slackIncludeDMs,
+			SlackAPIBaseURL: *slackAPIBaseURL,
 		})
 		if err != nil {
 			fmt.Fprintf(stderr, "workgraph run: %v\n", err)
@@ -490,9 +576,13 @@ func runCapture(args []string, stdout io.Writer, stderr io.Writer) int {
 	defer stop()
 
 	capture, err := workgraph.StartRun(workgraph.RunConfig{
-		HomeDir:      *homeDir,
-		DatabasePath: *databasePath,
-		WatchDirs:    watchDirs,
+		HomeDir:         *homeDir,
+		DatabasePath:    *databasePath,
+		WatchDirs:       watchDirs,
+		SlackToken:      *slackToken,
+		SlackChannels:   slackChannels,
+		SlackIncludeDMs: *slackIncludeDMs,
+		SlackAPIBaseURL: *slackAPIBaseURL,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph run: %v\n", err)
@@ -651,15 +741,24 @@ func parseCaptureControlConfig(command string, args []string, stderr io.Writer) 
 	databasePath := flags.String("database", "", "WorkGraph SQLite database path")
 	watchDirs := watchDirFlags{}
 	flags.Var(&watchDirs, "watch", "Directory to watch for local work activity")
+	slackToken := flags.String("slack-token", os.Getenv("WORKGRAPH_SLACK_TOKEN"), "Slack API token for read-only message collection")
+	slackAPIBaseURL := flags.String("slack-api-base", "", "Slack API base URL")
+	slackChannels := watchDirFlags{}
+	flags.Var(&slackChannels, "slack-channel", "Slack channel id to collect while running")
+	slackIncludeDMs := flags.Bool("slack-include-dms", false, "Opt into collecting Slack direct and group direct messages")
 
 	if err := flags.Parse(args); err != nil {
 		return workgraph.DaemonConfig{}, false
 	}
 
 	return workgraph.DaemonConfig{
-		HomeDir:      *homeDir,
-		DatabasePath: *databasePath,
-		WatchDirs:    watchDirs,
+		HomeDir:         *homeDir,
+		DatabasePath:    *databasePath,
+		WatchDirs:       watchDirs,
+		SlackToken:      *slackToken,
+		SlackChannels:   slackChannels,
+		SlackIncludeDMs: *slackIncludeDMs,
+		SlackAPIBaseURL: *slackAPIBaseURL,
 	}, true
 }
 
