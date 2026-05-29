@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -42,6 +43,18 @@ type RunConfig struct {
 	GitHubPollInterval time.Duration
 	// GitHubCommand is the gh-compatible executable used for GitHub polling.
 	GitHubCommand string
+	// SlackPollInterval controls Slack message capture while running.
+	SlackPollInterval time.Duration
+	// SlackToken is the Slack API bearer token used for read-only polling.
+	SlackToken string
+	// SlackChannels are explicit Slack channel ids to poll.
+	SlackChannels []string
+	// SlackIncludeDMs opts into Slack IM and MPIM discovery.
+	SlackIncludeDMs bool
+	// SlackAPIBaseURL overrides the Slack Web API base URL for tests.
+	SlackAPIBaseURL string
+	// SlackHTTPClient overrides the Slack API HTTP client for tests.
+	SlackHTTPClient *http.Client
 }
 
 // RunStatus describes an active capture process.
@@ -84,6 +97,13 @@ type RunCapture struct {
 	gitPollInterval     time.Duration
 	githubPollInterval  time.Duration
 	githubCommand       string
+	slackPollInterval   time.Duration
+	slackToken          string
+	slackChannels       []string
+	slackIncludeDMs     bool
+	slackAPIBaseURL     string
+	slackHTTPClient     *http.Client
+	slackCursors        map[string]string
 	suppressedCreates   map[string]time.Time
 	deleteCoalesceDelay time.Duration
 	events              chan CapturedEvent
@@ -148,6 +168,21 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 	status.WatchLimitPath = budget.limitPath
 	status.RegisteredWatchDirs = append([]string(nil), budget.registered...)
 
+	slackToken := config.SlackToken
+	slackChannels := append([]string(nil), config.SlackChannels...)
+	slackIncludeDMs := config.SlackIncludeDMs
+	slackAPIBaseURL := config.SlackAPIBaseURL
+	if slackToken == "" && len(slackChannels) == 0 {
+		if slackConfig, err := readSlackConnectorConfig(status.HomeDir); err == nil {
+			slackToken = slackConfig.AccessToken
+			slackChannels = append([]string(nil), slackConfig.Channels...)
+			slackIncludeDMs = slackConfig.IncludeDMs
+			if slackAPIBaseURL == "" {
+				slackAPIBaseURL = slackConfig.APIBaseURL
+			}
+		}
+	}
+
 	status.Message = runMessage(status)
 	events := make(chan CapturedEvent, 128)
 
@@ -165,6 +200,13 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 		gitPollInterval:     gitPollInterval(config.GitPollInterval),
 		githubPollInterval:  githubPollInterval(config.GitHubPollInterval),
 		githubCommand:       config.GitHubCommand,
+		slackPollInterval:   slackPollInterval(config.SlackPollInterval),
+		slackToken:          slackToken,
+		slackChannels:       slackChannels,
+		slackIncludeDMs:     slackIncludeDMs,
+		slackAPIBaseURL:     slackAPIBaseURL,
+		slackHTTPClient:     config.SlackHTTPClient,
+		slackCursors:        map[string]string{},
 		suppressedCreates:   map[string]time.Time{},
 		deleteCoalesceDelay: 75 * time.Millisecond,
 		events:              events,
@@ -179,6 +221,8 @@ func (capture *RunCapture) Run(ctx context.Context) error {
 	defer gitTicker.Stop()
 	githubTicker := time.NewTicker(capture.githubPollInterval)
 	defer githubTicker.Stop()
+	slackTicker := time.NewTicker(capture.slackPollInterval)
+	defer slackTicker.Stop()
 
 	for {
 		select {
@@ -190,6 +234,10 @@ func (capture *RunCapture) Run(ctx context.Context) error {
 			}
 		case <-githubTicker.C:
 			if err := capture.captureGitHubEvents(); err != nil {
+				return err
+			}
+		case <-slackTicker.C:
+			if err := capture.captureSlackEvents(); err != nil {
 				return err
 			}
 		case event, ok := <-capture.watcher.Events:
@@ -234,6 +282,27 @@ func (capture *RunCapture) captureGitHubEvents() error {
 		GitHubCommand: capture.githubCommand,
 	})
 	return err
+}
+
+func (capture *RunCapture) captureSlackEvents() error {
+	if capture.slackToken == "" {
+		return nil
+	}
+	result, err := CaptureSlackFromAPI(SlackAPICaptureConfig{
+		HomeDir:      capture.homeDir,
+		DatabasePath: capture.databasePath,
+		Token:        capture.slackToken,
+		Channels:     capture.slackChannels,
+		IncludeDMs:   capture.slackIncludeDMs,
+		APIBaseURL:   capture.slackAPIBaseURL,
+		HTTPClient:   capture.slackHTTPClient,
+		Cursors:      capture.slackCursors,
+	})
+	if err != nil {
+		return err
+	}
+	capture.slackCursors = result.Cursors
+	return nil
 }
 
 // Close releases resources held by the capture process.
@@ -681,6 +750,13 @@ func gitPollInterval(interval time.Duration) time.Duration {
 func githubPollInterval(interval time.Duration) time.Duration {
 	if interval <= 0 {
 		return 5 * time.Minute
+	}
+	return interval
+}
+
+func slackPollInterval(interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return 2 * time.Minute
 	}
 	return interval
 }

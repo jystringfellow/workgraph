@@ -8,6 +8,16 @@ WorkGraph keeps local configuration in the WorkGraph home:
 
 The config file answers what local paths WorkGraph watches and what paths it must never record.
 
+Connector-specific secrets are stored separately from `config.json`. Slack OAuth
+setup writes local connector settings to:
+
+```text
+~/.workgraph/slack.json
+```
+
+That file stores the Slack access token and explicitly configured channel ids
+with user-only file permissions.
+
 ## Defaults
 
 `workgraph init` creates `config.json` when it does not already exist.

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>WorkGraph Slack Connect</title>
+    <script>
+      const target =
+        "http://localhost:2727/slack/callback" +
+        window.location.search +
+        window.location.hash;
+
+      window.location.replace(target);
+    </script>
+  </head>
+  <body>
+    <main>
+      <h1>Returning to WorkGraph</h1>
+      <p>If nothing happens, use the link below.</p>
+      <p><a id="fallback" href="http://localhost:2727/slack/callback">Open WorkGraph Slack callback</a></p>
+    </main>
+    <script>
+      document.getElementById("fallback").href = target;
+    </script>
+  </body>
+</html>
