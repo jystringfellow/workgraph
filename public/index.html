@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="slack-app-id" content="A0B6SG6ENSV">
     <title>workgraph</title>
     <link rel="icon" type="image/png" href="/assets/workgraph-logo.png">
     <style>
@@ -41,6 +42,11 @@
         margin: 0 0 14px;
       }
 
+      .command {
+        display: inline-block;
+        margin-top: 4px;
+      }
+
       a {
         color: #ffffff;
       }
@@ -63,6 +69,8 @@
       <p>This static site hosts OAuth redirect helpers for local workgraph clients.</p>
       <p>Canonical web address: <a href="https://workgraph.pages.dev">workgraph.pages.dev</a>.</p>
       <p>The Slack callback endpoint is <code>/slack/callback</code>.</p>
+      <p>To connect Slack, start from the local CLI:</p>
+      <p><code class="command">workgraph slack connect</code></p>
     </main>
   </body>
 </html>

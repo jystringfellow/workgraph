@@ -27,7 +27,7 @@ import (
 
 // DefaultSlackClientID is set by official workgraph builds for Slack PKCE OAuth.
 // Local development builds can pass a client id explicitly.
-var DefaultSlackClientID string
+var DefaultSlackClientID = "11231908244708.11230550498913"
 
 // DefaultSlackRedirectURI is the public HTTPS relay URL used for Slack PKCE OAuth.
 // Official builds should set this to a workgraph-controlled HTTPS endpoint.
