@@ -1,6 +1,6 @@
-# WorkGraph Vision
+# workgraph Vision
 
-WorkGraph aims to become:
+workgraph aims to become:
 
 > the open substrate for personal work intelligence
 
@@ -17,7 +17,7 @@ The goal is not merely productivity tracking. The goal is:
 - contextual intelligence
 - personalized execution assistance
 
-WorkGraph helps me understand:
+workgraph helps me understand:
 - what I did
 - why I did it
 - who I interacted with

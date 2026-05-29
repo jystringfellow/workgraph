@@ -68,7 +68,7 @@ func TestConfigPersistsResolvedAbsoluteHomePath(t *testing.T) {
 	}
 }
 
-func TestConfigIgnoresWorkGraphHomeByDefault(t *testing.T) {
+func TestConfigIgnoresworkgraphHomeByDefault(t *testing.T) {
 	homeDir := filepath.Join(t.TempDir(), ".workgraph")
 
 	_, err := workgraph.Init(workgraph.InitConfig{
@@ -81,7 +81,7 @@ func TestConfigIgnoresWorkGraphHomeByDefault(t *testing.T) {
 	config := readInitConfig(t, filepath.Join(homeDir, "config.json"))
 	workgraphHome, err := filepath.Abs(homeDir)
 	if err != nil {
-		t.Fatalf("resolve WorkGraph home: %v", err)
+		t.Fatalf("resolve workgraph home: %v", err)
 	}
 
 	if !reflect.DeepEqual(config.IgnorePaths, []string{workgraphHome}) {

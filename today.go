@@ -73,7 +73,7 @@ func Today(config TodayConfig) (TodayResult, error) {
 	}
 	homeDir, err = filepath.Abs(homeDir)
 	if err != nil {
-		return TodayResult{}, fmt.Errorf("resolve WorkGraph home: %w", err)
+		return TodayResult{}, fmt.Errorf("resolve workgraph home: %w", err)
 	}
 
 	dbPath := config.DatabasePath

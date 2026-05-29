@@ -42,7 +42,7 @@ type DaemonStatus struct {
 	Message             string   `json:"-"`
 }
 
-// StartDaemon starts background capture and writes daemon state under WorkGraph home.
+// StartDaemon starts background capture and writes daemon state under workgraph home.
 func StartDaemon(config DaemonConfig) (DaemonStatus, error) {
 	runStatus, err := prepareRunStatus(RunConfig{
 		HomeDir:      config.HomeDir,
@@ -154,11 +154,11 @@ func DaemonStatusForConfig(config DaemonConfig) (DaemonStatus, error) {
 	return DaemonStatusForHome(homeDir)
 }
 
-// DaemonStatusForHome reports daemon state for a resolved or unresolved WorkGraph home path.
+// DaemonStatusForHome reports daemon state for a resolved or unresolved workgraph home path.
 func DaemonStatusForHome(homeDir string) (DaemonStatus, error) {
 	resolvedHome, err := filepath.Abs(homeDir)
 	if err != nil {
-		return DaemonStatus{}, fmt.Errorf("resolve WorkGraph home: %w", err)
+		return DaemonStatus{}, fmt.Errorf("resolve workgraph home: %w", err)
 	}
 
 	status, err := readDaemonState(resolvedHome)
@@ -314,7 +314,7 @@ func daemonStoppedStatus(homeDir string) DaemonStatus {
 
 func daemonStartedMessage(status DaemonStatus) string {
 	lines := []string{
-		"WorkGraph capture started",
+		"workgraph capture started",
 		"PID: " + strconv.Itoa(status.PID),
 		"Home: " + status.HomeDir,
 		"Database: " + status.DatabasePath,
@@ -328,7 +328,7 @@ func daemonStartedMessage(status DaemonStatus) string {
 
 func daemonRunningMessage(status DaemonStatus) string {
 	lines := []string{
-		"WorkGraph capture is running",
+		"workgraph capture is running",
 		"PID: " + strconv.Itoa(status.PID),
 		"Home: " + status.HomeDir,
 		"Database: " + status.DatabasePath,
@@ -365,13 +365,13 @@ func appendDaemonWatchLimitLine(lines *[]string, status DaemonStatus) {
 
 func daemonStoppedMessage(homeDir string) string {
 	if homeDir == "" {
-		return "WorkGraph capture is not running"
+		return "workgraph capture is not running"
 	}
-	return "WorkGraph capture is not running\nHome: " + homeDir
+	return "workgraph capture is not running\nHome: " + homeDir
 }
 
 func daemonStopMessage(homeDir string) string {
-	return "WorkGraph capture stopped\nHome: " + homeDir
+	return "workgraph capture stopped\nHome: " + homeDir
 }
 
 func processRunning(pid int) bool {

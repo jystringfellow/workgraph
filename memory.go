@@ -452,7 +452,7 @@ func InitPersonalMemory(config PersonalMemoryInitConfig) (PersonalMemoryInitResu
 	}
 	homeDir, err = filepath.Abs(homeDir)
 	if err != nil {
-		return PersonalMemoryInitResult{}, fmt.Errorf("resolve WorkGraph home: %w", err)
+		return PersonalMemoryInitResult{}, fmt.Errorf("resolve workgraph home: %w", err)
 	}
 	if err := requireMemoryInitHome(homeDir); err != nil {
 		return PersonalMemoryInitResult{}, err
@@ -495,7 +495,7 @@ func InitOrganizationMemory(config OrganizationMemoryInitConfig) (OrganizationMe
 	}
 	homeDir, err = filepath.Abs(homeDir)
 	if err != nil {
-		return OrganizationMemoryInitResult{}, fmt.Errorf("resolve WorkGraph home: %w", err)
+		return OrganizationMemoryInitResult{}, fmt.Errorf("resolve workgraph home: %w", err)
 	}
 	if err := requireMemoryInitHome(homeDir); err != nil {
 		return OrganizationMemoryInitResult{}, err
@@ -541,7 +541,7 @@ func InitTeamMemory(config TeamMemoryInitConfig) (TeamMemoryInitResult, error) {
 	}
 	homeDir, err = filepath.Abs(homeDir)
 	if err != nil {
-		return TeamMemoryInitResult{}, fmt.Errorf("resolve WorkGraph home: %w", err)
+		return TeamMemoryInitResult{}, fmt.Errorf("resolve workgraph home: %w", err)
 	}
 	if err := requireMemoryInitHome(homeDir); err != nil {
 		return TeamMemoryInitResult{}, err
@@ -587,7 +587,7 @@ func InitProjectMemory(config ProjectMemoryInitConfig) (ProjectMemoryInitResult,
 	}
 	homeDir, err = filepath.Abs(homeDir)
 	if err != nil {
-		return ProjectMemoryInitResult{}, fmt.Errorf("resolve WorkGraph home: %w", err)
+		return ProjectMemoryInitResult{}, fmt.Errorf("resolve workgraph home: %w", err)
 	}
 	if err := requireMemoryInitHome(homeDir); err != nil {
 		return ProjectMemoryInitResult{}, err

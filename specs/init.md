@@ -1,6 +1,6 @@
 # Init Command
 
-`workgraph init` creates local WorkGraph state.
+`workgraph init` creates local workgraph state.
 
 Init is safe to run more than once. It creates missing local state and preserves existing user data.
 
@@ -31,7 +31,7 @@ The default config:
 
 - watches existing common user-facing folders such as Desktop, Documents, Downloads, Code, Projects, Developer, Work, source, and repos
 - avoids recursively watching the entire home directory when common folders exist
-- ignores the WorkGraph home directory
+- ignores the workgraph home directory
 - stores watch and ignore paths as normalized absolute paths
 - includes high-noise ignored names such as `.git`, `node_modules`, and common build output directories
 
@@ -40,7 +40,7 @@ roots or ignore rules are preserved.
 
 When `--force` is provided, init overwrites `config.json` with the current
 default config. This is the supported way to pick up newer default ignore rules
-after WorkGraph changes.
+after workgraph changes.
 
 See `specs/config.md` for the config file contract.
 
@@ -48,7 +48,7 @@ See `specs/config.md` for the config file contract.
 
 Init reports the initialized paths:
 
-- WorkGraph home
+- workgraph home
 - database
 - memory repo
 - project memory directory
@@ -57,4 +57,4 @@ Init reports the initialized paths:
 On macOS, init also explains that capture may need access to protected folders
 such as Documents, Desktop, and Downloads when those folders are watched. It
 should suggest granting Full Disk Access once to the terminal app or installed
-WorkGraph binary to avoid repeated per-folder prompts.
+workgraph binary to avoid repeated per-folder prompts.

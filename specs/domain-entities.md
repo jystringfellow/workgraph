@@ -1,6 +1,6 @@
 # Domain Entity Contracts
 
-These contracts describe the core WorkGraph concepts before storage.
+These contracts describe the core workgraph concepts before storage.
 
 Entities marked `active` are implementation targets.
 Entities marked `draft` express product direction but are not required for Phase 0.
@@ -78,7 +78,7 @@ Active memory can describe several scopes:
 - team: squad strategy, rituals, ownership, current goals
 - project: project context, priorities, decisions, constraints, open questions
 
-WorkGraph should preserve memory documents as inspectable local files or local
+workgraph should preserve memory documents as inspectable local files or local
 snapshots. Structured entities can later be derived from or linked to these
 documents, but the source document remains the user-owned record.
 
@@ -179,5 +179,5 @@ Represents durable principles, preferences, working style, and decision
 heuristics for the user, team, or organization.
 
 Preferences are active memory, not observed behavior. Captured events may
-provide evidence that a preference exists, but WorkGraph should not infer a
+provide evidence that a preference exists, but workgraph should not infer a
 durable preference without an explicit local memory source or user approval.

@@ -115,7 +115,7 @@ func resumeDatabasePath(config ResumeConfig) (string, error) {
 	}
 	homeDir, err = filepath.Abs(homeDir)
 	if err != nil {
-		return "", fmt.Errorf("resolve WorkGraph home: %w", err)
+		return "", fmt.Errorf("resolve workgraph home: %w", err)
 	}
 
 	dbPath := config.DatabasePath

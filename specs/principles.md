@@ -1,8 +1,8 @@
-# WorkGraph Principles
+# workgraph Principles
 
 ## Development Model
 
-WorkGraph uses a facts-first development loop:
+workgraph uses a facts-first development loop:
 
 ```text
 write spec → write feature → write failing fact → implement → pass → cross off roadmap

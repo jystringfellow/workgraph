@@ -22,7 +22,7 @@ type ConfigWatchResult struct {
 	Message    string
 }
 
-// AddWatchDir prepends a resolved watch directory to WorkGraph config.
+// AddWatchDir prepends a resolved watch directory to workgraph config.
 func AddWatchDir(config ConfigWatchConfig) (ConfigWatchResult, error) {
 	homeDir, err := resolveHomeDir(config.HomeDir)
 	if err != nil {
@@ -30,7 +30,7 @@ func AddWatchDir(config ConfigWatchConfig) (ConfigWatchResult, error) {
 	}
 	homeDir, err = filepath.Abs(homeDir)
 	if err != nil {
-		return ConfigWatchResult{}, fmt.Errorf("resolve WorkGraph home: %w", err)
+		return ConfigWatchResult{}, fmt.Errorf("resolve workgraph home: %w", err)
 	}
 
 	configPath := filepath.Join(homeDir, "config.json")
@@ -68,7 +68,7 @@ func AddWatchDir(config ConfigWatchConfig) (ConfigWatchResult, error) {
 		WatchDirs:  append([]string(nil), localConfig.WatchDirs...),
 	}
 	result.Message = strings.Join([]string{
-		"WorkGraph config updated",
+		"workgraph config updated",
 		"Config: " + result.ConfigPath,
 		"Added watch directory: " + result.AddedPath,
 	}, "\n")

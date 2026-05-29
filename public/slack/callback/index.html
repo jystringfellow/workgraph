@@ -3,7 +3,40 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>WorkGraph Slack Connect</title>
+    <title>workgraph Slack Connect</title>
+    <link rel="icon" type="image/png" href="/assets/workgraph-logo.png">
+    <style>
+      body {
+        background: #590088;
+        color: #ffffff;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        line-height: 1.5;
+        margin: 0;
+      }
+
+      main {
+        margin: 0 auto;
+        max-width: 720px;
+        padding: 72px 24px;
+      }
+
+      h1 {
+        font-size: 32px;
+        font-weight: 650;
+        letter-spacing: 0;
+        line-height: 1.15;
+        margin: 0 0 16px;
+      }
+
+      p {
+        font-size: 16px;
+        margin: 0 0 14px;
+      }
+
+      a {
+        color: #ffffff;
+      }
+    </style>
     <script>
       const target =
         "http://localhost:2727/slack/callback" +
@@ -15,9 +48,9 @@
   </head>
   <body>
     <main>
-      <h1>Returning to WorkGraph</h1>
+      <h1>Returning to workgraph</h1>
       <p>If nothing happens, use the link below.</p>
-      <p><a id="fallback" href="http://localhost:2727/slack/callback">Open WorkGraph Slack callback</a></p>
+      <p><a id="fallback" href="http://localhost:2727/slack/callback">Open workgraph Slack callback</a></p>
     </main>
     <script>
       document.getElementById("fallback").href = target;

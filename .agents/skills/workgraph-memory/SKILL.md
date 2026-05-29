@@ -1,11 +1,11 @@
 ---
 name: workgraph-memory
-description: Draft, create, and edit WorkGraph project memory Markdown for durable user-owned context. Use when a user asks an AI agent to write or revise WorkGraph memory, preserve project priorities or decisions, turn a conversation into project context, or help maintain files under workgraph-memory/projects.
+description: Draft, create, and edit workgraph project memory Markdown for durable user-owned context. Use when a user asks an AI agent to write or revise workgraph memory, preserve project priorities or decisions, turn a conversation into project context, or help maintain files under workgraph-memory/projects.
 ---
 
-# WorkGraph Memory
+# workgraph Memory
 
-Keep WorkGraph project memory concise, durable, and explicitly grounded in what
+Keep workgraph project memory concise, durable, and explicitly grounded in what
 the user said or approved. Treat memory as user-owned context beside captured
 events, not as an invented account of behavior.
 
@@ -15,16 +15,16 @@ events, not as an invented account of behavior.
    - Use the project name the user provides when one is available.
    - If the user does not name a project and the current workspace is a Git
      repository, use the Git repo root basename as the candidate unless local
-     WorkGraph context suggests a different project name.
+     workgraph context suggests a different project name.
    - If neither signal is available, ask for the project name before creating
      memory.
    - Prefer `workgraph memory init "<project>"` when the command is available.
-     Use the path reported by WorkGraph instead of reproducing its slugging rule
+     Use the path reported by workgraph instead of reproducing its slugging rule
      by hand.
-   - If WorkGraph says it is not initialized, tell the user to run
+   - If workgraph says it is not initialized, tell the user to run
      `workgraph init` or ask before running setup on their behalf.
-2. Locate the WorkGraph memory contract before editing.
-   - In the WorkGraph repo, read `specs/memory.md` when available.
+2. Locate the workgraph memory contract before editing.
+   - In the workgraph repo, read `specs/memory.md` when available.
    - Default project memory lives under `workgraph-memory/projects/<project-slug>.md`.
 3. Gather durable context.
    - Use direct user statements and confirmed decisions as memory.
@@ -39,7 +39,7 @@ events, not as an invented account of behavior.
      progress logs out unless the user wants them.
 5. Verify the result.
    - Keep Markdown readable by hand.
-   - Check that project memory stays inside the WorkGraph memory directory.
+   - Check that project memory stays inside the workgraph memory directory.
    - Summarize what durable context changed and call out any inferred draft text.
 
 ## Memory Shape

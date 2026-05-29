@@ -1,6 +1,6 @@
 # Active Memory
 
-WorkGraph memory is explicit user-owned context stored in local files.
+workgraph memory is explicit user-owned context stored in local files.
 
 Captured events remain the source of truth for observed behavior. Memory can
 record context that events cannot know on their own, such as priorities,
@@ -55,7 +55,7 @@ require frontmatter, infer aliases, or generate memory with an LLM.
 ## Initialize Personal Memory
 
 `workgraph memory init --scope personal` creates a starter personal memory file
-after `workgraph init` has created the base local WorkGraph state.
+after `workgraph init` has created the base local workgraph state.
 
 The command:
 
@@ -64,7 +64,7 @@ The command:
   preferences, working style, and constraints
 - reports the existing personal memory path without overwriting when the file
   is already present
-- accepts explicit WorkGraph home and memory directory paths for non-default
+- accepts explicit workgraph home and memory directory paths for non-default
   local state
 - does not infer personal memory from captured events or external sources
 
@@ -72,7 +72,7 @@ The command:
 
 `workgraph memory init --scope organization <organization>` creates a starter
 organization memory file after `workgraph init` has created the base local
-WorkGraph state.
+workgraph state.
 
 The command:
 
@@ -81,14 +81,14 @@ The command:
   operating principles, current priorities, constraints, and open questions
 - reports the existing organization memory path without overwriting when the
   file is already present
-- accepts explicit WorkGraph home and memory directory paths for non-default
+- accepts explicit workgraph home and memory directory paths for non-default
   local state
 - does not infer organization memory from captured events or external sources
 
 ## Initialize Team Memory
 
 `workgraph memory init --scope team <team>` creates a starter team memory file
-after `workgraph init` has created the base local WorkGraph state.
+after `workgraph init` has created the base local workgraph state.
 
 The command:
 
@@ -97,14 +97,14 @@ The command:
   current goals, constraints, and open questions
 - reports the existing team memory path without overwriting when the file is
   already present
-- accepts explicit WorkGraph home and memory directory paths for non-default
+- accepts explicit workgraph home and memory directory paths for non-default
   local state
 - does not infer team memory from captured events or external sources
 
 ## Initialize Project Memory
 
 `workgraph memory init <project>` creates a starter project memory file after
-`workgraph init` has created the base local WorkGraph state.
+`workgraph init` has created the base local workgraph state.
 
 The command:
 
@@ -113,7 +113,7 @@ The command:
   decisions, constraints, and open questions
 - reports the existing project memory path without overwriting when the file is
   already present
-- accepts explicit WorkGraph home and memory directory paths for non-default
+- accepts explicit workgraph home and memory directory paths for non-default
   local state
 - does not modify Git state or `.gitignore`
 
@@ -173,4 +173,4 @@ recent activity was found.
 When a project has recent activity but no matching project memory, resume points
 to the path where a user can add it.
 
-WorkGraph must not use project names to read outside the memory repo.
+workgraph must not use project names to read outside the memory repo.

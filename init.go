@@ -12,7 +12,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// InitConfig controls where WorkGraph stores local state.
+// InitConfig controls where workgraph stores local state.
 type InitConfig struct {
 	HomeDir      string
 	DatabasePath string
@@ -20,7 +20,7 @@ type InitConfig struct {
 	Force        bool
 }
 
-// InitResult describes the local paths initialized by WorkGraph.
+// InitResult describes the local paths initialized by workgraph.
 type InitResult struct {
 	HomeDir      string
 	DatabasePath string
@@ -36,7 +36,7 @@ type configFile struct {
 	IgnoreNames           []string `json:"ignore_names"`
 }
 
-// Init creates the local WorkGraph home, config, SQLite database, and memory repo.
+// Init creates the local workgraph home, config, SQLite database, and memory repo.
 func Init(config InitConfig) (InitResult, error) {
 	homeDir, err := resolveHomeDir(config.HomeDir)
 	if err != nil {
@@ -44,7 +44,7 @@ func Init(config InitConfig) (InitResult, error) {
 	}
 
 	if err := os.MkdirAll(homeDir, 0o755); err != nil {
-		return InitResult{}, fmt.Errorf("create WorkGraph home: %w", err)
+		return InitResult{}, fmt.Errorf("create workgraph home: %w", err)
 	}
 
 	configPath := filepath.Join(homeDir, "config.json")
@@ -126,7 +126,7 @@ func resolveMemoryDir(memoryDir string) (string, error) {
 func createDefaultConfig(configPath string, homeDir string, force bool) error {
 	workgraphHome, err := filepath.Abs(homeDir)
 	if err != nil {
-		return fmt.Errorf("resolve WorkGraph home: %w", err)
+		return fmt.Errorf("resolve workgraph home: %w", err)
 	}
 
 	userHome, err := os.UserHomeDir()
@@ -222,7 +222,7 @@ func defaultWatchDirs(userHome string) ([]string, error) {
 
 func initMessage(result InitResult) string {
 	lines := []string{
-		"WorkGraph initialized",
+		"workgraph initialized",
 		"Home: " + result.HomeDir,
 		"Database: " + result.DatabasePath,
 		"Memory: " + result.MemoryDir,
@@ -232,8 +232,8 @@ func initMessage(result InitResult) string {
 	if runtime.GOOS == "darwin" {
 		lines = append(lines,
 			"",
-			"macOS note: WorkGraph watches common folders such as Desktop, Documents, and Downloads by default. macOS may prompt for access to protected folders.",
-			"To avoid repeated prompts, grant Full Disk Access once to your terminal app or installed WorkGraph binary in System Settings > Privacy & Security > Full Disk Access.",
+			"macOS note: workgraph watches common folders such as Desktop, Documents, and Downloads by default. macOS may prompt for access to protected folders.",
+			"To avoid repeated prompts, grant Full Disk Access once to your terminal app or installed workgraph binary in System Settings > Privacy & Security > Full Disk Access.",
 		)
 	}
 

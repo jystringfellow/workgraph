@@ -23,7 +23,7 @@ import (
 )
 
 // ErrNotInitialized is returned when capture starts before workgraph init.
-var ErrNotInitialized = errors.New("WorkGraph is not initialized")
+var ErrNotInitialized = errors.New("workgraph is not initialized")
 
 var errWatchLimitReached = errors.New("watch limit reached")
 
@@ -463,7 +463,7 @@ func prepareRunStatus(config RunConfig) (RunStatus, error) {
 	}
 	homeDir, err = filepath.Abs(homeDir)
 	if err != nil {
-		return RunStatus{}, fmt.Errorf("resolve WorkGraph home: %w", err)
+		return RunStatus{}, fmt.Errorf("resolve workgraph home: %w", err)
 	}
 
 	dbPath := config.DatabasePath
@@ -882,7 +882,7 @@ func nearestGitRoot(path string) string {
 
 func runMessage(status RunStatus) string {
 	lines := []string{
-		"WorkGraph capture is running",
+		"workgraph capture is running",
 		"Home: " + status.HomeDir,
 		"Database: " + status.DatabasePath,
 	}

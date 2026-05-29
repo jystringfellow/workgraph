@@ -37,10 +37,10 @@ func TestSlackCaptureStoresMessageEvent(t *testing.T) {
 	}
 
 	repoRoot := repoRoot(t)
-	if output, err := runWorkGraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
 		t.Fatalf("workgraph init failed: %v\n%s", err, output)
 	}
-	output, err := runWorkGraph(t, repoRoot, "slack", "capture", "--home", homeDir, "--events-file", eventsPath)
+	output, err := runworkgraph(t, repoRoot, "slack", "capture", "--home", homeDir, "--events-file", eventsPath)
 	if err != nil {
 		t.Fatalf("workgraph slack capture failed: %v\n%s", err, output)
 	}
@@ -94,11 +94,11 @@ func TestSlackCaptureStoresThreadReplyWithoutDuplicateEvent(t *testing.T) {
 	}
 
 	repoRoot := repoRoot(t)
-	if output, err := runWorkGraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
 		t.Fatalf("workgraph init failed: %v\n%s", err, output)
 	}
 	for i := 0; i < 2; i++ {
-		if output, err := runWorkGraph(t, repoRoot, "slack", "capture", "--home", homeDir, "--events-file", eventsPath); err != nil {
+		if output, err := runworkgraph(t, repoRoot, "slack", "capture", "--home", homeDir, "--events-file", eventsPath); err != nil {
 			t.Fatalf("workgraph slack capture failed: %v\n%s", err, output)
 		}
 	}

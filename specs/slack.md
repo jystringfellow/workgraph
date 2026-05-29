@@ -1,6 +1,6 @@
 # Slack Integration
 
-WorkGraph should ingest Slack activity as communication events that can support
+workgraph should ingest Slack activity as communication events that can support
 project resume and later memory suggestions.
 
 Slack ingestion starts with explicit capture from a local exported event file:
@@ -9,7 +9,7 @@ Slack ingestion starts with explicit capture from a local exported event file:
 workgraph slack capture --events-file slack-events.json
 ```
 
-This gives WorkGraph a deterministic ingestion path before adding Slack
+This gives workgraph a deterministic ingestion path before adding Slack
 authentication, API pagination, or workspace sync.
 
 Slack ingestion should also support read-only daemon collection from explicitly
@@ -26,7 +26,7 @@ workgraph slack connect
 ```
 
 The command starts a local callback server, opens the user's browser to Slack,
-asks the user to approve WorkGraph's read-only Slack access, exchanges the
+asks the user to approve workgraph's read-only Slack access, exchanges the
 redirect code with PKCE, and stores the resulting credentials locally. Users do
 not need to provide Slack client ids, client secrets, or copy returned codes in
 normal use.
@@ -38,7 +38,7 @@ explicit allowlist.
 
 Direct messages and group direct messages are not collected by default. Users
 must explicitly opt in with `--include-dms` during connect or
-`--slack-include-dms` during run. When enabled, WorkGraph requests Slack
+`--slack-include-dms` during run. When enabled, workgraph requests Slack
 `im:*` and `mpim:*` read/history scopes and includes `im` and `mpim`
 conversations in discovery.
 
@@ -52,7 +52,7 @@ This updates local connector settings. If Slack was originally authorized
 without DM scopes, the user may need to reconnect with `--include-dms` so Slack
 grants those additional user scopes.
 
-The default OAuth redirect URL for public distribution is a WorkGraph-controlled
+The default OAuth redirect URL for public distribution is a workgraph-controlled
 HTTPS relay:
 
 ```text
@@ -65,7 +65,7 @@ The relay immediately forwards the browser to the local daemon callback:
 http://localhost:2727/slack/callback
 ```
 
-Slack requires distributed apps to use SSL for OAuth redirect URLs. WorkGraph
+Slack requires distributed apps to use SSL for OAuth redirect URLs. workgraph
 therefore must register the HTTPS relay URL with Slack, not the localhost URL.
 The relay page lives in this repository at
 `public/slack/callback/index.html` and can be hosted as a static Cloudflare
@@ -74,18 +74,18 @@ Pages site.
 The Pages project also serves a minimal top-level page at `public/index.html`
 so the default `https://workgraph.pages.dev` URL is intentional.
 
-Official WorkGraph builds must include a Slack public-client id for this flow.
+Official workgraph builds must include a Slack public-client id for this flow.
 Local development builds may pass `--client-id` for testing against a developer
 Slack app.
 
-On successful authorization, WorkGraph stores Slack connector settings under
-the local WorkGraph home with user-only file permissions. The daemon can then
+On successful authorization, workgraph stores Slack connector settings under
+the local workgraph home with user-only file permissions. The daemon can then
 use the stored token and channels without requiring daily exports or repeated
 token flags.
 
 The daemon:
 
-- polls discovered or explicitly configured Slack channels while WorkGraph
+- polls discovered or explicitly configured Slack channels while workgraph
   capture is running
 - polls IM and MPIM conversations only when the user has explicitly opted in
 - fetches channel messages and available thread replies

@@ -57,9 +57,9 @@ func runInit(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags := flag.NewFlagSet("init", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
-	homeDir := flags.String("home", "", "WorkGraph home directory")
-	memoryDir := flags.String("memory", "", "WorkGraph memory directory")
-	databasePath := flags.String("database", "", "WorkGraph SQLite database path")
+	homeDir := flags.String("home", "", "workgraph home directory")
+	memoryDir := flags.String("memory", "", "workgraph memory directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
 	force := flags.Bool("force", false, "Refresh init-owned defaults such as config.json")
 
 	if err := flags.Parse(args); err != nil {
@@ -104,7 +104,7 @@ func runSlackConfigure(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags := flag.NewFlagSet("slack configure", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
-	homeDir := flags.String("home", "", "WorkGraph home directory")
+	homeDir := flags.String("home", "", "workgraph home directory")
 	includeDMs := flags.Bool("include-dms", false, "Opt into collecting Slack direct and group direct messages")
 
 	if err := flags.Parse(args); err != nil {
@@ -128,8 +128,8 @@ func runSlackCapture(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags := flag.NewFlagSet("slack capture", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
-	homeDir := flags.String("home", "", "WorkGraph home directory")
-	databasePath := flags.String("database", "", "WorkGraph SQLite database path")
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
 	eventsFile := flags.String("events-file", "", "Slack event export JSON file")
 
 	if err := flags.Parse(args); err != nil {
@@ -154,7 +154,7 @@ func runSlackConnect(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags := flag.NewFlagSet("slack connect", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
-	homeDir := flags.String("home", "", "WorkGraph home directory")
+	homeDir := flags.String("home", "", "workgraph home directory")
 	clientID := flags.String("client-id", os.Getenv("WORKGRAPH_SLACK_CLIENT_ID"), "Slack app client id")
 	clientSecret := flags.String("client-secret", os.Getenv("WORKGRAPH_SLACK_CLIENT_SECRET"), "Slack app client secret")
 	redirectURI := flags.String("redirect-uri", workgraph.DefaultSlackRedirectURI, "Slack OAuth redirect URI")
@@ -218,8 +218,8 @@ func runGitHubCapture(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags := flag.NewFlagSet("github capture", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
-	homeDir := flags.String("home", "", "WorkGraph home directory")
-	databasePath := flags.String("database", "", "WorkGraph SQLite database path")
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
 	eventsFile := flags.String("events-file", "", "GitHub event export JSON file")
 
 	if err := flags.Parse(args); err != nil {
@@ -280,8 +280,8 @@ func runMemoryInit(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags := flag.NewFlagSet("memory init", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
-	homeDir := flags.String("home", "", "WorkGraph home directory")
-	memoryDir := flags.String("memory", "", "WorkGraph memory directory")
+	homeDir := flags.String("home", "", "workgraph home directory")
+	memoryDir := flags.String("memory", "", "workgraph memory directory")
 	scope := flags.String("scope", "project", "Memory scope: project, personal, organization, or team")
 
 	if err := flags.Parse(args); err != nil {
@@ -362,9 +362,9 @@ func runMemorySuggest(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags := flag.NewFlagSet("memory suggest", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
-	homeDir := flags.String("home", "", "WorkGraph home directory")
-	memoryDir := flags.String("memory", "", "WorkGraph memory directory")
-	databasePath := flags.String("database", "", "WorkGraph SQLite database path")
+	homeDir := flags.String("home", "", "workgraph home directory")
+	memoryDir := flags.String("memory", "", "workgraph memory directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
 	scope := flags.String("scope", "project", "Memory suggestion scope")
 
 	if err := flags.Parse(args); err != nil {
@@ -395,9 +395,9 @@ func runMemoryLinks(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags := flag.NewFlagSet("memory links", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
-	homeDir := flags.String("home", "", "WorkGraph home directory")
-	memoryDir := flags.String("memory", "", "WorkGraph memory directory")
-	databasePath := flags.String("database", "", "WorkGraph SQLite database path")
+	homeDir := flags.String("home", "", "workgraph home directory")
+	memoryDir := flags.String("memory", "", "workgraph memory directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
 	scope := flags.String("scope", "project", "Memory link scope")
 
 	if err := flags.Parse(args); err != nil {
@@ -428,9 +428,9 @@ func runMemoryPromote(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags := flag.NewFlagSet("memory promote", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
-	homeDir := flags.String("home", "", "WorkGraph home directory")
-	memoryDir := flags.String("memory", "", "WorkGraph memory directory")
-	databasePath := flags.String("database", "", "WorkGraph SQLite database path")
+	homeDir := flags.String("home", "", "workgraph home directory")
+	memoryDir := flags.String("memory", "", "workgraph memory directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
 	scope := flags.String("scope", "project", "Memory promotion scope")
 	evidenceID := flags.String("evidence", "", "Event id supporting the promoted memory")
 	text := flags.String("text", "", "Curated memory text to promote")
@@ -465,8 +465,8 @@ func runGitCapture(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags := flag.NewFlagSet("git capture", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
-	homeDir := flags.String("home", "", "WorkGraph home directory")
-	databasePath := flags.String("database", "", "WorkGraph SQLite database path")
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
 	maxCommits := flags.Int("max-commits", 50, "Maximum recent commits to read per repository")
 
 	if err := flags.Parse(args); err != nil {
@@ -506,7 +506,7 @@ func runConfigAddWatch(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags := flag.NewFlagSet("config add-watch", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
-	homeDir := flags.String("home", "", "WorkGraph home directory")
+	homeDir := flags.String("home", "", "workgraph home directory")
 
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -538,8 +538,8 @@ func runCapture(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags := flag.NewFlagSet("run", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
-	homeDir := flags.String("home", "", "WorkGraph home directory")
-	databasePath := flags.String("database", "", "WorkGraph SQLite database path")
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
 	foreground := flags.Bool("foreground", false, "Run capture attached to the current terminal")
 	watchDirs := watchDirFlags{}
 	flags.Var(&watchDirs, "watch", "Directory to watch for local work activity")
@@ -664,8 +664,8 @@ func runToday(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags := flag.NewFlagSet("today", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
-	homeDir := flags.String("home", "", "WorkGraph home directory")
-	databasePath := flags.String("database", "", "WorkGraph SQLite database path")
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
 
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -688,9 +688,9 @@ func runResume(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags := flag.NewFlagSet("resume", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
-	homeDir := flags.String("home", "", "WorkGraph home directory")
-	databasePath := flags.String("database", "", "WorkGraph SQLite database path")
-	memoryDir := flags.String("memory", "", "WorkGraph memory directory")
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
+	memoryDir := flags.String("memory", "", "workgraph memory directory")
 
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -737,8 +737,8 @@ func parseCaptureControlConfig(command string, args []string, stderr io.Writer) 
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
-	homeDir := flags.String("home", "", "WorkGraph home directory")
-	databasePath := flags.String("database", "", "WorkGraph SQLite database path")
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
 	watchDirs := watchDirFlags{}
 	flags.Var(&watchDirs, "watch", "Directory to watch for local work activity")
 	slackToken := flags.String("slack-token", os.Getenv("WORKGRAPH_SLACK_TOKEN"), "Slack API token for read-only message collection")

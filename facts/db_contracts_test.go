@@ -86,7 +86,7 @@ func TestEventsCanBeInsertedAndReadFromDatabase(t *testing.T) {
 func TestEventsCanBeQueriedByProject(t *testing.T) {
 	db := openContractDatabase(t)
 	insertContractEvent(t, db, "cupcake-event", "Cupcake", time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC))
-	insertContractEvent(t, db, "workgraph-event", "WorkGraph", time.Date(2026, 5, 25, 12, 5, 0, 0, time.UTC))
+	insertContractEvent(t, db, "workgraph-event", "workgraph", time.Date(2026, 5, 25, 12, 5, 0, 0, time.UTC))
 
 	var count int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE project = ?`, "Cupcake").Scan(&count); err != nil {

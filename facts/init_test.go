@@ -18,7 +18,7 @@ import (
 // executable assertions, verify they fail, then implement only enough init
 // behavior to pass them before expanding the slice.
 
-func TestInitCreatesWorkGraphHome(t *testing.T) {
+func TestInitCreatesworkgraphHome(t *testing.T) {
 	homeDir := filepath.Join(t.TempDir(), ".workgraph")
 
 	_, err := workgraph.Init(workgraph.InitConfig{
@@ -30,10 +30,10 @@ func TestInitCreatesWorkGraphHome(t *testing.T) {
 
 	info, err := os.Stat(homeDir)
 	if err != nil {
-		t.Fatalf("expected WorkGraph home to exist: %v", err)
+		t.Fatalf("expected workgraph home to exist: %v", err)
 	}
 	if !info.IsDir() {
-		t.Fatalf("expected WorkGraph home to be a directory")
+		t.Fatalf("expected workgraph home to be a directory")
 	}
 }
 
@@ -118,7 +118,7 @@ func TestInitCreatesDefaultConfig(t *testing.T) {
 
 	workgraphHome, err := filepath.Abs(homeDir)
 	if err != nil {
-		t.Fatalf("resolve WorkGraph home: %v", err)
+		t.Fatalf("resolve workgraph home: %v", err)
 	}
 	expectedWatchDirs := []string{
 		filepath.Join(userHome, "Desktop"),
@@ -177,7 +177,7 @@ func TestInitDefaultConfigWatchesCommonUserFolders(t *testing.T) {
 	}
 }
 
-func TestInitDefaultConfigIgnoresWorkGraphHome(t *testing.T) {
+func TestInitDefaultConfigIgnoresworkgraphHome(t *testing.T) {
 	homeDir := filepath.Join(t.TempDir(), ".workgraph")
 
 	_, err := workgraph.Init(workgraph.InitConfig{
@@ -190,7 +190,7 @@ func TestInitDefaultConfigIgnoresWorkGraphHome(t *testing.T) {
 	config := readInitConfig(t, filepath.Join(homeDir, "config.json"))
 	workgraphHome, err := filepath.Abs(homeDir)
 	if err != nil {
-		t.Fatalf("resolve WorkGraph home: %v", err)
+		t.Fatalf("resolve workgraph home: %v", err)
 	}
 
 	if !reflect.DeepEqual(config.IgnorePaths, []string{workgraphHome}) {
@@ -274,7 +274,7 @@ func TestInitPreservesExistingConfig(t *testing.T) {
 	}
 
 	if err := os.MkdirAll(homeDir, 0o755); err != nil {
-		t.Fatalf("create WorkGraph home: %v", err)
+		t.Fatalf("create workgraph home: %v", err)
 	}
 	writeInitConfig(t, configPath, existing)
 
@@ -303,7 +303,7 @@ func TestInitForceOverwritesExistingConfigWithDefaults(t *testing.T) {
 	}
 
 	if err := os.MkdirAll(homeDir, 0o755); err != nil {
-		t.Fatalf("create WorkGraph home: %v", err)
+		t.Fatalf("create workgraph home: %v", err)
 	}
 	writeInitConfig(t, configPath, oldConfig)
 
@@ -318,7 +318,7 @@ func TestInitForceOverwritesExistingConfigWithDefaults(t *testing.T) {
 	config := readInitConfig(t, configPath)
 	workgraphHome, err := filepath.Abs(homeDir)
 	if err != nil {
-		t.Fatalf("resolve WorkGraph home: %v", err)
+		t.Fatalf("resolve workgraph home: %v", err)
 	}
 
 	expectedWatchDirs := []string{filepath.Join(userHome, "Desktop"), filepath.Join(userHome, "Documents")}

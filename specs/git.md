@@ -1,6 +1,6 @@
 # Git Integration
 
-WorkGraph captures local git commits as first-class events.
+workgraph captures local git commits as first-class events.
 
 Local git capture runs as part of `workgraph run`, so commits made while the
 daemon is active are captured without a separate manual step.

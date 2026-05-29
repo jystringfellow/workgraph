@@ -27,7 +27,7 @@ Capture control is responsible for:
 Background run output reports the configured paths and returns:
 
 ```text
-WorkGraph capture started
+workgraph capture started
 PID: 12345
 Home: /path/to/.workgraph
 Database: /path/to/.workgraph/workgraph.db
@@ -36,7 +36,7 @@ Watching: /path/to/project
 
 Path configuration starts with `~/.workgraph/config.json`. By default,
 `workgraph init` configures capture to watch existing common user-facing folders
-and ignore WorkGraph internal storage. Users can add more roots with
+and ignore workgraph internal storage. Users can add more roots with
 `workgraph config add-watch [path]`.
 
 CLI flags can choose watch roots for a single run:
@@ -58,7 +58,7 @@ For debugging, `workgraph run --foreground` keeps capture attached to the
 current terminal and prints one line per captured file event:
 
 ```text
-WorkGraph capture is running
+workgraph capture is running
 Home: /path/to/.workgraph
 Database: /path/to/.workgraph/workgraph.db
 Watching: /path/to/project
@@ -101,6 +101,6 @@ CLI flags > config file > defaults
 See `specs/config.md` for the config contract.
 
 Background capture uses local state such as a PID file and log file under the
-WorkGraph home. It does not require a cloud service or privileged install.
+workgraph home. It does not require a cloud service or privileged install.
 
 See `specs/capture-controls.md` for the background capture command contract.

@@ -6,7 +6,7 @@ func TestFileWatcherRecordsFileChangeEvent(t *testing.T) {
 	t.Skip("TBD: file watcher records file change events")
 }
 
-func TestFileWatcherIgnoresWorkGraphInternalFiles(t *testing.T) {
+func TestFileWatcherIgnoresworkgraphInternalFiles(t *testing.T) {
 	t.Skip("TBD: file watcher ignores ~/.workgraph and generated database files")
 }
 
