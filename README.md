@@ -1,6 +1,12 @@
+<p align="center">
+  <img src="public/assets/workgraph-lockup.png" alt="WorkGraph" width="160">
+</p>
+
 # WorkGraph
 
 WorkGraph is a local-first attempt to build the open substrate for personal work intelligence.
+
+Web: https://workgraph.pages.dev
 
 It captures operational context, connects it to durable personal memory, and helps restore the state of work so people can think, decide, and execute with more continuity.
 
