@@ -71,6 +71,9 @@ The relay page lives in this repository at
 `public/slack/callback/index.html` and can be hosted as a static Cloudflare
 Pages site.
 
+The Pages project also serves a minimal top-level page at `public/index.html`
+so the default `https://workgraph.pages.dev` URL is intentional.
+
 Official WorkGraph builds must include a Slack public-client id for this flow.
 Local development builds may pass `--client-id` for testing against a developer
 Slack app.
