@@ -90,33 +90,33 @@ func runSlack(args []string, stdout io.Writer, stderr io.Writer) int {
 	switch args[0] {
 	case "capture":
 		return runSlackCapture(args[1:], stdout, stderr)
-	case "configure":
-		return runSlackConfigure(args[1:], stdout, stderr)
 	case "connect":
 		return runSlackConnect(args[1:], stdout, stderr)
+	case "disconnect":
+		return runSlackDisconnect(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown slack command: %s\n", args[0])
 		return 2
 	}
 }
 
-func runSlackConfigure(args []string, stdout io.Writer, stderr io.Writer) int {
-	flags := flag.NewFlagSet("slack configure", flag.ContinueOnError)
+func runSlackDisconnect(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("slack disconnect", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
 	homeDir := flags.String("home", "", "workgraph home directory")
-	includeDMs := flags.Bool("include-dms", false, "Opt into collecting Slack direct and group direct messages")
+	slackAPIBaseURL := flags.String("slack-api-base", "", "Slack API base URL")
 
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
 
-	result, err := workgraph.ConfigureSlack(workgraph.SlackConfigureConfig{
+	result, err := workgraph.DisconnectSlack(workgraph.SlackDisconnectConfig{
 		HomeDir:    *homeDir,
-		IncludeDMs: *includeDMs,
+		APIBaseURL: *slackAPIBaseURL,
 	})
 	if err != nil {
-		fmt.Fprintf(stderr, "workgraph slack configure: %v\n", err)
+		fmt.Fprintf(stderr, "workgraph slack disconnect: %v\n", err)
 		return 1
 	}
 

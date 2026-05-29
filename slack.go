@@ -100,17 +100,21 @@ type SlackConnectResult struct {
 	AuthorizationURL string
 	State            string
 	Configured       bool
+	DaemonRestarted  bool
 	Message          string
 }
 
-type SlackConfigureConfig struct {
+type SlackDisconnectConfig struct {
 	HomeDir    string
-	IncludeDMs bool
+	APIBaseURL string
+	HTTPClient *http.Client
 }
 
-type SlackConfigureResult struct {
-	ConfigPath string
-	Message    string
+type SlackDisconnectResult struct {
+	ConfigPath      string
+	Revoked         bool
+	DaemonRestarted bool
+	Message         string
 }
 
 type slackConnectorConfig struct {
@@ -120,6 +124,7 @@ type slackConnectorConfig struct {
 	BotUserID   string   `json:"bot_user_id,omitempty"`
 	Channels    []string `json:"channels"`
 	IncludeDMs  bool     `json:"include_dms,omitempty"`
+	UserScopes  []string `json:"user_scopes"`
 	APIBaseURL  string   `json:"api_base_url,omitempty"`
 }
 
@@ -176,11 +181,18 @@ type slackOAuthAccessResponse struct {
 	AuthedUser  struct {
 		ID          string `json:"id"`
 		AccessToken string `json:"access_token"`
+		Scope       string `json:"scope"`
 	} `json:"authed_user"`
 	Team struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
 	} `json:"team"`
+}
+
+type slackRevokeResponse struct {
+	OK      bool   `json:"ok"`
+	Error   string `json:"error"`
+	Revoked bool   `json:"revoked"`
 }
 
 // CaptureSlackEvents stores Slack events from a local export file.
@@ -307,24 +319,26 @@ func ConnectSlack(config SlackConnectConfig) (SlackConnectResult, error) {
 		TeamName:    token.Team.Name,
 		BotUserID:   token.BotUserID,
 		Channels:    append([]string(nil), config.Channels...),
-		IncludeDMs:  config.IncludeDMs,
+		IncludeDMs:  config.IncludeDMs && slackHasDMScopes(slackOAuthUserScopes(token)),
+		UserScopes:  slackOAuthUserScopes(token),
 		APIBaseURL:  config.APIBaseURL,
 	}
 	if err := writeSlackConnectorConfig(result.ConfigPath, stored); err != nil {
 		return SlackConnectResult{}, err
 	}
+	daemonRestarted, err := restartDaemonAfterSlackUpdate(homeDir)
+	if err != nil {
+		return SlackConnectResult{}, err
+	}
 
 	result.Configured = true
-	result.Message = slackConnectedMessage(result.ConfigPath, stored)
+	result.DaemonRestarted = daemonRestarted
+	result.Message = slackConnectedMessage(result.ConfigPath, stored, config.IncludeDMs, daemonRestarted)
 	return result, nil
 }
 
 // ConnectSlackWithBrowser completes Slack OAuth with a local callback and PKCE.
 func ConnectSlackWithBrowser(ctx context.Context, config SlackConnectConfig) (SlackConnectResult, error) {
-	config.ClientID = resolveSlackClientID(config.ClientID)
-	if config.ClientID == "" {
-		return SlackConnectResult{}, errors.New("slack client id is required for browser connect")
-	}
 	homeDir, err := resolveHomeDir(config.HomeDir)
 	if err != nil {
 		return SlackConnectResult{}, err
@@ -338,6 +352,10 @@ func ConnectSlackWithBrowser(ctx context.Context, config SlackConnectConfig) (Sl
 			return SlackConnectResult{}, fmt.Errorf("%w: run workgraph init", ErrNotInitialized)
 		}
 		return SlackConnectResult{}, fmt.Errorf("check database: %w", err)
+	}
+	config.ClientID = resolveSlackClientID(config.ClientID)
+	if config.ClientID == "" {
+		return SlackConnectResult{}, errors.New("slack client id is required for browser connect")
 	}
 
 	redirectURI := config.RedirectURI
@@ -429,11 +447,16 @@ func ConnectSlackWithBrowser(ctx context.Context, config SlackConnectConfig) (Sl
 		TeamName:    token.Team.Name,
 		BotUserID:   token.BotUserID,
 		Channels:    append([]string(nil), config.Channels...),
-		IncludeDMs:  config.IncludeDMs,
+		IncludeDMs:  config.IncludeDMs && slackHasDMScopes(slackOAuthUserScopes(token)),
+		UserScopes:  slackOAuthUserScopes(token),
 		APIBaseURL:  config.APIBaseURL,
 	}
 	configPath := slackConfigPath(homeDir)
 	if err := writeSlackConnectorConfig(configPath, stored); err != nil {
+		return SlackConnectResult{}, err
+	}
+	daemonRestarted, err := restartDaemonAfterSlackUpdate(homeDir)
+	if err != nil {
 		return SlackConnectResult{}, err
 	}
 	return SlackConnectResult{
@@ -441,38 +464,54 @@ func ConnectSlackWithBrowser(ctx context.Context, config SlackConnectConfig) (Sl
 		AuthorizationURL: authURL,
 		State:            state,
 		Configured:       true,
-		Message:          slackConnectedMessage(configPath, stored),
+		DaemonRestarted:  daemonRestarted,
+		Message:          slackConnectedMessage(configPath, stored, config.IncludeDMs, daemonRestarted),
 	}, nil
 }
 
-func ConfigureSlack(config SlackConfigureConfig) (SlackConfigureResult, error) {
+func DisconnectSlack(config SlackDisconnectConfig) (SlackDisconnectResult, error) {
 	homeDir, err := resolveHomeDir(config.HomeDir)
 	if err != nil {
-		return SlackConfigureResult{}, err
+		return SlackDisconnectResult{}, err
 	}
 	homeDir, err = filepath.Abs(homeDir)
 	if err != nil {
-		return SlackConfigureResult{}, fmt.Errorf("resolve workgraph home: %w", err)
+		return SlackDisconnectResult{}, fmt.Errorf("resolve workgraph home: %w", err)
 	}
 	stored, err := readSlackConnectorConfig(homeDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return SlackConfigureResult{}, errors.New("Slack is not connected: run workgraph slack connect")
+			return SlackDisconnectResult{}, errors.New("Slack is not connected")
 		}
-		return SlackConfigureResult{}, err
+		return SlackDisconnectResult{}, err
 	}
-	stored.IncludeDMs = config.IncludeDMs
 	configPath := slackConfigPath(homeDir)
-	if err := writeSlackConnectorConfig(configPath, stored); err != nil {
-		return SlackConfigureResult{}, err
+	revoked, err := revokeSlackToken(config, stored.AccessToken)
+	if err != nil {
+		return SlackDisconnectResult{}, err
 	}
-	return SlackConfigureResult{
-		ConfigPath: configPath,
-		Message: strings.Join([]string{
-			"Slack configuration updated",
-			"Config: " + configPath,
-			slackCollectionModeLine(stored),
-		}, "\n"),
+	if err := os.Remove(configPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return SlackDisconnectResult{}, fmt.Errorf("remove slack config: %w", err)
+	}
+	daemonRestarted, err := restartDaemonAfterSlackUpdate(homeDir)
+	if err != nil {
+		return SlackDisconnectResult{}, err
+	}
+	lines := []string{
+		"Slack disconnected",
+		"Config removed: " + configPath,
+	}
+	if revoked {
+		lines = append(lines, "Slack token revoked")
+	}
+	if daemonRestarted {
+		lines = append(lines, "Background capture restarted to apply Slack settings.")
+	}
+	return SlackDisconnectResult{
+		ConfigPath:      configPath,
+		Revoked:         revoked,
+		DaemonRestarted: daemonRestarted,
+		Message:         strings.Join(lines, "\n"),
 	}, nil
 }
 
@@ -596,12 +635,44 @@ func slackConfigPath(homeDir string) string {
 	return filepath.Join(homeDir, "slack.json")
 }
 
-func slackConnectedMessage(configPath string, config slackConnectorConfig) string {
-	return strings.Join([]string{
+func slackConnectedMessage(configPath string, config slackConnectorConfig, requestedDMs bool, daemonRestarted bool) string {
+	lines := []string{
 		"Slack connected",
 		"Config: " + configPath,
 		slackCollectionModeLine(config),
-	}, "\n")
+	}
+	if requestedDMs {
+		lines = append(lines, "To remove Slack DM access later, run workgraph slack disconnect, then reconnect without --include-dms.")
+	} else {
+		lines = append(lines, "To include DMs later, run workgraph slack disconnect, then reconnect with --include-dms.")
+	}
+	if daemonRestarted {
+		lines = append(lines, "Background capture restarted to apply Slack settings.")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func restartDaemonAfterSlackUpdate(homeDir string) (bool, error) {
+	status, err := DaemonStatusForHome(homeDir)
+	if err != nil {
+		return false, err
+	}
+	if !status.Running {
+		return false, nil
+	}
+
+	config := DaemonConfig{
+		HomeDir:      status.HomeDir,
+		DatabasePath: status.DatabasePath,
+		WatchDirs:    append([]string(nil), status.WatchDirs...),
+	}
+	if _, err := StopDaemon(config); err != nil {
+		return false, err
+	}
+	if _, err := StartDaemon(config); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func slackCollectionModeLine(config slackConnectorConfig) string {
@@ -804,6 +875,47 @@ func fetchSlackMessages(config SlackAPICaptureConfig, method string, values url.
 	return apiResponse.Messages, nil
 }
 
+func revokeSlackToken(config SlackDisconnectConfig, token string) (bool, error) {
+	if token == "" {
+		return false, errors.New("slack access token is missing")
+	}
+	baseURL := config.APIBaseURL
+	if baseURL == "" {
+		baseURL = "https://slack.com/api"
+	}
+	request, err := http.NewRequest(http.MethodPost, strings.TrimRight(baseURL, "/")+"/auth.revoke", nil)
+	if err != nil {
+		return false, fmt.Errorf("create slack revoke request: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+
+	client := config.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return false, fmt.Errorf("revoke slack token: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(response.Body, 1024))
+		return false, fmt.Errorf("revoke slack token: status %s: %s", response.Status, strings.TrimSpace(string(body)))
+	}
+
+	var apiResponse slackRevokeResponse
+	if err := json.NewDecoder(response.Body).Decode(&apiResponse); err != nil {
+		return false, fmt.Errorf("parse slack revoke response: %w", err)
+	}
+	if !apiResponse.OK {
+		if apiResponse.Error == "" {
+			apiResponse.Error = "unknown_error"
+		}
+		return false, fmt.Errorf("slack auth.revoke: %s", apiResponse.Error)
+	}
+	return apiResponse.Revoked, nil
+}
+
 func exchangeSlackOAuthCode(config SlackConnectConfig) (slackOAuthAccessResponse, error) {
 	return exchangeSlackOAuthCodeForm(config, "")
 }
@@ -888,6 +1000,41 @@ func slackOAuthAccessToken(response slackOAuthAccessResponse) string {
 		return response.AuthedUser.AccessToken
 	}
 	return response.AccessToken
+}
+
+func slackOAuthUserScopes(response slackOAuthAccessResponse) []string {
+	return splitSlackScopes(response.AuthedUser.Scope)
+}
+
+func splitSlackScopes(scopes string) []string {
+	if strings.TrimSpace(scopes) == "" {
+		return nil
+	}
+	parts := strings.Split(scopes, ",")
+	result := make([]string, 0, len(parts))
+	seen := map[string]bool{}
+	for _, part := range parts {
+		scope := strings.TrimSpace(part)
+		if scope == "" || seen[scope] {
+			continue
+		}
+		seen[scope] = true
+		result = append(result, scope)
+	}
+	return result
+}
+
+func slackHasDMScopes(scopes []string) bool {
+	granted := map[string]bool{}
+	for _, scope := range scopes {
+		granted[scope] = true
+	}
+	for _, required := range []string{"im:read", "im:history", "mpim:read", "mpim:history"} {
+		if !granted[required] {
+			return false
+		}
+	}
+	return true
 }
 
 func slackConversationTypes(includeDMs bool) []string {
