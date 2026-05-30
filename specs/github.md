@@ -14,7 +14,7 @@ This gives workgraph a deterministic ingestion seam before adding network
 authentication and API pagination. A later provider can fetch the same event
 shape from GitHub directly.
 
-`workgraph run` should also poll GitHub activity through the authenticated
+`workgraph start` should also poll GitHub activity through the authenticated
 GitHub CLI (`gh`) when it is available. The daemon must be conservative:
 
 - discover GitHub repositories from configured local git remotes

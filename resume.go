@@ -289,7 +289,7 @@ func resumeOpenGitHubWork(events []ResumeEvent) []ResumeEvent {
 func resumeProjectsMessage(projects []ResumeProject, location *time.Location) string {
 	lines := []string{"Resumable projects"}
 	if len(projects) == 0 {
-		lines = append(lines, "No resumable projects found.", "Run workgraph run to capture activity.")
+		lines = append(lines, "No resumable projects found.", "Run workgraph start to capture activity.")
 		return strings.Join(lines, "\n")
 	}
 
@@ -305,7 +305,7 @@ func resumeProjectMessage(result ResumeResult, location *time.Location) string {
 	if len(result.Events) == 0 {
 		lines = append(lines,
 			fmt.Sprintf("No recent activity found for %s.", result.Project),
-			"Check the project name or run workgraph run to capture activity.",
+			"Check the project name or run workgraph start to capture activity.",
 		)
 		if result.Memory != nil {
 			lines = append(lines, "", "Project memory", result.Memory.Content)

@@ -17,7 +17,7 @@ Scenario: Capture Slack thread replies from an export
 Scenario: Daemon collects configured Slack messages
   Given workgraph has been initialized
   And Slack access is configured for a channel
-  When I run "workgraph run"
+  When I run "workgraph start"
   Then workgraph periodically collects new Slack messages from that channel
   And workgraph resolves Slack conversation and actor names when available
   And workgraph normalizes Slack mentions while preserving ids as evidence

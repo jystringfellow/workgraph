@@ -33,8 +33,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runGitHub(args[1:], stdout, stderr)
 	case "memory":
 		return runMemory(args[1:], stdout, stderr)
-	case "run":
-		return runCapture(args[1:], stdout, stderr)
+	case "start":
+		return runCaptureStart(args[1:], stdout, stderr)
 	case "status":
 		return runCaptureStatus(args[1:], stdout, stderr)
 	case "stop":
@@ -534,8 +534,8 @@ func runConfigAddWatch(args []string, stdout io.Writer, stderr io.Writer) int {
 	return 0
 }
 
-func runCapture(args []string, stdout io.Writer, stderr io.Writer) int {
-	flags := flag.NewFlagSet("run", flag.ContinueOnError)
+func runCaptureStart(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("start", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
 	homeDir := flags.String("home", "", "workgraph home directory")
@@ -564,7 +564,7 @@ func runCapture(args []string, stdout io.Writer, stderr io.Writer) int {
 			SlackAPIBaseURL: *slackAPIBaseURL,
 		})
 		if err != nil {
-			fmt.Fprintf(stderr, "workgraph run: %v\n", err)
+			fmt.Fprintf(stderr, "workgraph start: %v\n", err)
 			return 1
 		}
 
@@ -585,7 +585,7 @@ func runCapture(args []string, stdout io.Writer, stderr io.Writer) int {
 		SlackAPIBaseURL: *slackAPIBaseURL,
 	})
 	if err != nil {
-		fmt.Fprintf(stderr, "workgraph run: %v\n", err)
+		fmt.Fprintf(stderr, "workgraph start: %v\n", err)
 		return 1
 	}
 
@@ -608,7 +608,7 @@ func runCapture(args []string, stdout io.Writer, stderr io.Writer) int {
 	}()
 
 	if err := capture.Run(ctx); err != nil {
-		fmt.Fprintf(stderr, "workgraph run: %v\n", err)
+		fmt.Fprintf(stderr, "workgraph start: %v\n", err)
 		return 1
 	}
 	<-eventDone

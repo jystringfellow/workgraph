@@ -36,13 +36,13 @@ Scenario: Ignore generated build output by default
 Scenario: Use config when no watch flag is provided
   Given workgraph has been initialized
   And the config contains watch directories
-  When I run "workgraph run"
+  When I run "workgraph start"
   Then workgraph watches the configured directories
 
 Scenario: Let CLI watch flags override configured watch roots
   Given workgraph has been initialized
   And the config contains watch directories
-  When I run "workgraph run --foreground --watch ./project"
+  When I run "workgraph start --foreground --watch ./project"
   Then workgraph watches "./project" for that run
   And configured ignore rules still apply
 

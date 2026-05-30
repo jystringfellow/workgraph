@@ -1,6 +1,6 @@
-# Run Command
+# Start Command
 
-`workgraph run` starts local event capture in the background and returns after
+`workgraph start` starts local event capture in the background and returns after
 capture is ready.
 
 `workgraph status` reports background capture state, and `workgraph stop` stops
@@ -24,7 +24,7 @@ Capture control is responsible for:
 - registering configured watch roots before recursively descending into any one root
 - preserving events already written when capture stops
 
-Background run output reports the configured paths and returns:
+Background start output reports the configured paths and returns:
 
 ```text
 workgraph capture started
@@ -39,22 +39,22 @@ Path configuration starts with `~/.workgraph/config.json`. By default,
 and ignore workgraph internal storage. Users can add more roots with
 `workgraph config add-watch [path]`.
 
-CLI flags can choose watch roots for a single run:
+CLI flags can choose watch roots for a single start:
 
 ```text
-workgraph run --home ~/.workgraph --database ~/.workgraph/workgraph.db --watch .
+workgraph start --home ~/.workgraph --database ~/.workgraph/workgraph.db --watch .
 ```
 
 CLI flags can also opt into read-only Slack collection for explicit channels:
 
 ```text
-WORKGRAPH_SLACK_TOKEN=xoxb-... workgraph run --slack-channel C123
+WORKGRAPH_SLACK_TOKEN=xoxb-... workgraph start --slack-channel C123
 ```
 
 Slack collection only reads the configured channel ids, stores message and
 thread-reply events, and does not post, react, or otherwise act in Slack.
 
-For debugging, `workgraph run --foreground` keeps capture attached to the
+For debugging, `workgraph start --foreground` keeps capture attached to the
 current terminal and prints one line per captured file event:
 
 ```text
@@ -71,7 +71,7 @@ If recursive watch setup reaches its resource budget, capture keeps the watchers
 that were already registered and reports that the watch limit was reached.
 Resource limits must not crash foreground signal handling.
 
-When the watch limit is reached, run output should include a small sample of
+When the watch limit is reached, start output should include a small sample of
 registered directories and the first directory that could not be watched. The
 full registered directory list should remain available in runtime status for
 debugging and future tooling.

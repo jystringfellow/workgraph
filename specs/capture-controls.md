@@ -3,7 +3,7 @@
 workgraph controls local event capture with top-level commands:
 
 ```text
-workgraph run
+workgraph start
 workgraph status
 workgraph stop
 ```
@@ -14,14 +14,14 @@ Background capture is explicit. workgraph does not start capture silently during
 ## Commands
 
 ```text
-workgraph run
+workgraph start
 workgraph status
 workgraph stop
 ```
 
 ## Start
 
-`workgraph run` starts local event capture in the background and returns after
+`workgraph start` starts local event capture in the background and returns after
 capture is ready.
 
 It must:
@@ -35,7 +35,7 @@ It must:
 
 The default initialized config watches existing common user-facing folders, so a newly initialized workgraph can start background capture without trying to recursively watch the entire home directory.
 
-For debugging, `workgraph run --foreground` runs capture attached to the current
+For debugging, `workgraph start --foreground` runs capture attached to the current
 terminal and prints captured events as they arrive.
 
 ## Status

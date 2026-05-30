@@ -16,7 +16,7 @@ Slack ingestion should also support read-only daemon collection from explicitly
 configured channels:
 
 ```text
-WORKGRAPH_SLACK_TOKEN=xoxb-... workgraph run --slack-channel C123
+WORKGRAPH_SLACK_TOKEN=xoxb-... workgraph start --slack-channel C123
 ```
 
 Users can configure Slack access through OAuth:
@@ -64,7 +64,7 @@ disconnecting and reconnecting with `--include-dms`.
 When Slack connect or disconnect updates local connector settings and
 background capture is already running, workgraph restarts that background
 daemon so the Slack token, channels, and permission state take effect without a manual
-`workgraph stop` and `workgraph run`.
+`workgraph stop` and `workgraph start`.
 
 The default OAuth redirect URL for public distribution is a workgraph-controlled
 HTTPS relay:
