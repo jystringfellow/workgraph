@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -13,6 +14,13 @@ import (
 	"syscall"
 	"time"
 )
+
+var listDaemonProcesses = listSystemDaemonProcesses
+
+type daemonProcess struct {
+	PID     int
+	Command string
+}
 
 // DaemonConfig controls background event capture.
 type DaemonConfig struct {
@@ -172,6 +180,10 @@ func DaemonStatusForHome(homeDir string) (DaemonStatus, error) {
 		_ = removeDaemonState(resolvedHome)
 		return daemonStoppedStatus(resolvedHome), nil
 	}
+	if !processMatchesCaptureWorker(status.PID, status.HomeDir, status.DatabasePath) {
+		_ = removeDaemonState(resolvedHome)
+		return daemonStoppedStatus(resolvedHome), nil
+	}
 
 	status.Running = true
 	status.Message = daemonRunningMessage(status)
@@ -189,17 +201,22 @@ func StopDaemon(config DaemonConfig) (DaemonStatus, error) {
 		return status, nil
 	}
 
-	process, err := os.FindProcess(status.PID)
+	processes, err := matchingCaptureWorkerProcessesForStatus(status)
 	if err != nil {
-		return DaemonStatus{}, fmt.Errorf("find daemon process: %w", err)
+		return DaemonStatus{}, err
 	}
-	if err := process.Signal(syscall.SIGTERM); err != nil && processRunning(status.PID) {
-		return DaemonStatus{}, fmt.Errorf("stop daemon process: %w", err)
+	if len(processes) == 0 && status.PID > 0 {
+		processes = []daemonProcess{{PID: status.PID}}
+	}
+	for _, process := range processes {
+		if err := signalDaemonProcess(process.PID, syscall.SIGTERM); err != nil && processRunning(process.PID) {
+			return DaemonStatus{}, fmt.Errorf("stop daemon process %d: %w", process.PID, err)
+		}
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if !processRunning(status.PID) {
+		if !anyDaemonProcessRunning(processes) {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -383,6 +400,117 @@ func processRunning(pid int) bool {
 		return false
 	}
 	return process.Signal(syscall.Signal(0)) == nil
+}
+
+func signalDaemonProcess(pid int, signal os.Signal) error {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return fmt.Errorf("find daemon process: %w", err)
+	}
+	return process.Signal(signal)
+}
+
+func anyDaemonProcessRunning(processes []daemonProcess) bool {
+	for _, process := range processes {
+		if processRunning(process.PID) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchingCaptureWorkerProcessesForStatus(status DaemonStatus) ([]daemonProcess, error) {
+	processes, err := listDaemonProcesses()
+	if err != nil {
+		return nil, fmt.Errorf("list daemon processes: %w", err)
+	}
+	return matchingCaptureWorkerProcesses(status.HomeDir, status.DatabasePath, processes), nil
+}
+
+func processMatchesCaptureWorker(pid int, homeDir string, databasePath string) bool {
+	processes, err := listDaemonProcesses()
+	if err != nil {
+		return true
+	}
+	for _, process := range matchingCaptureWorkerProcesses(homeDir, databasePath, processes) {
+		if process.PID == pid {
+			return true
+		}
+	}
+	return false
+}
+
+func matchingCaptureWorkerProcesses(homeDir string, databasePath string, processes []daemonProcess) []daemonProcess {
+	homeDir = cleanProcessPath(homeDir)
+	databasePath = cleanProcessPath(databasePath)
+	matches := []daemonProcess{}
+	for _, process := range processes {
+		if !strings.Contains(process.Command, "__capture-worker") {
+			continue
+		}
+		args := strings.Fields(process.Command)
+		processHome := cleanProcessPath(flagValue(args, "--home"))
+		processDB := cleanProcessPath(flagValue(args, "--database"))
+		if processHome != "" && homeDir != "" && processHome == homeDir {
+			matches = append(matches, process)
+			continue
+		}
+		if processDB != "" && databasePath != "" && processDB == databasePath {
+			matches = append(matches, process)
+		}
+	}
+	return matches
+}
+
+func listSystemDaemonProcesses() ([]daemonProcess, error) {
+	output, err := exec.Command("ps", "-axo", "pid=,command=").Output()
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(string(output), "\n")
+	processes := make([]daemonProcess, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		pidText, command, ok := strings.Cut(line, " ")
+		if !ok {
+			continue
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(pidText))
+		if err != nil {
+			continue
+		}
+		command = strings.TrimSpace(command)
+		if command == "" {
+			continue
+		}
+		processes = append(processes, daemonProcess{PID: pid, Command: command})
+	}
+	return processes, nil
+}
+
+func flagValue(args []string, name string) string {
+	for i, arg := range args {
+		if arg == name && i+1 < len(args) {
+			return args[i+1]
+		}
+		if strings.HasPrefix(arg, name+"=") {
+			return strings.TrimPrefix(arg, name+"=")
+		}
+	}
+	return ""
+}
+
+func cleanProcessPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		return filepath.Clean(abs)
+	}
+	return filepath.Clean(path)
 }
 
 func signalContext() (context.Context, context.CancelFunc) {
