@@ -1,20 +1,20 @@
-Feature: Run workgraph
+Feature: Start workgraph
 
 Scenario: Start event capture
   Given workgraph has been initialized
-  When I run "workgraph run"
+  When I run "workgraph start"
   Then workgraph starts watching configured local work activity in the background
   And the command reports that capture started
 
-Scenario: Refuse to run before initialization
+Scenario: Refuse to start before initialization
   Given workgraph has not been initialized
-  When I run "workgraph run"
+  When I run "workgraph start"
   Then the command exits with an error
   And the output tells me to run "workgraph init"
 
 Scenario: Choose what to watch
   Given workgraph has been initialized
-  When I run "workgraph run --foreground --watch ./project"
+  When I run "workgraph start --foreground --watch ./project"
   Then workgraph watches file activity inside "./project"
   And workgraph stores events in the configured local database
   And configured ignore rules still apply
@@ -120,5 +120,5 @@ Scenario: Stop gracefully
 Scenario: Use configured watch roots by default
   Given workgraph has been initialized
   And the config watches existing common user-facing folders
-  When I run "workgraph run"
+  When I run "workgraph start"
   Then workgraph watches the configured directories

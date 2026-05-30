@@ -65,7 +65,7 @@ workgraph helps answer:
 The weekend V1 roadmap starts with:
 
 - `workgraph init` (implemented)
-- `workgraph run`
+- `workgraph start`
 - `workgraph today`
 - `workgraph resume <project>`
 - SQLite event storage
@@ -146,7 +146,7 @@ can recurse through them more fully than init-owned default folders.
 To start background file capture for the current directory:
 
 ```sh
-go run ./cmd/workgraph run --watch .
+go run ./cmd/workgraph start --watch .
 ```
 
 If no `--watch` flag is provided, background capture uses the configured
@@ -176,7 +176,7 @@ For debugging, add `--foreground` to keep capture attached to the current
 terminal and print captured events:
 
 ```sh
-go run ./cmd/workgraph run --foreground --watch .
+go run ./cmd/workgraph start --foreground --watch .
 ```
 
 Some editors save by writing a temporary scratch file and replacing the original
@@ -191,7 +191,7 @@ tmpdir="$(mktemp -d /tmp/workgraph-run.XXXXXX)"
 echo "$tmpdir" > /tmp/workgraph-run-dir
 mkdir -p "$tmpdir/project"
 go run ./cmd/workgraph init --home "$tmpdir/.workgraph" --memory "$tmpdir/memory"
-go run ./cmd/workgraph run --home "$tmpdir/.workgraph" --watch "$tmpdir/project"
+go run ./cmd/workgraph start --home "$tmpdir/.workgraph" --watch "$tmpdir/project"
 ```
 
 In another terminal, change a file under the watched project:
@@ -214,7 +214,7 @@ go run ./cmd/workgraph stop --home "$tmpdir/.workgraph"
 To watch events stream live instead, run foreground capture:
 
 ```sh
-go run ./cmd/workgraph run --foreground --home "$tmpdir/.workgraph" --watch "$tmpdir/project"
+go run ./cmd/workgraph start --foreground --home "$tmpdir/.workgraph" --watch "$tmpdir/project"
 ```
 
 The foreground terminal should print lines like:

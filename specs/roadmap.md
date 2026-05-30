@@ -2,7 +2,7 @@
 
 ## Phase 0: Core loop (weekend V1)
 - [x] CLI: workgraph init
-- [x] CLI: workgraph run
+- [x] CLI: workgraph start
 - [x] Foreground file capture
 - [x] Background capture controls
 - [x] CLI: workgraph today

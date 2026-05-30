@@ -12,7 +12,7 @@ import (
 	workgraph "github.com/jystringfellow/workgraph"
 )
 
-func TestRunStartsBackgroundCaptureWithConfiguredWatchDirs(t *testing.T) {
+func TestStartStartsBackgroundCaptureWithConfiguredWatchDirs(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
 	watchDir := filepath.Join(tempDir, "project")
@@ -32,7 +32,7 @@ func TestRunStartsBackgroundCaptureWithConfiguredWatchDirs(t *testing.T) {
 		IgnoreNames: []string{".git", "node_modules"},
 	})
 
-	output := runWorkgraphCommand(t, nil, "run", "--home", homeDir, "--database", initResult.DatabasePath)
+	output := runWorkgraphCommand(t, nil, "start", "--home", homeDir, "--database", initResult.DatabasePath)
 	defer runWorkgraphCommand(t, nil, "stop", "--home", homeDir)
 
 	if !strings.Contains(output, "started") {
@@ -49,14 +49,14 @@ func TestRunStartsBackgroundCaptureWithConfiguredWatchDirs(t *testing.T) {
 	}
 }
 
-func TestRunUsesDefaultSaneWatchRootsAfterInit(t *testing.T) {
+func TestStartUsesDefaultSaneWatchRootsAfterInit(t *testing.T) {
 	userHome := fakeUserHomeWithDirs(t, "Desktop", "Documents")
 	env := []string{"HOME=" + userHome, "USERPROFILE=" + userHome}
 	homeDir := filepath.Join(userHome, ".workgraph")
 	dbPath := filepath.Join(homeDir, "workgraph.db")
 
 	runWorkgraphCommand(t, env, "init")
-	output := runWorkgraphCommand(t, env, "run", "--home", homeDir)
+	output := runWorkgraphCommand(t, env, "start", "--home", homeDir)
 	defer runWorkgraphCommand(t, env, "stop", "--home", homeDir)
 
 	for _, expected := range []string{filepath.Join(userHome, "Desktop"), filepath.Join(userHome, "Documents")} {
@@ -93,7 +93,7 @@ func TestStatusReportsRunningCaptureState(t *testing.T) {
 		IgnoreNames: []string{"node_modules"},
 	})
 
-	runWorkgraphCommand(t, nil, "run", "--home", homeDir, "--database", initResult.DatabasePath)
+	runWorkgraphCommand(t, nil, "start", "--home", homeDir, "--database", initResult.DatabasePath)
 	defer runWorkgraphCommand(t, nil, "stop", "--home", homeDir)
 
 	output := runWorkgraphCommand(t, nil, "status", "--home", homeDir)
@@ -124,7 +124,7 @@ func TestStopStopsBackgroundCapture(t *testing.T) {
 		IgnoreNames: []string{".git", "node_modules"},
 	})
 
-	runWorkgraphCommand(t, nil, "run", "--home", homeDir, "--database", initResult.DatabasePath)
+	runWorkgraphCommand(t, nil, "start", "--home", homeDir, "--database", initResult.DatabasePath)
 
 	target := filepath.Join(watchDir, "kept.md")
 	if err := os.WriteFile(target, []byte("keep me"), 0o644); err != nil {
@@ -140,16 +140,26 @@ func TestStopStopsBackgroundCapture(t *testing.T) {
 	assertCaptureNotRunning(t, homeDir)
 }
 
-func TestTopLevelRunRefusesBeforeInit(t *testing.T) {
+func TestTopLevelStartRefusesBeforeInit(t *testing.T) {
 	homeDir := filepath.Join(t.TempDir(), ".workgraph")
 
-	output, err := runWorkgraphCommandAllowError(nil, "run", "--home", homeDir)
+	output, err := runWorkgraphCommandAllowError(nil, "start", "--home", homeDir)
 	if err == nil {
 		runWorkgraphCommand(t, nil, "stop", "--home", homeDir)
 		t.Fatalf("expected capture start to fail before init")
 	}
 	if !strings.Contains(output, "workgraph init") {
 		t.Fatalf("expected init guidance, got:\n%s", output)
+	}
+}
+
+func TestTopLevelRunIsNotACommand(t *testing.T) {
+	output, err := runWorkgraphCommandAllowError(nil, "run")
+	if err == nil {
+		t.Fatalf("expected run command to be rejected")
+	}
+	if !strings.Contains(output, "unknown command: run") {
+		t.Fatalf("expected unknown command output for run, got:\n%s", output)
 	}
 }
 
@@ -177,7 +187,7 @@ func TestBackgroundCaptureDoesNotRecordIgnoredPaths(t *testing.T) {
 		IgnoreNames: []string{"node_modules"},
 	})
 
-	runWorkgraphCommand(t, nil, "run", "--home", homeDir, "--database", initResult.DatabasePath)
+	runWorkgraphCommand(t, nil, "start", "--home", homeDir, "--database", initResult.DatabasePath)
 	defer runWorkgraphCommand(t, nil, "stop", "--home", homeDir)
 
 	visible := filepath.Join(watchDir, "visible.md")
@@ -199,7 +209,7 @@ func TestBackgroundCaptureDoesNotRecordIgnoredPaths(t *testing.T) {
 	assertNoEvent(t, initResult.DatabasePath, "created", ignoredByName)
 }
 
-func TestRunForegroundKeepsCaptureAttached(t *testing.T) {
+func TestStartForegroundKeepsCaptureAttached(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
 	watchDir := filepath.Join(tempDir, "project")
@@ -214,7 +224,7 @@ func TestRunForegroundKeepsCaptureAttached(t *testing.T) {
 		t.Fatalf("init failed: %v", err)
 	}
 
-	output, err := runWorkgraphBinaryWithTimeout(t, nil, 5*time.Second, "run", "--foreground", "--home", homeDir, "--database", initResult.DatabasePath, "--watch", watchDir)
+	output, err := runWorkgraphBinaryWithTimeout(t, nil, 5*time.Second, "start", "--foreground", "--home", homeDir, "--database", initResult.DatabasePath, "--watch", watchDir)
 	if err == nil {
 		t.Fatalf("expected foreground run to remain attached until interrupted")
 	}

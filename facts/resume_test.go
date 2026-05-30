@@ -553,7 +553,7 @@ func TestResumeShowsMissingProjectState(t *testing.T) {
 	if !strings.Contains(resume.Message, "No recent activity found for MissingProject.") {
 		t.Fatalf("expected missing project state, got:\n%s", resume.Message)
 	}
-	if !strings.Contains(resume.Message, "Check the project name or run workgraph run") {
+	if !strings.Contains(resume.Message, "Check the project name or run workgraph start") {
 		t.Fatalf("expected capture suggestion, got:\n%s", resume.Message)
 	}
 }

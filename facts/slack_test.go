@@ -926,7 +926,7 @@ func TestSlackDisconnectRevokesTokenRemovesConfigAndRestartsDaemon(t *testing.T)
 	}))
 	defer server.Close()
 
-	runWorkgraphCommand(t, nil, "run", "--home", homeDir, "--database", initResult.DatabasePath)
+	runWorkgraphCommand(t, nil, "start", "--home", homeDir, "--database", initResult.DatabasePath)
 	defer runWorkgraphCommand(t, nil, "stop", "--home", homeDir)
 	beforePID := readDaemonPID(t, homeDir)
 
