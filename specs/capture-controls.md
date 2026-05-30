@@ -57,7 +57,10 @@ When not running, status says background capture is not running.
 
 `workgraph stop` stops background capture explicitly and preserves events already written to SQLite.
 
-Stopping should remove stale capture state when the process exits cleanly.
+Stopping should remove stale capture state when the process exits cleanly. If
+more than one background `__capture-worker` process is running for the same
+workgraph home or database, stop should terminate all of those matching workers
+without stopping foreground commands or workers for other homes.
 
 ## Local State
 
