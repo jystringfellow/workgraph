@@ -35,6 +35,7 @@
 - [x] Slack ingestion (messages, threads)
    - [x] Fix Slack thread polling so replies added to already-seen parent messages are captured.
    - [x] Make Slack DM opt-in OAuth-aware.
+   - [x] Resolve Slack conversation and user display names.
 - [ ] Calendar ingestion (Google Calendar, Outlook Calendar)
 - [ ] Meeting ingestion (Zoom, Google Meet, Microsoft Teams metadata/transcripts when explicitly available)
 - [ ] Work tracking ingestion (Jira, Azure DevOps, Linear)
