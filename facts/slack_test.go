@@ -435,7 +435,7 @@ func TestRunMarksConnectedSlackUserAsSelf(t *testing.T) {
 		t.Fatalf("run returned error: %v", err)
 	}
 	event := slackEvent(t, initResult.DatabasePath, "slack.message", "C123", "1716215470.000170")
-	if event.Actor != "You (Stringfellow)" {
+	if event.Actor != "Stringfellow (you)" {
 		t.Fatalf("expected self actor label, got %q", event.Actor)
 	}
 	if !strings.Contains(event.PayloadJSON, `"user_is_self":true`) {

@@ -860,7 +860,7 @@ func inferSlackProject(event slackExportEvent) string {
 func slackActor(event slackExportEvent) string {
 	if event.UserIsSelf {
 		if event.UserName != "" {
-			return "You (" + event.UserName + ")"
+			return event.UserName + " (you)"
 		}
 		return "You"
 	}
