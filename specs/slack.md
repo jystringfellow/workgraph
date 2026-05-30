@@ -135,7 +135,7 @@ Slack events should be stored in the existing event store:
 - `type`: `slack.message` or `slack.thread_reply`
 - `project`: explicit project from the export when present, otherwise the
   resolved conversation name
-- `actor`: Slack user id or display name when available; `You (<display name>)`
+- `actor`: Slack user id or display name when available; `<display name> (you)`
   for messages authored by the authorized Slack user when that identity is known
 - `summary`: short message text with Slack user and channel mention tokens
   normalized to readable `@name` and `#channel` forms when metadata is available
