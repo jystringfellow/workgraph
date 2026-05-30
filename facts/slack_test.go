@@ -135,10 +135,14 @@ func TestRunCollectsConfiguredSlackMessagesAndThreadReplies(t *testing.T) {
 		if got := request.Header.Get("Authorization"); got != "Bearer test-token" {
 			t.Fatalf("expected bearer token, got %q", got)
 		}
-		if request.URL.Query().Get("channel") != "C123" {
+		if request.URL.Path != "/api/users.info" && request.URL.Path != "/api/auth.test" && request.URL.Query().Get("channel") != "C123" {
 			t.Fatalf("expected configured channel C123, got %q", request.URL.Query().Get("channel"))
 		}
 		switch request.URL.Path {
+		case "/api/auth.test":
+			return `{"ok":true,"user_id":"U789"}`
+		case "/api/conversations.info":
+			return `{"ok":true,"channel":{"id":"C123","name":"cupcake-api","is_private":false}}`
 		case "/api/conversations.history":
 			transport.historyRequests++
 			return `{"ok":true,"messages":[{"type":"message","user":"U456","text":"We decided to ship auth first.","ts":"1716215400.000100","permalink":"https://example.slack.com/archives/C123/p1716215400000100","reply_count":1}]}`
@@ -148,6 +152,15 @@ func TestRunCollectsConfiguredSlackMessagesAndThreadReplies(t *testing.T) {
 				t.Fatalf("expected thread ts, got %q", request.URL.Query().Get("ts"))
 			}
 			return `{"ok":true,"messages":[{"type":"message","user":"U456","text":"We decided to ship auth first.","ts":"1716215400.000100"},{"type":"message","user":"U789","text":"I noted that in the release plan.","ts":"1716215500.000200","thread_ts":"1716215400.000100","permalink":"https://example.slack.com/archives/C123/p1716215500000200"}]}`
+		case "/api/users.info":
+			switch request.URL.Query().Get("user") {
+			case "U456":
+				return `{"ok":true,"user":{"id":"U456","name":"ada"}}`
+			case "U789":
+				return `{"ok":true,"user":{"id":"U789","name":"grace"}}`
+			default:
+				t.Fatalf("unexpected user lookup %q", request.URL.Query().Get("user"))
+			}
 		default:
 			t.Fatalf("unexpected Slack API path %s", request.URL.Path)
 		}
@@ -192,6 +205,244 @@ func TestRunCollectsConfiguredSlackMessagesAndThreadReplies(t *testing.T) {
 	}
 }
 
+func TestRunResolvesConfiguredSlackConversationAndActorNames(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	transport := &fakeSlackTransport{}
+	client := &http.Client{Transport: transport}
+	transport.handle = func(request *http.Request) string {
+		if got := request.Header.Get("Authorization"); got != "Bearer test-token" {
+			t.Fatalf("expected bearer token, got %q", got)
+		}
+		switch request.URL.Path {
+		case "/api/auth.test":
+			return `{"ok":true,"user_id":"U789"}`
+		case "/api/conversations.info":
+			if request.URL.Query().Get("channel") != "C123" {
+				t.Fatalf("expected configured channel C123 info lookup, got %q", request.URL.Query().Get("channel"))
+			}
+			return `{"ok":true,"channel":{"id":"C123","name":"cupcake-api","is_private":false}}`
+		case "/api/conversations.history":
+			transport.historyRequests++
+			if request.URL.Query().Get("channel") != "C123" {
+				t.Fatalf("expected configured channel C123, got %q", request.URL.Query().Get("channel"))
+			}
+			return `{"ok":true,"messages":[{"type":"message","user":"U456","text":"Named channel context.","ts":"1716215450.000150"}]}`
+		case "/api/users.info":
+			if request.URL.Query().Get("user") != "U456" {
+				t.Fatalf("expected actor user lookup U456, got %q", request.URL.Query().Get("user"))
+			}
+			return `{"ok":true,"user":{"id":"U456","name":"ada","profile":{"display_name":"Ada Lovelace","real_name":"Augusta Ada Lovelace"}}}`
+		default:
+			t.Fatalf("unexpected Slack API path %s", request.URL.Path)
+		}
+		return `{"ok":false,"error":"unexpected_request"}`
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:           homeDir,
+		DatabasePath:      initResult.DatabasePath,
+		WatchDirs:         []string{tempDir},
+		SlackToken:        "test-token",
+		SlackChannels:     []string{"C123"},
+		SlackAPIBaseURL:   "https://slack.test/api",
+		SlackHTTPClient:   client,
+		SlackPollInterval: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("run start failed: %v", err)
+	}
+	go func() {
+		done <- capture.Run(ctx)
+	}()
+
+	waitForSlackEventOrRunError(t, initResult.DatabasePath, "slack.message", "C123", "1716215450.000150", done, transport)
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	event := slackEvent(t, initResult.DatabasePath, "slack.message", "C123", "1716215450.000150")
+	if event.Project != "cupcake-api" {
+		t.Fatalf("expected configured channel name project, got %q", event.Project)
+	}
+	if event.Actor != "Ada Lovelace" {
+		t.Fatalf("expected resolved actor display name, got %q", event.Actor)
+	}
+	if !strings.Contains(event.PayloadJSON, `"user":"U456"`) {
+		t.Fatalf("expected payload to preserve Slack user id, got %s", event.PayloadJSON)
+	}
+	if !strings.Contains(event.PayloadJSON, `"user_name":"Ada Lovelace"`) {
+		t.Fatalf("expected payload to include resolved user name, got %s", event.PayloadJSON)
+	}
+}
+
+func TestRunNormalizesSlackMentionsAndKeepsMentionEvidence(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	transport := &fakeSlackTransport{}
+	client := &http.Client{Transport: transport}
+	transport.handle = func(request *http.Request) string {
+		if got := request.Header.Get("Authorization"); got != "Bearer test-token" {
+			t.Fatalf("expected bearer token, got %q", got)
+		}
+		switch request.URL.Path {
+		case "/api/auth.test":
+			return `{"ok":true,"user_id":"U789"}`
+		case "/api/conversations.info":
+			switch request.URL.Query().Get("channel") {
+			case "C123":
+				return `{"ok":true,"channel":{"id":"C123","name":"cupcake-api","is_private":false}}`
+			case "C999":
+				return `{"ok":true,"channel":{"id":"C999","name":"launch-plan","is_private":false}}`
+			default:
+				t.Fatalf("unexpected channel info lookup %q", request.URL.Query().Get("channel"))
+			}
+		case "/api/conversations.history":
+			transport.historyRequests++
+			if request.URL.Query().Get("channel") != "C123" {
+				t.Fatalf("expected configured channel C123, got %q", request.URL.Query().Get("channel"))
+			}
+			return `{"ok":true,"messages":[{"type":"message","user":"U456","text":"Ask <@U789> about <#C999>.","ts":"1716215460.000160"}]}`
+		case "/api/users.info":
+			switch request.URL.Query().Get("user") {
+			case "U456":
+				return `{"ok":true,"user":{"id":"U456","name":"ada","profile":{"display_name":"Ada Lovelace"}}}`
+			case "U789":
+				return `{"ok":true,"user":{"id":"U789","name":"grace","profile":{"display_name":"Grace Hopper"}}}`
+			default:
+				t.Fatalf("unexpected user lookup %q", request.URL.Query().Get("user"))
+			}
+		default:
+			t.Fatalf("unexpected Slack API path %s", request.URL.Path)
+		}
+		return `{"ok":false,"error":"unexpected_request"}`
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:           homeDir,
+		DatabasePath:      initResult.DatabasePath,
+		WatchDirs:         []string{tempDir},
+		SlackToken:        "test-token",
+		SlackChannels:     []string{"C123"},
+		SlackAPIBaseURL:   "https://slack.test/api",
+		SlackHTTPClient:   client,
+		SlackPollInterval: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("run start failed: %v", err)
+	}
+	go func() {
+		done <- capture.Run(ctx)
+	}()
+
+	waitForSlackEventOrRunError(t, initResult.DatabasePath, "slack.message", "C123", "1716215460.000160", done, transport)
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	event := slackEvent(t, initResult.DatabasePath, "slack.message", "C123", "1716215460.000160")
+	if event.Summary != "Ask @Grace Hopper (you) about #launch-plan." {
+		t.Fatalf("expected normalized summary, got %q", event.Summary)
+	}
+	for _, expected := range []string{
+		`"text":"Ask \u003c@U789\u003e about \u003c#C999\u003e."`,
+		`"normalized_text":"Ask @Grace Hopper (you) about #launch-plan."`,
+		`"type":"user"`,
+		`"id":"U789"`,
+		`"name":"Grace Hopper"`,
+		`"is_self":true`,
+		`"type":"channel"`,
+		`"id":"C999"`,
+		`"name":"launch-plan"`,
+	} {
+		if !strings.Contains(event.PayloadJSON, expected) {
+			t.Fatalf("expected payload to include %s, got %s", expected, event.PayloadJSON)
+		}
+	}
+}
+
+func TestRunMarksConnectedSlackUserAsSelf(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	transport := &fakeSlackTransport{}
+	client := &http.Client{Transport: transport}
+	transport.handle = func(request *http.Request) string {
+		switch request.URL.Path {
+		case "/api/auth.test":
+			return `{"ok":true,"user_id":"USELF"}`
+		case "/api/conversations.info":
+			return `{"ok":true,"channel":{"id":"C123","name":"cupcake-api","is_private":false}}`
+		case "/api/conversations.history":
+			return `{"ok":true,"messages":[{"type":"message","user":"USELF","text":"I will handle this.","ts":"1716215470.000170"}]}`
+		case "/api/users.info":
+			if request.URL.Query().Get("user") != "USELF" {
+				t.Fatalf("unexpected user lookup %q", request.URL.Query().Get("user"))
+			}
+			return `{"ok":true,"user":{"id":"USELF","name":"stringfellow","profile":{"display_name":"Stringfellow"}}}`
+		default:
+			t.Fatalf("unexpected Slack API path %s", request.URL.Path)
+		}
+		return `{"ok":false,"error":"unexpected_request"}`
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:           homeDir,
+		DatabasePath:      initResult.DatabasePath,
+		WatchDirs:         []string{tempDir},
+		SlackToken:        "test-token",
+		SlackChannels:     []string{"C123"},
+		SlackAPIBaseURL:   "https://slack.test/api",
+		SlackHTTPClient:   client,
+		SlackPollInterval: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("run start failed: %v", err)
+	}
+	go func() {
+		done <- capture.Run(ctx)
+	}()
+
+	waitForSlackEventOrRunError(t, initResult.DatabasePath, "slack.message", "C123", "1716215470.000170", done, transport)
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	event := slackEvent(t, initResult.DatabasePath, "slack.message", "C123", "1716215470.000170")
+	if event.Actor != "You (Stringfellow)" {
+		t.Fatalf("expected self actor label, got %q", event.Actor)
+	}
+	if !strings.Contains(event.PayloadJSON, `"user_is_self":true`) {
+		t.Fatalf("expected payload to mark self user, got %s", event.PayloadJSON)
+	}
+}
+
 func TestRunCollectsLaterSlackThreadRepliesForAlreadySeenParents(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
@@ -206,10 +457,14 @@ func TestRunCollectsLaterSlackThreadRepliesForAlreadySeenParents(t *testing.T) {
 		if got := request.Header.Get("Authorization"); got != "Bearer test-token" {
 			t.Fatalf("expected bearer token, got %q", got)
 		}
-		if request.URL.Query().Get("channel") != "C123" {
+		if request.URL.Path != "/api/users.info" && request.URL.Path != "/api/auth.test" && request.URL.Query().Get("channel") != "C123" {
 			t.Fatalf("expected configured channel C123, got %q", request.URL.Query().Get("channel"))
 		}
 		switch request.URL.Path {
+		case "/api/auth.test":
+			return `{"ok":true,"user_id":"U789"}`
+		case "/api/conversations.info":
+			return `{"ok":true,"channel":{"id":"C123","name":"cupcake-api","is_private":false}}`
 		case "/api/conversations.history":
 			transport.historyRequests++
 			if transport.historyRequests == 1 {
@@ -225,6 +480,15 @@ func TestRunCollectsLaterSlackThreadRepliesForAlreadySeenParents(t *testing.T) {
 				return `{"ok":true,"messages":[{"type":"message","user":"U456","text":"Parent thread.","ts":"1716215400.000100"}]}`
 			}
 			return `{"ok":true,"messages":[{"type":"message","user":"U456","text":"Parent thread.","ts":"1716215400.000100"},{"type":"message","user":"U789","text":"Late reply.","ts":"1716215600.000300","thread_ts":"1716215400.000100"}]}`
+		case "/api/users.info":
+			switch request.URL.Query().Get("user") {
+			case "U456":
+				return `{"ok":true,"user":{"id":"U456","name":"ada"}}`
+			case "U789":
+				return `{"ok":true,"user":{"id":"U789","name":"grace"}}`
+			default:
+				t.Fatalf("unexpected user lookup %q", request.URL.Query().Get("user"))
+			}
 		default:
 			t.Fatalf("unexpected Slack API path %s", request.URL.Path)
 		}
@@ -282,6 +546,8 @@ func TestRunDiscoversSlackChannelsWhenNoneAreConfigured(t *testing.T) {
 			t.Fatalf("expected bearer token, got %q", got)
 		}
 		switch request.URL.Path {
+		case "/api/auth.test":
+			return `{"ok":true,"user_id":"U789"}`
 		case "/api/conversations.list":
 			transport.listRequests++
 			if request.URL.Query().Get("types") != "public_channel,private_channel" {
@@ -297,6 +563,15 @@ func TestRunDiscoversSlackChannelsWhenNoneAreConfigured(t *testing.T) {
 				return `{"ok":true,"messages":[{"type":"message","user":"U789","text":"Private channel context.","ts":"1716215800.000500"}]}`
 			default:
 				t.Fatalf("unexpected discovered channel %q", request.URL.Query().Get("channel"))
+			}
+		case "/api/users.info":
+			switch request.URL.Query().Get("user") {
+			case "U456":
+				return `{"ok":true,"user":{"id":"U456","name":"ada"}}`
+			case "U789":
+				return `{"ok":true,"user":{"id":"U789","name":"grace"}}`
+			default:
+				t.Fatalf("unexpected user lookup %q", request.URL.Query().Get("user"))
 			}
 		default:
 			t.Fatalf("unexpected Slack API path %s", request.URL.Path)
@@ -364,12 +639,19 @@ func TestRunDiscoversSlackDMsOnlyWhenOptedIn(t *testing.T) {
 			t.Fatalf("expected bearer token, got %q", got)
 		}
 		switch request.URL.Path {
+		case "/api/auth.test":
+			return `{"ok":true,"user_id":"U789"}`
 		case "/api/conversations.list":
 			transport.listRequests++
 			if request.URL.Query().Get("types") != "public_channel,private_channel,im,mpim" {
 				t.Fatalf("expected opt-in DM discovery, got %q", request.URL.Query().Get("types"))
 			}
-			return `{"ok":true,"channels":[{"id":"D123","name":"","is_private":true},{"id":"GDM456","name":"release-dm","is_private":true}]}`
+			return `{"ok":true,"channels":[{"id":"D123","name":"","is_private":true,"is_im":true,"user":"U456"},{"id":"GDM456","name":"","is_private":true,"is_mpim":true}]}`
+		case "/api/conversations.members":
+			if request.URL.Query().Get("channel") != "GDM456" {
+				t.Fatalf("expected group DM members lookup, got %q", request.URL.Query().Get("channel"))
+			}
+			return `{"ok":true,"members":["U456","U789"]}`
 		case "/api/conversations.history":
 			transport.historyRequests++
 			switch request.URL.Query().Get("channel") {
@@ -379,6 +661,15 @@ func TestRunDiscoversSlackDMsOnlyWhenOptedIn(t *testing.T) {
 				return `{"ok":true,"messages":[{"type":"message","user":"U789","text":"Group DM context.","ts":"1716216000.000700"}]}`
 			default:
 				t.Fatalf("unexpected discovered DM %q", request.URL.Query().Get("channel"))
+			}
+		case "/api/users.info":
+			switch request.URL.Query().Get("user") {
+			case "U456":
+				return `{"ok":true,"user":{"id":"U456","name":"ada"}}`
+			case "U789":
+				return `{"ok":true,"user":{"id":"U789","name":"grace"}}`
+			default:
+				t.Fatalf("unexpected user lookup %q", request.URL.Query().Get("user"))
 			}
 		default:
 			t.Fatalf("unexpected Slack API path %s", request.URL.Path)
@@ -418,6 +709,14 @@ func TestRunDiscoversSlackDMsOnlyWhenOptedIn(t *testing.T) {
 	}
 	if transport.historyRequests < 2 {
 		t.Fatalf("expected history for discovered DMs, got %d", transport.historyRequests)
+	}
+	dmEvent := slackEvent(t, initResult.DatabasePath, "slack.message", "D123", "1716215900.000600")
+	if dmEvent.Project != "DM: ada" {
+		t.Fatalf("expected resolved IM project, got %q", dmEvent.Project)
+	}
+	groupDMEvent := slackEvent(t, initResult.DatabasePath, "slack.message", "GDM456", "1716216000.000700")
+	if groupDMEvent.Project != "Group DM: ada, grace" {
+		t.Fatalf("expected resolved group DM project, got %q", groupDMEvent.Project)
 	}
 }
 
@@ -467,6 +766,12 @@ func TestSlackConnectPrintsOAuthURLWithoutStoringToken(t *testing.T) {
 	}
 	if !strings.Contains(query.Get("user_scope"), "channels:history") {
 		t.Fatalf("expected user history scope in authorization URL, got %q", query.Get("user_scope"))
+	}
+	if !strings.Contains(query.Get("user_scope"), "users:read") {
+		t.Fatalf("expected user profile scope in authorization URL, got %q", query.Get("user_scope"))
+	}
+	if !strings.Contains(query.Get("user_scope"), "team:read") {
+		t.Fatalf("expected workspace metadata scope in authorization URL, got %q", query.Get("user_scope"))
 	}
 	if _, err := os.Stat(filepath.Join(homeDir, "slack.json")); !os.IsNotExist(err) {
 		t.Fatalf("expected slack config not to be written before code exchange, stat err: %v", err)
@@ -526,7 +831,7 @@ func TestSlackConnectDMEnabledMessageExplainsDisconnectBeforeRemovingDMScopes(t 
 	transport := &fakeSlackTransport{}
 	client := &http.Client{Transport: transport}
 	transport.handle = func(request *http.Request) string {
-		return `{"ok":true,"authed_user":{"id":"U123","access_token":"xoxp-installed","scope":"channels:history,channels:read,groups:history,groups:read,im:history,im:read,mpim:history,mpim:read"},"team":{"id":"T123","name":"Cupcake Labs"}}`
+		return `{"ok":true,"authed_user":{"id":"U123","access_token":"xoxp-installed","scope":"channels:history,channels:read,groups:history,groups:read,users:read,team:read,im:history,im:read,mpim:history,mpim:read"},"team":{"id":"T123","name":"Cupcake Labs"}}`
 	}
 
 	result, err := workgraph.ConnectSlack(workgraph.SlackConnectConfig{
@@ -559,7 +864,7 @@ func TestSlackConnectWithoutDMsMessageExplainsReconnectPath(t *testing.T) {
 	transport := &fakeSlackTransport{}
 	client := &http.Client{Transport: transport}
 	transport.handle = func(request *http.Request) string {
-		return `{"ok":true,"authed_user":{"id":"U123","access_token":"xoxp-installed","scope":"channels:history,channels:read,groups:history,groups:read"},"team":{"id":"T123","name":"Cupcake Labs"}}`
+		return `{"ok":true,"authed_user":{"id":"U123","access_token":"xoxp-installed","scope":"channels:history,channels:read,groups:history,groups:read,users:read,team:read"},"team":{"id":"T123","name":"Cupcake Labs"}}`
 	}
 
 	result, err := workgraph.ConnectSlack(workgraph.SlackConnectConfig{
@@ -666,7 +971,7 @@ func TestSlackConnectExchangesCodeAndStoresConnectorConfig(t *testing.T) {
 		if request.Form.Get("redirect_uri") != workgraph.DefaultSlackRedirectURI {
 			t.Fatalf("expected redirect URI form value, got %q", request.Form.Get("redirect_uri"))
 		}
-		return `{"ok":true,"authed_user":{"id":"U123","access_token":"xoxp-installed","scope":"channels:history,channels:read,groups:history,groups:read"},"team":{"id":"T123","name":"Cupcake Labs"}}`
+		return `{"ok":true,"authed_user":{"id":"U123","access_token":"xoxp-installed","scope":"channels:history,channels:read,groups:history,groups:read,users:read,team:read"},"team":{"id":"T123","name":"Cupcake Labs"}}`
 	}
 
 	result, err := workgraph.ConnectSlack(workgraph.SlackConnectConfig{
@@ -707,12 +1012,13 @@ func TestSlackConnectExchangesCodeAndStoresConnectorConfig(t *testing.T) {
 		t.Fatalf("read slack config: %v", err)
 	}
 	var stored struct {
-		AccessToken string   `json:"access_token"`
-		TeamID      string   `json:"team_id"`
-		TeamName    string   `json:"team_name"`
-		Channels    []string `json:"channels"`
-		UserScopes  []string `json:"user_scopes"`
-		APIBaseURL  string   `json:"api_base_url"`
+		AccessToken  string   `json:"access_token"`
+		AuthedUserID string   `json:"authed_user_id"`
+		TeamID       string   `json:"team_id"`
+		TeamName     string   `json:"team_name"`
+		Channels     []string `json:"channels"`
+		UserScopes   []string `json:"user_scopes"`
+		APIBaseURL   string   `json:"api_base_url"`
 	}
 	if err := json.Unmarshal(contents, &stored); err != nil {
 		t.Fatalf("parse slack config: %v", err)
@@ -720,10 +1026,13 @@ func TestSlackConnectExchangesCodeAndStoresConnectorConfig(t *testing.T) {
 	if stored.AccessToken != "xoxp-installed" || stored.TeamID != "T123" || stored.TeamName != "Cupcake Labs" {
 		t.Fatalf("unexpected stored Slack config: %#v", stored)
 	}
+	if stored.AuthedUserID != "U123" {
+		t.Fatalf("expected stored authed user id, got %q", stored.AuthedUserID)
+	}
 	if strings.Join(stored.Channels, ",") != "C123,C456" {
 		t.Fatalf("expected stored channels, got %#v", stored.Channels)
 	}
-	if strings.Join(stored.UserScopes, ",") != "channels:history,channels:read,groups:history,groups:read" {
+	if strings.Join(stored.UserScopes, ",") != "channels:history,channels:read,groups:history,groups:read,users:read,team:read" {
 		t.Fatalf("expected stored OAuth user scopes, got %#v", stored.UserScopes)
 	}
 	if stored.APIBaseURL != "https://slack.test/api" {
@@ -789,13 +1098,28 @@ func TestRunUsesStoredSlackConnectorConfig(t *testing.T) {
 		if got := request.Header.Get("Authorization"); got != "Bearer xoxb-stored" {
 			t.Fatalf("expected stored bearer token, got %q", got)
 		}
-		if request.URL.Query().Get("channel") != "CSTORED" {
-			t.Fatalf("expected stored channel, got %q", request.URL.Query().Get("channel"))
-		}
-		if request.URL.Path != "/api/conversations.history" {
+		switch request.URL.Path {
+		case "/api/auth.test":
+			return `{"ok":true,"user_id":"U456"}`
+		case "/api/conversations.info":
+			if request.URL.Query().Get("channel") != "CSTORED" {
+				t.Fatalf("expected stored channel info, got %q", request.URL.Query().Get("channel"))
+			}
+			return `{"ok":true,"channel":{"id":"CSTORED","name":"stored-project","is_private":false}}`
+		case "/api/conversations.history":
+			if request.URL.Query().Get("channel") != "CSTORED" {
+				t.Fatalf("expected stored channel, got %q", request.URL.Query().Get("channel"))
+			}
+			return `{"ok":true,"messages":[{"type":"message","user":"U456","text":"Stored config works.","ts":"1716215600.000300"}]}`
+		case "/api/users.info":
+			if request.URL.Query().Get("user") != "U456" {
+				t.Fatalf("unexpected user lookup %q", request.URL.Query().Get("user"))
+			}
+			return `{"ok":true,"user":{"id":"U456","name":"ada"}}`
+		default:
 			t.Fatalf("unexpected Slack API path %s", request.URL.Path)
 		}
-		return `{"ok":true,"messages":[{"type":"message","user":"U456","text":"Stored config works.","ts":"1716215600.000300"}]}`
+		return `{"ok":false,"error":"unexpected_request"}`
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

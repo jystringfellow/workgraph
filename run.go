@@ -51,6 +51,8 @@ type RunConfig struct {
 	SlackChannels []string
 	// SlackIncludeDMs opts into Slack IM and MPIM discovery.
 	SlackIncludeDMs bool
+	// SlackSelfUserID is the authorized Slack user id for self-authored events.
+	SlackSelfUserID string
 	// SlackAPIBaseURL overrides the Slack Web API base URL for tests.
 	SlackAPIBaseURL string
 	// SlackHTTPClient overrides the Slack API HTTP client for tests.
@@ -101,6 +103,7 @@ type RunCapture struct {
 	slackToken          string
 	slackChannels       []string
 	slackIncludeDMs     bool
+	slackSelfUserID     string
 	slackAPIBaseURL     string
 	slackHTTPClient     *http.Client
 	slackCursors        map[string]string
@@ -172,12 +175,14 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 	slackToken := config.SlackToken
 	slackChannels := append([]string(nil), config.SlackChannels...)
 	slackIncludeDMs := config.SlackIncludeDMs
+	slackSelfUserID := config.SlackSelfUserID
 	slackAPIBaseURL := config.SlackAPIBaseURL
 	if slackToken == "" && len(slackChannels) == 0 {
 		if slackConfig, err := readSlackConnectorConfig(status.HomeDir); err == nil {
 			slackToken = slackConfig.AccessToken
 			slackChannels = append([]string(nil), slackConfig.Channels...)
 			slackIncludeDMs = slackConfig.IncludeDMs
+			slackSelfUserID = slackConfig.AuthedUserID
 			if slackAPIBaseURL == "" {
 				slackAPIBaseURL = slackConfig.APIBaseURL
 			}
@@ -205,6 +210,7 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 		slackToken:          slackToken,
 		slackChannels:       slackChannels,
 		slackIncludeDMs:     slackIncludeDMs,
+		slackSelfUserID:     slackSelfUserID,
 		slackAPIBaseURL:     slackAPIBaseURL,
 		slackHTTPClient:     config.SlackHTTPClient,
 		slackCursors:        map[string]string{},
@@ -296,6 +302,7 @@ func (capture *RunCapture) captureSlackEvents() error {
 		Token:         capture.slackToken,
 		Channels:      capture.slackChannels,
 		IncludeDMs:    capture.slackIncludeDMs,
+		SelfUserID:    capture.slackSelfUserID,
 		APIBaseURL:    capture.slackAPIBaseURL,
 		HTTPClient:    capture.slackHTTPClient,
 		Cursors:       capture.slackCursors,

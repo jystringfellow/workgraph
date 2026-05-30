@@ -19,6 +19,9 @@ Scenario: Daemon collects configured Slack messages
   And Slack access is configured for a channel
   When I run "workgraph run"
   Then workgraph periodically collects new Slack messages from that channel
+  And workgraph resolves Slack conversation and actor names when available
+  And workgraph normalizes Slack mentions while preserving ids as evidence
+  And workgraph marks messages authored by the connected Slack user
   And workgraph stores available thread replies
   And workgraph captures later replies added to already-seen thread parents
   And workgraph does not post or react in Slack

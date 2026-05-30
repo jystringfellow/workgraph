@@ -59,6 +59,7 @@ type SlackAPICaptureConfig struct {
 	Token         string
 	Channels      []string
 	IncludeDMs    bool
+	SelfUserID    string
 	APIBaseURL    string
 	HTTPClient    *http.Client
 	Cursors       map[string]string
@@ -76,6 +77,9 @@ type SlackChannel struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
 	Private bool   `json:"is_private"`
+	IsIM    bool   `json:"is_im"`
+	IsMPIM  bool   `json:"is_mpim"`
+	User    string `json:"user"`
 }
 
 // SlackConnectConfig controls Slack OAuth setup.
@@ -120,37 +124,53 @@ type SlackDisconnectResult struct {
 }
 
 type slackConnectorConfig struct {
-	AccessToken string   `json:"access_token"`
-	TeamID      string   `json:"team_id,omitempty"`
-	TeamName    string   `json:"team_name,omitempty"`
-	BotUserID   string   `json:"bot_user_id,omitempty"`
-	Channels    []string `json:"channels"`
-	IncludeDMs  bool     `json:"include_dms,omitempty"`
-	UserScopes  []string `json:"user_scopes"`
-	APIBaseURL  string   `json:"api_base_url,omitempty"`
+	AccessToken  string   `json:"access_token"`
+	AuthedUserID string   `json:"authed_user_id,omitempty"`
+	TeamID       string   `json:"team_id,omitempty"`
+	TeamName     string   `json:"team_name,omitempty"`
+	BotUserID    string   `json:"bot_user_id,omitempty"`
+	Channels     []string `json:"channels"`
+	IncludeDMs   bool     `json:"include_dms,omitempty"`
+	UserScopes   []string `json:"user_scopes"`
+	APIBaseURL   string   `json:"api_base_url,omitempty"`
 }
 
 type slackExportEvent struct {
-	Kind        string `json:"kind"`
-	ChannelID   string `json:"channel_id"`
-	ChannelName string `json:"channel_name"`
-	Project     string `json:"project,omitempty"`
-	User        string `json:"user"`
-	Text        string `json:"text"`
-	TS          string `json:"ts"`
-	ThreadTS    string `json:"thread_ts,omitempty"`
-	Permalink   string `json:"permalink"`
-	Timestamp   string `json:"timestamp"`
+	Kind           string         `json:"kind"`
+	ChannelID      string         `json:"channel_id"`
+	ChannelName    string         `json:"channel_name"`
+	Project        string         `json:"project,omitempty"`
+	User           string         `json:"user"`
+	UserName       string         `json:"user_name,omitempty"`
+	UserIsSelf     bool           `json:"user_is_self,omitempty"`
+	Text           string         `json:"text"`
+	NormalizedText string         `json:"normalized_text,omitempty"`
+	Mentions       []slackMention `json:"mentions,omitempty"`
+	TS             string         `json:"ts"`
+	ThreadTS       string         `json:"thread_ts,omitempty"`
+	Permalink      string         `json:"permalink"`
+	Timestamp      string         `json:"timestamp"`
 }
 
 type slackEventPayload struct {
-	ChannelID   string `json:"channel_id"`
-	ChannelName string `json:"channel_name"`
-	User        string `json:"user"`
-	Text        string `json:"text"`
-	TS          string `json:"ts"`
-	ThreadTS    string `json:"thread_ts,omitempty"`
-	Permalink   string `json:"permalink"`
+	ChannelID      string         `json:"channel_id"`
+	ChannelName    string         `json:"channel_name"`
+	User           string         `json:"user"`
+	UserName       string         `json:"user_name,omitempty"`
+	UserIsSelf     bool           `json:"user_is_self,omitempty"`
+	Text           string         `json:"text"`
+	NormalizedText string         `json:"normalized_text,omitempty"`
+	Mentions       []slackMention `json:"mentions,omitempty"`
+	TS             string         `json:"ts"`
+	ThreadTS       string         `json:"thread_ts,omitempty"`
+	Permalink      string         `json:"permalink"`
+}
+
+type slackMention struct {
+	Type   string `json:"type"`
+	ID     string `json:"id"`
+	Name   string `json:"name,omitempty"`
+	IsSelf bool   `json:"is_self,omitempty"`
 }
 
 type slackAPIResponse struct {
@@ -173,6 +193,40 @@ type slackConversationsListResponse struct {
 	OK       bool           `json:"ok"`
 	Error    string         `json:"error"`
 	Channels []SlackChannel `json:"channels"`
+}
+
+type slackConversationInfoResponse struct {
+	OK      bool         `json:"ok"`
+	Error   string       `json:"error"`
+	Channel SlackChannel `json:"channel"`
+}
+
+type slackConversationMembersResponse struct {
+	OK      bool     `json:"ok"`
+	Error   string   `json:"error"`
+	Members []string `json:"members"`
+}
+
+type slackUserInfoResponse struct {
+	OK    bool      `json:"ok"`
+	Error string    `json:"error"`
+	User  slackUser `json:"user"`
+}
+
+type slackAuthTestResponse struct {
+	OK     bool   `json:"ok"`
+	Error  string `json:"error"`
+	UserID string `json:"user_id"`
+}
+
+type slackUser struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	RealName string `json:"real_name"`
+	Profile  struct {
+		DisplayName string `json:"display_name"`
+		RealName    string `json:"real_name"`
+	} `json:"profile"`
 }
 
 type slackOAuthAccessResponse struct {
@@ -316,14 +370,15 @@ func ConnectSlack(config SlackConnectConfig) (SlackConnectResult, error) {
 	}
 
 	stored := slackConnectorConfig{
-		AccessToken: accessToken,
-		TeamID:      token.Team.ID,
-		TeamName:    token.Team.Name,
-		BotUserID:   token.BotUserID,
-		Channels:    append([]string(nil), config.Channels...),
-		IncludeDMs:  config.IncludeDMs && slackHasDMScopes(slackOAuthUserScopes(token)),
-		UserScopes:  slackOAuthUserScopes(token),
-		APIBaseURL:  config.APIBaseURL,
+		AccessToken:  accessToken,
+		AuthedUserID: token.AuthedUser.ID,
+		TeamID:       token.Team.ID,
+		TeamName:     token.Team.Name,
+		BotUserID:    token.BotUserID,
+		Channels:     append([]string(nil), config.Channels...),
+		IncludeDMs:   config.IncludeDMs && slackHasDMScopes(slackOAuthUserScopes(token)),
+		UserScopes:   slackOAuthUserScopes(token),
+		APIBaseURL:   config.APIBaseURL,
 	}
 	if err := writeSlackConnectorConfig(result.ConfigPath, stored); err != nil {
 		return SlackConnectResult{}, err
@@ -444,14 +499,15 @@ func ConnectSlackWithBrowser(ctx context.Context, config SlackConnectConfig) (Sl
 		return SlackConnectResult{}, errors.New("slack oauth response did not include an access token")
 	}
 	stored := slackConnectorConfig{
-		AccessToken: accessToken,
-		TeamID:      token.Team.ID,
-		TeamName:    token.Team.Name,
-		BotUserID:   token.BotUserID,
-		Channels:    append([]string(nil), config.Channels...),
-		IncludeDMs:  config.IncludeDMs && slackHasDMScopes(slackOAuthUserScopes(token)),
-		UserScopes:  slackOAuthUserScopes(token),
-		APIBaseURL:  config.APIBaseURL,
+		AccessToken:  accessToken,
+		AuthedUserID: token.AuthedUser.ID,
+		TeamID:       token.Team.ID,
+		TeamName:     token.Team.Name,
+		BotUserID:    token.BotUserID,
+		Channels:     append([]string(nil), config.Channels...),
+		IncludeDMs:   config.IncludeDMs && slackHasDMScopes(slackOAuthUserScopes(token)),
+		UserScopes:   slackOAuthUserScopes(token),
+		APIBaseURL:   config.APIBaseURL,
 	}
 	configPath := slackConfigPath(homeDir)
 	if err := writeSlackConnectorConfig(configPath, stored); err != nil {
@@ -555,6 +611,20 @@ func CaptureSlackFromAPI(config SlackAPICaptureConfig) (SlackAPICaptureResult, e
 		if err != nil {
 			return SlackAPICaptureResult{}, err
 		}
+	} else {
+		channels, err = fetchSlackConversationInfoForChannels(config, channels)
+		if err != nil {
+			return SlackAPICaptureResult{}, err
+		}
+	}
+	userNames := map[string]string{}
+	if err := resolveSlackConversationNames(config, channels, userNames); err != nil {
+		return SlackAPICaptureResult{}, err
+	}
+	channelNames := slackChannelNameCache(channels)
+	selfUserID := config.SelfUserID
+	if selfUserID == "" {
+		selfUserID = fetchSlackSelfUserID(config)
 	}
 
 	stored := 0
@@ -567,6 +637,9 @@ func CaptureSlackFromAPI(config SlackAPICaptureConfig) (SlackAPICaptureResult, e
 		newest := cursors[channel.ID]
 		for _, message := range messages {
 			event := slackEventFromAPIMessage(channel.ID, channel.Name, message, "")
+			event.UserName = fetchSlackUserName(config, message.User, userNames)
+			event.UserIsSelf = slackUserIsSelf(message.User, selfUserID)
+			event.NormalizedText, event.Mentions = normalizeSlackText(config, message.Text, userNames, channelNames, selfUserID)
 			inserted, err := storeSlackEvent(db, event)
 			if err != nil {
 				return SlackAPICaptureResult{}, err
@@ -584,7 +657,7 @@ func CaptureSlackFromAPI(config SlackAPICaptureConfig) (SlackAPICaptureResult, e
 			if _, ok := threadCursors[threadKey]; !ok {
 				threadCursors[threadKey] = message.TS
 			}
-			replyStored, latestReply, err := captureSlackThreadReplies(db, config, channel, message.TS, threadCursors[threadKey])
+			replyStored, latestReply, err := captureSlackThreadReplies(db, config, channel, message.TS, threadCursors[threadKey], userNames, selfUserID)
 			if err != nil {
 				return SlackAPICaptureResult{}, err
 			}
@@ -606,7 +679,7 @@ func CaptureSlackFromAPI(config SlackAPICaptureConfig) (SlackAPICaptureResult, e
 			if !ok || threadChannelID != channel.ID {
 				continue
 			}
-			replyStored, latestReply, err := captureSlackThreadReplies(db, config, channel, threadTS, cursor)
+			replyStored, latestReply, err := captureSlackThreadReplies(db, config, channel, threadTS, cursor, userNames, selfUserID)
 			if err != nil {
 				return SlackAPICaptureResult{}, err
 			}
@@ -715,13 +788,17 @@ func storeSlackEvent(db *sql.DB, event slackExportEvent) (bool, error) {
 	}
 
 	payload, err := json.Marshal(slackEventPayload{
-		ChannelID:   event.ChannelID,
-		ChannelName: event.ChannelName,
-		User:        event.User,
-		Text:        event.Text,
-		TS:          event.TS,
-		ThreadTS:    event.ThreadTS,
-		Permalink:   event.Permalink,
+		ChannelID:      event.ChannelID,
+		ChannelName:    event.ChannelName,
+		User:           event.User,
+		UserName:       event.UserName,
+		UserIsSelf:     event.UserIsSelf,
+		Text:           event.Text,
+		NormalizedText: event.NormalizedText,
+		Mentions:       event.Mentions,
+		TS:             event.TS,
+		ThreadTS:       event.ThreadTS,
+		Permalink:      event.Permalink,
 	})
 	if err != nil {
 		return false, fmt.Errorf("encode slack event: %w", err)
@@ -745,8 +822,8 @@ func storeSlackEvent(db *sql.DB, event slackExportEvent) (bool, error) {
 		timestamp.UTC().Format(time.RFC3339Nano),
 		string(payload),
 		inferSlackProject(event),
-		event.User,
-		event.Text,
+		slackActor(event),
+		slackSummary(event),
 		time.Now().UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -778,6 +855,26 @@ func inferSlackProject(event slackExportEvent) string {
 		return strings.TrimPrefix(event.ChannelName, "#")
 	}
 	return event.ChannelID
+}
+
+func slackActor(event slackExportEvent) string {
+	if event.UserIsSelf {
+		if event.UserName != "" {
+			return "You (" + event.UserName + ")"
+		}
+		return "You"
+	}
+	if event.UserName != "" {
+		return event.UserName
+	}
+	return event.User
+}
+
+func slackSummary(event slackExportEvent) string {
+	if event.NormalizedText != "" {
+		return event.NormalizedText
+	}
+	return event.Text
 }
 
 func slackCaptureMessage(result SlackCaptureResult) string {
@@ -843,6 +940,206 @@ func discoverSlackConversations(config SlackAPICaptureConfig) ([]SlackChannel, e
 	return apiResponse.Channels, nil
 }
 
+func fetchSlackConversationInfoForChannels(config SlackAPICaptureConfig, channels []SlackChannel) ([]SlackChannel, error) {
+	resolved := make([]SlackChannel, 0, len(channels))
+	for _, channel := range channels {
+		if channel.ID == "" || channel.Name != "" {
+			resolved = append(resolved, channel)
+			continue
+		}
+		info, err := fetchSlackConversationInfo(config, channel.ID)
+		if err != nil {
+			resolved = append(resolved, channel)
+			continue
+		}
+		if info.ID == "" {
+			info.ID = channel.ID
+		}
+		resolved = append(resolved, info)
+	}
+	return resolved, nil
+}
+
+func fetchSlackConversationInfo(config SlackAPICaptureConfig, channelID string) (SlackChannel, error) {
+	values := url.Values{}
+	values.Set("channel", channelID)
+	var apiResponse slackConversationInfoResponse
+	if err := fetchSlackAPIJSON(config, "conversations.info", values, &apiResponse); err != nil {
+		return SlackChannel{}, err
+	}
+	if !apiResponse.OK {
+		if apiResponse.Error == "" {
+			apiResponse.Error = "unknown_error"
+		}
+		return SlackChannel{}, fmt.Errorf("slack api conversations.info: %s", apiResponse.Error)
+	}
+	return apiResponse.Channel, nil
+}
+
+func resolveSlackConversationNames(config SlackAPICaptureConfig, channels []SlackChannel, userNames map[string]string) error {
+	for i := range channels {
+		name, err := slackConversationDisplayName(config, channels[i], userNames)
+		if err != nil {
+			return err
+		}
+		if name != "" {
+			channels[i].Name = name
+		}
+	}
+	return nil
+}
+
+func slackConversationDisplayName(config SlackAPICaptureConfig, channel SlackChannel, userNames map[string]string) (string, error) {
+	if channel.IsIM && channel.User != "" {
+		userName := fetchSlackUserName(config, channel.User, userNames)
+		if userName != "" {
+			return "DM: " + userName, nil
+		}
+	}
+	if channel.IsMPIM {
+		memberNames := fetchSlackConversationMemberNames(config, channel.ID, userNames)
+		if len(memberNames) > 0 {
+			return "Group DM: " + strings.Join(memberNames, ", "), nil
+		}
+	}
+	if channel.Name != "" {
+		return strings.TrimPrefix(channel.Name, "#"), nil
+	}
+	return channel.ID, nil
+}
+
+func fetchSlackConversationMemberNames(config SlackAPICaptureConfig, channelID string, userNames map[string]string) []string {
+	values := url.Values{}
+	values.Set("channel", channelID)
+	var apiResponse slackConversationMembersResponse
+	if err := fetchSlackAPIJSON(config, "conversations.members", values, &apiResponse); err != nil {
+		return nil
+	}
+	if !apiResponse.OK {
+		return nil
+	}
+	names := make([]string, 0, len(apiResponse.Members))
+	for _, memberID := range apiResponse.Members {
+		name := fetchSlackUserName(config, memberID, userNames)
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+func slackChannelNameCache(channels []SlackChannel) map[string]string {
+	names := map[string]string{}
+	for _, channel := range channels {
+		if channel.ID == "" || channel.Name == "" {
+			continue
+		}
+		names[channel.ID] = strings.TrimPrefix(channel.Name, "#")
+	}
+	return names
+}
+
+func normalizeSlackText(config SlackAPICaptureConfig, text string, userNames map[string]string, channelNames map[string]string, selfUserID string) (string, []slackMention) {
+	if text == "" {
+		return "", nil
+	}
+	var normalized strings.Builder
+	mentions := []slackMention{}
+	for i := 0; i < len(text); {
+		if text[i] != '<' {
+			normalized.WriteByte(text[i])
+			i++
+			continue
+		}
+		end := strings.IndexByte(text[i:], '>')
+		if end < 0 {
+			normalized.WriteByte(text[i])
+			i++
+			continue
+		}
+		end += i
+		token := text[i+1 : end]
+		replacement, mention, ok := resolveSlackMentionToken(config, token, userNames, channelNames, selfUserID)
+		if !ok {
+			normalized.WriteString(text[i : end+1])
+			i = end + 1
+			continue
+		}
+		normalized.WriteString(replacement)
+		mentions = append(mentions, mention)
+		i = end + 1
+	}
+	if len(mentions) == 0 {
+		return text, nil
+	}
+	return normalized.String(), mentions
+}
+
+func resolveSlackMentionToken(config SlackAPICaptureConfig, token string, userNames map[string]string, channelNames map[string]string, selfUserID string) (string, slackMention, bool) {
+	if strings.HasPrefix(token, "@") {
+		id, fallback := splitSlackMentionIDAndLabel(strings.TrimPrefix(token, "@"))
+		name := fetchSlackUserName(config, id, userNames)
+		if name == "" {
+			name = fallback
+		}
+		if name == "" {
+			name = id
+		}
+		isSelf := slackUserIsSelf(id, selfUserID)
+		replacement := "@" + name
+		if isSelf {
+			replacement += " (you)"
+		}
+		return replacement, slackMention{Type: "user", ID: id, Name: name, IsSelf: isSelf}, true
+	}
+	if strings.HasPrefix(token, "#") {
+		id, fallback := splitSlackMentionIDAndLabel(strings.TrimPrefix(token, "#"))
+		name := slackChannelMentionName(config, id, fallback, channelNames)
+		if name == "" {
+			name = id
+		}
+		return "#" + strings.TrimPrefix(name, "#"), slackMention{Type: "channel", ID: id, Name: strings.TrimPrefix(name, "#")}, true
+	}
+	return "", slackMention{}, false
+}
+
+func splitSlackMentionIDAndLabel(token string) (string, string) {
+	parts := strings.SplitN(token, "|", 2)
+	id := strings.TrimSpace(parts[0])
+	if caret := strings.IndexByte(id, '^'); caret >= 0 {
+		id = id[caret+1:]
+	}
+	label := ""
+	if len(parts) == 2 {
+		label = strings.TrimSpace(parts[1])
+	}
+	return id, label
+}
+
+func slackChannelMentionName(config SlackAPICaptureConfig, channelID string, fallback string, channelNames map[string]string) string {
+	if channelNames != nil {
+		if name := channelNames[channelID]; name != "" {
+			return name
+		}
+	}
+	if fallback != "" {
+		return fallback
+	}
+	info, err := fetchSlackConversationInfo(config, channelID)
+	if err != nil {
+		return ""
+	}
+	name := strings.TrimPrefix(info.Name, "#")
+	if name != "" && channelNames != nil {
+		channelNames[channelID] = name
+	}
+	return name
+}
+
+func slackUserIsSelf(userID string, selfUserID string) bool {
+	return userID != "" && selfUserID != "" && userID == selfUserID
+}
+
 func explicitSlackChannels(ids []string) []SlackChannel {
 	channels := make([]SlackChannel, 0, len(ids))
 	for _, id := range ids {
@@ -859,7 +1156,7 @@ func fetchSlackReplies(config SlackAPICaptureConfig, channel string, ts string) 
 	return fetchSlackMessages(config, "conversations.replies", values)
 }
 
-func captureSlackThreadReplies(db *sql.DB, config SlackAPICaptureConfig, channel SlackChannel, threadTS string, newest string) (int, string, error) {
+func captureSlackThreadReplies(db *sql.DB, config SlackAPICaptureConfig, channel SlackChannel, threadTS string, newest string, userNames map[string]string, selfUserID string) (int, string, error) {
 	replies, err := fetchSlackReplies(config, channel.ID, threadTS)
 	if err != nil {
 		return 0, newest, err
@@ -873,6 +1170,9 @@ func captureSlackThreadReplies(db *sql.DB, config SlackAPICaptureConfig, channel
 			continue
 		}
 		replyEvent := slackEventFromAPIMessage(channel.ID, channel.Name, reply, threadTS)
+		replyEvent.UserName = fetchSlackUserName(config, reply.User, userNames)
+		replyEvent.UserIsSelf = slackUserIsSelf(reply.User, selfUserID)
+		replyEvent.NormalizedText, replyEvent.Mentions = normalizeSlackText(config, reply.Text, userNames, nil, selfUserID)
 		inserted, err := storeSlackEvent(db, replyEvent)
 		if err != nil {
 			return stored, newest, err
@@ -897,6 +1197,83 @@ func parseSlackThreadCursorKey(key string) (string, string, bool) {
 		return "", "", false
 	}
 	return parts[0], parts[1], true
+}
+
+func fetchSlackUserName(config SlackAPICaptureConfig, userID string, userNames map[string]string) string {
+	if userID == "" {
+		return ""
+	}
+	if name, ok := userNames[userID]; ok {
+		return name
+	}
+	values := url.Values{}
+	values.Set("user", userID)
+	var apiResponse slackUserInfoResponse
+	if err := fetchSlackAPIJSON(config, "users.info", values, &apiResponse); err != nil {
+		return ""
+	}
+	if !apiResponse.OK {
+		return ""
+	}
+	name := slackUserDisplayName(apiResponse.User)
+	userNames[userID] = name
+	return name
+}
+
+func fetchSlackSelfUserID(config SlackAPICaptureConfig) string {
+	var apiResponse slackAuthTestResponse
+	if err := fetchSlackAPIJSON(config, "auth.test", url.Values{}, &apiResponse); err != nil {
+		return ""
+	}
+	if !apiResponse.OK {
+		return ""
+	}
+	return apiResponse.UserID
+}
+
+func slackUserDisplayName(user slackUser) string {
+	for _, candidate := range []string{
+		user.Profile.DisplayName,
+		user.Profile.RealName,
+		user.RealName,
+		user.Name,
+		user.ID,
+	} {
+		if strings.TrimSpace(candidate) != "" {
+			return strings.TrimSpace(candidate)
+		}
+	}
+	return ""
+}
+
+func fetchSlackAPIJSON(config SlackAPICaptureConfig, method string, values url.Values, target any) error {
+	baseURL := config.APIBaseURL
+	if baseURL == "" {
+		baseURL = "https://slack.com/api"
+	}
+	endpoint := strings.TrimRight(baseURL, "/") + "/" + method + "?" + values.Encode()
+	request, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("create slack request: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+config.Token)
+
+	client := config.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("fetch slack %s: %w", method, err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("fetch slack %s: status %s", method, response.Status)
+	}
+	if err := json.NewDecoder(response.Body).Decode(target); err != nil {
+		return fmt.Errorf("parse slack %s response: %w", method, err)
+	}
+	return nil
 }
 
 func fetchSlackMessages(config SlackAPICaptureConfig, method string, values url.Values) ([]slackAPIMessage, error) {
@@ -1050,7 +1427,7 @@ func slackScopes(configured []string, includeDMs bool) []string {
 	if len(configured) > 0 {
 		return append([]string(nil), configured...)
 	}
-	scopes := []string{"channels:history", "channels:read", "groups:history", "groups:read"}
+	scopes := []string{"channels:history", "channels:read", "groups:history", "groups:read", "users:read", "team:read"}
 	if includeDMs {
 		scopes = append(scopes, "im:history", "im:read", "mpim:history", "mpim:read")
 	}
