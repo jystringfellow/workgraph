@@ -24,3 +24,14 @@ Scenario: Capture Google Calendar events
   When I run "workgraph calendar capture --provider google --calendar-id primary"
   Then workgraph stores those Google events as calendar.event records
   And the records use the same normalized payload contract as imported calendar events
+
+Scenario: Connect Google Calendar with OAuth
+  Given workgraph has been initialized
+  When I run "workgraph calendar connect google"
+  Then workgraph opens Google OAuth and stores local Google Calendar connector settings after approval
+  And the browser flow uses PKCE without requiring a client secret
+  When I run "workgraph calendar connect google --no-browser"
+  Then workgraph prints a Google OAuth authorization URL
+  And workgraph does not store local Google Calendar connector settings yet
+  When I rerun "workgraph calendar connect google" with the OAuth code and matching state
+  Then workgraph stores local Google Calendar connector settings

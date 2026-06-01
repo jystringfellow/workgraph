@@ -17,9 +17,28 @@ workgraph calendar capture --provider google --calendar-id primary --token <acce
 ```
 
 The Google adapter reads events from the Google Calendar events endpoint and
-maps Google-specific fields into the same normalized event contract. OAuth setup
-and token refresh are separate follow-up work; this slice accepts an access
-token so the capture and storage behavior can be tested independently.
+maps Google-specific fields into the same normalized event contract. Direct
+token capture is mainly a fact-friendly adapter path; user-facing use should go
+through connection setup.
+
+Google Calendar connection setup uses OAuth:
+
+```text
+workgraph calendar connect google
+workgraph calendar connect google --no-browser
+workgraph calendar connect google --code <oauth-code> --state <state>
+```
+
+By default, connect opens the Google authorization URL and completes OAuth
+through a local PKCE callback, so a client secret is not required. The user can
+override the default workgraph client id with `--client-id`; manual or
+confidential-client flows can also pass `--client-secret`. Manual connect with
+`--no-browser` prints an authorization URL and does not write local connector
+settings until the user reruns it with an OAuth code and matching state. After
+code exchange, workgraph stores Google Calendar connector settings under the
+workgraph home directory with local-user-only file permissions. Stored settings
+include access token, refresh token when granted, token type, expiry, granted
+scopes, selected calendar ids, and provider API base URL.
 
 Each exported event uses a provider-neutral shape:
 
