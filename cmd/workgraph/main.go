@@ -105,6 +105,10 @@ func runCalendarCapture(args []string, stdout io.Writer, stderr io.Writer) int {
 	homeDir := flags.String("home", "", "workgraph home directory")
 	databasePath := flags.String("database", "", "workgraph SQLite database path")
 	eventsFile := flags.String("events-file", "", "Calendar event export JSON file")
+	provider := flags.String("provider", "", "Calendar provider to capture from")
+	calendarID := flags.String("calendar-id", "primary", "Provider calendar id")
+	token := flags.String("token", os.Getenv("WORKGRAPH_CALENDAR_TOKEN"), "Calendar provider access token")
+	calendarAPIBaseURL := flags.String("calendar-api-base", "", "Calendar API base URL")
 
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -114,6 +118,10 @@ func runCalendarCapture(args []string, stdout io.Writer, stderr io.Writer) int {
 		HomeDir:      *homeDir,
 		DatabasePath: *databasePath,
 		EventsFile:   *eventsFile,
+		Provider:     *provider,
+		CalendarID:   *calendarID,
+		Token:        *token,
+		APIBaseURL:   *calendarAPIBaseURL,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph calendar capture: %v\n", err)

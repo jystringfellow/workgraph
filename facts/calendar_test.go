@@ -2,6 +2,8 @@ package facts
 
 import (
 	"database/sql"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -108,6 +110,93 @@ func TestCalendarCaptureKeepsOneEventPerProviderCalendarID(t *testing.T) {
 
 	if count := calendarEventCount(t, filepath.Join(homeDir, "workgraph.db")); count != 1 {
 		t.Fatalf("expected recapture to keep one calendar event, got %d", count)
+	}
+}
+
+func TestCalendarCaptureMapsGoogleCalendarEvents(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	var gotPath string
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		gotPath = request.URL.Path
+		gotAuth = request.Header.Get("Authorization")
+		if request.URL.Query().Get("singleEvents") != "true" {
+			t.Fatalf("expected singleEvents=true, got %q", request.URL.RawQuery)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{
+  "items": [
+    {
+      "id": "google-event-1",
+      "summary": "Roadmap review",
+      "start": {"dateTime": "2026-05-21T09:00:00-07:00"},
+      "end": {"dateTime": "2026-05-21T09:45:00-07:00"},
+      "location": "Board Room",
+      "hangoutLink": "https://meet.google.com/road-map",
+      "organizer": {"displayName": "Ada Lovelace", "email": "ada@example.test"},
+      "attendees": [
+        {"displayName": "Grace Hopper", "email": "grace@example.test"},
+        {"email": "stringfellow@example.test"}
+      ],
+      "status": "confirmed"
+    }
+  ]
+}`))
+	}))
+	defer server.Close()
+
+	output, err := runworkgraph(t, repoRoot, "calendar", "capture",
+		"--home", homeDir,
+		"--provider", "google",
+		"--calendar-id", "primary",
+		"--token", "test-token",
+		"--calendar-api-base", server.URL,
+	)
+	if err != nil {
+		t.Fatalf("workgraph calendar capture failed: %v\n%s", err, output)
+	}
+	if gotPath != "/calendar/v3/calendars/primary/events" {
+		t.Fatalf("expected Google events endpoint, got %q", gotPath)
+	}
+	if gotAuth != "Bearer test-token" {
+		t.Fatalf("expected bearer token, got %q", gotAuth)
+	}
+
+	event := calendarEvent(t, filepath.Join(homeDir, "workgraph.db"), "google", "primary", "google-event-1")
+	if event.Timestamp != "2026-05-21T16:00:00Z" {
+		t.Fatalf("expected UTC start timestamp, got %q", event.Timestamp)
+	}
+	if event.Actor != "Ada Lovelace" {
+		t.Fatalf("expected organizer display name, got %q", event.Actor)
+	}
+	if event.Summary != "Roadmap review" {
+		t.Fatalf("expected Google summary as title, got %q", event.Summary)
+	}
+	for _, expected := range []string{
+		`"provider":"google"`,
+		`"calendar_id":"primary"`,
+		`"event_id":"google-event-1"`,
+		`"title":"Roadmap review"`,
+		`"start":"2026-05-21T16:00:00Z"`,
+		`"end":"2026-05-21T16:45:00Z"`,
+		`"location":"Board Room"`,
+		`"meeting_url":"https://meet.google.com/road-map"`,
+		`"organizer":"Ada Lovelace"`,
+		`"attendees":["Grace Hopper","stringfellow@example.test"]`,
+		`"status":"confirmed"`,
+	} {
+		if !strings.Contains(event.PayloadJSON, expected) {
+			t.Fatalf("expected payload to include %s, got %s", expected, event.PayloadJSON)
+		}
+	}
+	if !strings.Contains(string(output), "Events stored: 1") {
+		t.Fatalf("expected capture summary, got:\n%s", output)
 	}
 }
 

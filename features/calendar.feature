@@ -17,3 +17,10 @@ Scenario: Keep calendar provider adapters normalized
   Given Google Calendar and Outlook expose different event API shapes
   When their events are captured by workgraph
   Then both providers produce the same calendar.event payload contract
+
+Scenario: Capture Google Calendar events
+  Given workgraph has been initialized
+  And Google Calendar has events available to the authorized user
+  When I run "workgraph calendar capture --provider google --calendar-id primary"
+  Then workgraph stores those Google events as calendar.event records
+  And the records use the same normalized payload contract as imported calendar events

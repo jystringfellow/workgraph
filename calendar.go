@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +22,11 @@ type CalendarCaptureConfig struct {
 	DatabasePath string
 	WatchDirs    []string
 	EventsFile   string
+	Provider     string
+	CalendarID   string
+	Token        string
+	APIBaseURL   string
+	HTTPClient   *http.Client
 }
 
 // CalendarCaptureResult describes a calendar capture run.
@@ -60,7 +68,43 @@ type calendarEventPayload struct {
 	Status     string   `json:"status,omitempty"`
 }
 
-// CaptureCalendarEvents stores normalized calendar events from a local export file.
+type googleCalendarEventsResponse struct {
+	Items []googleCalendarEvent `json:"items"`
+}
+
+type googleCalendarEvent struct {
+	ID             string                 `json:"id"`
+	Summary        string                 `json:"summary"`
+	Start          googleCalendarDateTime `json:"start"`
+	End            googleCalendarDateTime `json:"end"`
+	Location       string                 `json:"location"`
+	HangoutLink    string                 `json:"hangoutLink"`
+	ConferenceData googleConferenceData   `json:"conferenceData"`
+	Organizer      googleCalendarPerson   `json:"organizer"`
+	Attendees      []googleCalendarPerson `json:"attendees"`
+	Status         string                 `json:"status"`
+}
+
+type googleCalendarDateTime struct {
+	DateTime string `json:"dateTime"`
+	Date     string `json:"date"`
+}
+
+type googleConferenceData struct {
+	EntryPoints []googleConferenceEntryPoint `json:"entryPoints"`
+}
+
+type googleConferenceEntryPoint struct {
+	EntryPointType string `json:"entryPointType"`
+	URI            string `json:"uri"`
+}
+
+type googleCalendarPerson struct {
+	DisplayName string `json:"displayName"`
+	Email       string `json:"email"`
+}
+
+// CaptureCalendarEvents stores normalized calendar events from a local export file or provider API.
 func CaptureCalendarEvents(config CalendarCaptureConfig) (CalendarCaptureResult, error) {
 	status, err := prepareRunStatus(RunConfig{
 		HomeDir:      config.HomeDir,
@@ -70,22 +114,6 @@ func CaptureCalendarEvents(config CalendarCaptureConfig) (CalendarCaptureResult,
 	if err != nil {
 		return CalendarCaptureResult{}, err
 	}
-	if config.EventsFile == "" {
-		return CalendarCaptureResult{}, errors.New("events file is required")
-	}
-
-	eventsFile, err := filepath.Abs(config.EventsFile)
-	if err != nil {
-		return CalendarCaptureResult{}, fmt.Errorf("resolve events file: %w", err)
-	}
-	contents, err := os.ReadFile(eventsFile)
-	if err != nil {
-		return CalendarCaptureResult{}, fmt.Errorf("read events file: %w", err)
-	}
-	var exported []calendarExportEvent
-	if err := json.Unmarshal(contents, &exported); err != nil {
-		return CalendarCaptureResult{}, fmt.Errorf("parse events file: %w", err)
-	}
 
 	db, err := sql.Open("sqlite3", status.DatabasePath)
 	if err != nil {
@@ -94,6 +122,11 @@ func CaptureCalendarEvents(config CalendarCaptureConfig) (CalendarCaptureResult,
 	defer db.Close()
 	if err := db.Ping(); err != nil {
 		return CalendarCaptureResult{}, fmt.Errorf("open database: %w", err)
+	}
+
+	exported, err := calendarEvents(config)
+	if err != nil {
+		return CalendarCaptureResult{}, err
 	}
 
 	stored := 0
@@ -114,6 +147,175 @@ func CaptureCalendarEvents(config CalendarCaptureConfig) (CalendarCaptureResult,
 	}
 	result.Message = calendarCaptureMessage(result)
 	return result, nil
+}
+
+func calendarEvents(config CalendarCaptureConfig) ([]calendarExportEvent, error) {
+	if config.EventsFile != "" {
+		return calendarEventsFromFile(config.EventsFile)
+	}
+
+	switch strings.ToLower(config.Provider) {
+	case "google":
+		return calendarEventsFromGoogle(config)
+	case "":
+		return nil, errors.New("events file or provider is required")
+	default:
+		return nil, fmt.Errorf("unsupported calendar provider %q", config.Provider)
+	}
+}
+
+func calendarEventsFromFile(eventsFile string) ([]calendarExportEvent, error) {
+	eventsFile, err := filepath.Abs(eventsFile)
+	if err != nil {
+		return nil, fmt.Errorf("resolve events file: %w", err)
+	}
+	contents, err := os.ReadFile(eventsFile)
+	if err != nil {
+		return nil, fmt.Errorf("read events file: %w", err)
+	}
+	var exported []calendarExportEvent
+	if err := json.Unmarshal(contents, &exported); err != nil {
+		return nil, fmt.Errorf("parse events file: %w", err)
+	}
+	return exported, nil
+}
+
+func calendarEventsFromGoogle(config CalendarCaptureConfig) ([]calendarExportEvent, error) {
+	if strings.TrimSpace(config.Token) == "" {
+		return nil, errors.New("calendar token is required")
+	}
+	calendarID := config.CalendarID
+	if calendarID == "" {
+		calendarID = "primary"
+	}
+
+	baseURL := config.APIBaseURL
+	if baseURL == "" {
+		baseURL = "https://www.googleapis.com"
+	}
+	endpoint, err := url.JoinPath(baseURL, "calendar/v3/calendars", calendarID, "events")
+	if err != nil {
+		return nil, fmt.Errorf("build Google Calendar events URL: %w", err)
+	}
+	requestURL, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("build Google Calendar events URL: %w", err)
+	}
+	query := requestURL.Query()
+	query.Set("singleEvents", "true")
+	query.Set("orderBy", "startTime")
+	requestURL.RawQuery = query.Encode()
+
+	request, err := http.NewRequest(http.MethodGet, requestURL.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("build Google Calendar request: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+config.Token)
+
+	client := config.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("request Google Calendar events: %w", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read Google Calendar response: %w", err)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("request Google Calendar events: status %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var apiResponse googleCalendarEventsResponse
+	if err := json.Unmarshal(body, &apiResponse); err != nil {
+		return nil, fmt.Errorf("parse Google Calendar response: %w", err)
+	}
+
+	events := make([]calendarExportEvent, 0, len(apiResponse.Items))
+	for _, event := range apiResponse.Items {
+		normalized, err := googleCalendarExportEvent(calendarID, event)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, normalized)
+	}
+	return events, nil
+}
+
+func googleCalendarExportEvent(calendarID string, event googleCalendarEvent) (calendarExportEvent, error) {
+	start, allDay, err := googleCalendarTimestamp(event.Start)
+	if err != nil {
+		return calendarExportEvent{}, fmt.Errorf("parse Google Calendar event start %q: %w", event.ID, err)
+	}
+	end, _, err := googleCalendarTimestamp(event.End)
+	if err != nil {
+		return calendarExportEvent{}, fmt.Errorf("parse Google Calendar event end %q: %w", event.ID, err)
+	}
+
+	return calendarExportEvent{
+		Provider:   "google",
+		CalendarID: calendarID,
+		EventID:    event.ID,
+		Title:      event.Summary,
+		Start:      start,
+		End:        end,
+		AllDay:     allDay,
+		Location:   event.Location,
+		MeetingURL: googleCalendarMeetingURL(event),
+		Organizer:  googleCalendarPersonName(event.Organizer),
+		Attendees:  googleCalendarAttendees(event.Attendees),
+		Status:     event.Status,
+	}, nil
+}
+
+func googleCalendarTimestamp(value googleCalendarDateTime) (string, bool, error) {
+	if value.DateTime != "" {
+		parsed, err := time.Parse(time.RFC3339Nano, value.DateTime)
+		if err != nil {
+			return "", false, err
+		}
+		return parsed.UTC().Format(time.RFC3339Nano), false, nil
+	}
+	if value.Date != "" {
+		parsed, err := time.Parse("2006-01-02", value.Date)
+		if err != nil {
+			return "", true, err
+		}
+		return parsed.UTC().Format(time.RFC3339Nano), true, nil
+	}
+	return "", false, errors.New("dateTime or date is required")
+}
+
+func googleCalendarMeetingURL(event googleCalendarEvent) string {
+	if event.HangoutLink != "" {
+		return event.HangoutLink
+	}
+	for _, entryPoint := range event.ConferenceData.EntryPoints {
+		if entryPoint.EntryPointType == "video" && entryPoint.URI != "" {
+			return entryPoint.URI
+		}
+	}
+	return ""
+}
+
+func googleCalendarAttendees(attendees []googleCalendarPerson) []string {
+	result := make([]string, 0, len(attendees))
+	for _, attendee := range attendees {
+		if name := googleCalendarPersonName(attendee); name != "" {
+			result = append(result, name)
+		}
+	}
+	return result
+}
+
+func googleCalendarPersonName(person googleCalendarPerson) string {
+	if person.DisplayName != "" {
+		return person.DisplayName
+	}
+	return person.Email
 }
 
 func storeCalendarEvent(db *sql.DB, event calendarExportEvent) (bool, error) {

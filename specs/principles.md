@@ -59,3 +59,9 @@ All major components (capture, storage, analysis) should be swappable.
 
 ## 10. Personal-first, then shareable
 The system must be genuinely useful to one person before generalizing.
+
+## 11. Connectors should become user-verifiable early
+For API-backed connectors, prefer implementing the user-facing connection setup
+early when it is feasible. OAuth, device flow, token storage, and disconnect
+behavior make the next API integration slices testable by the person building
+the feature, not only by automated facts and fake servers.
