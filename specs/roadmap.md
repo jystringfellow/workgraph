@@ -1,4 +1,4 @@
-# WorkGraph Roadmap
+# workgraph Roadmap
 
 ## Phase 0: Core loop (weekend V1)
 - [x] CLI: workgraph init
@@ -38,6 +38,7 @@
    - [x] Resolve Slack conversation and user display names.
    - [ ] People memory files or index for recurring collaborators discovered through connectors.
 - [ ] Calendar ingestion (Google Calendar, Outlook Calendar)
+   - [x] Normalized calendar.event capture from provider-neutral JSON export.
 - [ ] Meeting ingestion (Zoom, Google Meet, Microsoft Teams metadata/transcripts when explicitly available)
    - [ ] Meeting notes archive with index, decisions, and action items.
 - [ ] Work tracking ingestion (Jira, Azure DevOps, Linear)

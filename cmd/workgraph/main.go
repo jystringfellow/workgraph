@@ -31,6 +31,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runGit(args[1:], stdout, stderr)
 	case "github":
 		return runGitHub(args[1:], stdout, stderr)
+	case "calendar":
+		return runCalendar(args[1:], stdout, stderr)
 	case "memory":
 		return runMemory(args[1:], stdout, stderr)
 	case "start":
@@ -74,6 +76,47 @@ func runInit(args []string, stdout io.Writer, stderr io.Writer) int {
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph init: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runCalendar(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph calendar <command>")
+		return 2
+	}
+
+	switch args[0] {
+	case "capture":
+		return runCalendarCapture(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "unknown calendar command: %s\n", args[0])
+		return 2
+	}
+}
+
+func runCalendarCapture(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("calendar capture", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
+	eventsFile := flags.String("events-file", "", "Calendar event export JSON file")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+
+	result, err := workgraph.CaptureCalendarEvents(workgraph.CalendarCaptureConfig{
+		HomeDir:      *homeDir,
+		DatabasePath: *databasePath,
+		EventsFile:   *eventsFile,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph calendar capture: %v\n", err)
 		return 1
 	}
 
