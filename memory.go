@@ -289,7 +289,7 @@ func SuggestMemoryUpdates(config MemorySuggestConfig) (MemorySuggestResult, erro
 			break
 		}
 		result.Suggestions = append(result.Suggestions, MemorySuggestion{
-			Draft:      "Consider whether this changes project context, priorities, decisions, constraints, or open questions.",
+			Draft:      "Consider whether this changes project context, priorities, bets, decisions, people, artifacts, constraints, or open questions.",
 			EvidenceID: event.ID,
 			Evidence:   memorySuggestionEvidence(event),
 		})
@@ -661,7 +661,13 @@ func projectMemoryTemplate(project string) string {
 		"",
 		"## Current priorities",
 		"",
-		"## Decisions",
+		"## Current bets",
+		"",
+		"## Key decisions and rationale",
+		"",
+		"## People",
+		"",
+		"## Artifacts and links",
 		"",
 		"## Constraints",
 		"",
@@ -674,9 +680,21 @@ func personalMemoryTemplate() string {
 	return strings.Join([]string{
 		"# Personal memory",
 		"",
+		"## Role and scope",
+		"",
 		"## Priorities",
 		"",
 		"## Principles",
+		"",
+		"## Thinking models",
+		"",
+		"## Voice and communication",
+		"",
+		"## Working preferences",
+		"",
+		"## What I reject",
+		"",
+		"## AI collaboration modes",
 		"",
 		"## Preferences",
 		"",
@@ -833,11 +851,15 @@ func organizationMemoryTemplate(organization string) string {
 	return strings.Join([]string{
 		"# " + strings.TrimSpace(organization),
 		"",
+		"## Strategic themes",
+		"",
 		"## Strategy",
 		"",
 		"## Planning notes",
 		"",
 		"## Operating principles",
+		"",
+		"## Important people and groups",
 		"",
 		"## Current priorities",
 		"",
@@ -854,6 +876,10 @@ func teamMemoryTemplate(team string) string {
 		"",
 		"## Strategy",
 		"",
+		"## People",
+		"",
+		"## Operating norms",
+		"",
 		"## Rituals",
 		"",
 		"## Ownership",
@@ -869,10 +895,10 @@ func teamMemoryTemplate(team string) string {
 
 func projectMemoryInitMessage(result ProjectMemoryInitResult) string {
 	heading := "Project memory already exists"
-	hint := "Add or edit context, priorities, decisions, constraints, and open questions."
+	hint := "Add or edit context, priorities, bets, decisions, people, artifacts, constraints, and open questions."
 	if result.Created {
 		heading = "Project memory initialized"
-		hint = "Starter template added for context, priorities, decisions, constraints, and open questions."
+		hint = "Starter template added for context, priorities, bets, decisions, people, artifacts, constraints, and open questions."
 	}
 	return strings.Join([]string{
 		heading,
@@ -883,10 +909,10 @@ func projectMemoryInitMessage(result ProjectMemoryInitResult) string {
 
 func teamMemoryInitMessage(result TeamMemoryInitResult) string {
 	heading := "Team memory already exists"
-	hint := "Add or edit strategy, rituals, ownership, current goals, constraints, and open questions."
+	hint := "Add or edit strategy, people, operating norms, rituals, ownership, goals, constraints, and open questions."
 	if result.Created {
 		heading = "Team memory initialized"
-		hint = "Starter template added for strategy, rituals, ownership, current goals, constraints, and open questions."
+		hint = "Starter template added for strategy, people, operating norms, rituals, ownership, goals, constraints, and open questions."
 	}
 	return strings.Join([]string{
 		heading,
@@ -897,10 +923,10 @@ func teamMemoryInitMessage(result TeamMemoryInitResult) string {
 
 func organizationMemoryInitMessage(result OrganizationMemoryInitResult) string {
 	heading := "Organization memory already exists"
-	hint := "Add or edit strategy, planning notes, operating principles, current priorities, constraints, and open questions."
+	hint := "Add or edit strategic themes, strategy, planning notes, operating principles, people and groups, priorities, constraints, and open questions."
 	if result.Created {
 		heading = "Organization memory initialized"
-		hint = "Starter template added for strategy, planning notes, operating principles, current priorities, constraints, and open questions."
+		hint = "Starter template added for strategic themes, strategy, planning notes, operating principles, people and groups, priorities, constraints, and open questions."
 	}
 	return strings.Join([]string{
 		heading,
@@ -911,10 +937,10 @@ func organizationMemoryInitMessage(result OrganizationMemoryInitResult) string {
 
 func personalMemoryInitMessage(result PersonalMemoryInitResult) string {
 	heading := "Personal memory already exists"
-	hint := "Add or edit priorities, principles, preferences, working style, and constraints."
+	hint := "Add or edit role, priorities, principles, thinking models, voice, working preferences, rejected patterns, AI modes, preferences, working style, and constraints."
 	if result.Created {
 		heading = "Personal memory initialized"
-		hint = "Starter template added for priorities, principles, preferences, working style, and constraints."
+		hint = "Starter template added for role, priorities, principles, thinking models, voice, working preferences, rejected patterns, AI modes, preferences, working style, and constraints."
 	}
 	return strings.Join([]string{
 		heading,

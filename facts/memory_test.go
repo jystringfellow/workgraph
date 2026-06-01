@@ -37,7 +37,7 @@ func TestMemoryInitCreatesStarterProjectMemoryAtSlugPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read project memory: %v", err)
 	}
-	for _, expected := range []string{"# Cupcake API", "## Context", "## Current priorities", "## Decisions", "## Constraints", "## Open questions"} {
+	for _, expected := range []string{"# Cupcake API", "## Context", "## Current priorities", "## Current bets", "## Key decisions and rationale", "## People", "## Artifacts and links", "## Constraints", "## Open questions"} {
 		if !strings.Contains(string(contents), expected) {
 			t.Fatalf("expected starter memory to include %q, got:\n%s", expected, contents)
 		}
@@ -68,7 +68,7 @@ func TestMemoryInitCreatesStarterPersonalMemory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read personal memory: %v", err)
 	}
-	for _, expected := range []string{"# Personal memory", "## Priorities", "## Principles", "## Preferences", "## Working style", "## Constraints"} {
+	for _, expected := range []string{"# Personal memory", "## Role and scope", "## Priorities", "## Principles", "## Thinking models", "## Voice and communication", "## Working preferences", "## What I reject", "## AI collaboration modes", "## Preferences", "## Working style", "## Constraints"} {
 		if !strings.Contains(string(contents), expected) {
 			t.Fatalf("expected starter personal memory to include %q, got:\n%s", expected, contents)
 		}
@@ -100,7 +100,7 @@ func TestMemoryInitCreatesStarterOrganizationMemoryAtSlugPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read organization memory: %v", err)
 	}
-	for _, expected := range []string{"# Cupcake Labs", "## Strategy", "## Planning notes", "## Operating principles", "## Current priorities", "## Constraints", "## Open questions"} {
+	for _, expected := range []string{"# Cupcake Labs", "## Strategic themes", "## Strategy", "## Planning notes", "## Operating principles", "## Important people and groups", "## Current priorities", "## Constraints", "## Open questions"} {
 		if !strings.Contains(string(contents), expected) {
 			t.Fatalf("expected starter organization memory to include %q, got:\n%s", expected, contents)
 		}
@@ -132,7 +132,7 @@ func TestMemoryInitCreatesStarterTeamMemoryAtSlugPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read team memory: %v", err)
 	}
-	for _, expected := range []string{"# Platform Team", "## Strategy", "## Rituals", "## Ownership", "## Current goals", "## Constraints", "## Open questions"} {
+	for _, expected := range []string{"# Platform Team", "## Strategy", "## People", "## Operating norms", "## Rituals", "## Ownership", "## Current goals", "## Constraints", "## Open questions"} {
 		if !strings.Contains(string(contents), expected) {
 			t.Fatalf("expected starter team memory to include %q, got:\n%s", expected, contents)
 		}
