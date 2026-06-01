@@ -92,10 +92,70 @@ func runCalendar(args []string, stdout io.Writer, stderr io.Writer) int {
 	switch args[0] {
 	case "capture":
 		return runCalendarCapture(args[1:], stdout, stderr)
+	case "connect":
+		return runCalendarConnect(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown calendar command: %s\n", args[0])
 		return 2
 	}
+}
+
+func runCalendarConnect(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph calendar connect <provider>")
+		return 2
+	}
+	provider := args[0]
+
+	flags := flag.NewFlagSet("calendar connect "+provider, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	clientID := flags.String("client-id", os.Getenv("WORKGRAPH_GOOGLE_CLIENT_ID"), "Calendar provider OAuth client id")
+	clientSecret := flags.String("client-secret", os.Getenv("WORKGRAPH_GOOGLE_CLIENT_SECRET"), "Calendar provider OAuth client secret")
+	redirectURI := flags.String("redirect-uri", workgraph.DefaultGoogleCalendarRedirectURI, "Calendar provider OAuth redirect URI")
+	code := flags.String("code", "", "Calendar provider OAuth code")
+	state := flags.String("state", "", "Calendar provider OAuth state")
+	expectedState := flags.String("expected-state", "", "Expected Calendar provider OAuth state")
+	noBrowser := flags.Bool("no-browser", false, "Print the authorization URL instead of opening a browser")
+	calendarIDs := watchDirFlags{}
+	flags.Var(&calendarIDs, "calendar-id", "Provider calendar id to collect after connecting")
+	authBaseURL := flags.String("calendar-auth-base", "", "Calendar provider authorization URL")
+	tokenURL := flags.String("calendar-token-url", "", "Calendar provider token URL")
+	calendarAPIBaseURL := flags.String("calendar-api-base", "", "Calendar API base URL")
+
+	if err := flags.Parse(args[1:]); err != nil {
+		return 2
+	}
+
+	config := workgraph.CalendarConnectConfig{
+		HomeDir:       *homeDir,
+		Provider:      provider,
+		ClientID:      *clientID,
+		ClientSecret:  *clientSecret,
+		RedirectURI:   *redirectURI,
+		Code:          *code,
+		State:         *state,
+		ExpectedState: *expectedState,
+		CalendarIDs:   calendarIDs,
+		AuthBaseURL:   *authBaseURL,
+		TokenURL:      *tokenURL,
+		APIBaseURL:    *calendarAPIBaseURL,
+	}
+	var result workgraph.CalendarConnectResult
+	var err error
+	if *code == "" && !*noBrowser {
+		result, err = workgraph.ConnectCalendarWithBrowser(context.Background(), config)
+	} else {
+		result, err = workgraph.ConnectCalendar(config)
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph calendar connect: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
 }
 
 func runCalendarCapture(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -106,7 +166,7 @@ func runCalendarCapture(args []string, stdout io.Writer, stderr io.Writer) int {
 	databasePath := flags.String("database", "", "workgraph SQLite database path")
 	eventsFile := flags.String("events-file", "", "Calendar event export JSON file")
 	provider := flags.String("provider", "", "Calendar provider to capture from")
-	calendarID := flags.String("calendar-id", "primary", "Provider calendar id")
+	calendarID := flags.String("calendar-id", "", "Provider calendar id")
 	token := flags.String("token", os.Getenv("WORKGRAPH_CALENDAR_TOKEN"), "Calendar provider access token")
 	calendarAPIBaseURL := flags.String("calendar-api-base", "", "Calendar API base URL")
 

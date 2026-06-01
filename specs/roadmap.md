@@ -40,6 +40,10 @@
 - [ ] Calendar ingestion (Google Calendar, Outlook Calendar)
    - [x] Normalized calendar.event capture from provider-neutral JSON export.
    - [x] Google Calendar event capture maps provider API events into calendar.event.
+   - [x] Google Calendar OAuth connect stores local connector settings.
+   - [x] Google Calendar browser OAuth uses PKCE with the default workgraph client id.
+   - [ ] Google Calendar token refresh.
+   - [ ] Background polling from stored calendar connector settings.
 - [ ] Meeting ingestion (Zoom, Google Meet, Microsoft Teams metadata/transcripts when explicitly available)
    - [ ] Meeting notes archive with index, decisions, and action items.
 - [ ] Work tracking ingestion (Jira, Azure DevOps, Linear)

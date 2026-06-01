@@ -1,14 +1,19 @@
 package facts
 
 import (
+	"context"
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	workgraph "github.com/jystringfellow/workgraph"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -200,12 +205,274 @@ func TestCalendarCaptureMapsGoogleCalendarEvents(t *testing.T) {
 	}
 }
 
+func TestGoogleCalendarConnectOAuthStoresConnectorConfigAfterCodeExchange(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "calendar", "connect", "google",
+		"--home", homeDir,
+		"--no-browser",
+		"--client-id", "client-id",
+		"--redirect-uri", "http://localhost:2728/calendar/google/callback",
+		"--state", "fixed-state",
+	)
+	if err != nil {
+		t.Fatalf("workgraph calendar connect URL failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Google Calendar OAuth authorization URL") {
+		t.Fatalf("expected authorization guidance, got:\n%s", output)
+	}
+	authorizationURL := calendarAuthorizationURL(t, string(output))
+	parsed, err := url.Parse(authorizationURL)
+	if err != nil {
+		t.Fatalf("parse authorization url: %v", err)
+	}
+	if parsed.Scheme != "https" || parsed.Host != "accounts.google.com" || parsed.Path != "/o/oauth2/v2/auth" {
+		t.Fatalf("expected Google OAuth authorize URL, got %s", authorizationURL)
+	}
+	query := parsed.Query()
+	if query.Get("client_id") != "client-id" {
+		t.Fatalf("expected client id in authorization URL, got %q", query.Get("client_id"))
+	}
+	if query.Get("redirect_uri") != "http://localhost:2728/calendar/google/callback" {
+		t.Fatalf("expected redirect URI in authorization URL, got %q", query.Get("redirect_uri"))
+	}
+	if query.Get("state") != "fixed-state" {
+		t.Fatalf("expected state in authorization URL, got %q", query.Get("state"))
+	}
+	if query.Get("response_type") != "code" {
+		t.Fatalf("expected authorization code response type, got %q", query.Get("response_type"))
+	}
+	if query.Get("access_type") != "offline" {
+		t.Fatalf("expected offline access for refresh token, got %q", query.Get("access_type"))
+	}
+	if !strings.Contains(query.Get("scope"), "https://www.googleapis.com/auth/calendar.readonly") {
+		t.Fatalf("expected calendar readonly scope, got %q", query.Get("scope"))
+	}
+	if _, err := os.Stat(filepath.Join(homeDir, "calendar.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected calendar config not to be written before code exchange, stat err: %v", err)
+	}
+
+	var tokenRequestForm url.Values
+	var captureAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/token":
+			if err := request.ParseForm(); err != nil {
+				t.Fatalf("parse token request form: %v", err)
+			}
+			tokenRequestForm = request.Form
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = response.Write([]byte(`{
+  "access_token": "access-token",
+  "refresh_token": "refresh-token",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "scope": "https://www.googleapis.com/auth/calendar.readonly"
+}`))
+		case "/calendar/v3/calendars/primary/events":
+			captureAuth = request.Header.Get("Authorization")
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = response.Write([]byte(`{"items":[{"id":"connected-event","summary":"Connected calendar event","start":{"dateTime":"2026-05-22T10:00:00Z"},"end":{"dateTime":"2026-05-22T10:30:00Z"},"organizer":{"displayName":"Ada Lovelace"},"status":"confirmed"}]}`))
+		default:
+			t.Fatalf("unexpected calendar server path %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	output, err = runworkgraph(t, repoRoot, "calendar", "connect", "google",
+		"--home", homeDir,
+		"--client-id", "client-id",
+		"--client-secret", "client-secret",
+		"--redirect-uri", "http://localhost:2728/calendar/google/callback",
+		"--code", "oauth-code",
+		"--state", "fixed-state",
+		"--expected-state", "fixed-state",
+		"--calendar-id", "primary",
+		"--calendar-token-url", server.URL+"/token",
+		"--calendar-api-base", server.URL,
+	)
+	if err != nil {
+		t.Fatalf("workgraph calendar connect exchange failed: %v\n%s", err, output)
+	}
+	if tokenRequestForm.Get("grant_type") != "authorization_code" {
+		t.Fatalf("expected authorization_code grant, got %q", tokenRequestForm.Get("grant_type"))
+	}
+	if tokenRequestForm.Get("code") != "oauth-code" {
+		t.Fatalf("expected oauth code in token request, got %q", tokenRequestForm.Get("code"))
+	}
+	if tokenRequestForm.Get("client_id") != "client-id" || tokenRequestForm.Get("client_secret") != "client-secret" {
+		t.Fatalf("expected client credentials in token request, got %#v", tokenRequestForm)
+	}
+	if !strings.Contains(string(output), "Google Calendar connected") {
+		t.Fatalf("expected connected message, got:\n%s", output)
+	}
+
+	configPath := filepath.Join(homeDir, "calendar.json")
+	info, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatalf("expected calendar config: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("expected calendar config permissions 0600, got %v", got)
+	}
+	contents, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read calendar config: %v", err)
+	}
+	var stored struct {
+		Google struct {
+			AccessToken  string   `json:"access_token"`
+			RefreshToken string   `json:"refresh_token"`
+			TokenType    string   `json:"token_type"`
+			Scopes       []string `json:"scopes"`
+			CalendarIDs  []string `json:"calendar_ids"`
+			APIBaseURL   string   `json:"api_base_url"`
+		} `json:"google"`
+	}
+	if err := json.Unmarshal(contents, &stored); err != nil {
+		t.Fatalf("parse calendar config: %v", err)
+	}
+	if stored.Google.AccessToken != "access-token" || stored.Google.RefreshToken != "refresh-token" || stored.Google.TokenType != "Bearer" {
+		t.Fatalf("expected stored tokens, got %#v", stored.Google)
+	}
+	if len(stored.Google.CalendarIDs) != 1 || stored.Google.CalendarIDs[0] != "primary" {
+		t.Fatalf("expected stored calendar id, got %#v", stored.Google.CalendarIDs)
+	}
+	if stored.Google.APIBaseURL != server.URL {
+		t.Fatalf("expected stored API base URL, got %q", stored.Google.APIBaseURL)
+	}
+	if len(stored.Google.Scopes) != 1 || stored.Google.Scopes[0] != "https://www.googleapis.com/auth/calendar.readonly" {
+		t.Fatalf("expected stored scopes, got %#v", stored.Google.Scopes)
+	}
+
+	output, err = runworkgraph(t, repoRoot, "calendar", "capture",
+		"--home", homeDir,
+		"--provider", "google",
+	)
+	if err != nil {
+		t.Fatalf("workgraph calendar capture from stored config failed: %v\n%s", err, output)
+	}
+	if captureAuth != "Bearer access-token" {
+		t.Fatalf("expected capture to use stored access token, got %q", captureAuth)
+	}
+	event := calendarEvent(t, filepath.Join(homeDir, "workgraph.db"), "google", "primary", "connected-event")
+	if event.Summary != "Connected calendar event" {
+		t.Fatalf("expected connected calendar event capture, got %#v", event)
+	}
+}
+
+func TestGoogleCalendarBrowserConnectUsesPKCEAndStoresConnectorConfig(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	var tokenRequestForm url.Values
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/token" {
+			t.Fatalf("expected token endpoint, got %s", request.URL.Path)
+		}
+		if err := request.ParseForm(); err != nil {
+			t.Fatalf("parse token request form: %v", err)
+		}
+		tokenRequestForm = request.Form
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{
+  "access_token": "browser-access-token",
+  "refresh_token": "browser-refresh-token",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "scope": "https://www.googleapis.com/auth/calendar.readonly"
+}`))
+	}))
+	defer tokenServer.Close()
+
+	callbackURL := "http://127.0.0.1:27289/calendar/google/callback"
+	openBrowser := func(authorizationURL string) error {
+		parsed, err := url.Parse(authorizationURL)
+		if err != nil {
+			t.Fatalf("parse authorization url: %v", err)
+		}
+		query := parsed.Query()
+		if query.Get("client_id") != workgraph.DefaultGoogleCalendarClientID {
+			t.Fatalf("expected default client id, got %q", query.Get("client_id"))
+		}
+		if query.Get("code_challenge") == "" || query.Get("code_challenge_method") != "S256" {
+			t.Fatalf("expected PKCE challenge in authorization URL, got %q / %q", query.Get("code_challenge"), query.Get("code_challenge_method"))
+		}
+		go func() {
+			time.Sleep(20 * time.Millisecond)
+			callback, err := url.Parse(callbackURL)
+			if err != nil {
+				t.Errorf("parse callback URL: %v", err)
+				return
+			}
+			values := callback.Query()
+			values.Set("code", "browser-oauth-code")
+			values.Set("state", query.Get("state"))
+			callback.RawQuery = values.Encode()
+			_, _ = http.Get(callback.String())
+		}()
+		return nil
+	}
+
+	result, err := workgraph.ConnectCalendarWithBrowser(context.Background(), workgraph.CalendarConnectConfig{
+		HomeDir:     homeDir,
+		Provider:    "google",
+		RedirectURI: callbackURL,
+		TokenURL:    tokenServer.URL + "/token",
+		OpenBrowser: openBrowser,
+	})
+	if err != nil {
+		t.Fatalf("browser calendar connect failed: %v", err)
+	}
+	if !result.Configured {
+		t.Fatalf("expected browser connect to configure Google Calendar")
+	}
+	if tokenRequestForm.Get("code") != "browser-oauth-code" {
+		t.Fatalf("expected browser oauth code, got %q", tokenRequestForm.Get("code"))
+	}
+	if tokenRequestForm.Get("code_verifier") == "" {
+		t.Fatalf("expected PKCE code verifier in token request")
+	}
+	if tokenRequestForm.Get("client_secret") != "" {
+		t.Fatalf("expected no client secret for PKCE browser connect, got %q", tokenRequestForm.Get("client_secret"))
+	}
+
+	contents, err := os.ReadFile(filepath.Join(homeDir, "calendar.json"))
+	if err != nil {
+		t.Fatalf("read calendar config: %v", err)
+	}
+	if !strings.Contains(string(contents), `"access_token": "browser-access-token"`) {
+		t.Fatalf("expected browser access token in config, got %s", contents)
+	}
+}
+
 type storedCalendarEvent struct {
 	Timestamp   string
 	Project     string
 	Actor       string
 	Summary     string
 	PayloadJSON string
+}
+
+func calendarAuthorizationURL(t *testing.T, output string) string {
+	t.Helper()
+
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "https://") {
+			return line
+		}
+	}
+	t.Fatalf("expected authorization URL in output:\n%s", output)
+	return ""
 }
 
 func calendarEvent(t *testing.T, dbPath, provider, calendarID, eventID string) storedCalendarEvent {
