@@ -10,6 +10,17 @@ The first calendar contract is a normalized JSON capture path:
 workgraph calendar capture --events-file <calendar-events.json>
 ```
 
+The first provider adapter is Google Calendar:
+
+```text
+workgraph calendar capture --provider google --calendar-id primary --token <access-token>
+```
+
+The Google adapter reads events from the Google Calendar events endpoint and
+maps Google-specific fields into the same normalized event contract. OAuth setup
+and token refresh are separate follow-up work; this slice accepts an access
+token so the capture and storage behavior can be tested independently.
+
 Each exported event uses a provider-neutral shape:
 
 - `provider`: `google` or `microsoft`
@@ -35,5 +46,6 @@ Calendar events are deduplicated by provider, calendar id, and event id. If a
 later capture includes the same provider event with a newer or changed payload,
 workgraph refreshes the stored record instead of creating a duplicate.
 
-Google Calendar and Outlook/Microsoft Calendar should be implemented as
-provider adapters that produce this same normalized event shape.
+Google Calendar and Outlook/Microsoft Calendar should be implemented as provider
+adapters that produce this same normalized event shape. Google is the first
+adapter; Outlook/Microsoft Calendar should reuse the same storage contract.

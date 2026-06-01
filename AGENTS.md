@@ -50,6 +50,15 @@ capture events → store → group → query (today / resume)
 - Log important actions for debugging
 - Make behavior testable
 
+## Connector Guidelines
+
+When adding an API-backed connector, prefer starting with the user-facing
+connection setup (OAuth/device flow/token storage/disconnect) when feasible.
+The first API integration slice should leave the user with a real way to connect
+their own account and verify captured data locally. Provider adapters that only
+accept raw tokens are useful for facts, but they should usually be a stepping
+stone toward a connectable workflow, not the end of a user-visible slice.
+
 ## Facts
 
 Before implementing behavior:
