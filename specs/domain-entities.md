@@ -73,10 +73,10 @@ cannot know on their own.
 
 Active memory can describe several scopes:
 
-- personal: priorities, principles, preferences, working style, constraints
-- organization: company strategy, planning memos, values, operating principles
-- team: squad strategy, rituals, ownership, current goals
-- project: project context, priorities, decisions, constraints, open questions
+- personal: role, priorities, principles, thinking models, voice, working preferences, rejected patterns, AI modes, preferences, working style, constraints
+- organization: strategic themes, strategy, planning notes, operating principles, people and groups, priorities, constraints, open questions
+- team: strategy, people, operating norms, rituals, ownership, goals, constraints, open questions
+- project: context, priorities, bets, decisions and rationale, people, artifacts, constraints, open questions
 
 workgraph should preserve memory documents as inspectable local files or local
 snapshots. Structured entities can later be derived from or linked to these

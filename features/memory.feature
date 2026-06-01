@@ -41,25 +41,25 @@ Scenario: Initialize starter project memory
   Given workgraph has been initialized
   When I run "workgraph memory init <project>"
   Then project memory exists at a lower-kebab-case Markdown path
-  And the memory contains starter headings for context
+  And the memory contains starter headings for context, bets, decisions, people, and artifacts
 
 Scenario: Initialize starter personal memory
   Given workgraph has been initialized
   When I run "workgraph memory init --scope personal"
   Then personal memory exists at "personal.md"
-  And the memory contains starter headings for priorities and working style
+  And the memory contains starter headings for role, priorities, thinking models, voice, and AI collaboration
 
 Scenario: Initialize starter organization memory
   Given workgraph has been initialized
   When I run "workgraph memory init --scope organization <organization>"
   Then organization memory exists at a lower-kebab-case Markdown path
-  And the memory contains starter headings for strategy and operating principles
+  And the memory contains starter headings for strategic themes, operating principles, people, and priorities
 
 Scenario: Initialize starter team memory
   Given workgraph has been initialized
   When I run "workgraph memory init --scope team <team>"
   Then team memory exists at a lower-kebab-case Markdown path
-  And the memory contains starter headings for rituals and ownership
+  And the memory contains starter headings for people, operating norms, rituals, and ownership
 
 Scenario: Preserve existing project memory
   Given workgraph has been initialized

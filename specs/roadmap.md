@@ -25,9 +25,9 @@
 - [x] Markdown memory repo
 - [x] Load memory into system
 - [x] Resume explicit project from memory-only context
-- [x] Personal memory (priorities, principles, preferences, working style)
-- [x] Organization memory (strategy memos, planning docs, operating principles)
-- [x] Team memory (squad strategy, rituals, ownership, current goals)
+- [x] Personal memory (role, priorities, principles, preferences, working style, AI collaboration)
+- [x] Organization memory (strategic themes, strategy, planning notes, operating principles)
+- [x] Team memory (strategy, people, operating norms, rituals, ownership, goals)
 - [x] Evidence can suggest memory updates without becoming memory automatically
 - [x] Link events ↔ memory (projects, people)
 
@@ -36,11 +36,16 @@
    - [x] Fix Slack thread polling so replies added to already-seen parent messages are captured.
    - [x] Make Slack DM opt-in OAuth-aware.
    - [x] Resolve Slack conversation and user display names.
+   - [ ] People memory files or index for recurring collaborators discovered through connectors.
 - [ ] Calendar ingestion (Google Calendar, Outlook Calendar)
 - [ ] Meeting ingestion (Zoom, Google Meet, Microsoft Teams metadata/transcripts when explicitly available)
+   - [ ] Meeting notes archive with index, decisions, and action items.
 - [ ] Work tracking ingestion (Jira, Azure DevOps, Linear)
 - [ ] Knowledge base ingestion (Notion, Confluence, Google Docs/Drive)
+   - [ ] Knowledge claim notes for durable beliefs and decision rationale.
+   - [ ] Rich local HTML artifacts/reports linked to memory and evidence.
 - [ ] Configurable connector framework
+   - [ ] Memory routing/index file for loading relevant context by task.
 
 ## Phase 3.5: Enterprise security and compliance
 - [ ] IT-readable Slack/compliance document
