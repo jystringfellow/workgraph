@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>workgraph Privacy Policy</title>
+    <link rel="icon" type="image/png" href="/assets/workgraph-logo.png">
+    <style>
+      body {
+        background: #f7f5f9;
+        color: #1d1d1f;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        line-height: 1.55;
+        margin: 0;
+      }
+
+      header {
+        background: #590088;
+        color: #ffffff;
+      }
+
+      .hero {
+        margin: 0 auto;
+        max-width: 760px;
+        padding: 48px 24px 36px;
+      }
+
+      .lockup {
+        display: block;
+        height: auto;
+        margin: 0 0 28px;
+        max-width: 360px;
+        width: 58vw;
+      }
+
+      main {
+        background: #ffffff;
+        margin: 0 auto;
+        max-width: 760px;
+        padding: 40px 24px 80px;
+      }
+
+      h1 {
+        font-size: 36px;
+        letter-spacing: 0;
+        line-height: 1.15;
+        margin: 0 0 8px;
+      }
+
+      h2 {
+        font-size: 20px;
+        letter-spacing: 0;
+        margin: 32px 0 8px;
+      }
+
+      p, li {
+        font-size: 16px;
+      }
+
+      p {
+        margin: 0 0 14px;
+      }
+
+      ul {
+        margin: 0 0 14px;
+        padding-left: 22px;
+      }
+
+      a {
+        color: #590088;
+      }
+
+      header a {
+        color: #ffffff;
+      }
+
+      .updated {
+        color: #5f6368;
+        margin-bottom: 28px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="hero">
+        <img class="lockup" src="/assets/workgraph-lockup.png" alt="workgraph">
+        <h1>Privacy Policy</h1>
+        <p class="updated">Last updated: June 2, 2026</p>
+      </div>
+    </header>
+
+    <main>
+      <p>workgraph is local-first software for capturing and organizing personal work context. The application stores captured events and connector data locally on the user's device unless the user explicitly chooses otherwise.</p>
+
+      <h2>Information workgraph accesses</h2>
+      <p>When a user connects a third-party service, workgraph requests only the access needed for the enabled connector. Connected services may include Slack, Google Calendar, Microsoft Calendar, Notion, Jira, Azure DevOps, and other services the user chooses to enable.</p>
+
+      <h2>How information is used</h2>
+      <p>workgraph uses connected account data to create local work events, help restore context, and show activity through local commands such as today and resume. workgraph does not sell user data or use connected account data for advertising.</p>
+
+      <h2>How information is stored</h2>
+      <p>Connector credentials and captured events are stored locally in the user's workgraph home directory, normally under <code>~/.workgraph</code>. Connector credential files are written with local-user-only file permissions when supported by the operating system.</p>
+
+      <h2>Data sharing</h2>
+      <p>workgraph does not share connected service data with third parties. Captured data remains local unless the user explicitly exports it, commits it, shares it, or configures another tool to read it.</p>
+
+      <h2>Connected service data</h2>
+      <p>workgraph uses connected service data only to create local work events, restore context, and support user-requested local workflows. Each connector should request the narrowest practical read-only access for the behavior the user enables.</p>
+
+      <h2>Google API data</h2>
+      <p>workgraph's use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
+
+      <h2>User control</h2>
+      <p>Users can disconnect a connector, delete local connector credentials, or remove local workgraph data from their device. Google account access can also be revoked from the user's Google Account security settings.</p>
+
+      <h2>Contact</h2>
+      <p>For privacy questions, contact the workgraph project maintainer through the repository or project channel where workgraph was obtained.</p>
+
+      <p><a href="/">Return to workgraph</a></p>
+    </main>
+  </body>
+</html>
