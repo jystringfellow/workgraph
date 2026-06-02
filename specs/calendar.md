@@ -40,6 +40,15 @@ workgraph home directory with local-user-only file permissions. Stored settings
 include access token, refresh token when granted, token type, expiry, granted
 scopes, selected calendar ids, and provider API base URL.
 
+The Google OAuth app registration should use the workgraph homepage and privacy
+policy/terms URLs:
+
+```text
+https://workgraph.pages.dev
+https://workgraph.pages.dev/privacy.html
+https://workgraph.pages.dev/terms.html
+```
+
 Each exported event uses a provider-neutral shape:
 
 - `provider`: `google` or `microsoft`
