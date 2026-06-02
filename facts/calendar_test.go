@@ -250,8 +250,16 @@ func TestGoogleCalendarConnectOAuthStoresConnectorConfigAfterCodeExchange(t *tes
 	if query.Get("access_type") != "offline" {
 		t.Fatalf("expected offline access for refresh token, got %q", query.Get("access_type"))
 	}
-	if !strings.Contains(query.Get("scope"), "https://www.googleapis.com/auth/calendar.readonly") {
-		t.Fatalf("expected calendar readonly scope, got %q", query.Get("scope"))
+	for _, expectedScope := range []string{
+		"https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+		"https://www.googleapis.com/auth/calendar.freebusy",
+		"https://www.googleapis.com/auth/calendar.calendars.readonly",
+		"https://www.googleapis.com/auth/calendar.events.owned.readonly",
+		"https://www.googleapis.com/auth/calendar.events.readonly",
+	} {
+		if !strings.Contains(query.Get("scope"), expectedScope) {
+			t.Fatalf("expected scope %q, got %q", expectedScope, query.Get("scope"))
+		}
 	}
 	if _, err := os.Stat(filepath.Join(homeDir, "calendar.json")); !os.IsNotExist(err) {
 		t.Fatalf("expected calendar config not to be written before code exchange, stat err: %v", err)
@@ -272,7 +280,7 @@ func TestGoogleCalendarConnectOAuthStoresConnectorConfigAfterCodeExchange(t *tes
   "refresh_token": "refresh-token",
   "token_type": "Bearer",
   "expires_in": 3600,
-  "scope": "https://www.googleapis.com/auth/calendar.readonly"
+  "scope": "https://www.googleapis.com/auth/calendar.calendarlist.readonly https://www.googleapis.com/auth/calendar.freebusy https://www.googleapis.com/auth/calendar.calendars.readonly https://www.googleapis.com/auth/calendar.events.owned.readonly https://www.googleapis.com/auth/calendar.events.readonly"
 }`))
 		case "/calendar/v3/calendars/primary/events":
 			captureAuth = request.Header.Get("Authorization")
@@ -346,7 +354,12 @@ func TestGoogleCalendarConnectOAuthStoresConnectorConfigAfterCodeExchange(t *tes
 	if stored.Google.APIBaseURL != server.URL {
 		t.Fatalf("expected stored API base URL, got %q", stored.Google.APIBaseURL)
 	}
-	if len(stored.Google.Scopes) != 1 || stored.Google.Scopes[0] != "https://www.googleapis.com/auth/calendar.readonly" {
+	if len(stored.Google.Scopes) != 5 ||
+		stored.Google.Scopes[0] != "https://www.googleapis.com/auth/calendar.calendarlist.readonly" ||
+		stored.Google.Scopes[1] != "https://www.googleapis.com/auth/calendar.freebusy" ||
+		stored.Google.Scopes[2] != "https://www.googleapis.com/auth/calendar.calendars.readonly" ||
+		stored.Google.Scopes[3] != "https://www.googleapis.com/auth/calendar.events.owned.readonly" ||
+		stored.Google.Scopes[4] != "https://www.googleapis.com/auth/calendar.events.readonly" {
 		t.Fatalf("expected stored scopes, got %#v", stored.Google.Scopes)
 	}
 
@@ -388,7 +401,7 @@ func TestGoogleCalendarBrowserConnectUsesPKCEAndStoresConnectorConfig(t *testing
   "refresh_token": "browser-refresh-token",
   "token_type": "Bearer",
   "expires_in": 3600,
-  "scope": "https://www.googleapis.com/auth/calendar.readonly"
+  "scope": "https://www.googleapis.com/auth/calendar.calendarlist.readonly https://www.googleapis.com/auth/calendar.freebusy https://www.googleapis.com/auth/calendar.calendars.readonly https://www.googleapis.com/auth/calendar.events.owned.readonly https://www.googleapis.com/auth/calendar.events.readonly"
 }`))
 	}))
 	defer tokenServer.Close()
@@ -441,8 +454,8 @@ func TestGoogleCalendarBrowserConnectUsesPKCEAndStoresConnectorConfig(t *testing
 	if tokenRequestForm.Get("code_verifier") == "" {
 		t.Fatalf("expected PKCE code verifier in token request")
 	}
-	if tokenRequestForm.Get("client_secret") != "" {
-		t.Fatalf("expected no client secret for PKCE browser connect, got %q", tokenRequestForm.Get("client_secret"))
+	if _, ok := tokenRequestForm["client_secret"]; ok {
+		t.Fatalf("expected no client_secret field for PKCE browser connect, got %#v", tokenRequestForm["client_secret"])
 	}
 
 	contents, err := os.ReadFile(filepath.Join(homeDir, "calendar.json"))

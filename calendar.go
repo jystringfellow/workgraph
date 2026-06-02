@@ -411,8 +411,10 @@ func exchangeGoogleCalendarOAuthCodeWithVerifier(config CalendarConnectConfig, v
 	form.Set("grant_type", "authorization_code")
 	form.Set("code", config.Code)
 	form.Set("client_id", config.ClientID)
-	form.Set("client_secret", config.ClientSecret)
 	form.Set("redirect_uri", config.RedirectURI)
+	if config.ClientSecret != "" {
+		form.Set("client_secret", config.ClientSecret)
+	}
 	if verifier != "" {
 		form.Set("code_verifier", verifier)
 	}
@@ -474,7 +476,13 @@ func storeGoogleCalendarConnection(homeDir string, config CalendarConnectConfig,
 }
 
 func googleCalendarScopes() []string {
-	return []string{"https://www.googleapis.com/auth/calendar.readonly"}
+	return []string{
+		"https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+		"https://www.googleapis.com/auth/calendar.freebusy",
+		"https://www.googleapis.com/auth/calendar.calendars.readonly",
+		"https://www.googleapis.com/auth/calendar.events.owned.readonly",
+		"https://www.googleapis.com/auth/calendar.events.readonly",
+	}
 }
 
 func googleCalendarIDs(calendarIDs []string) []string {
@@ -533,7 +541,7 @@ func googleCalendarOAuthCallbackHandler(expectedState string, codeCh chan<- stri
 			return
 		}
 		response.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprintf(response, "<!doctype html><title>workgraph Calendar Connected</title><p>%s</p>", html.EscapeString("Google Calendar connected. You can close this window and return to workgraph."))
+		fmt.Fprintf(response, "<!doctype html><title>workgraph Calendar Authorization Received</title><p>%s</p>", html.EscapeString("Google Calendar authorization received. Return to workgraph to confirm the connection completed."))
 		codeCh <- code
 	})
 }
