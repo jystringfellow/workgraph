@@ -37,3 +37,9 @@ Scenario: Connect Google Calendar with OAuth
   And workgraph does not store local Google Calendar connector settings yet
   When I rerun "workgraph calendar connect google" with the OAuth code and matching state
   Then workgraph stores local Google Calendar connector settings
+
+Scenario: Disconnect Google Calendar
+  Given Google Calendar is already connected
+  When I run "workgraph calendar disconnect google"
+  Then workgraph revokes the stored Google Calendar token
+  And workgraph removes local Calendar connector settings

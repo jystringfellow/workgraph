@@ -35,5 +35,5 @@ wrangler deploy
 The expected route is:
 
 ```text
-https://workgraph.pages.dev/calendar/google/token
+https://workgraph-google-oauth-token.jystringfellow.workers.dev/calendar/google/token
 ```

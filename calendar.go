@@ -27,7 +27,10 @@ var DefaultGoogleCalendarClientID = "249970569298-d3ba0fnmoc720pq1coacr9s1ss2rhp
 const DefaultGoogleCalendarRedirectURI = "http://127.0.0.1:2727"
 
 // DefaultGoogleCalendarTokenURL is the workgraph OAuth token relay for Google Calendar.
-var DefaultGoogleCalendarTokenURL = "https://workgraph.pages.dev/calendar/google/token"
+var DefaultGoogleCalendarTokenURL = "https://workgraph-google-oauth-token.jystringfellow.workers.dev/calendar/google/token"
+
+// DefaultGoogleCalendarRevokeURL is Google's OAuth token revocation endpoint.
+var DefaultGoogleCalendarRevokeURL = "https://oauth2.googleapis.com/revoke"
 
 // CalendarCaptureConfig controls normalized calendar event ingestion.
 type CalendarCaptureConfig struct {
@@ -75,6 +78,21 @@ type CalendarConnectResult struct {
 	State            string
 	Configured       bool
 	Message          string
+}
+
+// CalendarDisconnectConfig controls calendar provider disconnect behavior.
+type CalendarDisconnectConfig struct {
+	HomeDir    string
+	Provider   string
+	RevokeURL  string
+	HTTPClient *http.Client
+}
+
+// CalendarDisconnectResult describes calendar provider disconnect behavior.
+type CalendarDisconnectResult struct {
+	ConfigPath string
+	Revoked    bool
+	Message    string
 }
 
 type calendarConnectorConfig struct {
@@ -218,6 +236,14 @@ func ConnectCalendar(config CalendarConnectConfig) (CalendarConnectResult, error
 		return CalendarConnectResult{}, fmt.Errorf("unsupported calendar provider %q", config.Provider)
 	}
 	return connectGoogleCalendar(config)
+}
+
+// DisconnectCalendar revokes provider OAuth access when possible and removes local connector settings.
+func DisconnectCalendar(config CalendarDisconnectConfig) (CalendarDisconnectResult, error) {
+	if strings.ToLower(config.Provider) != "google" {
+		return CalendarDisconnectResult{}, fmt.Errorf("unsupported calendar provider %q", config.Provider)
+	}
+	return disconnectGoogleCalendar(config)
 }
 
 // ConnectCalendarWithBrowser completes calendar provider OAuth with a local callback and PKCE.
@@ -402,6 +428,88 @@ func googleCalendarAuthorizationURLWithPKCE(config CalendarConnectConfig, state 
 		values.Set("code_challenge_method", "S256")
 	}
 	return baseURL + "?" + values.Encode()
+}
+
+func disconnectGoogleCalendar(config CalendarDisconnectConfig) (CalendarDisconnectResult, error) {
+	homeDir, err := resolveHomeDir(config.HomeDir)
+	if err != nil {
+		return CalendarDisconnectResult{}, err
+	}
+	homeDir, err = filepath.Abs(homeDir)
+	if err != nil {
+		return CalendarDisconnectResult{}, fmt.Errorf("resolve workgraph home: %w", err)
+	}
+	stored, err := readCalendarConnectorConfig(homeDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return CalendarDisconnectResult{}, errors.New("Google Calendar is not connected")
+		}
+		return CalendarDisconnectResult{}, err
+	}
+	if stored.Google == nil {
+		return CalendarDisconnectResult{}, errors.New("Google Calendar is not connected")
+	}
+
+	configPath := calendarConfigPath(homeDir)
+	revoked, err := revokeGoogleCalendarToken(config, stored.Google)
+	if err != nil {
+		return CalendarDisconnectResult{}, err
+	}
+	if err := os.Remove(configPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return CalendarDisconnectResult{}, fmt.Errorf("remove calendar config: %w", err)
+	}
+
+	lines := []string{
+		"Google Calendar disconnected",
+		"Config removed: " + configPath,
+	}
+	if revoked {
+		lines = append(lines, "Google Calendar token revoked")
+	}
+	return CalendarDisconnectResult{
+		ConfigPath: configPath,
+		Revoked:    revoked,
+		Message:    strings.Join(lines, "\n"),
+	}, nil
+}
+
+func revokeGoogleCalendarToken(config CalendarDisconnectConfig, stored *googleCalendarConnectorConfig) (bool, error) {
+	token := stored.RefreshToken
+	if token == "" {
+		token = stored.AccessToken
+	}
+	if token == "" {
+		return false, nil
+	}
+	revokeURL := config.RevokeURL
+	if revokeURL == "" {
+		revokeURL = DefaultGoogleCalendarRevokeURL
+	}
+	form := url.Values{}
+	form.Set("token", token)
+	request, err := http.NewRequest(http.MethodPost, revokeURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return false, fmt.Errorf("build Google Calendar revoke request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := config.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return false, fmt.Errorf("revoke Google Calendar token: %w", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return false, fmt.Errorf("read Google Calendar revoke response: %w", err)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return false, fmt.Errorf("revoke Google Calendar token: status %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return true, nil
 }
 
 func exchangeGoogleCalendarOAuthCodeWithPKCE(config CalendarConnectConfig, verifier string) (googleOAuthTokenResponse, error) {
