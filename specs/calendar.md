@@ -27,6 +27,7 @@ Google Calendar connection setup uses OAuth:
 workgraph calendar connect google
 workgraph calendar connect google --no-browser
 workgraph calendar connect google --code <oauth-code> --state <state>
+workgraph calendar disconnect google
 ```
 
 By default, connect opens the Google authorization URL and completes OAuth
@@ -42,7 +43,7 @@ Google's token exchange is performed through a narrow workgraph-controlled token
 relay:
 
 ```text
-https://workgraph.pages.dev/calendar/google/token
+https://workgraph-google-oauth-token.jystringfellow.workers.dev/calendar/google/token
 ```
 
 The local CLI sends only the authorization code, PKCE code verifier, redirect
@@ -65,6 +66,11 @@ Calendar connector settings under the workgraph home directory with
 local-user-only file permissions. Stored settings include access token, refresh
 token when granted, token type, expiry, granted scopes, selected calendar ids,
 and provider API base URL.
+
+`workgraph calendar disconnect google` revokes the stored Google Calendar token
+when possible and removes local Calendar connector settings. Disconnecting is
+the supported way to return workgraph to a clean Google Calendar connection
+state before reconnecting or recording the Google OAuth approval flow.
 
 The Google Calendar connector requests:
 

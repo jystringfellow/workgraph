@@ -94,6 +94,8 @@ func runCalendar(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runCalendarCapture(args[1:], stdout, stderr)
 	case "connect":
 		return runCalendarConnect(args[1:], stdout, stderr)
+	case "disconnect":
+		return runCalendarDisconnect(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown calendar command: %s\n", args[0])
 		return 2
@@ -151,6 +153,37 @@ func runCalendarConnect(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph calendar connect: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runCalendarDisconnect(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph calendar disconnect <provider>")
+		return 2
+	}
+	provider := args[0]
+
+	flags := flag.NewFlagSet("calendar disconnect "+provider, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	revokeURL := flags.String("calendar-revoke-url", "", "Calendar provider token revoke URL")
+
+	if err := flags.Parse(args[1:]); err != nil {
+		return 2
+	}
+
+	result, err := workgraph.DisconnectCalendar(workgraph.CalendarDisconnectConfig{
+		HomeDir:   *homeDir,
+		Provider:  provider,
+		RevokeURL: *revokeURL,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph calendar disconnect: %v\n", err)
 		return 1
 	}
 

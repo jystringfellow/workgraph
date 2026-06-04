@@ -482,8 +482,66 @@ func TestGoogleCalendarBrowserConnectUsesPKCEAndStoresConnectorConfig(t *testing
 	}
 }
 
+func TestGoogleCalendarDisconnectRevokesTokenAndRemovesConnectorConfig(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	configPath := filepath.Join(homeDir, "calendar.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "google": {
+    "access_token": "google-access-token",
+    "refresh_token": "google-refresh-token",
+    "token_type": "Bearer",
+    "calendar_ids": ["primary"]
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write calendar config: %v", err)
+	}
+
+	var revokedToken string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/revoke" {
+			t.Fatalf("unexpected Google revoke path %s", request.URL.Path)
+		}
+		if request.Method != http.MethodPost {
+			t.Fatalf("expected POST revoke request, got %s", request.Method)
+		}
+		if err := request.ParseForm(); err != nil {
+			t.Fatalf("parse revoke form: %v", err)
+		}
+		revokedToken = request.Form.Get("token")
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	output, err := runworkgraph(t, repoRoot, "calendar", "disconnect", "google",
+		"--home", homeDir,
+		"--calendar-revoke-url", server.URL+"/revoke",
+	)
+	if err != nil {
+		t.Fatalf("workgraph calendar disconnect failed: %v\n%s", err, output)
+	}
+	if revokedToken != "google-refresh-token" {
+		t.Fatalf("expected disconnect to revoke refresh token, got %q", revokedToken)
+	}
+	if !strings.Contains(string(output), "Google Calendar disconnected") {
+		t.Fatalf("expected disconnect message, got:\n%s", output)
+	}
+	if !strings.Contains(string(output), "Google Calendar token revoked") {
+		t.Fatalf("expected revoke confirmation, got:\n%s", output)
+	}
+	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+		t.Fatalf("expected calendar config removed, stat err: %v", err)
+	}
+}
+
 func TestGoogleCalendarUsesWorkgraphTokenRelayByDefault(t *testing.T) {
-	if workgraph.DefaultGoogleCalendarTokenURL != "https://workgraph.pages.dev/calendar/google/token" {
+	if workgraph.DefaultGoogleCalendarTokenURL != "https://workgraph-google-oauth-token.jystringfellow.workers.dev/calendar/google/token" {
 		t.Fatalf("expected default Google Calendar token URL to use workgraph relay, got %q", workgraph.DefaultGoogleCalendarTokenURL)
 	}
 }
