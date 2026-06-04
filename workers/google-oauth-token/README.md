@@ -4,9 +4,9 @@ This Cloudflare Worker performs the Google Calendar OAuth token exchange for
 workgraph. It exists because the local CLI should not ship or ask users for the
 Google OAuth client secret.
 
-The Worker only handles OAuth token exchange. It does not receive calendar event
-data and should not log request bodies, authorization codes, access tokens, or
-refresh tokens.
+The Worker only handles OAuth token exchange, including authorization-code and
+refresh-token grants. It does not receive calendar event data and should not log
+request bodies, authorization codes, access tokens, or refresh tokens.
 
 For local development, create `.dev.vars` from the example file and run the
 Worker locally:

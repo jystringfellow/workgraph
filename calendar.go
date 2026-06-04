@@ -41,6 +41,8 @@ type CalendarCaptureConfig struct {
 	Provider     string
 	CalendarID   string
 	Token        string
+	ClientID     string
+	TokenURL     string
 	APIBaseURL   string
 	HTTPClient   *http.Client
 }
@@ -107,6 +109,8 @@ type googleCalendarConnectorConfig struct {
 	Scopes       []string `json:"scopes,omitempty"`
 	CalendarIDs  []string `json:"calendar_ids"`
 	APIBaseURL   string   `json:"api_base_url,omitempty"`
+	ClientID     string   `json:"client_id,omitempty"`
+	TokenURL     string   `json:"token_url,omitempty"`
 }
 
 type calendarExportEvent struct {
@@ -513,10 +517,7 @@ func revokeGoogleCalendarToken(config CalendarDisconnectConfig, stored *googleCa
 }
 
 func exchangeGoogleCalendarOAuthCodeWithPKCE(config CalendarConnectConfig, verifier string) (googleOAuthTokenResponse, error) {
-	tokenURL := config.TokenURL
-	if tokenURL == "" {
-		tokenURL = DefaultGoogleCalendarTokenURL
-	}
+	tokenURL := resolveGoogleCalendarTokenURL(config.TokenURL)
 	form := url.Values{}
 	form.Set("grant_type", "authorization_code")
 	form.Set("code", config.Code)
@@ -554,6 +555,77 @@ func exchangeGoogleCalendarOAuthCodeWithPKCE(config CalendarConnectConfig, verif
 	return token, nil
 }
 
+func refreshGoogleCalendarAccessToken(config CalendarCaptureConfig, stored *googleCalendarConnectorConfig) (*googleCalendarConnectorConfig, error) {
+	if stored.RefreshToken == "" {
+		return nil, errors.New("google calendar refresh token is required")
+	}
+	clientID := config.ClientID
+	if clientID == "" {
+		clientID = stored.ClientID
+	}
+	clientID = resolveGoogleCalendarClientID(clientID)
+	if clientID == "" {
+		return nil, errors.New("google calendar client id is required for token refresh")
+	}
+	tokenURL := config.TokenURL
+	if tokenURL == "" {
+		tokenURL = stored.TokenURL
+	}
+	tokenURL = resolveGoogleCalendarTokenURL(tokenURL)
+
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", stored.RefreshToken)
+	form.Set("client_id", clientID)
+
+	request, err := http.NewRequest(http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("build Google Calendar refresh request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := config.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("refresh Google Calendar token: %w", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read Google Calendar refresh response: %w", err)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("refresh Google Calendar token: status %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var token googleOAuthTokenResponse
+	if err := json.Unmarshal(body, &token); err != nil {
+		return nil, fmt.Errorf("parse Google Calendar refresh response: %w", err)
+	}
+	if token.AccessToken == "" {
+		return nil, errors.New("google calendar refresh response did not include an access token")
+	}
+
+	refreshed := *stored
+	refreshed.AccessToken = token.AccessToken
+	if token.RefreshToken != "" {
+		refreshed.RefreshToken = token.RefreshToken
+	}
+	if token.TokenType != "" {
+		refreshed.TokenType = token.TokenType
+	}
+	if token.Scope != "" {
+		refreshed.Scopes = strings.Fields(token.Scope)
+	}
+	refreshed.ExpiresAt = googleCalendarTokenExpiresAt(token)
+	refreshed.ClientID = clientID
+	refreshed.TokenURL = tokenURL
+	return &refreshed, nil
+}
+
 func storeGoogleCalendarConnection(homeDir string, config CalendarConnectConfig, token googleOAuthTokenResponse) (CalendarConnectResult, error) {
 	if token.AccessToken == "" {
 		return CalendarConnectResult{}, errors.New("google calendar oauth response did not include an access token")
@@ -568,6 +640,8 @@ func storeGoogleCalendarConnection(homeDir string, config CalendarConnectConfig,
 			Scopes:       strings.Fields(token.Scope),
 			CalendarIDs:  googleCalendarIDs(config.CalendarIDs),
 			APIBaseURL:   config.APIBaseURL,
+			ClientID:     config.ClientID,
+			TokenURL:     resolveGoogleCalendarTokenURL(config.TokenURL),
 		},
 	}
 	if err := writeCalendarConnectorConfig(configPath, stored); err != nil {
@@ -604,6 +678,17 @@ func googleCalendarIDs(calendarIDs []string) []string {
 	return result
 }
 
+func googleCalendarTokenNeedsRefresh(config *googleCalendarConnectorConfig) (bool, error) {
+	if config.ExpiresAt == "" {
+		return false, nil
+	}
+	expiresAt, err := time.Parse(time.RFC3339Nano, config.ExpiresAt)
+	if err != nil {
+		return false, fmt.Errorf("parse Google Calendar token expiry: %w", err)
+	}
+	return time.Until(expiresAt) <= 5*time.Minute, nil
+}
+
 func googleCalendarTokenExpiresAt(token googleOAuthTokenResponse) string {
 	if token.ExpiresIn <= 0 {
 		return ""
@@ -624,6 +709,13 @@ func resolveGoogleCalendarClientID(clientID string) string {
 		return clientID
 	}
 	return DefaultGoogleCalendarClientID
+}
+
+func resolveGoogleCalendarTokenURL(tokenURL string) string {
+	if tokenURL != "" {
+		return tokenURL
+	}
+	return DefaultGoogleCalendarTokenURL
 }
 
 func googleCalendarOAuthCallbackHandler(expectedState string, codeCh chan<- string, errCh chan<- error) http.Handler {
@@ -688,12 +780,28 @@ func calendarEventsFromGoogle(config CalendarCaptureConfig) ([]calendarExportEve
 	if token == "" {
 		stored, err := readCalendarConnectorConfig(config.HomeDir)
 		if err == nil && stored.Google != nil {
-			token = stored.Google.AccessToken
+			googleConfig := stored.Google
+			needsRefresh, err := googleCalendarTokenNeedsRefresh(googleConfig)
+			if err != nil {
+				return nil, err
+			}
+			if needsRefresh {
+				refreshed, err := refreshGoogleCalendarAccessToken(config, googleConfig)
+				if err != nil {
+					return nil, err
+				}
+				stored.Google = refreshed
+				if err := writeCalendarConnectorConfig(calendarConfigPath(config.HomeDir), stored); err != nil {
+					return nil, err
+				}
+				googleConfig = refreshed
+			}
+			token = googleConfig.AccessToken
 			if calendarID == "" && len(stored.Google.CalendarIDs) > 0 {
 				calendarID = stored.Google.CalendarIDs[0]
 			}
 			if config.APIBaseURL == "" {
-				config.APIBaseURL = stored.Google.APIBaseURL
+				config.APIBaseURL = googleConfig.APIBaseURL
 			}
 		}
 	}

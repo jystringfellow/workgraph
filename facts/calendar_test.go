@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -202,6 +203,94 @@ func TestCalendarCaptureMapsGoogleCalendarEvents(t *testing.T) {
 	}
 	if !strings.Contains(string(output), "Events stored: 1") {
 		t.Fatalf("expected capture summary, got:\n%s", output)
+	}
+}
+
+func TestGoogleCalendarCaptureRefreshesExpiredStoredToken(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	var tokenRequestForm url.Values
+	var captureAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/token":
+			if err := request.ParseForm(); err != nil {
+				t.Fatalf("parse token request form: %v", err)
+			}
+			tokenRequestForm = request.Form
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = response.Write([]byte(`{
+  "access_token": "fresh-access-token",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "scope": "https://www.googleapis.com/auth/calendar.events.readonly"
+}`))
+		case "/calendar/v3/calendars/primary/events":
+			captureAuth = request.Header.Get("Authorization")
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = response.Write([]byte(`{"items":[{"id":"refreshed-event","summary":"Refreshed token event","start":{"dateTime":"2026-05-23T10:00:00Z"},"end":{"dateTime":"2026-05-23T10:30:00Z"},"organizer":{"displayName":"Ada Lovelace"},"status":"confirmed"}]}`))
+		default:
+			t.Fatalf("unexpected calendar server path %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	configPath := filepath.Join(homeDir, "calendar.json")
+	if err := os.WriteFile(configPath, []byte(fmt.Sprintf(`{
+  "google": {
+    "access_token": "expired-access-token",
+    "refresh_token": "stored-refresh-token",
+    "token_type": "Bearer",
+    "expires_at": "2026-01-01T00:00:00Z",
+    "scopes": ["https://www.googleapis.com/auth/calendar.events.readonly"],
+    "calendar_ids": ["primary"],
+    "api_base_url": %q,
+    "client_id": "client-id",
+    "token_url": %q
+  }
+}
+`, server.URL, server.URL+"/token")), 0o600); err != nil {
+		t.Fatalf("write calendar config: %v", err)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "calendar", "capture",
+		"--home", homeDir,
+		"--provider", "google",
+	)
+	if err != nil {
+		t.Fatalf("workgraph calendar capture failed: %v\n%s", err, output)
+	}
+	if tokenRequestForm.Get("grant_type") != "refresh_token" {
+		t.Fatalf("expected refresh token grant, got %#v", tokenRequestForm)
+	}
+	if tokenRequestForm.Get("refresh_token") != "stored-refresh-token" {
+		t.Fatalf("expected stored refresh token in token request, got %#v", tokenRequestForm)
+	}
+	if tokenRequestForm.Get("client_id") != "client-id" {
+		t.Fatalf("expected client id in token request, got %#v", tokenRequestForm)
+	}
+	if _, ok := tokenRequestForm["client_secret"]; ok {
+		t.Fatalf("expected no client_secret field in calendar refresh token request, got %#v", tokenRequestForm["client_secret"])
+	}
+	if captureAuth != "Bearer fresh-access-token" {
+		t.Fatalf("expected capture to use refreshed access token, got %q", captureAuth)
+	}
+
+	contents, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read refreshed calendar config: %v", err)
+	}
+	if !strings.Contains(string(contents), `"access_token": "fresh-access-token"`) {
+		t.Fatalf("expected refreshed access token stored, got:\n%s", contents)
+	}
+	event := calendarEvent(t, filepath.Join(homeDir, "workgraph.db"), "google", "primary", "refreshed-event")
+	if event.Summary != "Refreshed token event" {
+		t.Fatalf("expected refreshed token event capture, got %#v", event)
 	}
 }
 
@@ -579,6 +668,27 @@ func TestGoogleCalendarTokenRelayDocumentsLocalDevSecrets(t *testing.T) {
 	}
 	if !strings.Contains(string(example), "GOOGLE_CLIENT_SECRET=") {
 		t.Fatalf("expected .dev.vars example to include GOOGLE_CLIENT_SECRET, got:\n%s", example)
+	}
+}
+
+func TestGoogleCalendarTokenRelayAllowsRefreshTokenGrant(t *testing.T) {
+	repoRoot := repoRoot(t)
+	source, err := os.ReadFile(filepath.Join(repoRoot, "workers/google-oauth-token/src/index.ts"))
+	if err != nil {
+		t.Fatalf("read token relay source: %v", err)
+	}
+	for _, expected := range []string{
+		"authorization_code",
+		"refresh_token",
+		"client_secret",
+		"GOOGLE_CLIENT_SECRET",
+	} {
+		if !strings.Contains(string(source), expected) {
+			t.Fatalf("expected token relay source to include %q, got:\n%s", expected, source)
+		}
+	}
+	if strings.Contains(string(source), "console.log") {
+		t.Fatalf("expected token relay not to log OAuth request data, got:\n%s", source)
 	}
 }
 
