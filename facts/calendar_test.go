@@ -692,6 +692,29 @@ func TestGoogleCalendarTokenRelayAllowsRefreshTokenGrant(t *testing.T) {
 	}
 }
 
+func TestMicrosoftCalendarPublisherDomainVerificationFile(t *testing.T) {
+	path := filepath.Join(repoRoot(t), "public/.well-known/microsoft-identity-association.json")
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read Microsoft identity association file: %v", err)
+	}
+
+	var association struct {
+		AssociatedApplications []struct {
+			ApplicationID string `json:"applicationId"`
+		} `json:"associatedApplications"`
+	}
+	if err := json.Unmarshal(contents, &association); err != nil {
+		t.Fatalf("parse Microsoft identity association file: %v", err)
+	}
+	if len(association.AssociatedApplications) != 1 {
+		t.Fatalf("expected one associated Microsoft application, got %#v", association.AssociatedApplications)
+	}
+	if got := association.AssociatedApplications[0].ApplicationID; got != "413dce76-e10c-4a57-84b4-89f6b66ab265" {
+		t.Fatalf("expected workgraph Microsoft application id, got %q", got)
+	}
+}
+
 type storedCalendarEvent struct {
 	Timestamp   string
 	Project     string

@@ -45,6 +45,7 @@
    - [x] Google Calendar OAuth token exchange uses the workgraph Cloudflare relay with local `.dev.vars` development setup.
    - [x] Google Calendar disconnect revokes the stored token and removes local connector settings.
    - [x] Google Calendar token refresh.
+   - [x] Microsoft publisher-domain verification file is hosted from the workgraph Pages site.
    - [ ] Background polling from stored calendar connector settings.
 - [ ] Meeting ingestion (Zoom, Google Meet, Microsoft Teams metadata/transcripts when explicitly available)
    - [ ] Meeting notes archive with index, decisions, and action items.
@@ -85,6 +86,7 @@
 
 ## Phase 7: Platform
 - [x] CI runs full Go tests on pull requests to main
+- [ ] Harden facts for GitHub Actions portability, including temp directory assumptions and long-running daemon/start tests.
 - [ ] Plugin system
 - [ ] Desktop UI (Tauri)
 - [ ] Open-source release
