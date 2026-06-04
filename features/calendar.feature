@@ -44,3 +44,9 @@ Scenario: Disconnect Google Calendar
   When I run "workgraph calendar disconnect google"
   Then workgraph revokes the stored Google Calendar token
   And workgraph removes local Calendar connector settings
+
+Scenario: Verify Microsoft Calendar publisher domain
+  Given workgraph has a Microsoft Entra application
+  When Microsoft checks the workgraph Pages publisher domain
+  Then workgraph serves the Microsoft identity association file from ".well-known/microsoft-identity-association.json"
+  And the file includes the Microsoft application id for workgraph

@@ -126,6 +126,25 @@ https://workgraph.pages.dev/privacy.html
 https://workgraph.pages.dev/terms.html
 ```
 
+Microsoft Calendar setup starts with publisher-domain verification for the
+workgraph Microsoft Entra application. The Cloudflare Pages site must host the
+Microsoft identity association file at:
+
+```text
+https://workgraph.pages.dev/.well-known/microsoft-identity-association.json
+```
+
+The file should contain the Microsoft application id that owns the verification:
+
+```text
+413dce76-e10c-4a57-84b4-89f6b66ab265
+```
+
+This static verification file does not grant workgraph Microsoft account access
+or process user data. Microsoft account data access must be covered separately
+by OAuth scopes, local credential storage, and connector behavior before
+implementation.
+
 Each exported event uses a provider-neutral shape:
 
 - `provider`: `google` or `microsoft`
