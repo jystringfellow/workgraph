@@ -30,6 +30,8 @@ Scenario: Connect Google Calendar with OAuth
   When I run "workgraph calendar connect google"
   Then workgraph opens Google OAuth and stores local Google Calendar connector settings after approval
   And the browser flow uses PKCE without requiring a client secret
+  And the OAuth code exchange goes through the workgraph Google token relay
+  And the token relay uses Cloudflare secrets in production and an ignored .dev.vars file for local development
   When I run "workgraph calendar connect google --no-browser"
   Then workgraph prints a Google OAuth authorization URL
   And workgraph does not store local Google Calendar connector settings yet

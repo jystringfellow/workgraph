@@ -1,0 +1,7 @@
+name = "workgraph-google-oauth-token"
+main = "src/index.ts"
+compatibility_date = "2026-06-04"
+
+[vars]
+GOOGLE_CLIENT_ID = "249970569298-d3ba0fnmoc720pq1coacr9s1ss2rhp5s.apps.googleusercontent.com"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
