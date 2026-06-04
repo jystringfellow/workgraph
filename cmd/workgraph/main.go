@@ -112,9 +112,9 @@ func runCalendarConnect(args []string, stdout io.Writer, stderr io.Writer) int {
 
 	homeDir := flags.String("home", "", "workgraph home directory")
 	clientID := flags.String("client-id", os.Getenv("WORKGRAPH_GOOGLE_CLIENT_ID"), "Calendar provider OAuth client id")
-	clientSecret := flags.String("client-secret", os.Getenv("WORKGRAPH_GOOGLE_CLIENT_SECRET"), "Calendar provider OAuth client secret")
-	redirectURI := flags.String("redirect-uri", workgraph.DefaultGoogleCalendarRedirectURI, "Calendar provider OAuth redirect URI")
+	redirectURI := flags.String("redirect-uri", "", "Calendar provider OAuth redirect URI")
 	code := flags.String("code", "", "Calendar provider OAuth code")
+	codeVerifier := flags.String("code-verifier", "", "Calendar provider OAuth PKCE code verifier")
 	state := flags.String("state", "", "Calendar provider OAuth state")
 	expectedState := flags.String("expected-state", "", "Expected Calendar provider OAuth state")
 	noBrowser := flags.Bool("no-browser", false, "Print the authorization URL instead of opening a browser")
@@ -132,9 +132,9 @@ func runCalendarConnect(args []string, stdout io.Writer, stderr io.Writer) int {
 		HomeDir:       *homeDir,
 		Provider:      provider,
 		ClientID:      *clientID,
-		ClientSecret:  *clientSecret,
 		RedirectURI:   *redirectURI,
 		Code:          *code,
+		CodeVerifier:  *codeVerifier,
 		State:         *state,
 		ExpectedState: *expectedState,
 		CalendarIDs:   calendarIDs,

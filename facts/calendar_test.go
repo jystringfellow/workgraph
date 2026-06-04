@@ -217,7 +217,7 @@ func TestGoogleCalendarConnectOAuthStoresConnectorConfigAfterCodeExchange(t *tes
 		"--home", homeDir,
 		"--no-browser",
 		"--client-id", "client-id",
-		"--redirect-uri", "http://localhost:2728/calendar/google/callback",
+		"--redirect-uri", "http://127.0.0.1:2727/calendar/google/callback",
 		"--state", "fixed-state",
 	)
 	if err != nil {
@@ -238,7 +238,7 @@ func TestGoogleCalendarConnectOAuthStoresConnectorConfigAfterCodeExchange(t *tes
 	if query.Get("client_id") != "client-id" {
 		t.Fatalf("expected client id in authorization URL, got %q", query.Get("client_id"))
 	}
-	if query.Get("redirect_uri") != "http://localhost:2728/calendar/google/callback" {
+	if query.Get("redirect_uri") != "http://127.0.0.1:2727/calendar/google/callback" {
 		t.Fatalf("expected redirect URI in authorization URL, got %q", query.Get("redirect_uri"))
 	}
 	if query.Get("state") != "fixed-state" {
@@ -246,6 +246,9 @@ func TestGoogleCalendarConnectOAuthStoresConnectorConfigAfterCodeExchange(t *tes
 	}
 	if query.Get("response_type") != "code" {
 		t.Fatalf("expected authorization code response type, got %q", query.Get("response_type"))
+	}
+	if query.Get("code_challenge") == "" || query.Get("code_challenge_method") != "S256" {
+		t.Fatalf("expected PKCE challenge in authorization URL, got %q / %q", query.Get("code_challenge"), query.Get("code_challenge_method"))
 	}
 	if query.Get("access_type") != "offline" {
 		t.Fatalf("expected offline access for refresh token, got %q", query.Get("access_type"))
@@ -295,9 +298,9 @@ func TestGoogleCalendarConnectOAuthStoresConnectorConfigAfterCodeExchange(t *tes
 	output, err = runworkgraph(t, repoRoot, "calendar", "connect", "google",
 		"--home", homeDir,
 		"--client-id", "client-id",
-		"--client-secret", "client-secret",
-		"--redirect-uri", "http://localhost:2728/calendar/google/callback",
+		"--redirect-uri", "http://127.0.0.1:2727/calendar/google/callback",
 		"--code", "oauth-code",
+		"--code-verifier", "manual-code-verifier",
 		"--state", "fixed-state",
 		"--expected-state", "fixed-state",
 		"--calendar-id", "primary",
@@ -313,8 +316,11 @@ func TestGoogleCalendarConnectOAuthStoresConnectorConfigAfterCodeExchange(t *tes
 	if tokenRequestForm.Get("code") != "oauth-code" {
 		t.Fatalf("expected oauth code in token request, got %q", tokenRequestForm.Get("code"))
 	}
-	if tokenRequestForm.Get("client_id") != "client-id" || tokenRequestForm.Get("client_secret") != "client-secret" {
-		t.Fatalf("expected client credentials in token request, got %#v", tokenRequestForm)
+	if tokenRequestForm.Get("client_id") != "client-id" || tokenRequestForm.Get("code_verifier") != "manual-code-verifier" {
+		t.Fatalf("expected PKCE client id and verifier in token request, got %#v", tokenRequestForm)
+	}
+	if _, ok := tokenRequestForm["client_secret"]; ok {
+		t.Fatalf("expected no client_secret field in calendar token request, got %#v", tokenRequestForm["client_secret"])
 	}
 	if !strings.Contains(string(output), "Google Calendar connected") {
 		t.Fatalf("expected connected message, got:\n%s", output)
@@ -406,13 +412,23 @@ func TestGoogleCalendarBrowserConnectUsesPKCEAndStoresConnectorConfig(t *testing
 	}))
 	defer tokenServer.Close()
 
-	callbackURL := "http://127.0.0.1:27289/calendar/google/callback"
 	openBrowser := func(authorizationURL string) error {
 		parsed, err := url.Parse(authorizationURL)
 		if err != nil {
 			t.Fatalf("parse authorization url: %v", err)
 		}
 		query := parsed.Query()
+		redirectURI := query.Get("redirect_uri")
+		if !strings.HasPrefix(redirectURI, "http://127.0.0.1:") {
+			t.Fatalf("expected dynamic loopback redirect URI, got %q", redirectURI)
+		}
+		redirect, err := url.Parse(redirectURI)
+		if err != nil {
+			t.Fatalf("parse redirect URI: %v", err)
+		}
+		if redirect.Path != "" {
+			t.Fatalf("expected root loopback redirect path, got %q", redirect.Path)
+		}
 		if query.Get("client_id") != workgraph.DefaultGoogleCalendarClientID {
 			t.Fatalf("expected default client id, got %q", query.Get("client_id"))
 		}
@@ -421,7 +437,7 @@ func TestGoogleCalendarBrowserConnectUsesPKCEAndStoresConnectorConfig(t *testing
 		}
 		go func() {
 			time.Sleep(20 * time.Millisecond)
-			callback, err := url.Parse(callbackURL)
+			callback, err := url.Parse(redirectURI)
 			if err != nil {
 				t.Errorf("parse callback URL: %v", err)
 				return
@@ -438,7 +454,6 @@ func TestGoogleCalendarBrowserConnectUsesPKCEAndStoresConnectorConfig(t *testing
 	result, err := workgraph.ConnectCalendarWithBrowser(context.Background(), workgraph.CalendarConnectConfig{
 		HomeDir:     homeDir,
 		Provider:    "google",
-		RedirectURI: callbackURL,
 		TokenURL:    tokenServer.URL + "/token",
 		OpenBrowser: openBrowser,
 	})
@@ -464,6 +479,48 @@ func TestGoogleCalendarBrowserConnectUsesPKCEAndStoresConnectorConfig(t *testing
 	}
 	if !strings.Contains(string(contents), `"access_token": "browser-access-token"`) {
 		t.Fatalf("expected browser access token in config, got %s", contents)
+	}
+}
+
+func TestGoogleCalendarUsesWorkgraphTokenRelayByDefault(t *testing.T) {
+	if workgraph.DefaultGoogleCalendarTokenURL != "https://workgraph.pages.dev/calendar/google/token" {
+		t.Fatalf("expected default Google Calendar token URL to use workgraph relay, got %q", workgraph.DefaultGoogleCalendarTokenURL)
+	}
+}
+
+func TestGoogleCalendarTokenRelayDocumentsLocalDevSecrets(t *testing.T) {
+	repoRoot := repoRoot(t)
+
+	gitignore, err := os.ReadFile(filepath.Join(repoRoot, ".gitignore"))
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	if !strings.Contains(string(gitignore), ".dev.vars") {
+		t.Fatalf("expected .gitignore to ignore local Cloudflare .dev.vars secrets, got:\n%s", gitignore)
+	}
+
+	readme, err := os.ReadFile(filepath.Join(repoRoot, "workers/google-oauth-token/README.md"))
+	if err != nil {
+		t.Fatalf("read token relay README: %v", err)
+	}
+	for _, expected := range []string{
+		".dev.vars",
+		".dev.vars.example",
+		"GOOGLE_CLIENT_SECRET",
+		"wrangler dev",
+		"wrangler secret put GOOGLE_CLIENT_SECRET",
+	} {
+		if !strings.Contains(string(readme), expected) {
+			t.Fatalf("expected token relay README to document %q, got:\n%s", expected, readme)
+		}
+	}
+
+	example, err := os.ReadFile(filepath.Join(repoRoot, "workers/google-oauth-token/.dev.vars.example"))
+	if err != nil {
+		t.Fatalf("read token relay .dev.vars example: %v", err)
+	}
+	if !strings.Contains(string(example), "GOOGLE_CLIENT_SECRET=") {
+		t.Fatalf("expected .dev.vars example to include GOOGLE_CLIENT_SECRET, got:\n%s", example)
 	}
 }
 

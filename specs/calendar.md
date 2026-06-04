@@ -30,15 +30,41 @@ workgraph calendar connect google --code <oauth-code> --state <state>
 ```
 
 By default, connect opens the Google authorization URL and completes OAuth
-through a local PKCE callback, so a client secret is not required. The user can
-override the default workgraph client id with `--client-id`; manual or
-confidential-client flows can also pass `--client-secret`. Manual connect with
-`--no-browser` prints an authorization URL and does not write local connector
-settings until the user reruns it with an OAuth code and matching state. After
-code exchange, workgraph stores Google Calendar connector settings under the
-workgraph home directory with local-user-only file permissions. Stored settings
-include access token, refresh token when granted, token type, expiry, granted
-scopes, selected calendar ids, and provider API base URL.
+through a local PKCE callback. Browser connect binds a random loopback port and
+uses a redirect URI shaped like `http://127.0.0.1:<port>`, matching Google's
+installed-app loopback guidance. Google Calendar OAuth is always treated as a
+local/native app flow; workgraph does not support non-PKCE calendar OAuth. The
+user can override the default workgraph client id with `--client-id`, but
+workgraph does not expose or accept a calendar client secret because users will
+not provide secrets in normal local use.
+
+Google's token exchange is performed through a narrow workgraph-controlled token
+relay:
+
+```text
+https://workgraph.pages.dev/calendar/google/token
+```
+
+The local CLI sends only the authorization code, PKCE code verifier, redirect
+URI, client id, and grant type to the relay. The relay adds the Google OAuth
+client secret from Cloudflare Worker secrets, forwards the token request to
+Google, returns Google's JSON response, and does not store or log OAuth codes,
+tokens, or request bodies. The relay is used only for OAuth token exchange; it
+does not receive calendar event data.
+
+Local development for the token relay should use Cloudflare Workers' `.dev.vars`
+secret loading pattern. Developers can create
+`workers/google-oauth-token/.dev.vars` with `GOOGLE_CLIENT_SECRET=...` and run
+`wrangler dev` from the Worker directory. The local `.dev.vars` file must be
+ignored by git; production still uses `wrangler secret put GOOGLE_CLIENT_SECRET`.
+
+Manual connect with `--no-browser` prints a PKCE authorization URL and does not
+write local connector settings until the user reruns it with an OAuth code,
+matching state, and code verifier. After code exchange, workgraph stores Google
+Calendar connector settings under the workgraph home directory with
+local-user-only file permissions. Stored settings include access token, refresh
+token when granted, token type, expiry, granted scopes, selected calendar ids,
+and provider API base URL.
 
 The Google Calendar connector requests:
 
@@ -116,26 +142,3 @@ workgraph refreshes the stored record instead of creating a duplicate.
 Google Calendar and Outlook/Microsoft Calendar should be implemented as provider
 adapters that produce this same normalized event shape. Google is the first
 adapter; Outlook/Microsoft Calendar should reuse the same storage contract.
-
-Justitifcation text:
-```text
-workgraph is a local-first personal work context tool. It reads calendar data only to create local work events, help users understand what meetings and scheduled work happened during a day, and restore context through local commands such as today and resume.
-The app needs read-only access to calendar events so it can capture meeting titles, start/end times, organizers, attendees, locations, conferencing links, and event status. This data is stored locally on the user’s device and is not sold, used for advertising, or shared with third parties.
-The app also needs read-only access to the user’s calendar list so users can identify and select which calendars workgraph should capture.
-More limited scopes are not sufficient because events.owned.readonly only covers calendars owned by the user, while many work meetings appear on shared, delegated, subscribed, or organization-managed calendars. workgraph needs to read events on calendars the user can access, but it does not need write access.
-```
-
-Shorter:
-```text
-workgraph is a local-first personal work context tool. It uses Google Calendar data to create local
-calendar.event records, show scheduled work in local context views, and help users resume work around
-meetings.
-
-calendar.calendarlist.readonly lets users see and select which calendars workgraph should capture.
-calendar.events.readonly lets workgraph read events on calendars the user can access.
-calendar.events.owned.readonly supports narrower owned-calendar event reads where applicable.
-calendar.calendars.readonly provides calendar metadata such as title, description, and time zone.
-calendar.freebusy supports availability/focus-time context without requiring event details.
-
-workgraph requests read-only scopes only and does not modify Google Calendar data.
-```

@@ -22,8 +22,12 @@ import (
 // DefaultGoogleCalendarClientID is the OAuth client id used for Google Calendar PKCE OAuth.
 var DefaultGoogleCalendarClientID = "249970569298-d3ba0fnmoc720pq1coacr9s1ss2rhp5s.apps.googleusercontent.com"
 
-// DefaultGoogleCalendarRedirectURI is the local OAuth callback URL for Google Calendar.
-const DefaultGoogleCalendarRedirectURI = "http://localhost:2728/calendar/google/callback"
+// DefaultGoogleCalendarRedirectURI is used by manual Google Calendar OAuth flows.
+// Browser OAuth binds a random loopback port and builds the redirect dynamically.
+const DefaultGoogleCalendarRedirectURI = "http://127.0.0.1:2727"
+
+// DefaultGoogleCalendarTokenURL is the workgraph OAuth token relay for Google Calendar.
+var DefaultGoogleCalendarTokenURL = "https://workgraph.pages.dev/calendar/google/token"
 
 // CalendarCaptureConfig controls normalized calendar event ingestion.
 type CalendarCaptureConfig struct {
@@ -51,9 +55,9 @@ type CalendarConnectConfig struct {
 	HomeDir       string
 	Provider      string
 	ClientID      string
-	ClientSecret  string
 	RedirectURI   string
 	Code          string
+	CodeVerifier  string
 	State         string
 	ExpectedState string
 	CalendarIDs   []string
@@ -239,22 +243,24 @@ func ConnectCalendarWithBrowser(ctx context.Context, config CalendarConnectConfi
 	if config.ClientID == "" {
 		return CalendarConnectResult{}, errors.New("google calendar client id is required for browser connect")
 	}
-	if config.RedirectURI == "" {
-		config.RedirectURI = DefaultGoogleCalendarRedirectURI
-	}
-	parsedRedirect, err := url.Parse(config.RedirectURI)
-	if err != nil {
-		return CalendarConnectResult{}, fmt.Errorf("parse google calendar redirect URI: %w", err)
-	}
-	if !isLocalHTTPRedirect(parsedRedirect) {
-		return CalendarConnectResult{}, errors.New("google calendar redirect URI must be an http localhost URL")
+	listenAddress := "127.0.0.1:0"
+	if config.RedirectURI != "" {
+		parsedRedirect, err := url.Parse(config.RedirectURI)
+		if err != nil {
+			return CalendarConnectResult{}, fmt.Errorf("parse google calendar redirect URI: %w", err)
+		}
+		if !isLocalHTTPRedirect(parsedRedirect) {
+			return CalendarConnectResult{}, errors.New("google calendar redirect URI must be an http localhost URL")
+		}
+		listenAddress = parsedRedirect.Host
 	}
 
-	listener, err := net.Listen("tcp", parsedRedirect.Host)
+	listener, err := net.Listen("tcp", listenAddress)
 	if err != nil {
 		return CalendarConnectResult{}, fmt.Errorf("start google calendar oauth callback: %w", err)
 	}
 	defer listener.Close()
+	config.RedirectURI = "http://" + listener.Addr().String()
 
 	state, err := randomURLToken(24)
 	if err != nil {
@@ -300,7 +306,6 @@ func ConnectCalendarWithBrowser(ctx context.Context, config CalendarConnectConfi
 	config.HomeDir = homeDir
 	config.Code = code
 	config.ExpectedState = state
-	config.ClientSecret = ""
 	token, err := exchangeGoogleCalendarOAuthCodeWithPKCE(config, verifier)
 	if err != nil {
 		return CalendarConnectResult{}, err
@@ -345,9 +350,17 @@ func connectGoogleCalendar(config CalendarConnectConfig) (CalendarConnectResult,
 		}
 		state = generated
 	}
+	verifier := config.CodeVerifier
+	if verifier == "" {
+		generated, err := randomURLToken(48)
+		if err != nil {
+			return CalendarConnectResult{}, fmt.Errorf("create oauth verifier: %w", err)
+		}
+		verifier = generated
+	}
 	result := CalendarConnectResult{
 		ConfigPath:       calendarConfigPath(homeDir),
-		AuthorizationURL: googleCalendarAuthorizationURL(config, state),
+		AuthorizationURL: googleCalendarAuthorizationURLWithPKCE(config, state, slackPKCEChallenge(verifier)),
 		State:            state,
 	}
 	if config.Code == "" {
@@ -355,7 +368,8 @@ func connectGoogleCalendar(config CalendarConnectConfig) (CalendarConnectResult,
 			"Google Calendar OAuth authorization URL",
 			result.AuthorizationURL,
 			"State: " + result.State,
-			"After Google redirects back with a code, rerun calendar connect google with --code and --state.",
+			"Code verifier: " + verifier,
+			"After Google redirects back with a code, rerun calendar connect google with --code, --state, and --code-verifier.",
 		}, "\n")
 		return result, nil
 	}
@@ -363,15 +377,11 @@ func connectGoogleCalendar(config CalendarConnectConfig) (CalendarConnectResult,
 		return CalendarConnectResult{}, errors.New("google calendar oauth state did not match")
 	}
 
-	token, err := exchangeGoogleCalendarOAuthCode(config)
+	token, err := exchangeGoogleCalendarOAuthCodeWithPKCE(config, verifier)
 	if err != nil {
 		return CalendarConnectResult{}, err
 	}
 	return storeGoogleCalendarConnection(homeDir, config, token)
-}
-
-func googleCalendarAuthorizationURL(config CalendarConnectConfig, state string) string {
-	return googleCalendarAuthorizationURLWithPKCE(config, state, "")
 }
 
 func googleCalendarAuthorizationURLWithPKCE(config CalendarConnectConfig, state string, challenge string) string {
@@ -394,30 +404,17 @@ func googleCalendarAuthorizationURLWithPKCE(config CalendarConnectConfig, state 
 	return baseURL + "?" + values.Encode()
 }
 
-func exchangeGoogleCalendarOAuthCode(config CalendarConnectConfig) (googleOAuthTokenResponse, error) {
-	return exchangeGoogleCalendarOAuthCodeWithVerifier(config, "")
-}
-
 func exchangeGoogleCalendarOAuthCodeWithPKCE(config CalendarConnectConfig, verifier string) (googleOAuthTokenResponse, error) {
-	return exchangeGoogleCalendarOAuthCodeWithVerifier(config, verifier)
-}
-
-func exchangeGoogleCalendarOAuthCodeWithVerifier(config CalendarConnectConfig, verifier string) (googleOAuthTokenResponse, error) {
 	tokenURL := config.TokenURL
 	if tokenURL == "" {
-		tokenURL = "https://oauth2.googleapis.com/token"
+		tokenURL = DefaultGoogleCalendarTokenURL
 	}
 	form := url.Values{}
 	form.Set("grant_type", "authorization_code")
 	form.Set("code", config.Code)
 	form.Set("client_id", config.ClientID)
 	form.Set("redirect_uri", config.RedirectURI)
-	if config.ClientSecret != "" {
-		form.Set("client_secret", config.ClientSecret)
-	}
-	if verifier != "" {
-		form.Set("code_verifier", verifier)
-	}
+	form.Set("code_verifier", verifier)
 
 	request, err := http.NewRequest(http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
 	if err != nil {

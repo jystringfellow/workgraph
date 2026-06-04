@@ -42,6 +42,7 @@
    - [x] Google Calendar event capture maps provider API events into calendar.event.
    - [x] Google Calendar OAuth connect stores local connector settings.
    - [x] Google Calendar browser OAuth uses PKCE with the default workgraph client id.
+   - [x] Google Calendar OAuth token exchange uses the workgraph Cloudflare relay with local `.dev.vars` development setup.
    - [ ] Google Calendar token refresh.
    - [ ] Background polling from stored calendar connector settings.
 - [ ] Meeting ingestion (Zoom, Google Meet, Microsoft Teams metadata/transcripts when explicitly available)
