@@ -24,6 +24,7 @@ Scenario: Capture Google Calendar events
   When I run "workgraph calendar capture --provider google --calendar-id primary"
   Then workgraph stores those Google events as calendar.event records
   And the records use the same normalized payload contract as imported calendar events
+  And expired Google Calendar access tokens refresh through the workgraph Google token relay before capture
 
 Scenario: Connect Google Calendar with OAuth
   Given workgraph has been initialized

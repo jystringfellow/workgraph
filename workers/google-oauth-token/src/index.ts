@@ -4,13 +4,20 @@ interface Env {
   GOOGLE_TOKEN_URL: string;
 }
 
-const REQUIRED_FIELDS = [
-  "grant_type",
-  "code",
-  "code_verifier",
-  "redirect_uri",
-  "client_id",
-];
+const REQUIRED_FIELDS_BY_GRANT_TYPE: Record<string, string[]> = {
+  authorization_code: [
+    "grant_type",
+    "code",
+    "code_verifier",
+    "redirect_uri",
+    "client_id",
+  ],
+  refresh_token: [
+    "grant_type",
+    "refresh_token",
+    "client_id",
+  ],
+};
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -25,13 +32,15 @@ export default {
     }
 
     const form = new URLSearchParams(await request.text());
-    for (const field of REQUIRED_FIELDS) {
+    const grantType = form.get("grant_type") || "";
+    const requiredFields = REQUIRED_FIELDS_BY_GRANT_TYPE[grantType];
+    if (!requiredFields) {
+      return json({ error: "unsupported_grant_type" }, 400);
+    }
+    for (const field of requiredFields) {
       if (!form.get(field)) {
         return json({ error: "invalid_request", error_description: `${field} is required` }, 400);
       }
-    }
-    if (form.get("grant_type") !== "authorization_code") {
-      return json({ error: "unsupported_grant_type" }, 400);
     }
     if (form.get("client_id") !== env.GOOGLE_CLIENT_ID) {
       return json({ error: "invalid_client" }, 400);

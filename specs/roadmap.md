@@ -44,7 +44,7 @@
    - [x] Google Calendar browser OAuth uses PKCE with the default workgraph client id.
    - [x] Google Calendar OAuth token exchange uses the workgraph Cloudflare relay with local `.dev.vars` development setup.
    - [x] Google Calendar disconnect revokes the stored token and removes local connector settings.
-   - [ ] Google Calendar token refresh.
+   - [x] Google Calendar token refresh.
    - [ ] Background polling from stored calendar connector settings.
 - [ ] Meeting ingestion (Zoom, Google Meet, Microsoft Teams metadata/transcripts when explicitly available)
    - [ ] Meeting notes archive with index, decisions, and action items.
@@ -84,6 +84,7 @@
 - [ ] Approval-based execution
 
 ## Phase 7: Platform
+- [x] CI runs full Go tests on pull requests to main
 - [ ] Plugin system
 - [ ] Desktop UI (Tauri)
 - [ ] Open-source release

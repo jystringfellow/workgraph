@@ -53,6 +53,12 @@ Google, returns Google's JSON response, and does not store or log OAuth codes,
 tokens, or request bodies. The relay is used only for OAuth token exchange; it
 does not receive calendar event data.
 
+The same token relay handles Google Calendar refresh-token exchanges. When
+stored Google Calendar credentials are expired or close to expiry, capture
+refreshes the access token before calling the Calendar API. The local CLI sends
+the refresh token, client id, and grant type to the relay; it still does not
+send or store the Google client secret.
+
 Local development for the token relay should use Cloudflare Workers' `.dev.vars`
 secret loading pattern. Developers can create
 `workers/google-oauth-token/.dev.vars` with `GOOGLE_CLIENT_SECRET=...` and run
@@ -65,7 +71,7 @@ matching state, and code verifier. After code exchange, workgraph stores Google
 Calendar connector settings under the workgraph home directory with
 local-user-only file permissions. Stored settings include access token, refresh
 token when granted, token type, expiry, granted scopes, selected calendar ids,
-and provider API base URL.
+provider API base URL, OAuth client id, and token relay URL when customized.
 
 `workgraph calendar disconnect google` revokes the stored Google Calendar token
 when possible and removes local Calendar connector settings. Disconnecting is

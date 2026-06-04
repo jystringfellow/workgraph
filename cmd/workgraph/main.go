@@ -201,6 +201,8 @@ func runCalendarCapture(args []string, stdout io.Writer, stderr io.Writer) int {
 	provider := flags.String("provider", "", "Calendar provider to capture from")
 	calendarID := flags.String("calendar-id", "", "Provider calendar id")
 	token := flags.String("token", os.Getenv("WORKGRAPH_CALENDAR_TOKEN"), "Calendar provider access token")
+	clientID := flags.String("client-id", os.Getenv("WORKGRAPH_GOOGLE_CLIENT_ID"), "Calendar provider OAuth client id")
+	tokenURL := flags.String("calendar-token-url", "", "Calendar provider token URL")
 	calendarAPIBaseURL := flags.String("calendar-api-base", "", "Calendar API base URL")
 
 	if err := flags.Parse(args); err != nil {
@@ -214,6 +216,8 @@ func runCalendarCapture(args []string, stdout io.Writer, stderr io.Writer) int {
 		Provider:     *provider,
 		CalendarID:   *calendarID,
 		Token:        *token,
+		ClientID:     *clientID,
+		TokenURL:     *tokenURL,
 		APIBaseURL:   *calendarAPIBaseURL,
 	})
 	if err != nil {
