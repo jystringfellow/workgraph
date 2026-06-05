@@ -32,6 +32,15 @@ var DefaultGoogleCalendarTokenURL = "https://workgraph-google-oauth-token.jystri
 // DefaultGoogleCalendarRevokeURL is Google's OAuth token revocation endpoint.
 var DefaultGoogleCalendarRevokeURL = "https://oauth2.googleapis.com/revoke"
 
+// DefaultMicrosoftCalendarClientID is the Entra application id used for Microsoft Calendar PKCE OAuth.
+var DefaultMicrosoftCalendarClientID = "413dce76-e10c-4a57-84b4-89f6b66ab265"
+
+// DefaultMicrosoftCalendarRedirectURI is used by Microsoft Calendar OAuth flows.
+const DefaultMicrosoftCalendarRedirectURI = "http://localhost:2727/calendar/microsoft/callback"
+
+// DefaultMicrosoftCalendarTokenURL is Microsoft identity platform's v2 token endpoint.
+var DefaultMicrosoftCalendarTokenURL = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+
 // CalendarCaptureConfig controls normalized calendar event ingestion.
 type CalendarCaptureConfig struct {
 	HomeDir      string
@@ -98,10 +107,23 @@ type CalendarDisconnectResult struct {
 }
 
 type calendarConnectorConfig struct {
-	Google *googleCalendarConnectorConfig `json:"google,omitempty"`
+	Google    *googleCalendarConnectorConfig    `json:"google,omitempty"`
+	Microsoft *microsoftCalendarConnectorConfig `json:"microsoft,omitempty"`
 }
 
 type googleCalendarConnectorConfig struct {
+	AccessToken  string   `json:"access_token"`
+	RefreshToken string   `json:"refresh_token,omitempty"`
+	TokenType    string   `json:"token_type,omitempty"`
+	ExpiresAt    string   `json:"expires_at,omitempty"`
+	Scopes       []string `json:"scopes,omitempty"`
+	CalendarIDs  []string `json:"calendar_ids"`
+	APIBaseURL   string   `json:"api_base_url,omitempty"`
+	ClientID     string   `json:"client_id,omitempty"`
+	TokenURL     string   `json:"token_url,omitempty"`
+}
+
+type microsoftCalendarConnectorConfig struct {
 	AccessToken  string   `json:"access_token"`
 	RefreshToken string   `json:"refresh_token,omitempty"`
 	TokenType    string   `json:"token_type,omitempty"`
@@ -236,10 +258,14 @@ func CaptureCalendarEvents(config CalendarCaptureConfig) (CalendarCaptureResult,
 
 // ConnectCalendar prepares or completes calendar provider OAuth setup.
 func ConnectCalendar(config CalendarConnectConfig) (CalendarConnectResult, error) {
-	if strings.ToLower(config.Provider) != "google" {
+	switch strings.ToLower(config.Provider) {
+	case "google":
+		return connectGoogleCalendar(config)
+	case "microsoft":
+		return connectMicrosoftCalendar(config)
+	default:
 		return CalendarConnectResult{}, fmt.Errorf("unsupported calendar provider %q", config.Provider)
 	}
-	return connectGoogleCalendar(config)
 }
 
 // DisconnectCalendar revokes provider OAuth access when possible and removes local connector settings.
@@ -252,7 +278,8 @@ func DisconnectCalendar(config CalendarDisconnectConfig) (CalendarDisconnectResu
 
 // ConnectCalendarWithBrowser completes calendar provider OAuth with a local callback and PKCE.
 func ConnectCalendarWithBrowser(ctx context.Context, config CalendarConnectConfig) (CalendarConnectResult, error) {
-	if strings.ToLower(config.Provider) != "google" {
+	provider := strings.ToLower(config.Provider)
+	if provider != "google" && provider != "microsoft" {
 		return CalendarConnectResult{}, fmt.Errorf("unsupported calendar provider %q", config.Provider)
 	}
 	homeDir, err := resolveHomeDir(config.HomeDir)
@@ -269,28 +296,40 @@ func ConnectCalendarWithBrowser(ctx context.Context, config CalendarConnectConfi
 		}
 		return CalendarConnectResult{}, fmt.Errorf("check database: %w", err)
 	}
-	config.ClientID = resolveGoogleCalendarClientID(config.ClientID)
+	switch provider {
+	case "google":
+		config.ClientID = resolveGoogleCalendarClientID(config.ClientID)
+	case "microsoft":
+		config.ClientID = resolveMicrosoftCalendarClientID(config.ClientID)
+	}
 	if config.ClientID == "" {
-		return CalendarConnectResult{}, errors.New("google calendar client id is required for browser connect")
+		return CalendarConnectResult{}, fmt.Errorf("%s calendar client id is required for browser connect", provider)
 	}
 	listenAddress := "127.0.0.1:0"
+	redirectPath := ""
+	if config.RedirectURI == "" && provider == "microsoft" {
+		config.RedirectURI = DefaultMicrosoftCalendarRedirectURI
+	}
 	if config.RedirectURI != "" {
 		parsedRedirect, err := url.Parse(config.RedirectURI)
 		if err != nil {
-			return CalendarConnectResult{}, fmt.Errorf("parse google calendar redirect URI: %w", err)
+			return CalendarConnectResult{}, fmt.Errorf("parse %s calendar redirect URI: %w", provider, err)
 		}
 		if !isLocalHTTPRedirect(parsedRedirect) {
-			return CalendarConnectResult{}, errors.New("google calendar redirect URI must be an http localhost URL")
+			return CalendarConnectResult{}, fmt.Errorf("%s calendar redirect URI must be an http localhost URL", provider)
 		}
 		listenAddress = parsedRedirect.Host
+		redirectPath = parsedRedirect.EscapedPath()
 	}
 
 	listener, err := net.Listen("tcp", listenAddress)
 	if err != nil {
-		return CalendarConnectResult{}, fmt.Errorf("start google calendar oauth callback: %w", err)
+		return CalendarConnectResult{}, fmt.Errorf("start %s calendar oauth callback: %w", provider, err)
 	}
 	defer listener.Close()
-	config.RedirectURI = "http://" + listener.Addr().String()
+	if config.RedirectURI == "" || strings.HasSuffix(listenAddress, ":0") {
+		config.RedirectURI = "http://" + listener.Addr().String() + redirectPath
+	}
 
 	state, err := randomURLToken(24)
 	if err != nil {
@@ -301,7 +340,13 @@ func ConnectCalendarWithBrowser(ctx context.Context, config CalendarConnectConfi
 		return CalendarConnectResult{}, fmt.Errorf("create oauth verifier: %w", err)
 	}
 	config.State = state
-	authURL := googleCalendarAuthorizationURLWithPKCE(config, state, slackPKCEChallenge(verifier))
+	var authURL string
+	switch provider {
+	case "google":
+		authURL = googleCalendarAuthorizationURLWithPKCE(config, state, slackPKCEChallenge(verifier))
+	case "microsoft":
+		authURL = microsoftCalendarAuthorizationURLWithPKCE(config, state, slackPKCEChallenge(verifier))
+	}
 	codeCh := make(chan string, 1)
 	errCh := make(chan error, 1)
 
@@ -336,13 +381,26 @@ func ConnectCalendarWithBrowser(ctx context.Context, config CalendarConnectConfi
 	config.HomeDir = homeDir
 	config.Code = code
 	config.ExpectedState = state
-	token, err := exchangeGoogleCalendarOAuthCodeWithPKCE(config, verifier)
-	if err != nil {
-		return CalendarConnectResult{}, err
-	}
-	result, err := storeGoogleCalendarConnection(homeDir, config, token)
-	if err != nil {
-		return CalendarConnectResult{}, err
+	var result CalendarConnectResult
+	switch provider {
+	case "google":
+		token, err := exchangeGoogleCalendarOAuthCodeWithPKCE(config, verifier)
+		if err != nil {
+			return CalendarConnectResult{}, err
+		}
+		result, err = storeGoogleCalendarConnection(homeDir, config, token)
+		if err != nil {
+			return CalendarConnectResult{}, err
+		}
+	case "microsoft":
+		token, err := exchangeMicrosoftCalendarOAuthCodeWithPKCE(config, verifier)
+		if err != nil {
+			return CalendarConnectResult{}, err
+		}
+		result, err = storeMicrosoftCalendarConnection(homeDir, config, token)
+		if err != nil {
+			return CalendarConnectResult{}, err
+		}
 	}
 	result.AuthorizationURL = authURL
 	result.State = state
@@ -414,6 +472,71 @@ func connectGoogleCalendar(config CalendarConnectConfig) (CalendarConnectResult,
 	return storeGoogleCalendarConnection(homeDir, config, token)
 }
 
+func connectMicrosoftCalendar(config CalendarConnectConfig) (CalendarConnectResult, error) {
+	homeDir, err := resolveHomeDir(config.HomeDir)
+	if err != nil {
+		return CalendarConnectResult{}, err
+	}
+	homeDir, err = filepath.Abs(homeDir)
+	if err != nil {
+		return CalendarConnectResult{}, fmt.Errorf("resolve workgraph home: %w", err)
+	}
+	if _, err := os.Stat(filepath.Join(homeDir, "workgraph.db")); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return CalendarConnectResult{}, fmt.Errorf("%w: run workgraph init", ErrNotInitialized)
+		}
+		return CalendarConnectResult{}, fmt.Errorf("check database: %w", err)
+	}
+	config.ClientID = resolveMicrosoftCalendarClientID(config.ClientID)
+	if config.ClientID == "" {
+		return CalendarConnectResult{}, errors.New("microsoft calendar client id is required")
+	}
+	if config.RedirectURI == "" {
+		config.RedirectURI = DefaultMicrosoftCalendarRedirectURI
+	}
+
+	state := config.State
+	if state == "" {
+		generated, err := newEventID()
+		if err != nil {
+			return CalendarConnectResult{}, fmt.Errorf("create oauth state: %w", err)
+		}
+		state = generated
+	}
+	verifier := config.CodeVerifier
+	if verifier == "" {
+		generated, err := randomURLToken(48)
+		if err != nil {
+			return CalendarConnectResult{}, fmt.Errorf("create oauth verifier: %w", err)
+		}
+		verifier = generated
+	}
+	result := CalendarConnectResult{
+		ConfigPath:       calendarConfigPath(homeDir),
+		AuthorizationURL: microsoftCalendarAuthorizationURLWithPKCE(config, state, slackPKCEChallenge(verifier)),
+		State:            state,
+	}
+	if config.Code == "" {
+		result.Message = strings.Join([]string{
+			"Microsoft Calendar OAuth authorization URL",
+			result.AuthorizationURL,
+			"State: " + result.State,
+			"Code verifier: " + verifier,
+			"After Microsoft redirects back with a code, rerun calendar connect microsoft with --code, --state, and --code-verifier.",
+		}, "\n")
+		return result, nil
+	}
+	if config.ExpectedState != "" && config.State != "" && config.State != config.ExpectedState {
+		return CalendarConnectResult{}, errors.New("microsoft calendar oauth state did not match")
+	}
+
+	token, err := exchangeMicrosoftCalendarOAuthCodeWithPKCE(config, verifier)
+	if err != nil {
+		return CalendarConnectResult{}, err
+	}
+	return storeMicrosoftCalendarConnection(homeDir, config, token)
+}
+
 func googleCalendarAuthorizationURLWithPKCE(config CalendarConnectConfig, state string, challenge string) string {
 	baseURL := config.AuthBaseURL
 	if baseURL == "" {
@@ -427,6 +550,24 @@ func googleCalendarAuthorizationURLWithPKCE(config CalendarConnectConfig, state 
 	values.Set("state", state)
 	values.Set("access_type", "offline")
 	values.Set("include_granted_scopes", "true")
+	if challenge != "" {
+		values.Set("code_challenge", challenge)
+		values.Set("code_challenge_method", "S256")
+	}
+	return baseURL + "?" + values.Encode()
+}
+
+func microsoftCalendarAuthorizationURLWithPKCE(config CalendarConnectConfig, state string, challenge string) string {
+	baseURL := config.AuthBaseURL
+	if baseURL == "" {
+		baseURL = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+	}
+	values := url.Values{}
+	values.Set("client_id", config.ClientID)
+	values.Set("redirect_uri", config.RedirectURI)
+	values.Set("response_type", "code")
+	values.Set("scope", strings.Join(microsoftCalendarScopes(), " "))
+	values.Set("state", state)
 	if challenge != "" {
 		values.Set("code_challenge", challenge)
 		values.Set("code_challenge_method", "S256")
@@ -555,6 +696,45 @@ func exchangeGoogleCalendarOAuthCodeWithPKCE(config CalendarConnectConfig, verif
 	return token, nil
 }
 
+func exchangeMicrosoftCalendarOAuthCodeWithPKCE(config CalendarConnectConfig, verifier string) (googleOAuthTokenResponse, error) {
+	tokenURL := resolveMicrosoftCalendarTokenURL(config.TokenURL)
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("code", config.Code)
+	form.Set("client_id", config.ClientID)
+	form.Set("redirect_uri", config.RedirectURI)
+	form.Set("code_verifier", verifier)
+
+	request, err := http.NewRequest(http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return googleOAuthTokenResponse{}, fmt.Errorf("build Microsoft Calendar token request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := config.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return googleOAuthTokenResponse{}, fmt.Errorf("exchange Microsoft Calendar OAuth code: %w", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return googleOAuthTokenResponse{}, fmt.Errorf("read Microsoft Calendar OAuth response: %w", err)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return googleOAuthTokenResponse{}, fmt.Errorf("exchange Microsoft Calendar OAuth code: status %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var token googleOAuthTokenResponse
+	if err := json.Unmarshal(body, &token); err != nil {
+		return googleOAuthTokenResponse{}, fmt.Errorf("parse Microsoft Calendar OAuth response: %w", err)
+	}
+	return token, nil
+}
+
 func refreshGoogleCalendarAccessToken(config CalendarCaptureConfig, stored *googleCalendarConnectorConfig) (*googleCalendarConnectorConfig, error) {
 	if stored.RefreshToken == "" {
 		return nil, errors.New("google calendar refresh token is required")
@@ -654,6 +834,34 @@ func storeGoogleCalendarConnection(homeDir string, config CalendarConnectConfig,
 	}, nil
 }
 
+func storeMicrosoftCalendarConnection(homeDir string, config CalendarConnectConfig, token googleOAuthTokenResponse) (CalendarConnectResult, error) {
+	if token.AccessToken == "" {
+		return CalendarConnectResult{}, errors.New("microsoft calendar oauth response did not include an access token")
+	}
+	configPath := calendarConfigPath(homeDir)
+	stored := calendarConnectorConfig{
+		Microsoft: &microsoftCalendarConnectorConfig{
+			AccessToken:  token.AccessToken,
+			RefreshToken: token.RefreshToken,
+			TokenType:    token.TokenType,
+			ExpiresAt:    googleCalendarTokenExpiresAt(token),
+			Scopes:       strings.Fields(token.Scope),
+			CalendarIDs:  googleCalendarIDs(config.CalendarIDs),
+			APIBaseURL:   config.APIBaseURL,
+			ClientID:     config.ClientID,
+			TokenURL:     resolveMicrosoftCalendarTokenURL(config.TokenURL),
+		},
+	}
+	if err := writeCalendarConnectorConfig(configPath, stored); err != nil {
+		return CalendarConnectResult{}, err
+	}
+	return CalendarConnectResult{
+		ConfigPath: configPath,
+		Configured: true,
+		Message:    microsoftCalendarConnectedMessage(configPath, stored.Microsoft),
+	}, nil
+}
+
 func googleCalendarScopes() []string {
 	return []string{
 		"https://www.googleapis.com/auth/calendar.calendarlist.readonly",
@@ -661,6 +869,17 @@ func googleCalendarScopes() []string {
 		"https://www.googleapis.com/auth/calendar.calendars.readonly",
 		"https://www.googleapis.com/auth/calendar.events.owned.readonly",
 		"https://www.googleapis.com/auth/calendar.events.readonly",
+	}
+}
+
+func microsoftCalendarScopes() []string {
+	return []string{
+		"openid",
+		"profile",
+		"email",
+		"offline_access",
+		"https://graph.microsoft.com/Calendars.Read",
+		"https://graph.microsoft.com/Calendars.Read.Shared",
 	}
 }
 
@@ -704,6 +923,14 @@ func googleCalendarConnectedMessage(configPath string, config *googleCalendarCon
 	}, "\n")
 }
 
+func microsoftCalendarConnectedMessage(configPath string, config *microsoftCalendarConnectorConfig) string {
+	return strings.Join([]string{
+		"Microsoft Calendar connected",
+		"Config: " + configPath,
+		"Calendars: " + strings.Join(config.CalendarIDs, ", "),
+	}, "\n")
+}
+
 func resolveGoogleCalendarClientID(clientID string) string {
 	if clientID != "" {
 		return clientID
@@ -711,11 +938,25 @@ func resolveGoogleCalendarClientID(clientID string) string {
 	return DefaultGoogleCalendarClientID
 }
 
+func resolveMicrosoftCalendarClientID(clientID string) string {
+	if clientID != "" {
+		return clientID
+	}
+	return DefaultMicrosoftCalendarClientID
+}
+
 func resolveGoogleCalendarTokenURL(tokenURL string) string {
 	if tokenURL != "" {
 		return tokenURL
 	}
 	return DefaultGoogleCalendarTokenURL
+}
+
+func resolveMicrosoftCalendarTokenURL(tokenURL string) string {
+	if tokenURL != "" {
+		return tokenURL
+	}
+	return DefaultMicrosoftCalendarTokenURL
 }
 
 func googleCalendarOAuthCallbackHandler(expectedState string, codeCh chan<- string, errCh chan<- error) http.Handler {

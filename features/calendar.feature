@@ -50,3 +50,13 @@ Scenario: Verify Microsoft Calendar publisher domain
   When Microsoft checks the workgraph Pages publisher domain
   Then workgraph serves the Microsoft identity association file from ".well-known/microsoft-identity-association.json"
   And the file includes the Microsoft application id for workgraph
+
+Scenario: Connect Microsoft Calendar with OAuth
+  Given workgraph has been initialized
+  When I run "workgraph calendar connect microsoft"
+  Then workgraph opens Microsoft OAuth and stores local Microsoft Calendar connector settings after approval
+  And the browser flow uses PKCE without requiring a client secret
+  And the OAuth request targets Microsoft Graph calendar scopes, not Azure DevOps scopes
+  When I run "workgraph calendar connect microsoft --no-browser"
+  Then workgraph prints a Microsoft OAuth authorization URL
+  And workgraph does not store local Microsoft Calendar connector settings yet
