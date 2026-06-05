@@ -474,6 +474,258 @@ func TestGoogleCalendarConnectOAuthStoresConnectorConfigAfterCodeExchange(t *tes
 	}
 }
 
+func TestMicrosoftCalendarConnectOAuthUsesPKCEAndStoresConnectorConfig(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "calendar", "connect", "microsoft",
+		"--home", homeDir,
+		"--no-browser",
+		"--client-id", "client-id",
+		"--redirect-uri", "http://localhost:2727/calendar/microsoft/callback",
+		"--state", "fixed-state",
+	)
+	if err != nil {
+		t.Fatalf("workgraph calendar connect URL failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Microsoft Calendar OAuth authorization URL") {
+		t.Fatalf("expected Microsoft authorization guidance, got:\n%s", output)
+	}
+	authorizationURL := calendarAuthorizationURL(t, string(output))
+	parsed, err := url.Parse(authorizationURL)
+	if err != nil {
+		t.Fatalf("parse authorization url: %v", err)
+	}
+	if parsed.Scheme != "https" || parsed.Host != "login.microsoftonline.com" || parsed.Path != "/common/oauth2/v2.0/authorize" {
+		t.Fatalf("expected Microsoft OAuth authorize URL, got %s", authorizationURL)
+	}
+	query := parsed.Query()
+	if query.Get("client_id") != "client-id" {
+		t.Fatalf("expected client id in authorization URL, got %q", query.Get("client_id"))
+	}
+	if query.Get("redirect_uri") != "http://localhost:2727/calendar/microsoft/callback" {
+		t.Fatalf("expected redirect URI in authorization URL, got %q", query.Get("redirect_uri"))
+	}
+	if query.Get("state") != "fixed-state" {
+		t.Fatalf("expected state in authorization URL, got %q", query.Get("state"))
+	}
+	if query.Get("response_type") != "code" {
+		t.Fatalf("expected authorization code response type, got %q", query.Get("response_type"))
+	}
+	if query.Get("code_challenge") == "" || query.Get("code_challenge_method") != "S256" {
+		t.Fatalf("expected PKCE challenge in authorization URL, got %q / %q", query.Get("code_challenge"), query.Get("code_challenge_method"))
+	}
+	for _, expectedScope := range []string{
+		"openid",
+		"profile",
+		"email",
+		"offline_access",
+		"https://graph.microsoft.com/Calendars.Read",
+		"https://graph.microsoft.com/Calendars.Read.Shared",
+	} {
+		if !strings.Contains(query.Get("scope"), expectedScope) {
+			t.Fatalf("expected scope %q, got %q", expectedScope, query.Get("scope"))
+		}
+	}
+	if strings.Contains(query.Get("scope"), "visualstudio.com") {
+		t.Fatalf("expected Microsoft Calendar OAuth not to request Azure DevOps scopes, got %q", query.Get("scope"))
+	}
+	if _, err := os.Stat(filepath.Join(homeDir, "calendar.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected calendar config not to be written before code exchange, stat err: %v", err)
+	}
+
+	var tokenRequestForm url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/token" {
+			t.Fatalf("unexpected token server path %s", request.URL.Path)
+		}
+		if err := request.ParseForm(); err != nil {
+			t.Fatalf("parse token request form: %v", err)
+		}
+		tokenRequestForm = request.Form
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{
+  "access_token": "microsoft-access-token",
+  "refresh_token": "microsoft-refresh-token",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "scope": "openid profile email offline_access https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/Calendars.Read.Shared"
+}`))
+	}))
+	defer server.Close()
+
+	output, err = runworkgraph(t, repoRoot, "calendar", "connect", "microsoft",
+		"--home", homeDir,
+		"--client-id", "client-id",
+		"--redirect-uri", "http://localhost:2727/calendar/microsoft/callback",
+		"--code", "oauth-code",
+		"--code-verifier", "manual-code-verifier",
+		"--state", "fixed-state",
+		"--expected-state", "fixed-state",
+		"--calendar-id", "primary",
+		"--calendar-token-url", server.URL+"/token",
+		"--calendar-api-base", "https://graph.microsoft.test",
+	)
+	if err != nil {
+		t.Fatalf("workgraph calendar connect exchange failed: %v\n%s", err, output)
+	}
+	if tokenRequestForm.Get("grant_type") != "authorization_code" {
+		t.Fatalf("expected authorization_code grant, got %q", tokenRequestForm.Get("grant_type"))
+	}
+	if tokenRequestForm.Get("code") != "oauth-code" {
+		t.Fatalf("expected oauth code in token request, got %q", tokenRequestForm.Get("code"))
+	}
+	if tokenRequestForm.Get("client_id") != "client-id" || tokenRequestForm.Get("code_verifier") != "manual-code-verifier" {
+		t.Fatalf("expected PKCE client id and verifier in token request, got %#v", tokenRequestForm)
+	}
+	if tokenRequestForm.Get("redirect_uri") != "http://localhost:2727/calendar/microsoft/callback" {
+		t.Fatalf("expected redirect URI in token request, got %#v", tokenRequestForm)
+	}
+	if _, ok := tokenRequestForm["client_secret"]; ok {
+		t.Fatalf("expected no client_secret field in Microsoft calendar token request, got %#v", tokenRequestForm["client_secret"])
+	}
+	if !strings.Contains(string(output), "Microsoft Calendar connected") {
+		t.Fatalf("expected connected message, got:\n%s", output)
+	}
+
+	contents, err := os.ReadFile(filepath.Join(homeDir, "calendar.json"))
+	if err != nil {
+		t.Fatalf("read calendar config: %v", err)
+	}
+	var stored struct {
+		Microsoft struct {
+			AccessToken  string   `json:"access_token"`
+			RefreshToken string   `json:"refresh_token"`
+			TokenType    string   `json:"token_type"`
+			Scopes       []string `json:"scopes"`
+			CalendarIDs  []string `json:"calendar_ids"`
+			APIBaseURL   string   `json:"api_base_url"`
+			ClientID     string   `json:"client_id"`
+			TokenURL     string   `json:"token_url"`
+		} `json:"microsoft"`
+	}
+	if err := json.Unmarshal(contents, &stored); err != nil {
+		t.Fatalf("parse calendar config: %v", err)
+	}
+	if stored.Microsoft.AccessToken != "microsoft-access-token" || stored.Microsoft.RefreshToken != "microsoft-refresh-token" || stored.Microsoft.TokenType != "Bearer" {
+		t.Fatalf("expected stored Microsoft tokens, got %#v", stored.Microsoft)
+	}
+	if len(stored.Microsoft.CalendarIDs) != 1 || stored.Microsoft.CalendarIDs[0] != "primary" {
+		t.Fatalf("expected stored calendar id, got %#v", stored.Microsoft.CalendarIDs)
+	}
+	if stored.Microsoft.APIBaseURL != "https://graph.microsoft.test" {
+		t.Fatalf("expected stored API base URL, got %q", stored.Microsoft.APIBaseURL)
+	}
+	if stored.Microsoft.ClientID != "client-id" || stored.Microsoft.TokenURL != server.URL+"/token" {
+		t.Fatalf("expected stored Microsoft OAuth metadata, got %#v", stored.Microsoft)
+	}
+}
+
+func TestMicrosoftCalendarBrowserConnectUsesPKCEAndStoresConnectorConfig(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	var tokenRequestForm url.Values
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/token" {
+			t.Fatalf("expected token endpoint, got %s", request.URL.Path)
+		}
+		if err := request.ParseForm(); err != nil {
+			t.Fatalf("parse token request form: %v", err)
+		}
+		tokenRequestForm = request.Form
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{
+  "access_token": "microsoft-browser-access-token",
+  "refresh_token": "microsoft-browser-refresh-token",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "scope": "openid profile email offline_access https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/Calendars.Read.Shared"
+}`))
+	}))
+	defer tokenServer.Close()
+
+	openBrowser := func(authorizationURL string) error {
+		parsed, err := url.Parse(authorizationURL)
+		if err != nil {
+			t.Fatalf("parse authorization url: %v", err)
+		}
+		query := parsed.Query()
+		redirectURI := query.Get("redirect_uri")
+		if !strings.HasPrefix(redirectURI, "http://127.0.0.1:") {
+			t.Fatalf("expected loopback redirect URI, got %q", redirectURI)
+		}
+		redirect, err := url.Parse(redirectURI)
+		if err != nil {
+			t.Fatalf("parse redirect URI: %v", err)
+		}
+		if redirect.Path != "/calendar/microsoft/callback" {
+			t.Fatalf("expected Microsoft callback path, got %q", redirect.Path)
+		}
+		if query.Get("client_id") != workgraph.DefaultMicrosoftCalendarClientID {
+			t.Fatalf("expected default Microsoft client id, got %q", query.Get("client_id"))
+		}
+		if query.Get("code_challenge") == "" || query.Get("code_challenge_method") != "S256" {
+			t.Fatalf("expected PKCE challenge in authorization URL, got %q / %q", query.Get("code_challenge"), query.Get("code_challenge_method"))
+		}
+		if strings.Contains(query.Get("scope"), "visualstudio.com") {
+			t.Fatalf("expected Microsoft Calendar browser OAuth not to request Azure DevOps scopes, got %q", query.Get("scope"))
+		}
+		go func() {
+			time.Sleep(20 * time.Millisecond)
+			callback, err := url.Parse(redirectURI)
+			if err != nil {
+				t.Errorf("parse callback URL: %v", err)
+				return
+			}
+			values := callback.Query()
+			values.Set("code", "microsoft-browser-oauth-code")
+			values.Set("state", query.Get("state"))
+			callback.RawQuery = values.Encode()
+			_, _ = http.Get(callback.String())
+		}()
+		return nil
+	}
+
+	result, err := workgraph.ConnectCalendarWithBrowser(context.Background(), workgraph.CalendarConnectConfig{
+		HomeDir:     homeDir,
+		Provider:    "microsoft",
+		RedirectURI: "http://127.0.0.1:0/calendar/microsoft/callback",
+		TokenURL:    tokenServer.URL + "/token",
+		OpenBrowser: openBrowser,
+	})
+	if err != nil {
+		t.Fatalf("browser calendar connect failed: %v", err)
+	}
+	if !result.Configured {
+		t.Fatalf("expected browser connect to configure Microsoft Calendar")
+	}
+	if tokenRequestForm.Get("code") != "microsoft-browser-oauth-code" {
+		t.Fatalf("expected browser oauth code, got %q", tokenRequestForm.Get("code"))
+	}
+	if tokenRequestForm.Get("code_verifier") == "" {
+		t.Fatalf("expected PKCE code verifier in token request")
+	}
+	if _, ok := tokenRequestForm["client_secret"]; ok {
+		t.Fatalf("expected no client_secret field for PKCE browser connect, got %#v", tokenRequestForm["client_secret"])
+	}
+
+	contents, err := os.ReadFile(filepath.Join(homeDir, "calendar.json"))
+	if err != nil {
+		t.Fatalf("read calendar config: %v", err)
+	}
+	if !strings.Contains(string(contents), `"microsoft"`) || !strings.Contains(string(contents), `"access_token": "microsoft-browser-access-token"`) {
+		t.Fatalf("expected Microsoft browser access token in config, got %s", contents)
+	}
+}
+
 func TestGoogleCalendarBrowserConnectUsesPKCEAndStoresConnectorConfig(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")

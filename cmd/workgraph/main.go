@@ -113,7 +113,7 @@ func runCalendarConnect(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 
 	homeDir := flags.String("home", "", "workgraph home directory")
-	clientID := flags.String("client-id", os.Getenv("WORKGRAPH_GOOGLE_CLIENT_ID"), "Calendar provider OAuth client id")
+	clientID := flags.String("client-id", "", "Calendar provider OAuth client id")
 	redirectURI := flags.String("redirect-uri", "", "Calendar provider OAuth redirect URI")
 	code := flags.String("code", "", "Calendar provider OAuth code")
 	codeVerifier := flags.String("code-verifier", "", "Calendar provider OAuth PKCE code verifier")

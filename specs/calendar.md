@@ -28,6 +28,9 @@ workgraph calendar connect google
 workgraph calendar connect google --no-browser
 workgraph calendar connect google --code <oauth-code> --state <state>
 workgraph calendar disconnect google
+workgraph calendar connect microsoft
+workgraph calendar connect microsoft --no-browser
+workgraph calendar connect microsoft --code <oauth-code> --state <state>
 ```
 
 By default, connect opens the Google authorization URL and completes OAuth
@@ -144,6 +147,37 @@ This static verification file does not grant workgraph Microsoft account access
 or process user data. Microsoft account data access must be covered separately
 by OAuth scopes, local credential storage, and connector behavior before
 implementation.
+
+Microsoft Calendar connection setup uses the workgraph Microsoft Entra
+application:
+
+```text
+413dce76-e10c-4a57-84b4-89f6b66ab265
+```
+
+Microsoft Calendar OAuth must use authorization code with PKCE, the Microsoft
+identity platform v2 endpoints, and no client secret in local CLI requests.
+The default manual redirect URI is:
+
+```text
+http://localhost:2727/calendar/microsoft/callback
+```
+
+The Microsoft Calendar connector should initially request Microsoft Graph
+delegated scopes:
+
+```text
+openid
+profile
+email
+offline_access
+https://graph.microsoft.com/Calendars.Read
+https://graph.microsoft.com/Calendars.Read.Shared
+```
+
+Azure DevOps access must not be bundled into the initial Microsoft Calendar
+Graph authorization URL. Azure DevOps uses a different resource than Microsoft
+Graph and should be handled by the work tracking connector.
 
 Each exported event uses a provider-neutral shape:
 

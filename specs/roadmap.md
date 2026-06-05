@@ -46,10 +46,17 @@
    - [x] Google Calendar disconnect revokes the stored token and removes local connector settings.
    - [x] Google Calendar token refresh.
    - [x] Microsoft publisher-domain verification file is hosted from the workgraph Pages site.
+   - [x] Microsoft Calendar OAuth connect uses PKCE and stores local connector settings.
    - [ ] Background polling from stored calendar connector settings.
+- [ ] Mail ingestion (Gmail, Outlook Mail)
+   - [ ] Decide whether Google Mail uses the existing Google OAuth app or a separate `workgraph-mail` app.
+   - [ ] Define explicit metadata-only vs full-content mail capture modes.
+   - [ ] Google Mail OAuth planning for Restricted Gmail scopes.
+   - [ ] Microsoft Graph Mail OAuth planning with incremental delegated consent.
 - [ ] Meeting ingestion (Zoom, Google Meet, Microsoft Teams metadata/transcripts when explicitly available)
    - [ ] Meeting notes archive with index, decisions, and action items.
 - [ ] Work tracking ingestion (Jira, Azure DevOps, Linear)
+   - [ ] Azure DevOps authentication via Microsoft Entra ID as a separate connector from Microsoft Graph mail/calendar.
 - [ ] Knowledge base ingestion (Notion, Confluence, Google Docs/Drive)
    - [ ] Knowledge claim notes for durable beliefs and decision rationale.
    - [ ] Rich local HTML artifacts/reports linked to memory and evidence.
