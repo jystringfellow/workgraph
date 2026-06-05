@@ -270,10 +270,14 @@ func ConnectCalendar(config CalendarConnectConfig) (CalendarConnectResult, error
 
 // DisconnectCalendar revokes provider OAuth access when possible and removes local connector settings.
 func DisconnectCalendar(config CalendarDisconnectConfig) (CalendarDisconnectResult, error) {
-	if strings.ToLower(config.Provider) != "google" {
+	switch strings.ToLower(config.Provider) {
+	case "google":
+		return disconnectGoogleCalendar(config)
+	case "microsoft":
+		return disconnectMicrosoftCalendar(config)
+	default:
 		return CalendarDisconnectResult{}, fmt.Errorf("unsupported calendar provider %q", config.Provider)
 	}
-	return disconnectGoogleCalendar(config)
 }
 
 // ConnectCalendarWithBrowser completes calendar provider OAuth with a local callback and PKCE.
@@ -295,6 +299,11 @@ func ConnectCalendarWithBrowser(ctx context.Context, config CalendarConnectConfi
 			return CalendarConnectResult{}, fmt.Errorf("%w: run workgraph init", ErrNotInitialized)
 		}
 		return CalendarConnectResult{}, fmt.Errorf("check database: %w", err)
+	}
+	if connected, err := calendarProviderConnected(homeDir, provider); err != nil {
+		return CalendarConnectResult{}, err
+	} else if connected {
+		return calendarAlreadyConnectedResult(homeDir, provider), nil
 	}
 	switch provider {
 	case "google":
@@ -351,7 +360,7 @@ func ConnectCalendarWithBrowser(ctx context.Context, config CalendarConnectConfi
 	errCh := make(chan error, 1)
 
 	server := &http.Server{
-		Handler: googleCalendarOAuthCallbackHandler(state, codeCh, errCh),
+		Handler: calendarOAuthCallbackHandler(calendarProviderDisplayName(provider), state, codeCh, errCh),
 	}
 	go func() {
 		err := server.Serve(listener)
@@ -422,6 +431,13 @@ func connectGoogleCalendar(config CalendarConnectConfig) (CalendarConnectResult,
 		}
 		return CalendarConnectResult{}, fmt.Errorf("check database: %w", err)
 	}
+	if config.Code == "" {
+		if connected, err := calendarProviderConnected(homeDir, "google"); err != nil {
+			return CalendarConnectResult{}, err
+		} else if connected {
+			return calendarAlreadyConnectedResult(homeDir, "google"), nil
+		}
+	}
 	config.ClientID = resolveGoogleCalendarClientID(config.ClientID)
 	if config.ClientID == "" {
 		return CalendarConnectResult{}, errors.New("google calendar client id is required")
@@ -486,6 +502,13 @@ func connectMicrosoftCalendar(config CalendarConnectConfig) (CalendarConnectResu
 			return CalendarConnectResult{}, fmt.Errorf("%w: run workgraph init", ErrNotInitialized)
 		}
 		return CalendarConnectResult{}, fmt.Errorf("check database: %w", err)
+	}
+	if config.Code == "" {
+		if connected, err := calendarProviderConnected(homeDir, "microsoft"); err != nil {
+			return CalendarConnectResult{}, err
+		} else if connected {
+			return calendarAlreadyConnectedResult(homeDir, "microsoft"), nil
+		}
 	}
 	config.ClientID = resolveMicrosoftCalendarClientID(config.ClientID)
 	if config.ClientID == "" {
@@ -587,12 +610,12 @@ func disconnectGoogleCalendar(config CalendarDisconnectConfig) (CalendarDisconne
 	stored, err := readCalendarConnectorConfig(homeDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return CalendarDisconnectResult{}, errors.New("Google Calendar is not connected")
+			return calendarAlreadyDisconnectedResult(homeDir, "google"), nil
 		}
 		return CalendarDisconnectResult{}, err
 	}
 	if stored.Google == nil {
-		return CalendarDisconnectResult{}, errors.New("Google Calendar is not connected")
+		return calendarAlreadyDisconnectedResult(homeDir, "google"), nil
 	}
 
 	configPath := calendarConfigPath(homeDir)
@@ -614,6 +637,48 @@ func disconnectGoogleCalendar(config CalendarDisconnectConfig) (CalendarDisconne
 	return CalendarDisconnectResult{
 		ConfigPath: configPath,
 		Revoked:    revoked,
+		Message:    strings.Join(lines, "\n"),
+	}, nil
+}
+
+func disconnectMicrosoftCalendar(config CalendarDisconnectConfig) (CalendarDisconnectResult, error) {
+	homeDir, err := resolveHomeDir(config.HomeDir)
+	if err != nil {
+		return CalendarDisconnectResult{}, err
+	}
+	homeDir, err = filepath.Abs(homeDir)
+	if err != nil {
+		return CalendarDisconnectResult{}, fmt.Errorf("resolve workgraph home: %w", err)
+	}
+	stored, err := readCalendarConnectorConfig(homeDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return calendarAlreadyDisconnectedResult(homeDir, "microsoft"), nil
+		}
+		return CalendarDisconnectResult{}, err
+	}
+	if stored.Microsoft == nil {
+		return calendarAlreadyDisconnectedResult(homeDir, "microsoft"), nil
+	}
+
+	configPath := calendarConfigPath(homeDir)
+	stored.Microsoft = nil
+	if err := writeOrRemoveCalendarConnectorConfig(configPath, stored); err != nil {
+		return CalendarDisconnectResult{}, err
+	}
+
+	lines := []string{
+		"Microsoft Calendar disconnected",
+		"Microsoft Calendar credentials removed locally",
+		"To revoke Microsoft consent, remove workgraph from your Microsoft account or tenant app consent settings.",
+	}
+	if stored.Google == nil {
+		lines = append(lines, "Config removed: "+configPath)
+	} else {
+		lines = append(lines, "Config updated: "+configPath)
+	}
+	return CalendarDisconnectResult{
+		ConfigPath: configPath,
 		Message:    strings.Join(lines, "\n"),
 	}, nil
 }
@@ -959,29 +1024,40 @@ func resolveMicrosoftCalendarTokenURL(tokenURL string) string {
 	return DefaultMicrosoftCalendarTokenURL
 }
 
-func googleCalendarOAuthCallbackHandler(expectedState string, codeCh chan<- string, errCh chan<- error) http.Handler {
+func calendarOAuthCallbackHandler(providerName string, expectedState string, codeCh chan<- string, errCh chan<- error) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		query := request.URL.Query()
 		if googleErr := query.Get("error"); googleErr != "" {
-			http.Error(response, "Google Calendar authorization failed.", http.StatusBadRequest)
-			errCh <- fmt.Errorf("google calendar oauth: %s", googleErr)
+			http.Error(response, providerName+" authorization failed.", http.StatusBadRequest)
+			errCh <- fmt.Errorf("%s oauth: %s", strings.ToLower(providerName), googleErr)
 			return
 		}
 		if query.Get("state") != expectedState {
-			http.Error(response, "Google Calendar authorization state did not match.", http.StatusBadRequest)
-			errCh <- errors.New("google calendar oauth state did not match")
+			http.Error(response, providerName+" authorization state did not match.", http.StatusBadRequest)
+			errCh <- fmt.Errorf("%s oauth state did not match", strings.ToLower(providerName))
 			return
 		}
 		code := query.Get("code")
 		if code == "" {
-			http.Error(response, "Google Calendar authorization did not include a code.", http.StatusBadRequest)
-			errCh <- errors.New("google calendar oauth code missing")
+			http.Error(response, providerName+" authorization did not include a code.", http.StatusBadRequest)
+			errCh <- fmt.Errorf("%s oauth code missing", strings.ToLower(providerName))
 			return
 		}
 		response.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprintf(response, "<!doctype html><title>workgraph Calendar Authorization Received</title><p>%s</p>", html.EscapeString("Google Calendar authorization received. Return to workgraph to confirm the connection completed."))
+		fmt.Fprintf(response, "<!doctype html><title>workgraph Calendar Authorization Received</title><p>%s</p>", html.EscapeString(providerName+" authorization received. Return to workgraph to confirm the connection completed."))
 		codeCh <- code
 	})
+}
+
+func calendarProviderDisplayName(provider string) string {
+	switch strings.ToLower(provider) {
+	case "google":
+		return "Google Calendar"
+	case "microsoft":
+		return "Microsoft Calendar"
+	default:
+		return "Calendar"
+	}
 }
 
 func calendarEvents(config CalendarCaptureConfig) ([]calendarExportEvent, error) {
@@ -1288,6 +1364,57 @@ func writeCalendarConnectorConfig(path string, config calendarConnectorConfig) e
 		return fmt.Errorf("secure calendar config: %w", err)
 	}
 	return nil
+}
+
+func writeOrRemoveCalendarConnectorConfig(path string, config calendarConnectorConfig) error {
+	if config.Google == nil && config.Microsoft == nil {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove calendar config: %w", err)
+		}
+		return nil
+	}
+	return writeCalendarConnectorConfig(path, config)
+}
+
+func calendarProviderConnected(homeDir string, provider string) (bool, error) {
+	stored, err := readCalendarConnectorConfig(homeDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	switch strings.ToLower(provider) {
+	case "google":
+		return stored.Google != nil, nil
+	case "microsoft":
+		return stored.Microsoft != nil, nil
+	default:
+		return false, nil
+	}
+}
+
+func calendarAlreadyConnectedResult(homeDir string, provider string) CalendarConnectResult {
+	configPath := calendarConfigPath(homeDir)
+	return CalendarConnectResult{
+		ConfigPath: configPath,
+		Configured: true,
+		Message: strings.Join([]string{
+			calendarProviderDisplayName(provider) + " is already connected",
+			"Config: " + configPath,
+		}, "\n"),
+	}
+}
+
+func calendarAlreadyDisconnectedResult(homeDir string, provider string) CalendarDisconnectResult {
+	configPath := calendarConfigPath(homeDir)
+	return CalendarDisconnectResult{
+		ConfigPath: configPath,
+		Message: strings.Join([]string{
+			calendarProviderDisplayName(provider) + " is not connected",
+			"No local Calendar connector settings changed.",
+		}, "\n"),
+	}
 }
 
 func calendarConfigPath(homeDir string) string {

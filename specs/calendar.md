@@ -31,6 +31,7 @@ workgraph calendar disconnect google
 workgraph calendar connect microsoft
 workgraph calendar connect microsoft --no-browser
 workgraph calendar connect microsoft --code <oauth-code> --state <state>
+workgraph calendar disconnect microsoft
 ```
 
 By default, connect opens the Google authorization URL and completes OAuth
@@ -76,10 +77,20 @@ local-user-only file permissions. Stored settings include access token, refresh
 token when granted, token type, expiry, granted scopes, selected calendar ids,
 provider API base URL, OAuth client id, and token relay URL when customized.
 
+Calendar connect commands should be idempotent for already-connected providers.
+If a provider already has local connector settings and the user runs
+`workgraph calendar connect <provider>` without an explicit OAuth code,
+workgraph should not open OAuth again. It should print that the provider is
+already connected and return successfully.
+If a different calendar provider is already connected, connecting another
+provider must preserve the existing provider settings in `calendar.json`.
+
 `workgraph calendar disconnect google` revokes the stored Google Calendar token
 when possible and removes local Calendar connector settings. Disconnecting is
 the supported way to return workgraph to a clean Google Calendar connection
 state before reconnecting or recording the Google OAuth approval flow.
+If Google Calendar is not connected, disconnect should print that it is already
+disconnected and return successfully.
 
 The Google Calendar connector requests:
 
@@ -178,6 +189,18 @@ https://graph.microsoft.com/Calendars.Read.Shared
 Azure DevOps access must not be bundled into the initial Microsoft Calendar
 Graph authorization URL. Azure DevOps uses a different resource than Microsoft
 Graph and should be handled by the work tracking connector.
+
+`workgraph calendar disconnect microsoft` removes local Microsoft Calendar
+connector settings but does not revoke Microsoft app consent remotely. Microsoft
+does not provide the same narrow public OAuth token revocation endpoint that
+workgraph uses for Google Calendar. The disconnect output must tell users that
+local Microsoft Calendar credentials were removed and that Microsoft consent can
+be revoked from their Microsoft account or tenant app consent settings.
+Disconnecting Microsoft Calendar must preserve other calendar provider settings,
+such as Google Calendar, if they are present in the same local calendar
+configuration file.
+If Microsoft Calendar is not connected, disconnect should print that it is
+already disconnected and return successfully.
 
 Each exported event uses a provider-neutral shape:
 
