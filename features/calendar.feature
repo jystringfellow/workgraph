@@ -58,6 +58,7 @@ Scenario: Connect Microsoft Calendar with OAuth
   When I run "workgraph calendar connect microsoft"
   Then workgraph opens Microsoft OAuth and stores local Microsoft Calendar connector settings after approval
   And workgraph does not start OAuth again when Microsoft Calendar is already connected
+  And workgraph preserves existing Google Calendar settings when Microsoft Calendar connects
   And the browser flow uses PKCE without requiring a client secret
   And the OAuth request targets Microsoft Graph calendar scopes, not Azure DevOps scopes
   When I run "workgraph calendar connect microsoft --no-browser"

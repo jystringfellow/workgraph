@@ -876,18 +876,20 @@ func storeGoogleCalendarConnection(homeDir string, config CalendarConnectConfig,
 		return CalendarConnectResult{}, errors.New("google calendar oauth response did not include an access token")
 	}
 	configPath := calendarConfigPath(homeDir)
-	stored := calendarConnectorConfig{
-		Google: &googleCalendarConnectorConfig{
-			AccessToken:  token.AccessToken,
-			RefreshToken: token.RefreshToken,
-			TokenType:    token.TokenType,
-			ExpiresAt:    googleCalendarTokenExpiresAt(token),
-			Scopes:       strings.Fields(token.Scope),
-			CalendarIDs:  googleCalendarIDs(config.CalendarIDs),
-			APIBaseURL:   config.APIBaseURL,
-			ClientID:     config.ClientID,
-			TokenURL:     resolveGoogleCalendarTokenURL(config.TokenURL),
-		},
+	stored, err := readOrEmptyCalendarConnectorConfig(homeDir)
+	if err != nil {
+		return CalendarConnectResult{}, err
+	}
+	stored.Google = &googleCalendarConnectorConfig{
+		AccessToken:  token.AccessToken,
+		RefreshToken: token.RefreshToken,
+		TokenType:    token.TokenType,
+		ExpiresAt:    googleCalendarTokenExpiresAt(token),
+		Scopes:       strings.Fields(token.Scope),
+		CalendarIDs:  googleCalendarIDs(config.CalendarIDs),
+		APIBaseURL:   config.APIBaseURL,
+		ClientID:     config.ClientID,
+		TokenURL:     resolveGoogleCalendarTokenURL(config.TokenURL),
 	}
 	if err := writeCalendarConnectorConfig(configPath, stored); err != nil {
 		return CalendarConnectResult{}, err
@@ -904,18 +906,20 @@ func storeMicrosoftCalendarConnection(homeDir string, config CalendarConnectConf
 		return CalendarConnectResult{}, errors.New("microsoft calendar oauth response did not include an access token")
 	}
 	configPath := calendarConfigPath(homeDir)
-	stored := calendarConnectorConfig{
-		Microsoft: &microsoftCalendarConnectorConfig{
-			AccessToken:  token.AccessToken,
-			RefreshToken: token.RefreshToken,
-			TokenType:    token.TokenType,
-			ExpiresAt:    googleCalendarTokenExpiresAt(token),
-			Scopes:       strings.Fields(token.Scope),
-			CalendarIDs:  googleCalendarIDs(config.CalendarIDs),
-			APIBaseURL:   config.APIBaseURL,
-			ClientID:     config.ClientID,
-			TokenURL:     resolveMicrosoftCalendarTokenURL(config.TokenURL),
-		},
+	stored, err := readOrEmptyCalendarConnectorConfig(homeDir)
+	if err != nil {
+		return CalendarConnectResult{}, err
+	}
+	stored.Microsoft = &microsoftCalendarConnectorConfig{
+		AccessToken:  token.AccessToken,
+		RefreshToken: token.RefreshToken,
+		TokenType:    token.TokenType,
+		ExpiresAt:    googleCalendarTokenExpiresAt(token),
+		Scopes:       strings.Fields(token.Scope),
+		CalendarIDs:  googleCalendarIDs(config.CalendarIDs),
+		APIBaseURL:   config.APIBaseURL,
+		ClientID:     config.ClientID,
+		TokenURL:     resolveMicrosoftCalendarTokenURL(config.TokenURL),
 	}
 	if err := writeCalendarConnectorConfig(configPath, stored); err != nil {
 		return CalendarConnectResult{}, err
@@ -1347,6 +1351,17 @@ func readCalendarConnectorConfig(homeDir string) (calendarConnectorConfig, error
 	var config calendarConnectorConfig
 	if err := json.Unmarshal(contents, &config); err != nil {
 		return calendarConnectorConfig{}, fmt.Errorf("parse calendar config: %w", err)
+	}
+	return config, nil
+}
+
+func readOrEmptyCalendarConnectorConfig(homeDir string) (calendarConnectorConfig, error) {
+	config, err := readCalendarConnectorConfig(homeDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return calendarConnectorConfig{}, nil
+		}
+		return calendarConnectorConfig{}, err
 	}
 	return config, nil
 }

@@ -792,6 +792,79 @@ func TestCalendarConnectSkipsOAuthWhenProviderAlreadyConnected(t *testing.T) {
 	}
 }
 
+func TestCalendarConnectPreservesExistingProviderSettings(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	configPath := filepath.Join(homeDir, "calendar.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "google": {
+    "access_token": "google-access-token",
+    "refresh_token": "google-refresh-token",
+    "token_type": "Bearer",
+    "calendar_ids": ["primary"]
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write calendar config: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/token" {
+			t.Fatalf("unexpected token server path %s", request.URL.Path)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{
+  "access_token": "microsoft-access-token",
+  "refresh_token": "microsoft-refresh-token",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "scope": "openid profile email offline_access https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/Calendars.Read.Shared"
+}`))
+	}))
+	defer server.Close()
+
+	output, err := runworkgraph(t, repoRoot, "calendar", "connect", "microsoft",
+		"--home", homeDir,
+		"--client-id", "client-id",
+		"--redirect-uri", "http://localhost:2727/calendar/microsoft/callback",
+		"--code", "oauth-code",
+		"--code-verifier", "manual-code-verifier",
+		"--state", "fixed-state",
+		"--expected-state", "fixed-state",
+		"--calendar-token-url", server.URL+"/token",
+	)
+	if err != nil {
+		t.Fatalf("workgraph calendar connect exchange failed: %v\n%s", err, output)
+	}
+
+	contents, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read calendar config: %v", err)
+	}
+	var stored struct {
+		Google struct {
+			AccessToken string `json:"access_token"`
+		} `json:"google"`
+		Microsoft struct {
+			AccessToken string `json:"access_token"`
+		} `json:"microsoft"`
+	}
+	if err := json.Unmarshal(contents, &stored); err != nil {
+		t.Fatalf("parse calendar config: %v", err)
+	}
+	if stored.Google.AccessToken != "google-access-token" {
+		t.Fatalf("expected Google settings preserved, got:\n%s", contents)
+	}
+	if stored.Microsoft.AccessToken != "microsoft-access-token" {
+		t.Fatalf("expected Microsoft settings stored, got:\n%s", contents)
+	}
+}
+
 func TestGoogleCalendarBrowserConnectUsesPKCEAndStoresConnectorConfig(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
