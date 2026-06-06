@@ -1053,7 +1053,7 @@ func calendarOAuthCallbackHandler(providerName string, expectedState string, cod
 			return
 		}
 		response.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprintf(response, "<!doctype html><title>workgraph Calendar Authorization Received</title><p>%s</p>", html.EscapeString(providerName+" authorization received. Return to workgraph to confirm the connection completed."))
+		fmt.Fprintf(response, "<!doctype html><title>%s</title><p>%s</p>", html.EscapeString("workgraph "+providerName+" Authorization Received"), html.EscapeString(providerName+" authorization received. Return to workgraph to confirm the connection completed."))
 		codeCh <- code
 	})
 }

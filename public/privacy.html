@@ -93,7 +93,7 @@
       <p>workgraph is local-first software for capturing and organizing personal work context. The application stores captured events and connector data locally on the user's device unless the user explicitly chooses otherwise.</p>
 
       <h2>Information workgraph accesses</h2>
-      <p>When a user connects a third-party service, workgraph requests only the access needed for the enabled connector. Connected services may include Slack, Google Calendar, Microsoft Calendar, Notion, Jira, Azure DevOps, and other services the user chooses to enable.</p>
+      <p>When a user connects a third-party service, workgraph requests only the access needed for the enabled connector. Connected services may include Slack, Google Calendar, Gmail, Microsoft Calendar, Microsoft Mail, Notion, Jira, Azure DevOps, and other services the user chooses to enable.</p>
 
       <h2>How information is used</h2>
       <p>workgraph uses connected account data to create local work events, help restore context, and show activity through local commands such as today and resume. workgraph does not sell user data or use connected account data for advertising.</p>
@@ -107,8 +107,11 @@
       <h2>Connected service data</h2>
       <p>workgraph uses connected service data only to create local work events, restore context, and support user-requested local workflows. Each connector should request the narrowest practical read-only access for the behavior the user enables.</p>
 
+      <h2>Mail data</h2>
+      <p>When a user enables a mail connector, workgraph may read message metadata and full message content for mail the user can access. Mail data is used to create local work context records, connect conversations to projects, and help restore relevant work context. workgraph does not modify, send, delete, or label email.</p>
+
       <h2>OAuth token relay</h2>
-      <p>For Google Calendar OAuth, workgraph uses a limited token relay hosted on Cloudflare Workers to complete OAuth token exchanges. During initial connection, the local app sends the authorization code, PKCE code verifier, redirect URI, client ID, and grant type to the relay. During token refresh, the local app sends the refresh token, client ID, and grant type to the relay. The relay adds the Google OAuth client secret, forwards the request to Google, returns Google's token response, and does not store or log OAuth codes, tokens, request bodies, or calendar event data.</p>
+      <p>For Google OAuth, workgraph uses a limited token relay hosted on Cloudflare Workers to complete OAuth token exchanges. During initial connection, the local app sends the authorization code, PKCE code verifier, redirect URI, client ID, and grant type to the relay. During token refresh, the local app sends the refresh token, client ID, and grant type to the relay. The relay adds the Google OAuth client secret, forwards the request to Google, returns Google's token response, and does not store or log OAuth codes, tokens, request bodies, calendar data, or mail data.</p>
 
       <h2>Google API data</h2>
       <p>workgraph's use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
