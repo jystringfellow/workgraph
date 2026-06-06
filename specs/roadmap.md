@@ -50,17 +50,29 @@
    - [x] Microsoft Calendar disconnect removes local connector settings while preserving other providers.
    - [ ] Background polling from stored calendar connector settings.
 - [ ] Mail ingestion (Gmail, Outlook Mail)
-   - [ ] Decide whether Google Mail uses the existing Google OAuth app or a separate `workgraph-mail` app.
-   - [ ] Define explicit metadata-only vs full-content mail capture modes.
-   - [ ] Google Mail OAuth planning for Restricted Gmail scopes.
+   - [x] Google Mail uses the existing Google OAuth app.
+   - [x] Only full-content mail capture, no separate modes.
+   - [x] Google Mail OAuth planning for Restricted Gmail scopes.
+   - [x] Google Mail OAuth connect stores local connector settings.
+   - [ ] Google Mail disconnect revokes and removes local connector settings.
+   - [ ] Google Mail capture into normalized mail events.
    - [ ] Microsoft Graph Mail OAuth planning with incremental delegated consent.
+   - [x] Microsoft Mail OAuth connect stores local connector settings.
+   - [ ] Microsoft Mail disconnect removes local connector settings.
+   - [ ] Microsoft Mail capture into normalized mail events.
 - [ ] Meeting ingestion (Zoom, Google Meet, Microsoft Teams metadata/transcripts when explicitly available)
    - [ ] Meeting notes archive with index, decisions, and action items.
 - [ ] Work tracking ingestion (Jira, Azure DevOps, Linear)
    - [ ] Azure DevOps authentication via Microsoft Entra ID as a separate connector from Microsoft Graph mail/calendar.
 - [ ] Knowledge base ingestion (Notion, Confluence, Google Docs/Drive)
+   - [ ] Notion OAuth connect/disconnect.
+   - [ ] Notion page/database capture into normalized knowledge events.
    - [ ] Knowledge claim notes for durable beliefs and decision rationale.
    - [ ] Rich local HTML artifacts/reports linked to memory and evidence.
+- [ ] LLM connector
+   - [ ] Local config for provider/model selection.
+   - [ ] Explicit opt-in hosted LLM credentials and outbound request controls.
+   - [ ] Fact-backed summary/suggestion command path using the configured LLM.
 - [ ] Configurable connector framework
    - [ ] Memory routing/index file for loading relevant context by task.
 
@@ -95,6 +107,10 @@
 ## Phase 7: Platform
 - [x] CI runs full Go tests on pull requests to main
 - [ ] Harden facts for GitHub Actions portability, including temp directory assumptions and long-running daemon/start tests.
+- [ ] Distribution
+   - [ ] Homebrew formula/tap.
+   - [ ] Scoop manifest.
+   - [ ] Versioned release archives and checksums.
 - [ ] Plugin system
 - [ ] Desktop UI (Tauri)
 - [ ] Open-source release

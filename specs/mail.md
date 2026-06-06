@@ -35,52 +35,60 @@ a provider-neutral shape such as:
 Google Mail
 -----------
 
-Google Mail should probably use a separate Google OAuth app from Google
-Calendar, such as `workgraph-mail`, unless we decide the approval and consent
-tradeoffs of a combined app are worth it.
+Google Mail uses the same Google OAuth app as Google Calendar. The user connects
+mail explicitly with:
 
-The same Google OAuth app can technically request scopes incrementally with
-`include_granted_scopes=true`. If a user grants Calendar scopes first and later
-grants Gmail scopes to the same app, Google can return a combined authorization
-covering both sets of scopes. However, Gmail read scopes are Restricted Google
-Workspace scopes, so combining them with Calendar can complicate approval,
-consent warnings, and revocation behavior.
+```text
+workgraph mail connect google
+```
 
-Potential Google scopes:
+Google Mail OAuth uses authorization code with PKCE, the same workgraph Google
+client id, and the same workgraph Google OAuth token relay used by Google
+Calendar. The local CLI must not send or accept a Google client secret.
+
+Google Mail has one connect mode. It requests read-only full message and
+metadata access:
 
 ```text
 https://www.googleapis.com/auth/gmail.readonly
-https://www.googleapis.com/auth/gmail.metadata
 ```
 
-`gmail.readonly` allows reading messages and metadata. `gmail.metadata` avoids
-message bodies and attachments but still reads headers and other mailbox
-metadata. Both are Restricted scopes and require a separate Google review path
-before workgraph should request them from users.
+`gmail.readonly` lets workgraph read email messages and metadata so it can
+create local mail records, connect email conversations to projects, and restore
+relevant context. Full message content is needed because subjects and headers
+alone often omit decisions, requests, links, and follow-up items.
+
+Google Mail credentials are stored separately from calendar credentials in the
+workgraph home directory. Disconnecting Google Mail should revoke the stored
+Google token when possible and remove local mail connector settings without
+disconnecting Google Calendar.
 
 Microsoft Mail
 --------------
 
-Microsoft Mail can likely use the same Microsoft Entra application as Microsoft
-Calendar while keeping workgraph commands, local config, and consent prompts
-separate. Microsoft supports incremental delegated consent, so
+Microsoft Mail uses the same Microsoft Entra application as Microsoft Calendar
+while keeping workgraph commands, local config, and consent prompts separate.
+Microsoft supports incremental delegated consent, so
 `workgraph calendar connect microsoft` can request calendar permissions first
 and `workgraph mail connect microsoft` can later request mail permissions for
 the same app.
 
-Potential Microsoft Graph delegated scopes:
+Microsoft Mail has one connect mode. It requests read-only full message access
+for the signed-in user's mailbox and mailboxes shared with them:
 
 ```text
-Mail.ReadBasic
-Mail.Read
-Mail.Read.Shared
 offline_access
+https://graph.microsoft.com/Mail.Read
+https://graph.microsoft.com/Mail.Read.Shared
 ```
 
-`Mail.ReadBasic` reads basic message properties without body, preview body,
-attachments, or extended properties. `Mail.Read` reads the signed-in user's
-mailbox. `Mail.Read.Shared` covers mail the signed-in user can access in shared
-or delegated mailboxes and is only valid for work or school accounts.
+`Mail.Read` reads the signed-in user's mailbox. `Mail.Read.Shared` covers mail
+the signed-in user can access in shared or delegated mailboxes and is only valid
+for work or school accounts.
+
+Microsoft Mail credentials are stored separately from calendar credentials in
+the workgraph home directory. Disconnecting Microsoft Mail should remove local
+mail connector settings without disconnecting Microsoft Calendar.
 
 Azure DevOps
 ------------

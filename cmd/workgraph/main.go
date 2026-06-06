@@ -33,6 +33,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runGitHub(args[1:], stdout, stderr)
 	case "calendar":
 		return runCalendar(args[1:], stdout, stderr)
+	case "mail":
+		return runMail(args[1:], stdout, stderr)
 	case "memory":
 		return runMemory(args[1:], stdout, stderr)
 	case "start":
@@ -53,6 +55,76 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unknown command: %s\n", args[0])
 		return 2
 	}
+}
+
+func runMail(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph mail <command>")
+		return 2
+	}
+
+	switch args[0] {
+	case "connect":
+		return runMailConnect(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "unknown mail command: %s\n", args[0])
+		return 2
+	}
+}
+
+func runMailConnect(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph mail connect <provider>")
+		return 2
+	}
+	provider := args[0]
+
+	flags := flag.NewFlagSet("mail connect "+provider, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	clientID := flags.String("client-id", "", "Mail provider OAuth client id")
+	redirectURI := flags.String("redirect-uri", "", "Mail provider OAuth redirect URI")
+	code := flags.String("code", "", "Mail provider OAuth code")
+	codeVerifier := flags.String("code-verifier", "", "Mail provider OAuth PKCE code verifier")
+	state := flags.String("state", "", "Mail provider OAuth state")
+	expectedState := flags.String("expected-state", "", "Expected Mail provider OAuth state")
+	noBrowser := flags.Bool("no-browser", false, "Print the authorization URL instead of opening a browser")
+	authBaseURL := flags.String("mail-auth-base", "", "Mail provider authorization URL")
+	tokenURL := flags.String("mail-token-url", "", "Mail provider token URL")
+	mailAPIBaseURL := flags.String("mail-api-base", "", "Mail API base URL")
+
+	if err := flags.Parse(args[1:]); err != nil {
+		return 2
+	}
+
+	config := workgraph.MailConnectConfig{
+		HomeDir:       *homeDir,
+		Provider:      provider,
+		ClientID:      *clientID,
+		RedirectURI:   *redirectURI,
+		Code:          *code,
+		CodeVerifier:  *codeVerifier,
+		State:         *state,
+		ExpectedState: *expectedState,
+		AuthBaseURL:   *authBaseURL,
+		TokenURL:      *tokenURL,
+		APIBaseURL:    *mailAPIBaseURL,
+	}
+	var result workgraph.MailConnectResult
+	var err error
+	if *code == "" && !*noBrowser {
+		result, err = workgraph.ConnectMailWithBrowser(context.Background(), config)
+	} else {
+		result, err = workgraph.ConnectMail(config)
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph mail connect: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
 }
 
 func runInit(args []string, stdout io.Writer, stderr io.Writer) int {
