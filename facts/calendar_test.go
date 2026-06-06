@@ -1035,6 +1035,79 @@ func TestGoogleCalendarDisconnectRevokesTokenAndRemovesConnectorConfig(t *testin
 	}
 }
 
+func TestGoogleCalendarDisconnectRemovesConnectorConfigAndPreservesMicrosoft(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	configPath := filepath.Join(homeDir, "calendar.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "google": {
+    "access_token": "google-access-token",
+    "refresh_token": "google-refresh-token",
+    "token_type": "Bearer",
+    "calendar_ids": ["primary"]
+  },
+  "microsoft": {
+    "access_token": "microsoft-access-token",
+    "refresh_token": "microsoft-refresh-token",
+    "token_type": "Bearer",
+    "calendar_ids": ["primary"]
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write calendar config: %v", err)
+	}
+
+	var revokedToken string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/revoke" {
+			t.Fatalf("unexpected Google revoke path %s", request.URL.Path)
+		}
+		if err := request.ParseForm(); err != nil {
+			t.Fatalf("parse revoke form: %v", err)
+		}
+		revokedToken = request.Form.Get("token")
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	output, err := runworkgraph(t, repoRoot, "calendar", "disconnect", "google",
+		"--home", homeDir,
+		"--calendar-revoke-url", server.URL+"/revoke",
+	)
+	if err != nil {
+		t.Fatalf("workgraph calendar disconnect failed: %v\n%s", err, output)
+	}
+	if revokedToken != "google-refresh-token" {
+		t.Fatalf("expected disconnect to revoke refresh token, got %q", revokedToken)
+	}
+	if !strings.Contains(string(output), "Google Calendar disconnected") {
+		t.Fatalf("expected disconnect message, got:\n%s", output)
+	}
+
+	contents, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("expected calendar config to remain for Microsoft settings: %v", err)
+	}
+	var stored struct {
+		Google    *struct{} `json:"google"`
+		Microsoft *struct{} `json:"microsoft"`
+	}
+	if err := json.Unmarshal(contents, &stored); err != nil {
+		t.Fatalf("parse calendar config: %v", err)
+	}
+	if stored.Google != nil {
+		t.Fatalf("expected Google calendar settings to be removed, got:\n%s", contents)
+	}
+	if stored.Microsoft == nil {
+		t.Fatalf("expected Microsoft calendar settings to be preserved, got:\n%s", contents)
+	}
+}
+
 func TestMicrosoftCalendarDisconnectRemovesConnectorConfigAndPreservesGoogle(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")

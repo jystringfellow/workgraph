@@ -89,6 +89,9 @@ provider must preserve the existing provider settings in `calendar.json`.
 when possible and removes local Calendar connector settings. Disconnecting is
 the supported way to return workgraph to a clean Google Calendar connection
 state before reconnecting or recording the Google OAuth approval flow.
+Disconnecting Google Calendar must preserve other calendar provider settings,
+such as Microsoft Calendar, if they are present in the same local calendar
+configuration file.
 If Google Calendar is not connected, disconnect should print that it is already
 disconnected and return successfully.
 

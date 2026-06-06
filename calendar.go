@@ -623,13 +623,18 @@ func disconnectGoogleCalendar(config CalendarDisconnectConfig) (CalendarDisconne
 	if err != nil {
 		return CalendarDisconnectResult{}, err
 	}
-	if err := os.Remove(configPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return CalendarDisconnectResult{}, fmt.Errorf("remove calendar config: %w", err)
+	stored.Google = nil
+	if err := writeOrRemoveCalendarConnectorConfig(configPath, stored); err != nil {
+		return CalendarDisconnectResult{}, err
 	}
 
 	lines := []string{
 		"Google Calendar disconnected",
-		"Config removed: " + configPath,
+	}
+	if stored.Microsoft == nil {
+		lines = append(lines, "Config removed: "+configPath)
+	} else {
+		lines = append(lines, "Config updated: "+configPath)
 	}
 	if revoked {
 		lines = append(lines, "Google Calendar token revoked")

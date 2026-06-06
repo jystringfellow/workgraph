@@ -45,6 +45,7 @@ Scenario: Disconnect Google Calendar
   When I run "workgraph calendar disconnect google"
   Then workgraph revokes the stored Google Calendar token
   And workgraph removes local Calendar connector settings
+  And workgraph preserves local settings for other calendar providers
   And disconnect succeeds when Google Calendar is already disconnected
 
 Scenario: Verify Microsoft Calendar publisher domain
