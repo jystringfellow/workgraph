@@ -66,26 +66,29 @@ disconnecting Google Calendar.
 Microsoft Mail
 --------------
 
-Microsoft Mail can likely use the same Microsoft Entra application as Microsoft
-Calendar while keeping workgraph commands, local config, and consent prompts
-separate. Microsoft supports incremental delegated consent, so
+Microsoft Mail uses the same Microsoft Entra application as Microsoft Calendar
+while keeping workgraph commands, local config, and consent prompts separate.
+Microsoft supports incremental delegated consent, so
 `workgraph calendar connect microsoft` can request calendar permissions first
 and `workgraph mail connect microsoft` can later request mail permissions for
 the same app.
 
-Potential Microsoft Graph delegated scopes:
+Microsoft Mail has one connect mode. It requests read-only full message access
+for the signed-in user's mailbox and mailboxes shared with them:
 
 ```text
-Mail.ReadBasic
-Mail.Read
-Mail.Read.Shared
 offline_access
+https://graph.microsoft.com/Mail.Read
+https://graph.microsoft.com/Mail.Read.Shared
 ```
 
-`Mail.ReadBasic` reads basic message properties without body, preview body,
-attachments, or extended properties. `Mail.Read` reads the signed-in user's
-mailbox. `Mail.Read.Shared` covers mail the signed-in user can access in shared
-or delegated mailboxes and is only valid for work or school accounts.
+`Mail.Read` reads the signed-in user's mailbox. `Mail.Read.Shared` covers mail
+the signed-in user can access in shared or delegated mailboxes and is only valid
+for work or school accounts.
+
+Microsoft Mail credentials are stored separately from calendar credentials in
+the workgraph home directory. Disconnecting Microsoft Mail should remove local
+mail connector settings without disconnecting Microsoft Calendar.
 
 Azure DevOps
 ------------

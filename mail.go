@@ -23,6 +23,15 @@ const DefaultGoogleMailRedirectURI = "http://127.0.0.1:2727/mail/google/callback
 // DefaultGoogleMailTokenURL is the workgraph OAuth token relay for Google Mail.
 var DefaultGoogleMailTokenURL = DefaultGoogleCalendarTokenURL
 
+// DefaultMicrosoftMailClientID is the Entra application id used for Microsoft Mail PKCE OAuth.
+var DefaultMicrosoftMailClientID = DefaultMicrosoftCalendarClientID
+
+// DefaultMicrosoftMailRedirectURI is used by Microsoft Mail OAuth flows.
+const DefaultMicrosoftMailRedirectURI = "http://localhost:2727/mail/microsoft/callback"
+
+// DefaultMicrosoftMailTokenURL is Microsoft identity platform's v2 token endpoint.
+var DefaultMicrosoftMailTokenURL = DefaultMicrosoftCalendarTokenURL
+
 // MailConnectConfig controls mail provider OAuth setup.
 type MailConnectConfig struct {
 	HomeDir       string
@@ -50,10 +59,22 @@ type MailConnectResult struct {
 }
 
 type mailConnectorConfig struct {
-	Google *googleMailConnectorConfig `json:"google,omitempty"`
+	Google    *googleMailConnectorConfig    `json:"google,omitempty"`
+	Microsoft *microsoftMailConnectorConfig `json:"microsoft,omitempty"`
 }
 
 type googleMailConnectorConfig struct {
+	AccessToken  string   `json:"access_token"`
+	RefreshToken string   `json:"refresh_token,omitempty"`
+	TokenType    string   `json:"token_type,omitempty"`
+	ExpiresAt    string   `json:"expires_at,omitempty"`
+	Scopes       []string `json:"scopes,omitempty"`
+	APIBaseURL   string   `json:"api_base_url,omitempty"`
+	ClientID     string   `json:"client_id,omitempty"`
+	TokenURL     string   `json:"token_url,omitempty"`
+}
+
+type microsoftMailConnectorConfig struct {
 	AccessToken  string   `json:"access_token"`
 	RefreshToken string   `json:"refresh_token,omitempty"`
 	TokenType    string   `json:"token_type,omitempty"`
@@ -69,6 +90,8 @@ func ConnectMail(config MailConnectConfig) (MailConnectResult, error) {
 	switch strings.ToLower(config.Provider) {
 	case "google":
 		return connectGoogleMail(config)
+	case "microsoft":
+		return connectMicrosoftMail(config)
 	default:
 		return MailConnectResult{}, fmt.Errorf("unsupported mail provider %q", config.Provider)
 	}
@@ -77,7 +100,7 @@ func ConnectMail(config MailConnectConfig) (MailConnectResult, error) {
 // ConnectMailWithBrowser completes mail provider OAuth with a local callback and PKCE.
 func ConnectMailWithBrowser(ctx context.Context, config MailConnectConfig) (MailConnectResult, error) {
 	provider := strings.ToLower(config.Provider)
-	if provider != "google" {
+	if provider != "google" && provider != "microsoft" {
 		return MailConnectResult{}, fmt.Errorf("unsupported mail provider %q", config.Provider)
 	}
 	homeDir, err := mailHomeDir(config.HomeDir)
@@ -90,9 +113,17 @@ func ConnectMailWithBrowser(ctx context.Context, config MailConnectConfig) (Mail
 		return mailAlreadyConnectedResult(homeDir, provider), nil
 	}
 
-	config.ClientID = resolveGoogleMailClientID(config.ClientID)
+	switch provider {
+	case "google":
+		config.ClientID = resolveGoogleMailClientID(config.ClientID)
+	case "microsoft":
+		config.ClientID = resolveMicrosoftMailClientID(config.ClientID)
+		if config.RedirectURI == "" {
+			config.RedirectURI = DefaultMicrosoftMailRedirectURI
+		}
+	}
 	if config.ClientID == "" {
-		return MailConnectResult{}, errors.New("google mail client id is required for browser connect")
+		return MailConnectResult{}, fmt.Errorf("%s mail client id is required for browser connect", provider)
 	}
 
 	listenAddress := "127.0.0.1:0"
@@ -100,10 +131,10 @@ func ConnectMailWithBrowser(ctx context.Context, config MailConnectConfig) (Mail
 	if config.RedirectURI != "" {
 		parsedRedirect, err := url.Parse(config.RedirectURI)
 		if err != nil {
-			return MailConnectResult{}, fmt.Errorf("parse google mail redirect URI: %w", err)
+			return MailConnectResult{}, fmt.Errorf("parse %s mail redirect URI: %w", provider, err)
 		}
 		if !isLocalHTTPRedirect(parsedRedirect) {
-			return MailConnectResult{}, errors.New("google mail redirect URI must be an http localhost URL")
+			return MailConnectResult{}, fmt.Errorf("%s mail redirect URI must be an http localhost URL", provider)
 		}
 		listenAddress = parsedRedirect.Host
 		redirectPath = parsedRedirect.EscapedPath()
@@ -127,7 +158,13 @@ func ConnectMailWithBrowser(ctx context.Context, config MailConnectConfig) (Mail
 		return MailConnectResult{}, fmt.Errorf("create oauth verifier: %w", err)
 	}
 	config.State = state
-	authURL := googleMailAuthorizationURLWithPKCE(config, state, slackPKCEChallenge(verifier))
+	var authURL string
+	switch provider {
+	case "google":
+		authURL = googleMailAuthorizationURLWithPKCE(config, state, slackPKCEChallenge(verifier))
+	case "microsoft":
+		authURL = microsoftMailAuthorizationURLWithPKCE(config, state, slackPKCEChallenge(verifier))
+	}
 
 	codeCh := make(chan string, 1)
 	errCh := make(chan error, 1)
@@ -162,13 +199,26 @@ func ConnectMailWithBrowser(ctx context.Context, config MailConnectConfig) (Mail
 	config.HomeDir = homeDir
 	config.Code = code
 	config.ExpectedState = state
-	token, err := exchangeGoogleMailOAuthCodeWithPKCE(config, verifier)
-	if err != nil {
-		return MailConnectResult{}, err
-	}
-	result, err := storeGoogleMailConnection(homeDir, config, token)
-	if err != nil {
-		return MailConnectResult{}, err
+	var result MailConnectResult
+	switch provider {
+	case "google":
+		token, err := exchangeGoogleMailOAuthCodeWithPKCE(config, verifier)
+		if err != nil {
+			return MailConnectResult{}, err
+		}
+		result, err = storeGoogleMailConnection(homeDir, config, token)
+		if err != nil {
+			return MailConnectResult{}, err
+		}
+	case "microsoft":
+		token, err := exchangeMicrosoftMailOAuthCodeWithPKCE(config, verifier)
+		if err != nil {
+			return MailConnectResult{}, err
+		}
+		result, err = storeMicrosoftMailConnection(homeDir, config, token)
+		if err != nil {
+			return MailConnectResult{}, err
+		}
 	}
 	result.AuthorizationURL = authURL
 	result.State = state
@@ -237,6 +287,68 @@ func connectGoogleMail(config MailConnectConfig) (MailConnectResult, error) {
 	return storeGoogleMailConnection(homeDir, config, token)
 }
 
+func connectMicrosoftMail(config MailConnectConfig) (MailConnectResult, error) {
+	homeDir, err := mailHomeDir(config.HomeDir)
+	if err != nil {
+		return MailConnectResult{}, err
+	}
+	if config.Code == "" {
+		if connected, err := mailProviderConnected(homeDir, "microsoft"); err != nil {
+			return MailConnectResult{}, err
+		} else if connected {
+			return mailAlreadyConnectedResult(homeDir, "microsoft"), nil
+		}
+	}
+	config.ClientID = resolveMicrosoftMailClientID(config.ClientID)
+	if config.ClientID == "" {
+		return MailConnectResult{}, errors.New("microsoft mail client id is required")
+	}
+	if config.RedirectURI == "" {
+		config.RedirectURI = DefaultMicrosoftMailRedirectURI
+	}
+
+	state := config.State
+	if state == "" {
+		generated, err := newEventID()
+		if err != nil {
+			return MailConnectResult{}, fmt.Errorf("create oauth state: %w", err)
+		}
+		state = generated
+	}
+	verifier := config.CodeVerifier
+	if verifier == "" {
+		generated, err := randomURLToken(48)
+		if err != nil {
+			return MailConnectResult{}, fmt.Errorf("create oauth verifier: %w", err)
+		}
+		verifier = generated
+	}
+	result := MailConnectResult{
+		ConfigPath:       mailConfigPath(homeDir),
+		AuthorizationURL: microsoftMailAuthorizationURLWithPKCE(config, state, slackPKCEChallenge(verifier)),
+		State:            state,
+	}
+	if config.Code == "" {
+		result.Message = strings.Join([]string{
+			"Microsoft Mail OAuth authorization URL",
+			result.AuthorizationURL,
+			"State: " + result.State,
+			"Code verifier: " + verifier,
+			"After Microsoft redirects back with a code, rerun mail connect microsoft with --code, --state, and --code-verifier.",
+		}, "\n")
+		return result, nil
+	}
+	if config.ExpectedState != "" && config.State != "" && config.State != config.ExpectedState {
+		return MailConnectResult{}, errors.New("microsoft mail oauth state did not match")
+	}
+
+	token, err := exchangeMicrosoftMailOAuthCodeWithPKCE(config, verifier)
+	if err != nil {
+		return MailConnectResult{}, err
+	}
+	return storeMicrosoftMailConnection(homeDir, config, token)
+}
+
 func googleMailAuthorizationURLWithPKCE(config MailConnectConfig, state string, challenge string) string {
 	baseURL := config.AuthBaseURL
 	if baseURL == "" {
@@ -250,6 +362,24 @@ func googleMailAuthorizationURLWithPKCE(config MailConnectConfig, state string, 
 	values.Set("state", state)
 	values.Set("access_type", "offline")
 	values.Set("include_granted_scopes", "true")
+	if challenge != "" {
+		values.Set("code_challenge", challenge)
+		values.Set("code_challenge_method", "S256")
+	}
+	return baseURL + "?" + values.Encode()
+}
+
+func microsoftMailAuthorizationURLWithPKCE(config MailConnectConfig, state string, challenge string) string {
+	baseURL := config.AuthBaseURL
+	if baseURL == "" {
+		baseURL = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+	}
+	values := url.Values{}
+	values.Set("client_id", config.ClientID)
+	values.Set("redirect_uri", config.RedirectURI)
+	values.Set("response_type", "code")
+	values.Set("scope", strings.Join(microsoftMailScopes(), " "))
+	values.Set("state", state)
 	if challenge != "" {
 		values.Set("code_challenge", challenge)
 		values.Set("code_challenge_method", "S256")
@@ -296,6 +426,45 @@ func exchangeGoogleMailOAuthCodeWithPKCE(config MailConnectConfig, verifier stri
 	return token, nil
 }
 
+func exchangeMicrosoftMailOAuthCodeWithPKCE(config MailConnectConfig, verifier string) (googleOAuthTokenResponse, error) {
+	tokenURL := resolveMicrosoftMailTokenURL(config.TokenURL)
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("code", config.Code)
+	form.Set("client_id", config.ClientID)
+	form.Set("redirect_uri", config.RedirectURI)
+	form.Set("code_verifier", verifier)
+
+	request, err := http.NewRequest(http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return googleOAuthTokenResponse{}, fmt.Errorf("build Microsoft Mail token request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := config.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return googleOAuthTokenResponse{}, fmt.Errorf("exchange Microsoft Mail OAuth code: %w", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return googleOAuthTokenResponse{}, fmt.Errorf("read Microsoft Mail OAuth response: %w", err)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return googleOAuthTokenResponse{}, fmt.Errorf("exchange Microsoft Mail OAuth code: status %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var token googleOAuthTokenResponse
+	if err := json.Unmarshal(body, &token); err != nil {
+		return googleOAuthTokenResponse{}, fmt.Errorf("parse Microsoft Mail OAuth response: %w", err)
+	}
+	return token, nil
+}
+
 func storeGoogleMailConnection(homeDir string, config MailConnectConfig, token googleOAuthTokenResponse) (MailConnectResult, error) {
 	if token.AccessToken == "" {
 		return MailConnectResult{}, errors.New("google mail oauth response did not include an access token")
@@ -328,9 +497,52 @@ func storeGoogleMailConnection(homeDir string, config MailConnectConfig, token g
 	}, nil
 }
 
+func storeMicrosoftMailConnection(homeDir string, config MailConnectConfig, token googleOAuthTokenResponse) (MailConnectResult, error) {
+	if token.AccessToken == "" {
+		return MailConnectResult{}, errors.New("microsoft mail oauth response did not include an access token")
+	}
+	configPath := mailConfigPath(homeDir)
+	stored, err := readOrEmptyMailConnectorConfig(homeDir)
+	if err != nil {
+		return MailConnectResult{}, err
+	}
+	stored.Microsoft = &microsoftMailConnectorConfig{
+		AccessToken:  token.AccessToken,
+		RefreshToken: token.RefreshToken,
+		TokenType:    token.TokenType,
+		ExpiresAt:    googleCalendarTokenExpiresAt(token),
+		Scopes:       strings.Fields(token.Scope),
+		APIBaseURL:   config.APIBaseURL,
+		ClientID:     config.ClientID,
+		TokenURL:     resolveMicrosoftMailTokenURL(config.TokenURL),
+	}
+	if err := writeMailConnectorConfig(configPath, stored); err != nil {
+		return MailConnectResult{}, err
+	}
+	return MailConnectResult{
+		ConfigPath: configPath,
+		Configured: true,
+		Message: strings.Join([]string{
+			"Microsoft Mail connected",
+			"Config: " + configPath,
+		}, "\n"),
+	}, nil
+}
+
 func googleMailScopes() []string {
 	return []string{
 		"https://www.googleapis.com/auth/gmail.readonly",
+	}
+}
+
+func microsoftMailScopes() []string {
+	return []string{
+		"openid",
+		"profile",
+		"email",
+		"offline_access",
+		"https://graph.microsoft.com/Mail.Read",
+		"https://graph.microsoft.com/Mail.Read.Shared",
 	}
 }
 
@@ -341,11 +553,25 @@ func resolveGoogleMailClientID(clientID string) string {
 	return DefaultGoogleMailClientID
 }
 
+func resolveMicrosoftMailClientID(clientID string) string {
+	if clientID != "" {
+		return clientID
+	}
+	return DefaultMicrosoftMailClientID
+}
+
 func resolveGoogleMailTokenURL(tokenURL string) string {
 	if tokenURL != "" {
 		return tokenURL
 	}
 	return DefaultGoogleMailTokenURL
+}
+
+func resolveMicrosoftMailTokenURL(tokenURL string) string {
+	if tokenURL != "" {
+		return tokenURL
+	}
+	return DefaultMicrosoftMailTokenURL
 }
 
 func mailProviderConnected(homeDir string, provider string) (bool, error) {
@@ -359,6 +585,8 @@ func mailProviderConnected(homeDir string, provider string) (bool, error) {
 	switch strings.ToLower(provider) {
 	case "google":
 		return stored.Google != nil, nil
+	case "microsoft":
+		return stored.Microsoft != nil, nil
 	default:
 		return false, nil
 	}
@@ -380,6 +608,8 @@ func mailProviderDisplayName(provider string) string {
 	switch strings.ToLower(provider) {
 	case "google":
 		return "Google Mail"
+	case "microsoft":
+		return "Microsoft Mail"
 	default:
 		return "Mail"
 	}
