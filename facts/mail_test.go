@@ -1,7 +1,9 @@
 package facts
 
 import (
+	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -9,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func TestGoogleMailConnectOAuthUsesPKCEAndStoresConnectorConfig(t *testing.T) {
@@ -394,6 +398,376 @@ func TestMailConnectPreservesOtherProviderSettings(t *testing.T) {
 	}
 }
 
+func TestGoogleMailDisconnectRevokesAndPreservesMicrosoftSettings(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	configPath := filepath.Join(homeDir, "mail.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "google": {
+    "access_token": "google-access-token",
+    "refresh_token": "google-refresh-token",
+    "token_type": "Bearer",
+    "scopes": ["https://www.googleapis.com/auth/gmail.readonly"]
+  },
+  "microsoft": {
+    "access_token": "microsoft-access-token",
+    "refresh_token": "microsoft-refresh-token",
+    "token_type": "Bearer",
+    "scopes": ["https://graph.microsoft.com/Mail.Read"]
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write mail config: %v", err)
+	}
+
+	var revokeForm url.Values
+	revokeServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if err := request.ParseForm(); err != nil {
+			t.Fatalf("parse revoke form: %v", err)
+		}
+		revokeForm = request.Form
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer revokeServer.Close()
+
+	output, err := runworkgraph(t, repoRoot, "mail", "disconnect", "google",
+		"--home", homeDir,
+		"--mail-revoke-url", revokeServer.URL,
+	)
+	if err != nil {
+		t.Fatalf("workgraph mail disconnect failed: %v\n%s", err, output)
+	}
+	if revokeForm.Get("token") != "google-refresh-token" {
+		t.Fatalf("expected Google refresh token to be revoked, got %#v", revokeForm)
+	}
+	if !strings.Contains(string(output), "Google Mail disconnected") || !strings.Contains(string(output), "Google Mail token revoked") {
+		t.Fatalf("expected disconnect and revoke output, got:\n%s", output)
+	}
+
+	contents, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read mail config: %v", err)
+	}
+	var stored struct {
+		Google    *struct{} `json:"google"`
+		Microsoft struct {
+			AccessToken string `json:"access_token"`
+		} `json:"microsoft"`
+	}
+	if err := json.Unmarshal(contents, &stored); err != nil {
+		t.Fatalf("parse mail config: %v", err)
+	}
+	if stored.Google != nil {
+		t.Fatalf("expected Google Mail settings removed, got:\n%s", contents)
+	}
+	if stored.Microsoft.AccessToken != "microsoft-access-token" {
+		t.Fatalf("expected Microsoft Mail settings preserved, got:\n%s", contents)
+	}
+
+	output, err = runworkgraph(t, repoRoot, "mail", "disconnect", "google", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("expected second disconnect to succeed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Google Mail is not connected") {
+		t.Fatalf("expected already disconnected message, got:\n%s", output)
+	}
+}
+
+func TestGoogleMailCaptureStoresNormalizedMessages(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	var listAuth string
+	var getAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/gmail/v1/users/me/messages":
+			listAuth = request.Header.Get("Authorization")
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = response.Write([]byte(`{
+  "messages": [
+    {"id": "msg-123", "threadId": "thread-abc"}
+  ]
+}`))
+		case "/gmail/v1/users/me/messages/msg-123":
+			getAuth = request.Header.Get("Authorization")
+			if request.URL.Query().Get("format") != "full" {
+				t.Fatalf("expected format=full, got %q", request.URL.RawQuery)
+			}
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = response.Write([]byte(`{
+  "id": "msg-123",
+  "threadId": "thread-abc",
+  "internalDate": "1780315200000",
+  "snippet": "Can you review the launch plan?",
+  "payload": {
+    "mimeType": "multipart/alternative",
+    "headers": [
+      {"name": "Subject", "value": "Launch plan review"},
+      {"name": "From", "value": "Ada Lovelace <ada@example.test>"},
+      {"name": "To", "value": "Stringfellow <stringfellow@example.test>"},
+      {"name": "Cc", "value": "Grace Hopper <grace@example.test>"},
+      {"name": "Date", "value": "Mon, 01 Jun 2026 12:00:00 -0700"}
+    ],
+    "parts": [
+      {
+        "mimeType": "text/plain",
+        "body": {"data": "Q2FuIHlvdSByZXZpZXcgdGhlIGxhdW5jaCBwbGFuPw"}
+      }
+    ]
+  }
+}`))
+		default:
+			t.Fatalf("unexpected Gmail server path %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	output, err := runworkgraph(t, repoRoot, "mail", "capture",
+		"--home", homeDir,
+		"--provider", "google",
+		"--token", "test-token",
+		"--mail-api-base", server.URL,
+	)
+	if err != nil {
+		t.Fatalf("workgraph mail capture failed: %v\n%s", err, output)
+	}
+	if listAuth != "Bearer test-token" || getAuth != "Bearer test-token" {
+		t.Fatalf("expected bearer auth for list/get, got list %q get %q", listAuth, getAuth)
+	}
+	if !strings.Contains(string(output), "Mail capture complete") || !strings.Contains(string(output), "Messages stored: 1") {
+		t.Fatalf("expected capture summary, got:\n%s", output)
+	}
+
+	event := mailEvent(t, filepath.Join(homeDir, "workgraph.db"), "google", "me", "msg-123")
+	if event.Timestamp != "2026-06-01T19:00:00Z" {
+		t.Fatalf("expected Date header timestamp in UTC, got %q", event.Timestamp)
+	}
+	if event.Actor != "Ada Lovelace <ada@example.test>" {
+		t.Fatalf("expected From actor, got %q", event.Actor)
+	}
+	if event.Summary != "Launch plan review" {
+		t.Fatalf("expected subject summary, got %q", event.Summary)
+	}
+	for _, expected := range []string{
+		`"provider":"google"`,
+		`"mailbox_id":"me"`,
+		`"message_id":"msg-123"`,
+		`"thread_id":"thread-abc"`,
+		`"subject":"Launch plan review"`,
+		`"from":"Ada Lovelace \u003cada@example.test\u003e"`,
+		`"to":["Stringfellow \u003cstringfellow@example.test\u003e"]`,
+		`"cc":["Grace Hopper \u003cgrace@example.test\u003e"]`,
+		`"snippet":"Can you review the launch plan?"`,
+		`"body_text":"Can you review the launch plan?"`,
+	} {
+		if !strings.Contains(event.PayloadJSON, expected) {
+			t.Fatalf("expected payload to include %s, got %s", expected, event.PayloadJSON)
+		}
+	}
+
+	output, err = runworkgraph(t, repoRoot, "mail", "capture",
+		"--home", homeDir,
+		"--provider", "google",
+		"--token", "test-token",
+		"--mail-api-base", server.URL,
+	)
+	if err != nil {
+		t.Fatalf("workgraph mail recapture failed: %v\n%s", err, output)
+	}
+	if count := mailEventCount(t, filepath.Join(homeDir, "workgraph.db")); count != 1 {
+		t.Fatalf("expected recapture to keep one mail event, got %d", count)
+	}
+}
+
+func TestMicrosoftMailDisconnectPreservesGoogleSettings(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	configPath := filepath.Join(homeDir, "mail.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "google": {
+    "access_token": "google-access-token",
+    "refresh_token": "google-refresh-token",
+    "token_type": "Bearer",
+    "scopes": ["https://www.googleapis.com/auth/gmail.readonly"]
+  },
+  "microsoft": {
+    "access_token": "microsoft-access-token",
+    "refresh_token": "microsoft-refresh-token",
+    "token_type": "Bearer",
+    "scopes": ["https://graph.microsoft.com/Mail.Read"]
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write mail config: %v", err)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "mail", "disconnect", "microsoft", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("workgraph mail disconnect failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Microsoft Mail disconnected") ||
+		!strings.Contains(string(output), "Microsoft Mail credentials removed locally") ||
+		!strings.Contains(string(output), "To revoke Microsoft consent") {
+		t.Fatalf("expected Microsoft local disconnect guidance, got:\n%s", output)
+	}
+
+	contents, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read mail config: %v", err)
+	}
+	var stored struct {
+		Google struct {
+			AccessToken string `json:"access_token"`
+		} `json:"google"`
+		Microsoft *struct{} `json:"microsoft"`
+	}
+	if err := json.Unmarshal(contents, &stored); err != nil {
+		t.Fatalf("parse mail config: %v", err)
+	}
+	if stored.Google.AccessToken != "google-access-token" {
+		t.Fatalf("expected Google Mail settings preserved, got:\n%s", contents)
+	}
+	if stored.Microsoft != nil {
+		t.Fatalf("expected Microsoft Mail settings removed, got:\n%s", contents)
+	}
+
+	output, err = runworkgraph(t, repoRoot, "mail", "disconnect", "microsoft", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("expected second disconnect to succeed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Microsoft Mail is not connected") {
+		t.Fatalf("expected already disconnected message, got:\n%s", output)
+	}
+}
+
+func TestMicrosoftMailCaptureStoresNormalizedMessages(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1.0/me/messages" {
+			t.Fatalf("unexpected Microsoft Graph path %s", request.URL.Path)
+		}
+		gotAuth = request.Header.Get("Authorization")
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{
+  "value": [
+    {
+      "id": "ms-msg-123",
+      "conversationId": "ms-conversation-abc",
+      "subject": "Budget review",
+      "receivedDateTime": "2026-06-02T16:30:00Z",
+      "sentDateTime": "2026-06-02T16:29:00Z",
+      "bodyPreview": "Please review the updated budget.",
+      "from": {
+        "emailAddress": {
+          "name": "Ada Lovelace",
+          "address": "ada@example.test"
+        }
+      },
+      "toRecipients": [
+        {
+          "emailAddress": {
+            "name": "Stringfellow",
+            "address": "stringfellow@example.test"
+          }
+        }
+      ],
+      "ccRecipients": [
+        {
+          "emailAddress": {
+            "name": "Grace Hopper",
+            "address": "grace@example.test"
+          }
+        }
+      ],
+      "body": {
+        "contentType": "html",
+        "content": "<p>Please review the updated budget.</p>"
+      }
+    }
+  ]
+}`))
+	}))
+	defer server.Close()
+
+	output, err := runworkgraph(t, repoRoot, "mail", "capture",
+		"--home", homeDir,
+		"--provider", "microsoft",
+		"--token", "test-token",
+		"--mail-api-base", server.URL,
+	)
+	if err != nil {
+		t.Fatalf("workgraph mail capture failed: %v\n%s", err, output)
+	}
+	if gotAuth != "Bearer test-token" {
+		t.Fatalf("expected bearer auth for Graph request, got %q", gotAuth)
+	}
+	if !strings.Contains(string(output), "Mail capture complete") || !strings.Contains(string(output), "Messages stored: 1") {
+		t.Fatalf("expected capture summary, got:\n%s", output)
+	}
+
+	event := mailEvent(t, filepath.Join(homeDir, "workgraph.db"), "microsoft", "me", "ms-msg-123")
+	if event.Timestamp != "2026-06-02T16:30:00Z" {
+		t.Fatalf("expected receivedDateTime timestamp, got %q", event.Timestamp)
+	}
+	if event.Actor != "Ada Lovelace <ada@example.test>" {
+		t.Fatalf("expected sender actor, got %q", event.Actor)
+	}
+	if event.Summary != "Budget review" {
+		t.Fatalf("expected subject summary, got %q", event.Summary)
+	}
+	for _, expected := range []string{
+		`"provider":"microsoft"`,
+		`"mailbox_id":"me"`,
+		`"message_id":"ms-msg-123"`,
+		`"thread_id":"ms-conversation-abc"`,
+		`"subject":"Budget review"`,
+		`"from":"Ada Lovelace \u003cada@example.test\u003e"`,
+		`"to":["Stringfellow \u003cstringfellow@example.test\u003e"]`,
+		`"cc":["Grace Hopper \u003cgrace@example.test\u003e"]`,
+		`"snippet":"Please review the updated budget."`,
+		`"body_html":"\u003cp\u003ePlease review the updated budget.\u003c/p\u003e"`,
+	} {
+		if !strings.Contains(event.PayloadJSON, expected) {
+			t.Fatalf("expected payload to include %s, got %s", expected, event.PayloadJSON)
+		}
+	}
+
+	output, err = runworkgraph(t, repoRoot, "mail", "capture",
+		"--home", homeDir,
+		"--provider", "microsoft",
+		"--token", "test-token",
+		"--mail-api-base", server.URL,
+	)
+	if err != nil {
+		t.Fatalf("workgraph mail recapture failed: %v\n%s", err, output)
+	}
+	if count := mailEventCount(t, filepath.Join(homeDir, "workgraph.db")); count != 1 {
+		t.Fatalf("expected recapture to keep one mail event, got %d", count)
+	}
+}
+
 func mailAuthorizationURL(t *testing.T, output string) string {
 	t.Helper()
 
@@ -414,4 +788,44 @@ func stringSliceContains(values []string, expected string) bool {
 		}
 	}
 	return false
+}
+
+type storedMailEvent struct {
+	Timestamp   string
+	Actor       string
+	Summary     string
+	PayloadJSON string
+}
+
+func mailEvent(t *testing.T, databasePath string, provider string, mailboxID string, messageID string) storedMailEvent {
+	t.Helper()
+
+	db, err := sql.Open("sqlite3", databasePath)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+
+	id := fmt.Sprintf("mail.message:%s:%s:%s", provider, mailboxID, messageID)
+	var event storedMailEvent
+	if err := db.QueryRow(`select timestamp, coalesce(actor, ''), coalesce(summary, ''), payload_json from events where id = ?`, id).Scan(&event.Timestamp, &event.Actor, &event.Summary, &event.PayloadJSON); err != nil {
+		t.Fatalf("read mail event %s: %v", id, err)
+	}
+	return event
+}
+
+func mailEventCount(t *testing.T, databasePath string) int {
+	t.Helper()
+
+	db, err := sql.Open("sqlite3", databasePath)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+
+	var count int
+	if err := db.QueryRow(`select count(*) from events where source = 'mail'`).Scan(&count); err != nil {
+		t.Fatalf("count mail events: %v", err)
+	}
+	return count
 }
