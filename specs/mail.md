@@ -94,7 +94,15 @@ for work or school accounts.
 
 Microsoft Mail credentials are stored separately from calendar credentials in
 the workgraph home directory. Disconnecting Microsoft Mail should remove local
-mail connector settings without disconnecting Microsoft Calendar.
+mail connector settings without disconnecting Microsoft Calendar. Microsoft
+does not provide a simple provider token revoke endpoint equivalent to Google,
+so disconnect is local-only and should explain that account or tenant consent
+must be removed in Microsoft settings when full consent revocation is desired.
+
+Microsoft Mail capture reads messages from Microsoft Graph. Captured events are
+stored as `mail.message` with stable ids based on provider, mailbox, and message
+id. Graph message fields provide subject, sender, recipients, conversation id,
+received/sent time, body preview, and the available text or HTML body.
 
 Azure DevOps
 ------------

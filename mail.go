@@ -193,6 +193,37 @@ type gmailBody struct {
 	Data string `json:"data"`
 }
 
+type microsoftMailMessagesResponse struct {
+	Value []microsoftMailMessage `json:"value"`
+}
+
+type microsoftMailMessage struct {
+	ID               string                   `json:"id"`
+	ConversationID   string                   `json:"conversationId"`
+	Subject          string                   `json:"subject"`
+	ReceivedDateTime string                   `json:"receivedDateTime"`
+	SentDateTime     string                   `json:"sentDateTime"`
+	BodyPreview      string                   `json:"bodyPreview"`
+	From             microsoftMailRecipient   `json:"from"`
+	ToRecipients     []microsoftMailRecipient `json:"toRecipients"`
+	CCRecipients     []microsoftMailRecipient `json:"ccRecipients"`
+	Body             microsoftMailMessageBody `json:"body"`
+}
+
+type microsoftMailRecipient struct {
+	EmailAddress microsoftMailEmailAddress `json:"emailAddress"`
+}
+
+type microsoftMailEmailAddress struct {
+	Name    string `json:"name"`
+	Address string `json:"address"`
+}
+
+type microsoftMailMessageBody struct {
+	ContentType string `json:"contentType"`
+	Content     string `json:"content"`
+}
+
 // ConnectMail prepares or completes mail provider OAuth setup.
 func ConnectMail(config MailConnectConfig) (MailConnectResult, error) {
 	switch strings.ToLower(config.Provider) {
@@ -210,6 +241,8 @@ func DisconnectMail(config MailDisconnectConfig) (MailDisconnectResult, error) {
 	switch strings.ToLower(config.Provider) {
 	case "google":
 		return disconnectGoogleMail(config)
+	case "microsoft":
+		return disconnectMicrosoftMail(config)
 	default:
 		return MailDisconnectResult{}, fmt.Errorf("unsupported mail provider %q", config.Provider)
 	}
@@ -560,6 +593,48 @@ func disconnectGoogleMail(config MailDisconnectConfig) (MailDisconnectResult, er
 	}, nil
 }
 
+func disconnectMicrosoftMail(config MailDisconnectConfig) (MailDisconnectResult, error) {
+	homeDir, err := resolveHomeDir(config.HomeDir)
+	if err != nil {
+		return MailDisconnectResult{}, err
+	}
+	homeDir, err = filepath.Abs(homeDir)
+	if err != nil {
+		return MailDisconnectResult{}, fmt.Errorf("resolve workgraph home: %w", err)
+	}
+	stored, err := readMailConnectorConfig(homeDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return mailAlreadyDisconnectedResult(homeDir, "microsoft"), nil
+		}
+		return MailDisconnectResult{}, err
+	}
+	if stored.Microsoft == nil {
+		return mailAlreadyDisconnectedResult(homeDir, "microsoft"), nil
+	}
+
+	configPath := mailConfigPath(homeDir)
+	stored.Microsoft = nil
+	if err := writeOrRemoveMailConnectorConfig(configPath, stored); err != nil {
+		return MailDisconnectResult{}, err
+	}
+
+	lines := []string{
+		"Microsoft Mail disconnected",
+		"Microsoft Mail credentials removed locally",
+		"To revoke Microsoft consent, remove workgraph from your Microsoft account or tenant app consent settings.",
+	}
+	if stored.Google == nil {
+		lines = append(lines, "Config removed: "+configPath)
+	} else {
+		lines = append(lines, "Config updated: "+configPath)
+	}
+	return MailDisconnectResult{
+		ConfigPath: configPath,
+		Message:    strings.Join(lines, "\n"),
+	}, nil
+}
+
 func revokeGoogleMailToken(config MailDisconnectConfig, stored *googleMailConnectorConfig) (bool, error) {
 	token := stored.RefreshToken
 	if token == "" {
@@ -783,6 +858,8 @@ func mailMessages(config MailCaptureConfig) ([]mailExportMessage, error) {
 	switch strings.ToLower(config.Provider) {
 	case "google":
 		return mailMessagesFromGoogle(config)
+	case "microsoft":
+		return mailMessagesFromMicrosoft(config)
 	case "":
 		return nil, errors.New("mail provider is required")
 	default:
@@ -843,6 +920,153 @@ func mailMessagesFromGoogle(config MailCaptureConfig) ([]mailExportMessage, erro
 		messages = append(messages, normalized)
 	}
 	return messages, nil
+}
+
+func mailMessagesFromMicrosoft(config MailCaptureConfig) ([]mailExportMessage, error) {
+	token := config.Token
+	if token == "" {
+		stored, err := readMailConnectorConfig(config.HomeDir)
+		if err == nil && stored.Microsoft != nil {
+			microsoftConfig := stored.Microsoft
+			token = microsoftConfig.AccessToken
+			if config.APIBaseURL == "" {
+				config.APIBaseURL = microsoftConfig.APIBaseURL
+			}
+		}
+	}
+	if strings.TrimSpace(token) == "" {
+		return nil, errors.New("mail token is required")
+	}
+	mailboxID := config.MailboxID
+	if mailboxID == "" {
+		mailboxID = "me"
+	}
+
+	baseURL := config.APIBaseURL
+	if baseURL == "" {
+		baseURL = "https://graph.microsoft.com"
+	}
+	endpoint, err := microsoftMailMessagesEndpoint(baseURL, mailboxID)
+	if err != nil {
+		return nil, err
+	}
+	graphMessages, err := requestMicrosoftMailMessages(config, endpoint, token)
+	if err != nil {
+		return nil, err
+	}
+
+	messages := make([]mailExportMessage, 0, len(graphMessages.Value))
+	for _, graphMessage := range graphMessages.Value {
+		normalized, err := microsoftMailExportMessage(mailboxID, graphMessage)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, normalized)
+	}
+	return messages, nil
+}
+
+func microsoftMailMessagesEndpoint(baseURL string, mailboxID string) (string, error) {
+	if mailboxID == "" || mailboxID == "me" {
+		endpoint, err := url.JoinPath(baseURL, "v1.0", "me", "messages")
+		if err != nil {
+			return "", fmt.Errorf("build Microsoft Mail messages URL: %w", err)
+		}
+		return endpoint, nil
+	}
+	endpoint, err := url.JoinPath(baseURL, "v1.0", "users", mailboxID, "messages")
+	if err != nil {
+		return "", fmt.Errorf("build Microsoft Mail messages URL: %w", err)
+	}
+	return endpoint, nil
+}
+
+func requestMicrosoftMailMessages(config MailCaptureConfig, endpoint string, token string) (microsoftMailMessagesResponse, error) {
+	request, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return microsoftMailMessagesResponse{}, fmt.Errorf("build Microsoft Mail request: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+
+	client := config.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return microsoftMailMessagesResponse{}, fmt.Errorf("request Microsoft Mail messages: %w", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return microsoftMailMessagesResponse{}, fmt.Errorf("read Microsoft Mail response: %w", err)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return microsoftMailMessagesResponse{}, fmt.Errorf("request Microsoft Mail messages: status %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var messages microsoftMailMessagesResponse
+	if err := json.Unmarshal(body, &messages); err != nil {
+		return microsoftMailMessagesResponse{}, fmt.Errorf("parse Microsoft Mail response: %w", err)
+	}
+	return messages, nil
+}
+
+func microsoftMailExportMessage(mailboxID string, message microsoftMailMessage) (mailExportMessage, error) {
+	if message.ID == "" {
+		return mailExportMessage{}, errors.New("microsoft mail message id is required")
+	}
+	timestamp := message.ReceivedDateTime
+	if timestamp == "" {
+		timestamp = message.SentDateTime
+	}
+	if timestamp == "" {
+		return mailExportMessage{}, errors.New("receivedDateTime or sentDateTime is required")
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, timestamp)
+	if err != nil {
+		return mailExportMessage{}, fmt.Errorf("parse Microsoft Mail timestamp %q: %w", message.ID, err)
+	}
+
+	exported := mailExportMessage{
+		Provider:  "microsoft",
+		MailboxID: mailboxID,
+		MessageID: message.ID,
+		ThreadID:  message.ConversationID,
+		Subject:   message.Subject,
+		Timestamp: parsed.UTC().Format(time.RFC3339Nano),
+		From:      microsoftMailAddress(message.From.EmailAddress),
+		To:        microsoftMailAddresses(message.ToRecipients),
+		CC:        microsoftMailAddresses(message.CCRecipients),
+		Snippet:   message.BodyPreview,
+	}
+	switch strings.ToLower(message.Body.ContentType) {
+	case "html":
+		exported.BodyHTML = message.Body.Content
+	default:
+		exported.BodyText = message.Body.Content
+	}
+	return exported, nil
+}
+
+func microsoftMailAddresses(recipients []microsoftMailRecipient) []string {
+	result := make([]string, 0, len(recipients))
+	for _, recipient := range recipients {
+		if address := microsoftMailAddress(recipient.EmailAddress); address != "" {
+			result = append(result, address)
+		}
+	}
+	return result
+}
+
+func microsoftMailAddress(address microsoftMailEmailAddress) string {
+	if address.Name != "" && address.Address != "" {
+		return address.Name + " <" + address.Address + ">"
+	}
+	if address.Address != "" {
+		return address.Address
+	}
+	return address.Name
 }
 
 func requestGmailMessageList(config MailCaptureConfig, endpoint string, token string) (gmailListMessagesResponse, error) {

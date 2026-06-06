@@ -589,6 +589,185 @@ func TestGoogleMailCaptureStoresNormalizedMessages(t *testing.T) {
 	}
 }
 
+func TestMicrosoftMailDisconnectPreservesGoogleSettings(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	configPath := filepath.Join(homeDir, "mail.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "google": {
+    "access_token": "google-access-token",
+    "refresh_token": "google-refresh-token",
+    "token_type": "Bearer",
+    "scopes": ["https://www.googleapis.com/auth/gmail.readonly"]
+  },
+  "microsoft": {
+    "access_token": "microsoft-access-token",
+    "refresh_token": "microsoft-refresh-token",
+    "token_type": "Bearer",
+    "scopes": ["https://graph.microsoft.com/Mail.Read"]
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write mail config: %v", err)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "mail", "disconnect", "microsoft", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("workgraph mail disconnect failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Microsoft Mail disconnected") ||
+		!strings.Contains(string(output), "Microsoft Mail credentials removed locally") ||
+		!strings.Contains(string(output), "To revoke Microsoft consent") {
+		t.Fatalf("expected Microsoft local disconnect guidance, got:\n%s", output)
+	}
+
+	contents, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read mail config: %v", err)
+	}
+	var stored struct {
+		Google struct {
+			AccessToken string `json:"access_token"`
+		} `json:"google"`
+		Microsoft *struct{} `json:"microsoft"`
+	}
+	if err := json.Unmarshal(contents, &stored); err != nil {
+		t.Fatalf("parse mail config: %v", err)
+	}
+	if stored.Google.AccessToken != "google-access-token" {
+		t.Fatalf("expected Google Mail settings preserved, got:\n%s", contents)
+	}
+	if stored.Microsoft != nil {
+		t.Fatalf("expected Microsoft Mail settings removed, got:\n%s", contents)
+	}
+
+	output, err = runworkgraph(t, repoRoot, "mail", "disconnect", "microsoft", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("expected second disconnect to succeed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Microsoft Mail is not connected") {
+		t.Fatalf("expected already disconnected message, got:\n%s", output)
+	}
+}
+
+func TestMicrosoftMailCaptureStoresNormalizedMessages(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1.0/me/messages" {
+			t.Fatalf("unexpected Microsoft Graph path %s", request.URL.Path)
+		}
+		gotAuth = request.Header.Get("Authorization")
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{
+  "value": [
+    {
+      "id": "ms-msg-123",
+      "conversationId": "ms-conversation-abc",
+      "subject": "Budget review",
+      "receivedDateTime": "2026-06-02T16:30:00Z",
+      "sentDateTime": "2026-06-02T16:29:00Z",
+      "bodyPreview": "Please review the updated budget.",
+      "from": {
+        "emailAddress": {
+          "name": "Ada Lovelace",
+          "address": "ada@example.test"
+        }
+      },
+      "toRecipients": [
+        {
+          "emailAddress": {
+            "name": "Stringfellow",
+            "address": "stringfellow@example.test"
+          }
+        }
+      ],
+      "ccRecipients": [
+        {
+          "emailAddress": {
+            "name": "Grace Hopper",
+            "address": "grace@example.test"
+          }
+        }
+      ],
+      "body": {
+        "contentType": "html",
+        "content": "<p>Please review the updated budget.</p>"
+      }
+    }
+  ]
+}`))
+	}))
+	defer server.Close()
+
+	output, err := runworkgraph(t, repoRoot, "mail", "capture",
+		"--home", homeDir,
+		"--provider", "microsoft",
+		"--token", "test-token",
+		"--mail-api-base", server.URL,
+	)
+	if err != nil {
+		t.Fatalf("workgraph mail capture failed: %v\n%s", err, output)
+	}
+	if gotAuth != "Bearer test-token" {
+		t.Fatalf("expected bearer auth for Graph request, got %q", gotAuth)
+	}
+	if !strings.Contains(string(output), "Mail capture complete") || !strings.Contains(string(output), "Messages stored: 1") {
+		t.Fatalf("expected capture summary, got:\n%s", output)
+	}
+
+	event := mailEvent(t, filepath.Join(homeDir, "workgraph.db"), "microsoft", "me", "ms-msg-123")
+	if event.Timestamp != "2026-06-02T16:30:00Z" {
+		t.Fatalf("expected receivedDateTime timestamp, got %q", event.Timestamp)
+	}
+	if event.Actor != "Ada Lovelace <ada@example.test>" {
+		t.Fatalf("expected sender actor, got %q", event.Actor)
+	}
+	if event.Summary != "Budget review" {
+		t.Fatalf("expected subject summary, got %q", event.Summary)
+	}
+	for _, expected := range []string{
+		`"provider":"microsoft"`,
+		`"mailbox_id":"me"`,
+		`"message_id":"ms-msg-123"`,
+		`"thread_id":"ms-conversation-abc"`,
+		`"subject":"Budget review"`,
+		`"from":"Ada Lovelace \u003cada@example.test\u003e"`,
+		`"to":["Stringfellow \u003cstringfellow@example.test\u003e"]`,
+		`"cc":["Grace Hopper \u003cgrace@example.test\u003e"]`,
+		`"snippet":"Please review the updated budget."`,
+		`"body_html":"\u003cp\u003ePlease review the updated budget.\u003c/p\u003e"`,
+	} {
+		if !strings.Contains(event.PayloadJSON, expected) {
+			t.Fatalf("expected payload to include %s, got %s", expected, event.PayloadJSON)
+		}
+	}
+
+	output, err = runworkgraph(t, repoRoot, "mail", "capture",
+		"--home", homeDir,
+		"--provider", "microsoft",
+		"--token", "test-token",
+		"--mail-api-base", server.URL,
+	)
+	if err != nil {
+		t.Fatalf("workgraph mail recapture failed: %v\n%s", err, output)
+	}
+	if count := mailEventCount(t, filepath.Join(homeDir, "workgraph.db")); count != 1 {
+		t.Fatalf("expected recapture to keep one mail event, got %d", count)
+	}
+}
+
 func mailAuthorizationURL(t *testing.T, output string) string {
 	t.Helper()
 

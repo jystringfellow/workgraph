@@ -56,10 +56,10 @@
    - [x] Google Mail OAuth connect stores local connector settings.
    - [x] Google Mail disconnect revokes and removes local connector settings.
    - [x] Google Mail capture into normalized mail events.
-   - [ ] Microsoft Graph Mail OAuth planning with incremental delegated consent.
+   - [x] Microsoft Graph Mail OAuth planning with incremental delegated consent.
    - [x] Microsoft Mail OAuth connect stores local connector settings.
-   - [ ] Microsoft Mail disconnect removes local connector settings.
-   - [ ] Microsoft Mail capture into normalized mail events.
+   - [x] Microsoft Mail disconnect removes local connector settings.
+   - [x] Microsoft Mail capture into normalized mail events.
 - [ ] Meeting ingestion (Zoom, Google Meet, Microsoft Teams metadata/transcripts when explicitly available)
    - [ ] Meeting notes archive with index, decisions, and action items.
 - [ ] Work tracking ingestion (Jira, Azure DevOps, Linear)

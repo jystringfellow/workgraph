@@ -35,3 +35,17 @@ Scenario: Capture Google Mail messages
   Then workgraph stores Gmail messages as normalized mail.message events
   And each event keeps provider, mailbox id, message id, thread id, headers, snippet, and available text body
   And recapturing the same Gmail message updates the existing event instead of creating a duplicate
+
+Scenario: Disconnect Microsoft Mail
+  Given Google Mail and Microsoft Mail are connected
+  When I run "workgraph mail disconnect microsoft"
+  Then workgraph removes only the local Microsoft Mail connector settings
+  And workgraph explains Microsoft consent must be revoked in Microsoft account or tenant settings
+  And Google Mail remains connected
+
+Scenario: Capture Microsoft Mail messages
+  Given Microsoft Mail is connected
+  When I run "workgraph mail capture --provider microsoft"
+  Then workgraph stores Microsoft Graph messages as normalized mail.message events
+  And each event keeps provider, mailbox id, message id, conversation id, sender, recipients, preview, and available body
+  And recapturing the same Microsoft message updates the existing event instead of creating a duplicate
