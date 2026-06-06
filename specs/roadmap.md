@@ -54,8 +54,8 @@
    - [x] Only full-content mail capture, no separate modes.
    - [x] Google Mail OAuth planning for Restricted Gmail scopes.
    - [x] Google Mail OAuth connect stores local connector settings.
-   - [ ] Google Mail disconnect revokes and removes local connector settings.
-   - [ ] Google Mail capture into normalized mail events.
+   - [x] Google Mail disconnect revokes and removes local connector settings.
+   - [x] Google Mail capture into normalized mail events.
    - [ ] Microsoft Graph Mail OAuth planning with incremental delegated consent.
    - [x] Microsoft Mail OAuth connect stores local connector settings.
    - [ ] Microsoft Mail disconnect removes local connector settings.

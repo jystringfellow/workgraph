@@ -64,12 +64,52 @@ func runMail(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	switch args[0] {
+	case "capture":
+		return runMailCapture(args[1:], stdout, stderr)
 	case "connect":
 		return runMailConnect(args[1:], stdout, stderr)
+	case "disconnect":
+		return runMailDisconnect(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown mail command: %s\n", args[0])
 		return 2
 	}
+}
+
+func runMailCapture(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("mail capture", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
+	provider := flags.String("provider", "", "Mail provider to capture from")
+	mailboxID := flags.String("mailbox-id", "", "Provider mailbox id")
+	token := flags.String("token", os.Getenv("WORKGRAPH_MAIL_TOKEN"), "Mail provider access token")
+	clientID := flags.String("client-id", "", "Mail provider OAuth client id")
+	tokenURL := flags.String("mail-token-url", "", "Mail provider token URL")
+	mailAPIBaseURL := flags.String("mail-api-base", "", "Mail API base URL")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+
+	result, err := workgraph.CaptureMailMessages(workgraph.MailCaptureConfig{
+		HomeDir:      *homeDir,
+		DatabasePath: *databasePath,
+		Provider:     *provider,
+		MailboxID:    *mailboxID,
+		Token:        *token,
+		ClientID:     *clientID,
+		TokenURL:     *tokenURL,
+		APIBaseURL:   *mailAPIBaseURL,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph mail capture: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
 }
 
 func runMailConnect(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -120,6 +160,37 @@ func runMailConnect(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph mail connect: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runMailDisconnect(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph mail disconnect <provider>")
+		return 2
+	}
+	provider := args[0]
+
+	flags := flag.NewFlagSet("mail disconnect "+provider, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	revokeURL := flags.String("mail-revoke-url", "", "Mail provider token revoke URL")
+
+	if err := flags.Parse(args[1:]); err != nil {
+		return 2
+	}
+
+	result, err := workgraph.DisconnectMail(workgraph.MailDisconnectConfig{
+		HomeDir:   *homeDir,
+		Provider:  provider,
+		RevokeURL: *revokeURL,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph mail disconnect: %v\n", err)
 		return 1
 	}
 

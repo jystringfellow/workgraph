@@ -63,6 +63,12 @@ workgraph home directory. Disconnecting Google Mail should revoke the stored
 Google token when possible and remove local mail connector settings without
 disconnecting Google Calendar.
 
+Google Mail capture reads message ids from Gmail and fetches each message in
+full format. Captured events are stored as `mail.message` with stable ids based
+on provider, mailbox, and message id. Header fields provide subject, sender,
+recipients, and message time; Gmail snippets and text/plain body parts provide
+local context when available.
+
 Microsoft Mail
 --------------
 
