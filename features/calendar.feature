@@ -30,6 +30,7 @@ Scenario: Connect Google Calendar with OAuth
   Given workgraph has been initialized
   When I run "workgraph calendar connect google"
   Then workgraph opens Google OAuth and stores local Google Calendar connector settings after approval
+  And workgraph does not start OAuth again when Google Calendar is already connected
   And the browser flow uses PKCE without requiring a client secret
   And the OAuth code exchange goes through the workgraph Google token relay
   And the token relay uses Cloudflare secrets in production and an ignored .dev.vars file for local development
@@ -44,6 +45,8 @@ Scenario: Disconnect Google Calendar
   When I run "workgraph calendar disconnect google"
   Then workgraph revokes the stored Google Calendar token
   And workgraph removes local Calendar connector settings
+  And workgraph preserves local settings for other calendar providers
+  And disconnect succeeds when Google Calendar is already disconnected
 
 Scenario: Verify Microsoft Calendar publisher domain
   Given workgraph has a Microsoft Entra application
@@ -55,8 +58,18 @@ Scenario: Connect Microsoft Calendar with OAuth
   Given workgraph has been initialized
   When I run "workgraph calendar connect microsoft"
   Then workgraph opens Microsoft OAuth and stores local Microsoft Calendar connector settings after approval
+  And workgraph does not start OAuth again when Microsoft Calendar is already connected
+  And workgraph preserves existing Google Calendar settings when Microsoft Calendar connects
   And the browser flow uses PKCE without requiring a client secret
   And the OAuth request targets Microsoft Graph calendar scopes, not Azure DevOps scopes
   When I run "workgraph calendar connect microsoft --no-browser"
   Then workgraph prints a Microsoft OAuth authorization URL
   And workgraph does not store local Microsoft Calendar connector settings yet
+
+Scenario: Disconnect Microsoft Calendar
+  Given Microsoft Calendar is already connected
+  When I run "workgraph calendar disconnect microsoft"
+  Then workgraph removes local Microsoft Calendar connector settings
+  And the output explains Microsoft consent must be revoked from Microsoft account or tenant app consent settings
+  And workgraph preserves local settings for other calendar providers
+  And disconnect succeeds when Microsoft Calendar is already disconnected

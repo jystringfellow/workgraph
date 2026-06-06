@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -652,6 +653,7 @@ func TestMicrosoftCalendarBrowserConnectUsesPKCEAndStoresConnectorConfig(t *test
 	}))
 	defer tokenServer.Close()
 
+	var callbackBody string
 	openBrowser := func(authorizationURL string) error {
 		parsed, err := url.Parse(authorizationURL)
 		if err != nil {
@@ -689,7 +691,18 @@ func TestMicrosoftCalendarBrowserConnectUsesPKCEAndStoresConnectorConfig(t *test
 			values.Set("code", "microsoft-browser-oauth-code")
 			values.Set("state", query.Get("state"))
 			callback.RawQuery = values.Encode()
-			_, _ = http.Get(callback.String())
+			response, err := http.Get(callback.String())
+			if err != nil {
+				t.Errorf("request callback URL: %v", err)
+				return
+			}
+			defer response.Body.Close()
+			body, err := io.ReadAll(response.Body)
+			if err != nil {
+				t.Errorf("read callback response: %v", err)
+				return
+			}
+			callbackBody = string(body)
 		}()
 		return nil
 	}
@@ -707,6 +720,9 @@ func TestMicrosoftCalendarBrowserConnectUsesPKCEAndStoresConnectorConfig(t *test
 	if !result.Configured {
 		t.Fatalf("expected browser connect to configure Microsoft Calendar")
 	}
+	if !strings.Contains(callbackBody, "Microsoft Calendar authorization received") {
+		t.Fatalf("expected Microsoft callback message, got %q", callbackBody)
+	}
 	if tokenRequestForm.Get("code") != "microsoft-browser-oauth-code" {
 		t.Fatalf("expected browser oauth code, got %q", tokenRequestForm.Get("code"))
 	}
@@ -723,6 +739,129 @@ func TestMicrosoftCalendarBrowserConnectUsesPKCEAndStoresConnectorConfig(t *test
 	}
 	if !strings.Contains(string(contents), `"microsoft"`) || !strings.Contains(string(contents), `"access_token": "microsoft-browser-access-token"`) {
 		t.Fatalf("expected Microsoft browser access token in config, got %s", contents)
+	}
+}
+
+func TestCalendarConnectSkipsOAuthWhenProviderAlreadyConnected(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	configPath := filepath.Join(homeDir, "calendar.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "google": {
+    "access_token": "google-access-token",
+    "calendar_ids": ["primary"]
+  },
+  "microsoft": {
+    "access_token": "microsoft-access-token",
+    "calendar_ids": ["primary"]
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write calendar config: %v", err)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "calendar", "connect", "google",
+		"--home", homeDir,
+	)
+	if err != nil {
+		t.Fatalf("expected connected Google connect to succeed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Google Calendar is already connected") {
+		t.Fatalf("expected already connected Google message, got:\n%s", output)
+	}
+	if strings.Contains(string(output), "authorization URL") {
+		t.Fatalf("expected already connected Google connect not to print OAuth URL, got:\n%s", output)
+	}
+
+	output, err = runworkgraph(t, repoRoot, "calendar", "connect", "microsoft",
+		"--home", homeDir,
+	)
+	if err != nil {
+		t.Fatalf("expected connected Microsoft connect to succeed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Microsoft Calendar is already connected") {
+		t.Fatalf("expected already connected Microsoft message, got:\n%s", output)
+	}
+	if strings.Contains(string(output), "authorization URL") {
+		t.Fatalf("expected already connected Microsoft connect not to print OAuth URL, got:\n%s", output)
+	}
+}
+
+func TestCalendarConnectPreservesExistingProviderSettings(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	configPath := filepath.Join(homeDir, "calendar.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "google": {
+    "access_token": "google-access-token",
+    "refresh_token": "google-refresh-token",
+    "token_type": "Bearer",
+    "calendar_ids": ["primary"]
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write calendar config: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/token" {
+			t.Fatalf("unexpected token server path %s", request.URL.Path)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{
+  "access_token": "microsoft-access-token",
+  "refresh_token": "microsoft-refresh-token",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "scope": "openid profile email offline_access https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/Calendars.Read.Shared"
+}`))
+	}))
+	defer server.Close()
+
+	output, err := runworkgraph(t, repoRoot, "calendar", "connect", "microsoft",
+		"--home", homeDir,
+		"--client-id", "client-id",
+		"--redirect-uri", "http://localhost:2727/calendar/microsoft/callback",
+		"--code", "oauth-code",
+		"--code-verifier", "manual-code-verifier",
+		"--state", "fixed-state",
+		"--expected-state", "fixed-state",
+		"--calendar-token-url", server.URL+"/token",
+	)
+	if err != nil {
+		t.Fatalf("workgraph calendar connect exchange failed: %v\n%s", err, output)
+	}
+
+	contents, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read calendar config: %v", err)
+	}
+	var stored struct {
+		Google struct {
+			AccessToken string `json:"access_token"`
+		} `json:"google"`
+		Microsoft struct {
+			AccessToken string `json:"access_token"`
+		} `json:"microsoft"`
+	}
+	if err := json.Unmarshal(contents, &stored); err != nil {
+		t.Fatalf("parse calendar config: %v", err)
+	}
+	if stored.Google.AccessToken != "google-access-token" {
+		t.Fatalf("expected Google settings preserved, got:\n%s", contents)
+	}
+	if stored.Microsoft.AccessToken != "microsoft-access-token" {
+		t.Fatalf("expected Microsoft settings stored, got:\n%s", contents)
 	}
 }
 
@@ -753,6 +892,7 @@ func TestGoogleCalendarBrowserConnectUsesPKCEAndStoresConnectorConfig(t *testing
 	}))
 	defer tokenServer.Close()
 
+	var callbackBody string
 	openBrowser := func(authorizationURL string) error {
 		parsed, err := url.Parse(authorizationURL)
 		if err != nil {
@@ -787,7 +927,18 @@ func TestGoogleCalendarBrowserConnectUsesPKCEAndStoresConnectorConfig(t *testing
 			values.Set("code", "browser-oauth-code")
 			values.Set("state", query.Get("state"))
 			callback.RawQuery = values.Encode()
-			_, _ = http.Get(callback.String())
+			response, err := http.Get(callback.String())
+			if err != nil {
+				t.Errorf("request callback URL: %v", err)
+				return
+			}
+			defer response.Body.Close()
+			body, err := io.ReadAll(response.Body)
+			if err != nil {
+				t.Errorf("read callback response: %v", err)
+				return
+			}
+			callbackBody = string(body)
 		}()
 		return nil
 	}
@@ -803,6 +954,9 @@ func TestGoogleCalendarBrowserConnectUsesPKCEAndStoresConnectorConfig(t *testing
 	}
 	if !result.Configured {
 		t.Fatalf("expected browser connect to configure Google Calendar")
+	}
+	if !strings.Contains(callbackBody, "Google Calendar authorization received") {
+		t.Fatalf("expected Google callback message, got %q", callbackBody)
 	}
 	if tokenRequestForm.Get("code") != "browser-oauth-code" {
 		t.Fatalf("expected browser oauth code, got %q", tokenRequestForm.Get("code"))
@@ -878,6 +1032,170 @@ func TestGoogleCalendarDisconnectRevokesTokenAndRemovesConnectorConfig(t *testin
 	}
 	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
 		t.Fatalf("expected calendar config removed, stat err: %v", err)
+	}
+}
+
+func TestGoogleCalendarDisconnectRemovesConnectorConfigAndPreservesMicrosoft(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	configPath := filepath.Join(homeDir, "calendar.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "google": {
+    "access_token": "google-access-token",
+    "refresh_token": "google-refresh-token",
+    "token_type": "Bearer",
+    "calendar_ids": ["primary"]
+  },
+  "microsoft": {
+    "access_token": "microsoft-access-token",
+    "refresh_token": "microsoft-refresh-token",
+    "token_type": "Bearer",
+    "calendar_ids": ["primary"]
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write calendar config: %v", err)
+	}
+
+	var revokedToken string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/revoke" {
+			t.Fatalf("unexpected Google revoke path %s", request.URL.Path)
+		}
+		if err := request.ParseForm(); err != nil {
+			t.Fatalf("parse revoke form: %v", err)
+		}
+		revokedToken = request.Form.Get("token")
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	output, err := runworkgraph(t, repoRoot, "calendar", "disconnect", "google",
+		"--home", homeDir,
+		"--calendar-revoke-url", server.URL+"/revoke",
+	)
+	if err != nil {
+		t.Fatalf("workgraph calendar disconnect failed: %v\n%s", err, output)
+	}
+	if revokedToken != "google-refresh-token" {
+		t.Fatalf("expected disconnect to revoke refresh token, got %q", revokedToken)
+	}
+	if !strings.Contains(string(output), "Google Calendar disconnected") {
+		t.Fatalf("expected disconnect message, got:\n%s", output)
+	}
+
+	contents, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("expected calendar config to remain for Microsoft settings: %v", err)
+	}
+	var stored struct {
+		Google    *struct{} `json:"google"`
+		Microsoft *struct{} `json:"microsoft"`
+	}
+	if err := json.Unmarshal(contents, &stored); err != nil {
+		t.Fatalf("parse calendar config: %v", err)
+	}
+	if stored.Google != nil {
+		t.Fatalf("expected Google calendar settings to be removed, got:\n%s", contents)
+	}
+	if stored.Microsoft == nil {
+		t.Fatalf("expected Microsoft calendar settings to be preserved, got:\n%s", contents)
+	}
+}
+
+func TestMicrosoftCalendarDisconnectRemovesConnectorConfigAndPreservesGoogle(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	configPath := filepath.Join(homeDir, "calendar.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "google": {
+    "access_token": "google-access-token",
+    "refresh_token": "google-refresh-token",
+    "token_type": "Bearer",
+    "calendar_ids": ["primary"]
+  },
+  "microsoft": {
+    "access_token": "microsoft-access-token",
+    "refresh_token": "microsoft-refresh-token",
+    "token_type": "Bearer",
+    "calendar_ids": ["primary"]
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write calendar config: %v", err)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "calendar", "disconnect", "microsoft",
+		"--home", homeDir,
+	)
+	if err != nil {
+		t.Fatalf("workgraph calendar disconnect failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Microsoft Calendar disconnected") {
+		t.Fatalf("expected disconnect message, got:\n%s", output)
+	}
+	if !strings.Contains(string(output), "Microsoft Calendar credentials removed locally") {
+		t.Fatalf("expected local removal confirmation, got:\n%s", output)
+	}
+	if !strings.Contains(string(output), "To revoke Microsoft consent, remove workgraph from your Microsoft account or tenant app consent settings.") {
+		t.Fatalf("expected Microsoft consent revocation guidance, got:\n%s", output)
+	}
+
+	contents, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("expected calendar config to remain for Google settings: %v", err)
+	}
+	var stored struct {
+		Google    *struct{} `json:"google"`
+		Microsoft *struct{} `json:"microsoft"`
+	}
+	if err := json.Unmarshal(contents, &stored); err != nil {
+		t.Fatalf("parse calendar config: %v", err)
+	}
+	if stored.Google == nil {
+		t.Fatalf("expected Google calendar settings to be preserved, got:\n%s", contents)
+	}
+	if stored.Microsoft != nil {
+		t.Fatalf("expected Microsoft calendar settings to be removed, got:\n%s", contents)
+	}
+}
+
+func TestCalendarDisconnectAlreadyDisconnectedSucceeds(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "calendar", "disconnect", "google",
+		"--home", homeDir,
+	)
+	if err != nil {
+		t.Fatalf("expected already disconnected Google disconnect to succeed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Google Calendar is not connected") {
+		t.Fatalf("expected already disconnected Google message, got:\n%s", output)
+	}
+
+	output, err = runworkgraph(t, repoRoot, "calendar", "disconnect", "microsoft",
+		"--home", homeDir,
+	)
+	if err != nil {
+		t.Fatalf("expected already disconnected Microsoft disconnect to succeed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Microsoft Calendar is not connected") {
+		t.Fatalf("expected already disconnected Microsoft message, got:\n%s", output)
 	}
 }
 

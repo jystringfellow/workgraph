@@ -47,6 +47,7 @@
    - [x] Google Calendar token refresh.
    - [x] Microsoft publisher-domain verification file is hosted from the workgraph Pages site.
    - [x] Microsoft Calendar OAuth connect uses PKCE and stores local connector settings.
+   - [x] Microsoft Calendar disconnect removes local connector settings while preserving other providers.
    - [ ] Background polling from stored calendar connector settings.
 - [ ] Mail ingestion (Gmail, Outlook Mail)
    - [ ] Decide whether Google Mail uses the existing Google OAuth app or a separate `workgraph-mail` app.
