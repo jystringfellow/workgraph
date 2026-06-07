@@ -57,6 +57,18 @@ type RunConfig struct {
 	SlackAPIBaseURL string
 	// SlackHTTPClient overrides the Slack API HTTP client for tests.
 	SlackHTTPClient *http.Client
+	// CalendarPollInterval controls connected calendar capture while running.
+	CalendarPollInterval time.Duration
+	// CalendarHTTPClient overrides the Calendar API HTTP client for tests.
+	CalendarHTTPClient *http.Client
+	// MailPollInterval controls connected mail capture while running.
+	MailPollInterval time.Duration
+	// MailHTTPClient overrides the Mail API HTTP client for tests.
+	MailHTTPClient *http.Client
+	// NotionPollInterval controls connected Notion capture while running.
+	NotionPollInterval time.Duration
+	// NotionHTTPClient overrides the Notion API HTTP client for tests.
+	NotionHTTPClient *http.Client
 }
 
 // RunStatus describes an active capture process.
@@ -72,6 +84,7 @@ type RunStatus struct {
 	WatchLimitReached     bool
 	WatchLimitPath        string
 	RegisteredWatchDirs   []string
+	MonitoredConnectors   []string
 	Message               string
 }
 
@@ -86,31 +99,43 @@ type CapturedEvent struct {
 
 // RunCapture watches local files and stores events until stopped.
 type RunCapture struct {
-	Status              RunStatus
-	Events              <-chan CapturedEvent
-	db                  *sql.DB
-	watcher             *fsnotify.Watcher
-	homeDir             string
-	databasePath        string
-	watchDirs           []string
-	ignorePaths         []string
-	ignoreNames         []string
-	watchBudget         *watchBudget
-	gitPollInterval     time.Duration
-	githubPollInterval  time.Duration
-	githubCommand       string
-	slackPollInterval   time.Duration
-	slackToken          string
-	slackChannels       []string
-	slackIncludeDMs     bool
-	slackSelfUserID     string
-	slackAPIBaseURL     string
-	slackHTTPClient     *http.Client
-	slackCursors        map[string]string
-	slackThreadCursors  map[string]string
-	suppressedCreates   map[string]time.Time
-	deleteCoalesceDelay time.Duration
-	events              chan CapturedEvent
+	Status               RunStatus
+	Events               <-chan CapturedEvent
+	db                   *sql.DB
+	watcher              *fsnotify.Watcher
+	homeDir              string
+	databasePath         string
+	watchDirs            []string
+	ignorePaths          []string
+	ignoreNames          []string
+	watchBudget          *watchBudget
+	gitEnabled           bool
+	gitPollInterval      time.Duration
+	githubEnabled        bool
+	githubPollInterval   time.Duration
+	githubCommand        string
+	slackEnabled         bool
+	slackPollInterval    time.Duration
+	slackToken           string
+	slackChannels        []string
+	slackIncludeDMs      bool
+	slackSelfUserID      string
+	slackAPIBaseURL      string
+	slackHTTPClient      *http.Client
+	slackCursors         map[string]string
+	slackThreadCursors   map[string]string
+	calendarPollInterval time.Duration
+	calendarProviders    []string
+	calendarHTTPClient   *http.Client
+	mailPollInterval     time.Duration
+	mailProviders        []string
+	mailHTTPClient       *http.Client
+	notionPollInterval   time.Duration
+	notionEnabled        bool
+	notionHTTPClient     *http.Client
+	suppressedCreates    map[string]time.Time
+	deleteCoalesceDelay  time.Duration
+	events               chan CapturedEvent
 }
 
 type fileEventPayload struct {
@@ -188,36 +213,58 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 			}
 		}
 	}
+	connectorState, err := readConnectorRuntimeFile(status.HomeDir)
+	if err != nil {
+		watcher.Close()
+		db.Close()
+		return nil, err
+	}
+	calendarProviders := connectedCalendarProviders(status.HomeDir, connectorState)
+	mailProviders := connectedMailProviders(status.HomeDir, connectorState)
+	notionEnabled := notionConnectorConnected(status.HomeDir) && connectorEnabled(connectorState, "notion")
+	status.MonitoredConnectors = monitoredConnectorIDs(status.HomeDir, connectorState)
 
 	status.Message = runMessage(status)
 	events := make(chan CapturedEvent, 128)
 
 	return &RunCapture{
-		Status:              status,
-		Events:              events,
-		db:                  db,
-		watcher:             watcher,
-		homeDir:             status.HomeDir,
-		databasePath:        status.DatabasePath,
-		watchDirs:           status.WatchDirs,
-		ignorePaths:         status.IgnorePaths,
-		ignoreNames:         status.IgnoreNames,
-		watchBudget:         budget,
-		gitPollInterval:     gitPollInterval(config.GitPollInterval),
-		githubPollInterval:  githubPollInterval(config.GitHubPollInterval),
-		githubCommand:       config.GitHubCommand,
-		slackPollInterval:   slackPollInterval(config.SlackPollInterval),
-		slackToken:          slackToken,
-		slackChannels:       slackChannels,
-		slackIncludeDMs:     slackIncludeDMs,
-		slackSelfUserID:     slackSelfUserID,
-		slackAPIBaseURL:     slackAPIBaseURL,
-		slackHTTPClient:     config.SlackHTTPClient,
-		slackCursors:        map[string]string{},
-		slackThreadCursors:  map[string]string{},
-		suppressedCreates:   map[string]time.Time{},
-		deleteCoalesceDelay: 75 * time.Millisecond,
-		events:              events,
+		Status:               status,
+		Events:               events,
+		db:                   db,
+		watcher:              watcher,
+		homeDir:              status.HomeDir,
+		databasePath:         status.DatabasePath,
+		watchDirs:            status.WatchDirs,
+		ignorePaths:          status.IgnorePaths,
+		ignoreNames:          status.IgnoreNames,
+		watchBudget:          budget,
+		gitEnabled:           connectorEnabled(connectorState, "git"),
+		gitPollInterval:      connectorInterval(connectorState, "git", gitPollInterval(config.GitPollInterval)),
+		githubEnabled:        connectorEnabled(connectorState, "github"),
+		githubPollInterval:   connectorInterval(connectorState, "github", githubPollInterval(config.GitHubPollInterval)),
+		githubCommand:        config.GitHubCommand,
+		slackEnabled:         connectorEnabled(connectorState, "slack"),
+		slackPollInterval:    connectorInterval(connectorState, "slack", slackPollInterval(config.SlackPollInterval)),
+		slackToken:           slackToken,
+		slackChannels:        slackChannels,
+		slackIncludeDMs:      slackIncludeDMs,
+		slackSelfUserID:      slackSelfUserID,
+		slackAPIBaseURL:      slackAPIBaseURL,
+		slackHTTPClient:      config.SlackHTTPClient,
+		slackCursors:         map[string]string{},
+		slackThreadCursors:   map[string]string{},
+		calendarPollInterval: connectorInterval(connectorState, "calendar.google", calendarPollInterval(config.CalendarPollInterval)),
+		calendarProviders:    calendarProviders,
+		calendarHTTPClient:   config.CalendarHTTPClient,
+		mailPollInterval:     connectorInterval(connectorState, "mail.google", mailPollInterval(config.MailPollInterval)),
+		mailProviders:        mailProviders,
+		mailHTTPClient:       config.MailHTTPClient,
+		notionPollInterval:   connectorInterval(connectorState, "notion", notionPollInterval(config.NotionPollInterval)),
+		notionEnabled:        notionEnabled,
+		notionHTTPClient:     config.NotionHTTPClient,
+		suppressedCreates:    map[string]time.Time{},
+		deleteCoalesceDelay:  75 * time.Millisecond,
+		events:               events,
 	}, nil
 }
 
@@ -231,6 +278,12 @@ func (capture *RunCapture) Run(ctx context.Context) error {
 	defer githubTicker.Stop()
 	slackTicker := time.NewTicker(capture.slackPollInterval)
 	defer slackTicker.Stop()
+	calendarTicker := time.NewTicker(capture.calendarPollInterval)
+	defer calendarTicker.Stop()
+	mailTicker := time.NewTicker(capture.mailPollInterval)
+	defer mailTicker.Stop()
+	notionTicker := time.NewTicker(capture.notionPollInterval)
+	defer notionTicker.Stop()
 
 	for {
 		select {
@@ -246,6 +299,18 @@ func (capture *RunCapture) Run(ctx context.Context) error {
 			}
 		case <-slackTicker.C:
 			if err := capture.captureSlackEvents(); err != nil {
+				return err
+			}
+		case <-calendarTicker.C:
+			if err := capture.captureCalendarEvents(); err != nil {
+				return err
+			}
+		case <-mailTicker.C:
+			if err := capture.captureMailMessages(); err != nil {
+				return err
+			}
+		case <-notionTicker.C:
+			if err := capture.captureNotionEvents(); err != nil {
 				return err
 			}
 		case event, ok := <-capture.watcher.Events:
@@ -266,7 +331,56 @@ func (capture *RunCapture) Run(ctx context.Context) error {
 	}
 }
 
+func connectedCalendarProviders(homeDir string, state connectorRuntimeFile) []string {
+	config, err := readCalendarConnectorConfig(homeDir)
+	if err != nil {
+		return nil
+	}
+	var providers []string
+	if config.Google != nil && strings.TrimSpace(config.Google.AccessToken) != "" && connectorEnabled(state, "calendar.google") {
+		providers = append(providers, "google")
+	}
+	if config.Microsoft != nil && strings.TrimSpace(config.Microsoft.AccessToken) != "" && connectorEnabled(state, "calendar.microsoft") {
+		providers = append(providers, "microsoft")
+	}
+	return providers
+}
+
+func connectedMailProviders(homeDir string, state connectorRuntimeFile) []string {
+	config, err := readMailConnectorConfig(homeDir)
+	if err != nil {
+		return nil
+	}
+	var providers []string
+	if config.Google != nil && strings.TrimSpace(config.Google.AccessToken) != "" && connectorEnabled(state, "mail.google") {
+		providers = append(providers, "google")
+	}
+	if config.Microsoft != nil && strings.TrimSpace(config.Microsoft.AccessToken) != "" && connectorEnabled(state, "mail.microsoft") {
+		providers = append(providers, "microsoft")
+	}
+	return providers
+}
+
+func notionConnectorConnected(homeDir string) bool {
+	config, err := readNotionConnectorConfig(homeDir)
+	return err == nil && strings.TrimSpace(config.AccessToken) != ""
+}
+
+func monitoredConnectorIDs(homeDir string, state connectorRuntimeFile) []string {
+	statuses := connectorStatuses(homeDir, state)
+	ids := make([]string, 0, len(statuses))
+	for _, status := range statuses {
+		if status.Connected && status.Enabled {
+			ids = append(ids, status.ID)
+		}
+	}
+	return ids
+}
+
 func (capture *RunCapture) captureGitCommits() error {
+	if !capture.gitEnabled {
+		return nil
+	}
 	result, err := CaptureGitCommits(GitCaptureConfig{
 		HomeDir:      capture.homeDir,
 		DatabasePath: capture.databasePath,
@@ -283,6 +397,9 @@ func (capture *RunCapture) captureGitCommits() error {
 }
 
 func (capture *RunCapture) captureGitHubEvents() error {
+	if !capture.githubEnabled {
+		return nil
+	}
 	_, err := CaptureGitHubFromGH(GitHubCaptureConfig{
 		HomeDir:       capture.homeDir,
 		DatabasePath:  capture.databasePath,
@@ -293,7 +410,7 @@ func (capture *RunCapture) captureGitHubEvents() error {
 }
 
 func (capture *RunCapture) captureSlackEvents() error {
-	if capture.slackToken == "" {
+	if !capture.slackEnabled || capture.slackToken == "" {
 		return nil
 	}
 	result, err := CaptureSlackFromAPI(SlackAPICaptureConfig{
@@ -314,6 +431,49 @@ func (capture *RunCapture) captureSlackEvents() error {
 	capture.slackCursors = result.Cursors
 	capture.slackThreadCursors = result.ThreadCursors
 	return nil
+}
+
+func (capture *RunCapture) captureCalendarEvents() error {
+	for _, provider := range capture.calendarProviders {
+		_, err := CaptureCalendarEvents(CalendarCaptureConfig{
+			HomeDir:      capture.homeDir,
+			DatabasePath: capture.databasePath,
+			WatchDirs:    capture.watchDirs,
+			Provider:     provider,
+			HTTPClient:   capture.calendarHTTPClient,
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (capture *RunCapture) captureMailMessages() error {
+	for _, provider := range capture.mailProviders {
+		_, err := CaptureMailMessages(MailCaptureConfig{
+			HomeDir:      capture.homeDir,
+			DatabasePath: capture.databasePath,
+			Provider:     provider,
+			HTTPClient:   capture.mailHTTPClient,
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (capture *RunCapture) captureNotionEvents() error {
+	if !capture.notionEnabled {
+		return nil
+	}
+	_, err := CaptureNotion(NotionCaptureConfig{
+		HomeDir:      capture.homeDir,
+		DatabasePath: capture.databasePath,
+		HTTPClient:   capture.notionHTTPClient,
+	})
+	return err
 }
 
 // Close releases resources held by the capture process.
@@ -772,6 +932,27 @@ func slackPollInterval(interval time.Duration) time.Duration {
 	return interval
 }
 
+func calendarPollInterval(interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return 5 * time.Minute
+	}
+	return interval
+}
+
+func mailPollInterval(interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return 5 * time.Minute
+	}
+	return interval
+}
+
+func notionPollInterval(interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return 10 * time.Minute
+	}
+	return interval
+}
+
 func (budget *watchBudget) canAdd(path string) bool {
 	if budget.count >= budget.limit {
 		budget.reached = true
@@ -897,33 +1078,41 @@ func runMessage(status RunStatus) string {
 		"Home: " + status.HomeDir,
 		"Database: " + status.DatabasePath,
 	}
-	for _, watchDir := range status.WatchDirs {
-		lines = append(lines, "Watching: "+watchDir)
+	lines = append(lines, watchSummaryLine(status))
+	if len(status.MonitoredConnectors) > 0 {
+		lines = append(lines, "Monitoring: "+strings.Join(status.MonitoredConnectors, ", "))
 	}
 	if status.WatchLimitReached {
 		lines = append(lines, fmt.Sprintf("Watch limit reached: %d/%d directories registered", status.WatchCount, status.WatchLimit))
-		lines = append(lines, "Registered watch directories:")
-		sample := watchDirectorySample(status.RegisteredWatchDirs)
-		for _, watchDir := range sample {
-			lines = append(lines, "Watching directory: "+watchDir)
-		}
-		if len(status.RegisteredWatchDirs) > len(sample) {
-			lines = append(lines, fmt.Sprintf("... and %d more", len(status.RegisteredWatchDirs)-len(sample)))
+		if last := lastRegisteredWatchDirectory(status.RegisteredWatchDirs); last != "" {
+			lines = append(lines, "Last watched directory: "+last)
 		}
 		if status.WatchLimitPath != "" {
-			lines = append(lines, "First unwatched directory: "+status.WatchLimitPath)
+			lines = append(lines, "Next unwatched directory: "+status.WatchLimitPath)
 		}
+		lines = append(lines, "Prioritize important directories with workgraph config add-watch.")
 	}
 
 	return strings.Join(lines, "\n")
 }
 
-func watchDirectorySample(watchDirs []string) []string {
-	const maxSample = 10
-	if len(watchDirs) <= maxSample {
-		return watchDirs
+func watchSummaryLine(status RunStatus) string {
+	count := len(status.WatchDirs)
+	switch count {
+	case 0:
+		return "Watching: no configured directories"
+	case 1:
+		return "Watching: 1 configured directory"
+	default:
+		return fmt.Sprintf("Watching: %d configured directories", count)
 	}
-	return watchDirs[:maxSample]
+}
+
+func lastRegisteredWatchDirectory(watchDirs []string) string {
+	if len(watchDirs) == 0 {
+		return ""
+	}
+	return watchDirs[len(watchDirs)-1]
 }
 
 func fileSize(path string) int64 {

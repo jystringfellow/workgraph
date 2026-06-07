@@ -38,8 +38,8 @@ func TestStartStartsBackgroundCaptureWithConfiguredWatchDirs(t *testing.T) {
 	if !strings.Contains(output, "started") {
 		t.Fatalf("expected capture start output, got:\n%s", output)
 	}
-	if !strings.Contains(output, watchDir) {
-		t.Fatalf("expected start output to include configured watch dir %q, got:\n%s", watchDir, output)
+	if !strings.Contains(output, "Watching: 1 configured directory") {
+		t.Fatalf("expected start output to summarize configured watch dirs, got:\n%s", output)
 	}
 	if _, err := os.Stat(filepath.Join(homeDir, "daemon.pid")); err != nil {
 		t.Fatalf("expected capture pid under workgraph home: %v", err)
@@ -59,10 +59,8 @@ func TestStartUsesDefaultSaneWatchRootsAfterInit(t *testing.T) {
 	output := runWorkgraphCommand(t, env, "start", "--home", homeDir)
 	defer runWorkgraphCommand(t, env, "stop", "--home", homeDir)
 
-	for _, expected := range []string{filepath.Join(userHome, "Desktop"), filepath.Join(userHome, "Documents")} {
-		if !strings.Contains(output, expected) {
-			t.Fatalf("expected capture to watch default directory %q, got:\n%s", expected, output)
-		}
+	if !strings.Contains(output, "Watching: 2 configured directories") {
+		t.Fatalf("expected capture to summarize default watch roots, got:\n%s", output)
 	}
 	if strings.Contains(output, "Watching: "+userHome+"\n") {
 		t.Fatalf("expected capture not to watch broad user home %q, got:\n%s", userHome, output)
@@ -97,7 +95,7 @@ func TestStatusReportsRunningCaptureState(t *testing.T) {
 	defer runWorkgraphCommand(t, nil, "stop", "--home", homeDir)
 
 	output := runWorkgraphCommand(t, nil, "status", "--home", homeDir)
-	for _, expected := range []string{"running", "PID:", watchDir, ignoredDir, "node_modules"} {
+	for _, expected := range []string{"running", "PID:", "Watching: 1 configured directory", ignoredDir, "node_modules"} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("expected capture status to include %q, got:\n%s", expected, output)
 		}
