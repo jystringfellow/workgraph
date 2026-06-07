@@ -35,6 +35,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runCalendar(args[1:], stdout, stderr)
 	case "mail":
 		return runMail(args[1:], stdout, stderr)
+	case "notion":
+		return runNotion(args[1:], stdout, stderr)
 	case "memory":
 		return runMemory(args[1:], stdout, stderr)
 	case "start":
@@ -55,6 +57,91 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unknown command: %s\n", args[0])
 		return 2
 	}
+}
+
+func runNotion(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph notion <command>")
+		return 2
+	}
+
+	switch args[0] {
+	case "connect":
+		return runNotionConnect(args[1:], stdout, stderr)
+	case "disconnect":
+		return runNotionDisconnect(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "unknown notion command: %s\n", args[0])
+		return 2
+	}
+}
+
+func runNotionConnect(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("notion connect", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	clientID := flags.String("client-id", "", "Notion OAuth client id")
+	redirectURI := flags.String("redirect-uri", "", "Notion OAuth redirect URI")
+	code := flags.String("code", "", "Notion OAuth code")
+	state := flags.String("state", "", "Notion OAuth state")
+	expectedState := flags.String("expected-state", "", "Expected Notion OAuth state")
+	noBrowser := flags.Bool("no-browser", false, "Print the authorization URL instead of opening a browser")
+	authBaseURL := flags.String("notion-auth-base", "", "Notion authorization URL")
+	tokenURL := flags.String("notion-token-url", "", "Notion token relay URL")
+	notionAPIBaseURL := flags.String("notion-api-base", "", "Notion API base URL")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+
+	config := workgraph.NotionConnectConfig{
+		HomeDir:       *homeDir,
+		ClientID:      *clientID,
+		RedirectURI:   *redirectURI,
+		Code:          *code,
+		State:         *state,
+		ExpectedState: *expectedState,
+		AuthBaseURL:   *authBaseURL,
+		TokenURL:      *tokenURL,
+		APIBaseURL:    *notionAPIBaseURL,
+	}
+	var result workgraph.NotionConnectResult
+	var err error
+	if *code == "" && !*noBrowser {
+		result, err = workgraph.ConnectNotionWithBrowser(context.Background(), config)
+	} else {
+		result, err = workgraph.ConnectNotion(config)
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph notion connect: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runNotionDisconnect(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("notion disconnect", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+
+	result, err := workgraph.DisconnectNotion(workgraph.NotionDisconnectConfig{
+		HomeDir: *homeDir,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph notion disconnect: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
 }
 
 func runMail(args []string, stdout io.Writer, stderr io.Writer) int {

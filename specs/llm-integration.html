@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLM Integration Specification - workgraph</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 0 20px;
+            background-color: #f9f9f9;
+        }
+        h1, h2, h3 {
+            color: #1a1a1a;
+            border-bottom: 1px solid #e1e1e1;
+            padding-bottom: 0.5rem;
+        }
+        .card {
+            background: white;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        code {
+            background: #f0f0f0;
+            padding: 0.2rem 0.4rem;
+            border-radius: 3px;
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+        }
+        pre {
+            background: #f0f0f0;
+            padding: 1rem;
+            border-radius: 8px;
+            overflow-x: auto;
+        }
+        .tag {
+            display: inline-block;
+            padding: 0.2rem 0.5rem;
+            background: #eef2ff;
+            color: #4f46e5;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1 style="border-bottom: 3px solid #4f46e5;">LLM Integration Specification</h1>
+        <p><span class="tag">Internal Document</span></p>
+
+        <h2>Context</h2>
+        <p>To empower <strong>workgraph</strong> as a tool for personal work intelligence, it must be able to leverage Large Language Models (LLMs) for tasks such as summarization, categorization, and proactive insight generation.</p>
+        <p>While the system is <em>"Local-First,"</em> we recognize that some users prefer high-capability hosted models (OpenAI/Anthropic), while other users require more private "Cloud" options (AWS Bedrock/Azure Foundry).</p>
+
+        <h2>Principles</h2>
+        <ul>
+            <li><strong>Provider Agnosticism:</strong> The core business logic of workgraph must not know which provider it is talking to. It should interact with a unified <code>LLMProvider</code> interface.</li>
+            <li><strong>Data Sovereignty:</strong> Only the data required for the specific task (the "context") should be sent to any external API.</li>
+            <li><strong>Local-First Continuity:</strong> The absence of an LLM or a failed connection to one must not break core functionality. LLM features are "enhancements."</li>
+        </ul>
+
+        <h2>Architecture: Provider Pattern</h2>
+        <p>We will implement a provider-based abstraction to handle the differences between local inference, cloud profiles (Bedrock/Azure), and standard API keys.</p>
+
+        <h3>1. The Unified Interface</h3>
+        <p>All integrations must satisfy a common interface in <code>internal/llm</code>:</p>
+        <ul>
+            <li><code>Generate(ctx, request) -> Response</code></li>
+            <li><code>Stream(ctx, request) -> Channel</code> (Optional for real-time UI)</li>
+        </ul>
+
+        <h3>2. Supported Categories</h3>
+        <p>The system should support three categories of providers:</p>
+        <ul>
+            <li><strong>Standard API:</strong> Standard HTTP calls to OpenAI, Anthropic, etc., requiring an API Key.</li>
+            <li><strong>Cloud Inference Profiles:</strong> Integration with AWS Bedrock and Azure Foundry, which allow the user to use high-powered models within their own account/tenant.</li>
+            <li><strong>Local Bridge:</strong> Support for local inference engines (e.g., Ollama) via a standard OpenAI-compatible local endpoint.</li>
+        </ul>        <h2>Data Flow & Context Management</h2>
+        <p>To preserve privacy and manage token costs, we will implement the following:</p>
+        <ul>
+            <li><strong>Just-In-Time (JIT) Context Gathering:</strong> The system should not send an entire database dump. A <em>Context Fetcher</em> identifies relevant records in SQLite based on dates or tags to construct a focused prompt.</li>
+            <li><strong>Prompt Templates:</strong> Prompts are defined as static templates with placeholders (e.g., <code>"Summarize the following notes from {{date}}: {{content}}"</code>) stored in a dedicated directory.</li>
+            <li><strong>Handling Latency:</strong> All LLM calls must be performed asynchronously or via worker threads to ensure the UI/CLI remains responsive.</li>
+        </ul>
+
+        <h2>Error Handling & Fallbacks</h2>
+        <ul>
+            <li><strong>Partial Success:</strong> If an LLM is unavailable, the system should still save the raw data and provide a "Retry" option for the AI operation later.</li>
+            <li><strong>Validation:</strong> The output of any LLM call must be validated before being persisted as an "official" record in the system.</li>
+        </ul>
+
+        <h2>Roadmap Checklist</h2>
+        <ul>
+            <li>[ ] Define <code>llm_provider</code> interface in <code>internal/llm</code></li>
+            <li>[ ] Implement standard OpenAI/Anthropic providers</li>
+            <li>[ ] Implement AWS Bedrock / Azure Foundry bridge</li>
+            <li>[ ] Implement Context Fetcher for automated prompt building</li>
+            <li>[ ] Add configuration UI/CLI for provider selection and key management</li>
+        </ul>
+    </div>
+</body>
+</html>
