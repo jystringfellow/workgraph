@@ -48,3 +48,10 @@ Scenario: Connect Slack with OAuth
   And approving access stores local Slack connector settings
   And the output explains that enabling DMs later requires disconnecting and reconnecting
   And the daemon can discover visible Slack channels without repeated token flags
+  And Slack is enabled for shared connector polling
+
+Scenario: Configure Slack polling without disconnecting
+  Given Slack is connected
+  When I disable the Slack connector
+  Then workgraph stops polling Slack
+  And the Slack account remains connected for later re-enabling

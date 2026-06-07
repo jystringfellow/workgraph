@@ -25,6 +25,17 @@ GitHub CLI (`gh`) when it is available. The daemon must be conservative:
 - store events through the same ingestion path as exported events
 - avoid duplicate events across polling cycles
 
+GitHub polling should participate in the shared connector runtime. Today,
+workgraph can infer GitHub from local git remotes and the authenticated `gh`
+CLI. A future `workgraph github connect` command should validate `gh auth
+status`, store local polling preferences, and make GitHub appear in connector
+status with the same enabled/disabled and interval controls as API-backed
+connectors. Manual `github capture` remains available for imports and facts.
+
+Local git capture does not require account connection, but it should appear in
+the same connector status view as an enabled local source when file/git capture
+is active.
+
 GitHub capture keeps one stored work snapshot per repository PR or issue
 identity. Recapturing the same PR or issue with a newer GitHub `updated_at`
 refreshes the stored timestamp, state, title, actor, and payload without

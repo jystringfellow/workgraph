@@ -1,5 +1,13 @@
 Feature: Notion connection
 
+Scenario: Capture shared Notion pages and databases
+  Given Notion is connected
+  When I run "workgraph notion capture"
+  Then workgraph searches Notion for pages and databases shared with the connection
+  And workgraph stores notion.page and notion.database records
+  And the records preserve object id, title, URL, created time, last edited time, and parent metadata
+  And recapturing the same page or database updates the existing event instead of creating duplicates
+
 Scenario: Connect Notion with OAuth
   Given workgraph has been initialized
   When I run "workgraph notion connect"

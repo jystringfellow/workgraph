@@ -268,6 +268,8 @@ func runNotion(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	switch args[0] {
+	case "capture":
+		return runNotionCapture(args[1:], stdout, stderr)
 	case "connect":
 		return runNotionConnect(args[1:], stdout, stderr)
 	case "disconnect":
@@ -276,6 +278,34 @@ func runNotion(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unknown notion command: %s\n", args[0])
 		return 2
 	}
+}
+
+func runNotionCapture(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("notion capture", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
+	token := flags.String("token", os.Getenv("WORKGRAPH_NOTION_TOKEN"), "Notion access token")
+	notionAPIBaseURL := flags.String("notion-api-base", "", "Notion API base URL")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+
+	result, err := workgraph.CaptureNotion(workgraph.NotionCaptureConfig{
+		HomeDir:      *homeDir,
+		DatabasePath: *databasePath,
+		Token:        *token,
+		APIBaseURL:   *notionAPIBaseURL,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph notion capture: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
 }
 
 func runNotionConnect(args []string, stdout io.Writer, stderr io.Writer) int {
