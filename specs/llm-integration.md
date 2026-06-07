@@ -1,63 +1,265 @@
-# Specification: LLM Integration
+# LLM Integration
 
-## Context
-To empower "workgraph" as a tool for personal work intelligence, it must be able to leverage Large Language Models (LLMs) for tasks such as summarization, categorization, and proactive insight generation. 
+workgraph should use LLMs as an optional local capability for summarization,
+association suggestions, and supplemental insight. Core capture, storage, today,
+resume, and memory behavior must continue to work without an LLM.
 
-While the system is "Local-First," we recognize that some users prefer high-capability hosted models (OpenAI/Anthropic), while others require more private "Cloud" options (AWS Bedrock/Azure Foundry).
+The LLM connector must support:
+
+- local models, especially OpenAI-compatible local endpoints such as Ollama, LM
+  Studio, llama.cpp servers, and similar tools
+- cloud-account models such as AWS Bedrock and Azure-hosted model endpoints
+- third-party model subscriptions such as OpenAI, Anthropic, Google, and other
+  provider APIs when users bring their own credentials
 
 ## Principles
-1. **Provider Agnostic**: The core business logic of workgraph must not know which provider it is talking to. It should interact with a unified `LLMProvider` interface.
-2. **Data Sovereignty**: Only the data required for the specific task (the "context") should be sent to any external API.
-3. **Local-First Continuity**: The absence of an LLM or a failed connection to one must not break core functionality. LLM features are "enhancements."
 
-## Architecture: Provider Pattern
-We will implement a provider-based abstraction to handle the differences between local inference, cloud profiles (Bedrock/Azure), and standard API keys.
+- **Optional enhancement**: LLM features are disabled until configured. A failed
+  model call must not break non-LLM commands.
+- **Local-first by default**: Local model profiles should work without outbound
+  hosted AI calls or API keys.
+- **User-owned credentials**: Credentials are configured locally. workgraph must
+  not require a workgraph-operated LLM service.
+- **Explicit outbound consent**: Hosted LLM use is opt-in at configuration time.
+  Dry-run and debug modes must let users inspect outbound prompts without
+  sending them.
+- **Focused context**: workgraph must send only the selected task context, never
+  an unbounded database or memory dump.
+- **Suggestions before facts**: LLM output is supplemental unless the user
+  approves it. LLMs may propose summaries, associations, and memory edits, but
+  memories remain concrete user-owned records.
+- **Provider-independent tasks**: Commands such as summarize and associate should
+  target task contracts, not provider-specific request shapes.
 
-### 1. The Unified Interface
-All integrations must satisfy a common interface in `internal/llm`:
-- `Generate(ctx, request) -> Response`
-- `Stream(ctx, request) -> Channel` (Optional for real-time UI)
+## Configuration
 
-### 2. Supported Categories
-The system should support three categories of providers:
-- **Standard API**: Standard HTTP calls to OpenAI, Anthropic, etc., requiring an API Key.
-- **Cloud Inference Profiles**: Integration with AWS Bedrock and Azure Foundry, which allow the user to use high-powered models within their own cloud accounts/tenants.
-- **Local Bridge**: Support for local inference engines (e.g., Ollama) via a standard OpenAI-compatible local endpoint.
+workgraph stores LLM configuration locally under the workgraph home directory:
 
-## Configuration Requirements
-The configuration must allow users to select an active provider and provide necessary credentials:
-- `provider_type`: [openai, anthropic, bedrock, azure, ollama]
-- `api_key`: (for 3rd party services)
-- `inference_profile`: (specific for AWS Bedrock / Azure Foundry)
-- `model_id`: The specific model identifier.
+```text
+~/.workgraph/llm.json
+```
 
-## Data Flow & Context Management
+The file must be written with local-user-only permissions when supported by the
+operating system.
 
-### 1. Just-In-Time (JIT) Context Gathering
-To preserve privacy and manage token costs:
-- The system should not send an entire database dump to the LLM.
-- When a "Work" is performed (e.g., "Summarize my day"), a **Context Fetcher** identifies relevant records in SQLite based on dates or tags and constructs a focused prompt.
+Configuration should support multiple named profiles, one default profile, and
+optional task-specific profile overrides:
 
-### 2. Prompt Templates
-Prompts are defined as static templates with placeholders:
-- `templates/` directory contains YAML or JSON files.
-- Example: `"Please summarize the following notes from {{date}}: {{content}}"`
-- This allows users to tweak the "personality" of the interaction without modifying the core code.
+```json
+{
+  "default_profile": "local-gemma",
+  "task_profiles": {
+    "summarize": "local-gemma",
+    "associate": "bedrock-work"
+  },
+  "profiles": {
+    "local-gemma": {
+      "provider": "openai-compatible",
+      "base_url": "http://localhost:11434/v1",
+      "model": "gemma-4-12b"
+    },
+    "bedrock-work": {
+      "provider": "bedrock",
+      "aws_profile": "work",
+      "region": "us-east-1",
+      "model_arn": "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+    },
+    "openai-personal": {
+      "provider": "openai",
+      "model": "gpt-4.1-mini",
+      "api_key_env": "OPENAI_API_KEY"
+    }
+  }
+}
+```
 
-### 3. Handling Latency and Timeouts
-Because LLM calls can be slow (or fail):
-- All LLM calls must be performed in an asynchronous task or a worker thread.
-- The UI/CLI should show a "Processing" state or use a background job status.
-- Standard timeouts (e.g., 60s) must be enforced to prevent hanging connections.
+For the first slice, local OpenAI-compatible profiles do not require credentials.
+Hosted API profiles should prefer environment variable references such as
+`api_key_env` over storing raw API keys. Bedrock profiles should prefer normal
+AWS local credential resolution through `aws_profile`, region, and `model_arn`.
+The ARN may identify a foundation model, provisioned throughput, imported
+model, or inference profile. A plain `model_id` can be accepted as a convenience
+later, but ARNs are the preferred durable shape because tools such as Claude
+Code and cloud governance workflows commonly expect them.
 
-## Error Handling & Fallbacks
-1. **Partial Success**: If an LLM is unavailable, the system should still save the raw data and provide a "Retry" option for the AI operation later.
-2. **Provider Failover** (Optional): Ability to define a secondary provider if the primary fails.
-3. **Validation**: The output of any LLM call must be validated before being persisted as an "official" record in the system.
+Initial commands:
+
+```text
+workgraph llm add <profile> --provider openai-compatible --base-url <url> --model <model>
+workgraph llm add <profile> --provider bedrock --aws-profile <profile> --region <region> --model-arn <arn>
+workgraph llm list
+workgraph llm use <profile>
+workgraph llm use <profile> --for summarize
+workgraph llm test
+workgraph llm test --profile <profile>
+workgraph llm summarize today --dry-run
+workgraph llm summarize today
+```
+
+Future provider commands may add provider-specific flags for OpenAI, Anthropic,
+Google, Bedrock, and Azure without changing the task command surface.
+
+## Task Contracts
+
+LLM requests should be organized around workgraph tasks. Each task defines its
+input selection, output shape, and persistence behavior.
+
+### `test`
+
+Purpose: verify a configured profile can complete a minimal generation request.
+
+Input:
+
+- a short deterministic user prompt
+
+Output:
+
+- provider name
+- model id
+- request destination
+- response text
+
+Persistence:
+
+- none
+
+### `summarize_today`
+
+Purpose: summarize today's captured local work context.
+
+Input:
+
+- selected `today` events from SQLite
+- relevant local memory excerpts when available
+- event ids or source ids needed for traceability
+
+Output:
+
+- plain text summary
+- notable threads or projects
+- open loops or suggested next review items
+- cited event ids where practical
+
+Persistence:
+
+- supplemental local summary event or draft
+- no memory file changes
+
+Dry-run behavior:
+
+- prints the selected context and prompt
+- prints selected profile and destination
+- does not call the provider
+
+### `associate_events` (future)
+
+Purpose: propose cross-platform work associations, such as linking a Slack
+thread, calendar event, GitHub PR, Notion page, and local file activity to the
+same project or work item.
+
+Input:
+
+- candidate events and artifacts selected by deterministic heuristics
+- existing memory project aliases or known associations
+
+Output:
+
+- proposed links
+- confidence or strength of evidence
+- reasons grounded in event ids, source ids, timestamps, names, and titles
+
+Persistence:
+
+- pending association suggestions only
+- no automatic mutation of events or memory
+
+### `memory_suggestions` (future)
+
+Purpose: propose supplemental updates to memory files from repeated evidence or
+approved summaries.
+
+Input:
+
+- selected evidence
+- current memory snippets
+
+Output:
+
+- proposed Markdown additions or edits
+- reasons and source event ids
+
+Persistence:
+
+- draft patch or suggestion only
+- memory files change only after explicit user approval
+
+## Provider Shape
+
+The implementation should introduce provider adapters only after task contracts
+are clear. The first provider should be OpenAI-compatible HTTP because it covers
+local engines and many hosted-compatible gateways.
+
+Provider adapters eventually need to account for:
+
+- chat or responses API request shape
+- streaming support
+- JSON output support
+- timeout and retry behavior
+- max output tokens
+- provider/model metadata
+- provider-specific authentication
+- context window and capability differences
+
+The first implementation does not need embeddings, vector search, tool calling,
+or streaming.
+
+## Context And Prompt Handling
+
+workgraph should build prompts just in time from local state. Prompt builders
+must keep instructions separate from connector data and memory excerpts because
+captured data is untrusted input and can contain prompt injection attempts.
+
+Prompt templates may become user-editable later, but the first slice should use
+small static prompts so facts can validate deterministic request structure.
+
+Outbound filtering must run before hosted model calls. Filtering is a risk
+reduction layer, not a guarantee. At minimum, hosted outbound context should
+scrub common secrets, access tokens, credential-looking strings, and configured
+internal patterns before transmission.
+
+## Error Handling
+
+- LLM calls must use bounded timeouts.
+- Provider errors should include provider/profile names without logging secrets.
+- `--dry-run` must not perform provider network calls.
+- Failed LLM calls should not discard captured raw data.
+- Persisted LLM output must be distinguishable from first-party captured events
+  and user-authored memory.
+
+## First Slice
+
+The first executable slice is local OpenAI-compatible configuration and a
+summary dry run:
+
+- add/list/use named LLM profiles
+- set default and task-specific profile routing
+- test an OpenAI-compatible profile against a fake or local endpoint
+- run `workgraph llm summarize today --dry-run` without sending data
+
+After this slice, add real `summarize today` generation and persistence, then
+Bedrock, then third-party hosted providers.
 
 ## Roadmap Checklist
-- [ ] Define `llm_provider` interface in `internal/llm`.
-- [ ] Implement standard OpenAI/Anthropic providers.
-- [ ] Implement AWS Bedrock / Azure Foundry bridge.
-- [ ] Implement Context Fetcher for automated prompt building.
-- [ ] Add configuration UI/CLI for provider selection and key management.
+
+- [ ] LLM config file with named profiles and task routing.
+- [ ] OpenAI-compatible provider for local model endpoints.
+- [ ] `workgraph llm test`.
+- [ ] `workgraph llm summarize today --dry-run`.
+- [ ] `workgraph llm summarize today` supplemental summary output.
+- [ ] Bedrock profile support through local AWS credentials.
+- [ ] Hosted provider support for OpenAI, Anthropic, Google, and similar APIs.
+- [ ] Association suggestions across Slack, calendar, GitHub, Notion, mail, and
+  local file events.
+- [ ] Memory suggestion drafts with explicit approval before memory changes.
+- [ ] Embeddings or search only if deterministic context selection becomes too
+  slow or weak.

@@ -70,7 +70,7 @@
    - [ ] Knowledge claim notes for durable beliefs and decision rationale.
    - [ ] Rich local HTML artifacts/reports linked to memory and evidence.
 - [ ] LLM connector
-   - [ ] Local config for provider/model selection.
+   - [x] Local config for provider/model selection.
    - [ ] Explicit opt-in hosted LLM credentials and outbound request controls.
    - [ ] Fact-backed summary/suggestion command path using the configured LLM.
 - [ ] Configurable connector framework

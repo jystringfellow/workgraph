@@ -35,6 +35,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runCalendar(args[1:], stdout, stderr)
 	case "mail":
 		return runMail(args[1:], stdout, stderr)
+	case "llm":
+		return runLLM(args[1:], stdout, stderr)
 	case "notion":
 		return runNotion(args[1:], stdout, stderr)
 	case "memory":
@@ -57,6 +59,206 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unknown command: %s\n", args[0])
 		return 2
 	}
+}
+
+func runLLM(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph llm <command>")
+		return 2
+	}
+
+	switch args[0] {
+	case "add":
+		return runLLMAdd(args[1:], stdout, stderr)
+	case "list":
+		return runLLMList(args[1:], stdout, stderr)
+	case "remove":
+		return runLLMRemove(args[1:], stdout, stderr)
+	case "use":
+		return runLLMUse(args[1:], stdout, stderr)
+	case "test":
+		return runLLMTest(args[1:], stdout, stderr)
+	case "summarize":
+		return runLLMSummarize(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "unknown llm command: %s\n", args[0])
+		return 2
+	}
+}
+
+func runLLMAdd(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph llm add <profile>")
+		return 2
+	}
+	profile := args[0]
+
+	flags := flag.NewFlagSet("llm add "+profile, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	provider := flags.String("provider", "", "LLM provider")
+	baseURL := flags.String("base-url", "", "OpenAI-compatible base URL")
+	model := flags.String("model", "", "LLM model")
+	apiKeyEnv := flags.String("api-key-env", "", "Environment variable containing the API key")
+	awsProfile := flags.String("aws-profile", "", "AWS profile for Bedrock")
+	region := flags.String("region", "", "Cloud provider region")
+	modelARN := flags.String("model-arn", "", "Bedrock model or inference profile ARN")
+
+	if err := flags.Parse(args[1:]); err != nil {
+		return 2
+	}
+
+	result, err := workgraph.AddLLMProfile(workgraph.LLMAddProfileConfig{
+		HomeDir:    *homeDir,
+		Name:       profile,
+		Provider:   *provider,
+		BaseURL:    *baseURL,
+		Model:      *model,
+		APIKeyEnv:  *apiKeyEnv,
+		AWSProfile: *awsProfile,
+		Region:     *region,
+		ModelARN:   *modelARN,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph llm add: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runLLMList(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("llm list", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+
+	result, err := workgraph.ListLLMProfiles(workgraph.LLMListConfig{HomeDir: *homeDir})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph llm list: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runLLMRemove(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph llm remove <profile>")
+		return 2
+	}
+	profile := args[0]
+
+	flags := flag.NewFlagSet("llm remove "+profile, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+
+	if err := flags.Parse(args[1:]); err != nil {
+		return 2
+	}
+
+	result, err := workgraph.RemoveLLMProfile(workgraph.LLMRemoveProfileConfig{
+		HomeDir: *homeDir,
+		Name:    profile,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph llm remove: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runLLMUse(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph llm use <profile>")
+		return 2
+	}
+	profile := args[0]
+
+	flags := flag.NewFlagSet("llm use "+profile, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	task := flags.String("for", "", "Task to route to this profile")
+
+	if err := flags.Parse(args[1:]); err != nil {
+		return 2
+	}
+
+	result, err := workgraph.UseLLMProfile(workgraph.LLMUseProfileConfig{
+		HomeDir: *homeDir,
+		Name:    profile,
+		Task:    *task,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph llm use: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runLLMTest(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("llm test", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	profile := flags.String("profile", "", "LLM profile to test")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+
+	result, err := workgraph.TestLLMProfile(workgraph.LLMTestConfig{
+		HomeDir: *homeDir,
+		Profile: *profile,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph llm test: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runLLMSummarize(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph llm summarize <target>")
+		return 2
+	}
+	target := args[0]
+
+	flags := flag.NewFlagSet("llm summarize "+target, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	dryRun := flags.Bool("dry-run", false, "Preview prompt and context without calling the provider")
+
+	if err := flags.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if target != "today" {
+		fmt.Fprintf(stderr, "unsupported llm summarize target: %s\n", target)
+		return 2
+	}
+
+	result, err := workgraph.SummarizeTodayWithLLM(workgraph.LLMSummarizeTodayConfig{
+		HomeDir: *homeDir,
+		DryRun:  *dryRun,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph llm summarize today: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
 }
 
 func runNotion(args []string, stdout io.Writer, stderr io.Writer) int {
