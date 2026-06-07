@@ -1,7 +1,9 @@
 package facts
 
 import (
+	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -9,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func TestNotionTokenRelayDocumentsSecretsAndLocalDev(t *testing.T) {
@@ -37,6 +41,106 @@ func TestNotionTokenRelayDocumentsSecretsAndLocalDev(t *testing.T) {
 	}
 	if !strings.Contains(string(example), "NOTION_CLIENT_SECRET=") {
 		t.Fatalf("expected .dev.vars example to include NOTION_CLIENT_SECRET, got:\n%s", example)
+	}
+}
+
+func TestNotionCaptureStoresSharedPagesAndDatabases(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	var requests int
+	var gotAuth string
+	var gotVersion string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests++
+		if request.Method != http.MethodPost || request.URL.Path != "/v1/search" {
+			t.Fatalf("expected Notion search request, got %s %s", request.Method, request.URL.Path)
+		}
+		gotAuth = request.Header.Get("Authorization")
+		gotVersion = request.Header.Get("Notion-Version")
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{
+  "object": "list",
+  "results": [
+    {
+      "object": "page",
+      "id": "page-1",
+      "created_time": "2026-06-07T15:00:00.000Z",
+      "last_edited_time": "2026-06-07T16:00:00.000Z",
+      "url": "https://www.notion.so/page-1",
+      "parent": {"type": "workspace", "workspace": true},
+      "properties": {
+        "title": {
+          "id": "title",
+          "type": "title",
+          "title": [{"plain_text": "Launch plan"}]
+        }
+      }
+    },
+    {
+      "object": "database",
+      "id": "database-1",
+      "created_time": "2026-06-07T14:00:00.000Z",
+      "last_edited_time": "2026-06-07T14:30:00.000Z",
+      "url": "https://www.notion.so/database-1",
+      "title": [{"plain_text": "Project docs"}]
+    }
+  ],
+  "next_cursor": null,
+  "has_more": false
+}`))
+	}))
+	defer server.Close()
+
+	output, err := runworkgraph(t, repoRoot, "notion", "capture",
+		"--home", homeDir,
+		"--token", "notion-token",
+		"--notion-api-base", server.URL,
+	)
+	if err != nil {
+		t.Fatalf("workgraph notion capture failed: %v\n%s", err, output)
+	}
+	if requests != 1 {
+		t.Fatalf("expected one search request, got %d", requests)
+	}
+	if gotAuth != "Bearer notion-token" {
+		t.Fatalf("expected bearer auth, got %q", gotAuth)
+	}
+	if gotVersion == "" {
+		t.Fatalf("expected Notion-Version header")
+	}
+	if !strings.Contains(string(output), "Notion capture complete") || !strings.Contains(string(output), "Events stored: 2") {
+		t.Fatalf("expected Notion capture summary, got:\n%s", output)
+	}
+
+	page := notionEvent(t, filepath.Join(homeDir, "workgraph.db"), "notion.page", "page-1")
+	if page.Timestamp != "2026-06-07T16:00:00Z" {
+		t.Fatalf("expected page timestamp from last_edited_time, got %q", page.Timestamp)
+	}
+	if page.Summary != "Launch plan" {
+		t.Fatalf("expected page title summary, got %q", page.Summary)
+	}
+	for _, expected := range []string{
+		`"object":"page"`,
+		`"id":"page-1"`,
+		`"title":"Launch plan"`,
+		`"url":"https://www.notion.so/page-1"`,
+	} {
+		if !strings.Contains(page.PayloadJSON, expected) {
+			t.Fatalf("expected page payload to include %s, got %s", expected, page.PayloadJSON)
+		}
+	}
+
+	database := notionEvent(t, filepath.Join(homeDir, "workgraph.db"), "notion.database", "database-1")
+	if database.Summary != "Project docs" {
+		t.Fatalf("expected database title summary, got %q", database.Summary)
+	}
+	if !strings.Contains(database.PayloadJSON, `"object":"database"`) {
+		t.Fatalf("expected database payload, got %s", database.PayloadJSON)
 	}
 }
 
@@ -219,6 +323,30 @@ func TestNotionConnectOAuthStoresConnectorConfig(t *testing.T) {
 	if !strings.Contains(string(output), "Notion is not connected") {
 		t.Fatalf("expected already disconnected message, got:\n%s", output)
 	}
+}
+
+type storedNotionEvent struct {
+	Timestamp   string
+	Summary     string
+	PayloadJSON string
+}
+
+func notionEvent(t *testing.T, dbPath, eventType, objectID string) storedNotionEvent {
+	t.Helper()
+
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+
+	id := fmt.Sprintf("%s:%s", eventType, objectID)
+	var event storedNotionEvent
+	err = db.QueryRow(`SELECT timestamp, summary, payload_json FROM events WHERE id = ?`, id).Scan(&event.Timestamp, &event.Summary, &event.PayloadJSON)
+	if err != nil {
+		t.Fatalf("read Notion event %s: %v", id, err)
+	}
+	return event
 }
 
 func notionAuthorizationURL(t *testing.T, output string) string {

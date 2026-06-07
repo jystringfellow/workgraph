@@ -8,6 +8,7 @@ Notion connection setup uses OAuth:
 
 ```text
 workgraph notion connect
+workgraph notion capture
 workgraph notion connect --no-browser
 workgraph notion connect --code <oauth-code> --state <state>
 workgraph notion disconnect
@@ -38,6 +39,24 @@ Disconnecting does not revoke access at Notion because Notion revocation is
 managed from the user's Notion workspace connection settings. If Notion is not
 connected, disconnect should print that it is already disconnected and return
 successfully.
+
+Notion capture stores metadata for pages and databases shared with the Notion
+connection:
+
+```text
+workgraph notion capture
+workgraph notion capture --token <access-token>
+```
+
+The first capture slice uses Notion's search endpoint with API version
+`2022-06-28` because that version returns shared `page` and `database` objects
+from one API shape. Capture stores `notion.page` and `notion.database` events
+with stable ids, titles, URLs, created time, last edited time, and parent
+metadata when available. It does not crawl block contents yet.
+
+Notion capture keeps one stored event per Notion object id. Recapturing the same
+page or database updates the stored event when Notion metadata changes without
+creating duplicates.
 
 The first Notion OAuth slice is a narrow Cloudflare Worker token relay:
 

@@ -1,7 +1,9 @@
 package workgraph
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // DefaultNotionClientID is the OAuth client id used for the workgraph Notion public connection.
@@ -27,6 +31,26 @@ var DefaultNotionTokenURL = "https://workgraph-notion-oauth-token.jystringfellow
 
 // DefaultNotionAPIBaseURL is Notion's API base URL.
 var DefaultNotionAPIBaseURL = "https://api.notion.com"
+
+// DefaultNotionAPIVersion is pinned to the API shape where search returns pages and databases.
+const DefaultNotionAPIVersion = "2022-06-28"
+
+// NotionCaptureConfig controls Notion page and database metadata capture.
+type NotionCaptureConfig struct {
+	HomeDir      string
+	DatabasePath string
+	Token        string
+	APIBaseURL   string
+	HTTPClient   *http.Client
+}
+
+// NotionCaptureResult describes a Notion capture run.
+type NotionCaptureResult struct {
+	HomeDir      string
+	DatabasePath string
+	EventsStored int
+	Message      string
+}
 
 // NotionConnectConfig controls Notion OAuth setup.
 type NotionConnectConfig struct {
@@ -90,6 +114,109 @@ type notionOAuthTokenResponse struct {
 	BotID                string          `json:"bot_id"`
 	Owner                json.RawMessage `json:"owner"`
 	DuplicatedTemplateID string          `json:"duplicated_template_id"`
+}
+
+type notionSearchResponse struct {
+	Results    []notionSearchResult `json:"results"`
+	NextCursor string               `json:"next_cursor"`
+	HasMore    bool                 `json:"has_more"`
+}
+
+type notionSearchResult struct {
+	Object         string                    `json:"object"`
+	ID             string                    `json:"id"`
+	CreatedTime    string                    `json:"created_time"`
+	LastEditedTime string                    `json:"last_edited_time"`
+	URL            string                    `json:"url"`
+	Properties     map[string]notionProperty `json:"properties,omitempty"`
+	Title          []notionRichText          `json:"title,omitempty"`
+	Parent         json.RawMessage           `json:"parent,omitempty"`
+}
+
+type notionProperty struct {
+	Type  string           `json:"type"`
+	Title []notionRichText `json:"title,omitempty"`
+}
+
+type notionRichText struct {
+	PlainText string `json:"plain_text"`
+}
+
+type notionEventPayload struct {
+	Object         string          `json:"object"`
+	ID             string          `json:"id"`
+	Title          string          `json:"title,omitempty"`
+	URL            string          `json:"url,omitempty"`
+	CreatedTime    string          `json:"created_time,omitempty"`
+	LastEditedTime string          `json:"last_edited_time,omitempty"`
+	Parent         json.RawMessage `json:"parent,omitempty"`
+}
+
+// CaptureNotion stores metadata for shared Notion pages and databases.
+func CaptureNotion(config NotionCaptureConfig) (NotionCaptureResult, error) {
+	status, err := prepareRunStatus(RunConfig{
+		HomeDir:      config.HomeDir,
+		DatabasePath: config.DatabasePath,
+	})
+	if err != nil {
+		return NotionCaptureResult{}, err
+	}
+	config.HomeDir = status.HomeDir
+	if config.DatabasePath == "" {
+		config.DatabasePath = status.DatabasePath
+	}
+	if config.Token == "" {
+		stored, err := readNotionConnectorConfig(status.HomeDir)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return NotionCaptureResult{}, errors.New("notion token is required: run workgraph notion connect or pass --token")
+			}
+			return NotionCaptureResult{}, err
+		}
+		config.Token = stored.AccessToken
+		if config.APIBaseURL == "" {
+			config.APIBaseURL = stored.APIBaseURL
+		}
+	}
+	if config.Token == "" {
+		return NotionCaptureResult{}, errors.New("notion token is required")
+	}
+
+	objects, err := notionSearchAll(config)
+	if err != nil {
+		return NotionCaptureResult{}, err
+	}
+
+	db, err := sql.Open("sqlite3", status.DatabasePath)
+	if err != nil {
+		return NotionCaptureResult{}, fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+	if err := db.Ping(); err != nil {
+		return NotionCaptureResult{}, fmt.Errorf("open database: %w", err)
+	}
+
+	stored := 0
+	for _, object := range objects {
+		if object.Object != "page" && object.Object != "database" {
+			continue
+		}
+		inserted, err := storeNotionEvent(db, object)
+		if err != nil {
+			return NotionCaptureResult{}, err
+		}
+		if inserted {
+			stored++
+		}
+	}
+
+	result := NotionCaptureResult{
+		HomeDir:      status.HomeDir,
+		DatabasePath: status.DatabasePath,
+		EventsStored: stored,
+	}
+	result.Message = notionCaptureMessage(result)
+	return result, nil
 }
 
 // ConnectNotion prepares or completes Notion OAuth setup.
@@ -259,6 +386,154 @@ func DisconnectNotion(config NotionDisconnectConfig) (NotionDisconnectResult, er
 			"To fully revoke access, remove workgraph from your Notion workspace connection settings.",
 		}, "\n"),
 	}, nil
+}
+
+func notionSearchAll(config NotionCaptureConfig) ([]notionSearchResult, error) {
+	baseURL := resolveNotionAPIBaseURL(config.APIBaseURL)
+	client := config.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	var results []notionSearchResult
+	cursor := ""
+	for {
+		body := map[string]any{"page_size": 100}
+		if cursor != "" {
+			body["start_cursor"] = cursor
+		}
+		requestBody, err := json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("encode Notion search request: %w", err)
+		}
+		request, err := http.NewRequest(http.MethodPost, strings.TrimRight(baseURL, "/")+"/v1/search", bytes.NewReader(requestBody))
+		if err != nil {
+			return nil, fmt.Errorf("build Notion search request: %w", err)
+		}
+		request.Header.Set("Authorization", "Bearer "+config.Token)
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Notion-Version", DefaultNotionAPIVersion)
+
+		response, err := client.Do(request)
+		if err != nil {
+			return nil, fmt.Errorf("search Notion: %w", err)
+		}
+		responseBody, readErr := io.ReadAll(response.Body)
+		closeErr := response.Body.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("read Notion search response: %w", readErr)
+		}
+		if closeErr != nil {
+			return nil, fmt.Errorf("close Notion search response: %w", closeErr)
+		}
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			return nil, fmt.Errorf("search Notion: status %d: %s", response.StatusCode, strings.TrimSpace(string(responseBody)))
+		}
+		var parsed notionSearchResponse
+		if err := json.Unmarshal(responseBody, &parsed); err != nil {
+			return nil, fmt.Errorf("parse Notion search response: %w", err)
+		}
+		results = append(results, parsed.Results...)
+		if !parsed.HasMore || parsed.NextCursor == "" {
+			break
+		}
+		cursor = parsed.NextCursor
+	}
+	return results, nil
+}
+
+func storeNotionEvent(db *sql.DB, object notionSearchResult) (bool, error) {
+	title := notionTitle(object)
+	timestamp := object.LastEditedTime
+	if timestamp == "" {
+		timestamp = object.CreatedTime
+	}
+	parsedTime, err := time.Parse(time.RFC3339Nano, timestamp)
+	if err != nil {
+		return false, fmt.Errorf("parse Notion timestamp %q: %w", object.ID, err)
+	}
+	eventType := "notion." + object.Object
+	payload := notionEventPayload{
+		Object:         object.Object,
+		ID:             object.ID,
+		Title:          title,
+		URL:            object.URL,
+		CreatedTime:    object.CreatedTime,
+		LastEditedTime: object.LastEditedTime,
+		Parent:         object.Parent,
+	}
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return false, fmt.Errorf("encode Notion event payload: %w", err)
+	}
+	result, err := db.Exec(`INSERT INTO events (
+			id, source, type, timestamp, payload_json, project, actor, summary, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			timestamp = excluded.timestamp,
+			payload_json = excluded.payload_json,
+			project = excluded.project,
+			actor = excluded.actor,
+			summary = excluded.summary
+		WHERE excluded.timestamp != events.timestamp
+			OR excluded.payload_json != events.payload_json
+			OR COALESCE(excluded.project, '') != COALESCE(events.project, '')
+			OR COALESCE(excluded.actor, '') != COALESCE(events.actor, '')
+			OR COALESCE(excluded.summary, '') != COALESCE(events.summary, '')`,
+		notionEventID(eventType, object.ID),
+		"notion",
+		eventType,
+		parsedTime.UTC().Format(time.RFC3339Nano),
+		string(payloadJSON),
+		emptyStringAsNull(""),
+		emptyStringAsNull(""),
+		emptyStringAsNull(title),
+		time.Now().UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return false, fmt.Errorf("store Notion event: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("store Notion event: %w", err)
+	}
+	return rows > 0, nil
+}
+
+func notionTitle(object notionSearchResult) string {
+	if object.Object == "database" {
+		return notionPlainText(object.Title)
+	}
+	for _, property := range object.Properties {
+		if property.Type == "title" {
+			if title := notionPlainText(property.Title); title != "" {
+				return title
+			}
+		}
+	}
+	return ""
+}
+
+func notionPlainText(parts []notionRichText) string {
+	var values []string
+	for _, part := range parts {
+		if part.PlainText != "" {
+			values = append(values, part.PlainText)
+		}
+	}
+	return strings.TrimSpace(strings.Join(values, ""))
+}
+
+func notionEventID(eventType string, objectID string) string {
+	return fmt.Sprintf("%s:%s", eventType, objectID)
+}
+
+func notionCaptureMessage(result NotionCaptureResult) string {
+	return strings.Join([]string{
+		"Notion capture complete",
+		"Home: " + result.HomeDir,
+		"Database: " + result.DatabasePath,
+		fmt.Sprintf("Events stored: %d", result.EventsStored),
+	}, "\n")
 }
 
 func notionAuthorizationURL(config NotionConnectConfig, state string) string {

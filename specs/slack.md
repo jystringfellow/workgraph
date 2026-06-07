@@ -66,6 +66,13 @@ background capture is already running, workgraph restarts that background
 daemon so the Slack token, channels, and permission state take effect without a manual
 `workgraph stop` and `workgraph start`.
 
+Slack's current daemon polling should participate in the shared connector
+runtime. `workgraph slack connect` makes Slack capture-ready, and
+`workgraph start` polls Slack at a visible interval by default while the
+connector is enabled. Users can still run manual capture commands for imports
+and debugging, and shared connector controls should let them disable Slack
+polling or change its interval without disconnecting the account.
+
 The default OAuth redirect URL for public distribution is a workgraph-controlled
 HTTPS relay:
 

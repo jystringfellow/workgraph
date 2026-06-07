@@ -37,6 +37,7 @@ Scenario: Capture GitHub activity while run is active
   And the GitHub CLI reports pull request activity for that repository
   When GitHub polling runs
   Then workgraph stores the GitHub pull request event without a manual capture command
+  And GitHub appears in shared connector status
 
 Scenario: Skip GitHub polling when rate limit is low
   Given workgraph is running
@@ -50,3 +51,10 @@ Scenario: Bound GitHub polling work per tick
   When GitHub polling runs
   Then workgraph queries only a bounded number of repositories
   And workgraph keeps capture running
+
+Scenario: Connect GitHub through the local GitHub CLI
+  Given the GitHub CLI is authenticated
+  When I run "workgraph github connect"
+  Then workgraph validates the local GitHub CLI authentication
+  And GitHub is enabled for shared connector polling
+  And workgraph reports how to disable or change GitHub polling

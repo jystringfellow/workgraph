@@ -66,7 +66,7 @@
    - [ ] Azure DevOps authentication via Microsoft Entra ID as a separate connector from Microsoft Graph mail/calendar.
 - [ ] Knowledge base ingestion (Notion, Confluence, Google Docs/Drive)
    - [x] Notion OAuth connect/disconnect.
-   - [ ] Notion page/database capture into normalized knowledge events.
+   - [x] Notion page/database capture into normalized knowledge events.
    - [ ] Knowledge claim notes for durable beliefs and decision rationale.
    - [ ] Rich local HTML artifacts/reports linked to memory and evidence.
 - [ ] LLM connector
@@ -74,6 +74,7 @@
    - [ ] Explicit opt-in hosted LLM credentials and outbound request controls.
    - [ ] Fact-backed summary/suggestion command path using the configured LLM.
 - [ ] Configurable connector framework
+   - [ ] Connected services poll automatically from `workgraph start` with visible controls.
    - [ ] Memory routing/index file for loading relevant context by task.
 
 ## Phase 3.5: Enterprise security and compliance
