@@ -1,0 +1,7 @@
+name = "workgraph-notion-oauth-token"
+main = "src/index.ts"
+compatibility_date = "2026-06-07"
+
+[vars]
+NOTION_CLIENT_ID = "378d872b-594c-8110-b4c0-0037422697b3"
+NOTION_TOKEN_URL = "https://api.notion.com/v1/oauth/token"
