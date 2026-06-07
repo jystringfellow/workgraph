@@ -65,7 +65,7 @@
 - [ ] Work tracking ingestion (Jira, Azure DevOps, Linear)
    - [ ] Azure DevOps authentication via Microsoft Entra ID as a separate connector from Microsoft Graph mail/calendar.
 - [ ] Knowledge base ingestion (Notion, Confluence, Google Docs/Drive)
-   - [ ] Notion OAuth connect/disconnect.
+   - [x] Notion OAuth connect/disconnect.
    - [ ] Notion page/database capture into normalized knowledge events.
    - [ ] Knowledge claim notes for durable beliefs and decision rationale.
    - [ ] Rich local HTML artifacts/reports linked to memory and evidence.
