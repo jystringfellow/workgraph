@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	workgraph "github.com/jystringfellow/workgraph"
 )
@@ -27,6 +28,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runInit(args[1:], stdout, stderr)
 	case "config":
 		return runConfig(args[1:], stdout, stderr)
+	case "connectors":
+		return runConnectors(args[1:], stdout, stderr)
 	case "git":
 		return runGit(args[1:], stdout, stderr)
 	case "github":
@@ -255,6 +258,106 @@ func runLLMSummarize(args []string, stdout io.Writer, stderr io.Writer) int {
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph llm summarize today: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runConnectors(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph connectors <list|enable|disable|interval>")
+		return 2
+	}
+
+	switch args[0] {
+	case "list":
+		return runConnectorsList(args[1:], stdout, stderr)
+	case "enable":
+		return runConnectorsEnable(args[1:], stdout, stderr)
+	case "disable":
+		return runConnectorsDisable(args[1:], stdout, stderr)
+	case "interval":
+		return runConnectorsInterval(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "unknown connectors command: %s\n", args[0])
+		return 2
+	}
+}
+
+func runConnectorsList(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("connectors list", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	result, err := workgraph.ListConnectors(workgraph.ConnectorListConfig{
+		HomeDir: *homeDir,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph connectors list: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runConnectorsEnable(args []string, stdout io.Writer, stderr io.Writer) int {
+	return runConnectorsSetEnabled("enable", args, stdout, stderr, true)
+}
+
+func runConnectorsDisable(args []string, stdout io.Writer, stderr io.Writer) int {
+	return runConnectorsSetEnabled("disable", args, stdout, stderr, false)
+}
+
+func runConnectorsSetEnabled(command string, args []string, stdout io.Writer, stderr io.Writer, enabled bool) int {
+	flags := flag.NewFlagSet("connectors "+command, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 1 {
+		fmt.Fprintf(stderr, "usage: workgraph connectors %s <connector>\n", command)
+		return 2
+	}
+	result, err := workgraph.SetConnectorEnabled(workgraph.ConnectorUpdateConfig{
+		HomeDir: *homeDir,
+		ID:      flags.Arg(0),
+		Enabled: enabled,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph connectors %s: %v\n", command, err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runConnectorsInterval(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("connectors interval", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 2 {
+		fmt.Fprintln(stderr, "usage: workgraph connectors interval <connector> <duration>")
+		return 2
+	}
+	interval, err := time.ParseDuration(flags.Arg(1))
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph connectors interval: parse duration: %v\n", err)
+		return 1
+	}
+	result, err := workgraph.SetConnectorInterval(workgraph.ConnectorUpdateConfig{
+		HomeDir:  *homeDir,
+		ID:       flags.Arg(0),
+		Interval: interval,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph connectors interval: %v\n", err)
 		return 1
 	}
 	fmt.Fprintln(stdout, result.Message)

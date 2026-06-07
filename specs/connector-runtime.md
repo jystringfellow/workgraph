@@ -38,11 +38,20 @@ backfills, and one-off runs.
 
 ```text
 workgraph connectors list
-workgraph connectors poll --once
-workgraph connectors poll --connector slack
 workgraph connectors enable <connector>
 workgraph connectors disable <connector>
 workgraph connectors interval <connector> <duration>
+```
+
+The first runtime control slice stores polling preferences in
+`connectors.json`. Disabling a connector stops polling without removing OAuth
+credentials from the provider-specific config file.
+
+Future runtime commands should include:
+
+```text
+workgraph connectors poll --once
+workgraph connectors poll --connector slack
 workgraph start --no-connectors
 workgraph start --connector <connector>
 ```
@@ -68,16 +77,16 @@ in connector status as an enabled local source when file/git capture is active.
 
 1. Keep current manual capture commands.
 2. Add Notion capture from stored Notion settings.
-3. Introduce `workgraph connectors poll --once` with a shared result shape.
-4. Add calendar polling from stored Google/Microsoft settings.
-5. Add mail polling from stored Google/Microsoft settings.
-6. Add Notion polling from stored settings.
-7. Move Slack daemon polling behind the same connector poll status model while
+3. Add calendar polling from stored Google/Microsoft settings.
+4. Add mail polling from stored Google/Microsoft settings.
+5. Add Notion polling from stored settings.
+6. Add `workgraph connectors list`, `enable`, `disable`, and `interval`.
+7. Introduce `workgraph connectors poll --once` with a shared result shape.
+8. Move Slack daemon polling behind the same connector poll status model while
    preserving its existing connect/disconnect restart behavior.
-8. Move GitHub `gh` polling behind the same connector poll status model and add
+9. Move GitHub `gh` polling behind the same connector poll status model and add
    optional `github connect` validation/config.
-9. Show connector polling in `workgraph status`.
-10. Add disable/interval controls per connector.
+10. Show connector polling in `workgraph status`.
 11. Wire the shared poll loop into `workgraph start` by default for connected
     providers.
 

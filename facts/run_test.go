@@ -654,14 +654,20 @@ func TestRunReportsRegisteredAndUnwatchedDirectoriesAtResourceBudget(t *testing.
 	if capture.Status.WatchLimitPath != unwatchedChild {
 		t.Fatalf("expected first unwatched directory %q, got %q", unwatchedChild, capture.Status.WatchLimitPath)
 	}
-	if !strings.Contains(capture.Status.Message, "Registered watch directories:") {
-		t.Fatalf("expected run message to include registered directory sample, got %q", capture.Status.Message)
+	if strings.Contains(capture.Status.Message, "Registered watch directories:") {
+		t.Fatalf("expected run message not to include registered directory sample, got %q", capture.Status.Message)
 	}
-	if !strings.Contains(capture.Status.Message, "Watching directory: "+watchDir) {
-		t.Fatalf("expected run message to include registered root, got %q", capture.Status.Message)
+	if !strings.Contains(capture.Status.Message, "Watching: 1 configured directory") {
+		t.Fatalf("expected run message to summarize configured directories, got %q", capture.Status.Message)
 	}
-	if !strings.Contains(capture.Status.Message, "First unwatched directory: "+unwatchedChild) {
+	if !strings.Contains(capture.Status.Message, "Last watched directory: "+firstChild) {
+		t.Fatalf("expected run message to include last watched directory, got %q", capture.Status.Message)
+	}
+	if !strings.Contains(capture.Status.Message, "Next unwatched directory: "+unwatchedChild) {
 		t.Fatalf("expected run message to include first unwatched directory, got %q", capture.Status.Message)
+	}
+	if !strings.Contains(capture.Status.Message, "Prioritize important directories with workgraph config add-watch.") {
+		t.Fatalf("expected run message to include priority directory guidance, got %q", capture.Status.Message)
 	}
 }
 

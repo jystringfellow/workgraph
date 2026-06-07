@@ -31,7 +31,8 @@ workgraph capture started
 PID: 12345
 Home: /path/to/.workgraph
 Database: /path/to/.workgraph/workgraph.db
-Watching: /path/to/project
+Watching: 1 configured directory
+Monitoring: git, github, slack, notion
 ```
 
 Path configuration starts with `~/.workgraph/config.json`. By default,
@@ -61,7 +62,8 @@ current terminal and prints one line per captured file event:
 workgraph capture is running
 Home: /path/to/.workgraph
 Database: /path/to/.workgraph/workgraph.db
-Watching: /path/to/project
+Watching: 1 configured directory
+Monitoring: git, github, slack, notion
 file.created /path/to/project/notes.md
 file.modified /path/to/project/notes.md
 file.deleted /path/to/project/notes.md
@@ -71,10 +73,12 @@ If recursive watch setup reaches its resource budget, capture keeps the watchers
 that were already registered and reports that the watch limit was reached.
 Resource limits must not crash foreground signal handling.
 
-When the watch limit is reached, start output should include a small sample of
-registered directories and the first directory that could not be watched. The
-full registered directory list should remain available in runtime status for
-debugging and future tooling.
+When the watch limit is reached, start output should stay compact. It should
+include the count of registered directories, the last directory successfully
+watched, the next directory that could not be watched, and guidance to add
+priority directories with `workgraph config add-watch`. The full registered
+directory list should remain available in runtime status for debugging and
+future tooling.
 
 When a watched root contains both user-facing folders and hidden/cache folders,
 recursive setup should prioritize user-facing folders such as Desktop,

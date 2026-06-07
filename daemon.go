@@ -47,6 +47,7 @@ type DaemonStatus struct {
 	WatchLimitReached   bool     `json:"watch_limit_reached"`
 	WatchLimitPath      string   `json:"watch_limit_path"`
 	RegisteredWatchDirs []string `json:"registered_watch_dirs"`
+	MonitoredConnectors []string `json:"monitored_connectors,omitempty"`
 	Message             string   `json:"-"`
 }
 
@@ -245,6 +246,7 @@ func daemonStatusFromRun(status RunStatus, pid int) DaemonStatus {
 		WatchLimitReached:   status.WatchLimitReached,
 		WatchLimitPath:      status.WatchLimitPath,
 		RegisteredWatchDirs: append([]string(nil), status.RegisteredWatchDirs...),
+		MonitoredConnectors: append([]string(nil), status.MonitoredConnectors...),
 	}
 }
 
@@ -335,9 +337,10 @@ func daemonStartedMessage(status DaemonStatus) string {
 		"PID: " + strconv.Itoa(status.PID),
 		"Home: " + status.HomeDir,
 		"Database: " + status.DatabasePath,
+		daemonWatchSummaryLine(status),
 	}
-	for _, watchDir := range status.WatchDirs {
-		lines = append(lines, "Watching: "+watchDir)
+	if len(status.MonitoredConnectors) > 0 {
+		lines = append(lines, "Monitoring: "+strings.Join(status.MonitoredConnectors, ", "))
 	}
 	appendDaemonWatchLimitLine(&lines, status)
 	return strings.Join(lines, "\n")
@@ -349,9 +352,10 @@ func daemonRunningMessage(status DaemonStatus) string {
 		"PID: " + strconv.Itoa(status.PID),
 		"Home: " + status.HomeDir,
 		"Database: " + status.DatabasePath,
+		daemonWatchSummaryLine(status),
 	}
-	for _, watchDir := range status.WatchDirs {
-		lines = append(lines, "Watching: "+watchDir)
+	if len(status.MonitoredConnectors) > 0 {
+		lines = append(lines, "Monitoring: "+strings.Join(status.MonitoredConnectors, ", "))
 	}
 	for _, ignorePath := range status.IgnorePaths {
 		lines = append(lines, "Ignoring path: "+ignorePath)
@@ -366,17 +370,25 @@ func daemonRunningMessage(status DaemonStatus) string {
 func appendDaemonWatchLimitLine(lines *[]string, status DaemonStatus) {
 	if status.WatchLimitReached {
 		*lines = append(*lines, fmt.Sprintf("Watch limit reached: %d/%d directories registered", status.WatchCount, status.WatchLimit))
-		*lines = append(*lines, "Registered watch directories:")
-		sample := watchDirectorySample(status.RegisteredWatchDirs)
-		for _, watchDir := range sample {
-			*lines = append(*lines, "Watching directory: "+watchDir)
-		}
-		if len(status.RegisteredWatchDirs) > len(sample) {
-			*lines = append(*lines, fmt.Sprintf("... and %d more", len(status.RegisteredWatchDirs)-len(sample)))
+		if last := lastRegisteredWatchDirectory(status.RegisteredWatchDirs); last != "" {
+			*lines = append(*lines, "Last watched directory: "+last)
 		}
 		if status.WatchLimitPath != "" {
-			*lines = append(*lines, "First unwatched directory: "+status.WatchLimitPath)
+			*lines = append(*lines, "Next unwatched directory: "+status.WatchLimitPath)
 		}
+		*lines = append(*lines, "Prioritize important directories with workgraph config add-watch.")
+	}
+}
+
+func daemonWatchSummaryLine(status DaemonStatus) string {
+	count := len(status.WatchDirs)
+	switch count {
+	case 0:
+		return "Watching: no configured directories"
+	case 1:
+		return "Watching: 1 configured directory"
+	default:
+		return fmt.Sprintf("Watching: %d configured directories", count)
 	}
 }
 

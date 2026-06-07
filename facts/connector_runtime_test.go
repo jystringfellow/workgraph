@@ -1,0 +1,213 @@
+package facts
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	workgraph "github.com/jystringfellow/workgraph"
+	_ "github.com/mattn/go-sqlite3"
+)
+
+func TestRunPollsConnectedCalendarMailAndNotion(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	watchDir := filepath.Join(tempDir, "project")
+	if err := os.MkdirAll(watchDir, 0o755); err != nil {
+		t.Fatalf("create watch dir: %v", err)
+	}
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	calendarServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/calendar/v3/calendars/primary/events" {
+			t.Fatalf("unexpected calendar path %s", request.URL.Path)
+		}
+		if got := request.Header.Get("Authorization"); got != "Bearer calendar-token" {
+			t.Fatalf("expected calendar bearer token, got %q", got)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"items":[{"id":"calendar-runtime-event","summary":"Runtime calendar event","start":{"dateTime":"2026-06-07T09:00:00Z"},"end":{"dateTime":"2026-06-07T09:30:00Z"},"organizer":{"displayName":"Ada Lovelace"},"status":"confirmed"}]}`))
+	}))
+	defer calendarServer.Close()
+	if err := os.WriteFile(filepath.Join(homeDir, "calendar.json"), []byte(fmt.Sprintf(`{
+  "google": {
+    "access_token": "calendar-token",
+    "calendar_ids": ["primary"],
+    "api_base_url": %q
+  }
+}
+`, calendarServer.URL)), 0o600); err != nil {
+		t.Fatalf("write calendar config: %v", err)
+	}
+
+	mailServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if got := request.Header.Get("Authorization"); got != "Bearer mail-token" {
+			t.Fatalf("expected mail bearer token, got %q", got)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/gmail/v1/users/me/messages":
+			_, _ = response.Write([]byte(`{"messages":[{"id":"runtime-mail-message","threadId":"runtime-thread"}]}`))
+		case "/gmail/v1/users/me/messages/runtime-mail-message":
+			_, _ = response.Write([]byte(`{
+  "id": "runtime-mail-message",
+  "threadId": "runtime-thread",
+  "internalDate": "1780848000000",
+  "snippet": "Runtime mail snippet",
+  "payload": {
+    "headers": [
+      {"name": "Subject", "value": "Runtime mail message"},
+      {"name": "From", "value": "Ada Lovelace <ada@example.test>"},
+      {"name": "To", "value": "Stringfellow <stringfellow@example.test>"},
+      {"name": "Date", "value": "Sun, 07 Jun 2026 09:00:00 +0000"}
+    ],
+    "body": {"data": "UnVudGltZSBib2R5"}
+  }
+}`))
+		default:
+			t.Fatalf("unexpected mail path %s", request.URL.Path)
+		}
+	}))
+	defer mailServer.Close()
+	if err := os.WriteFile(filepath.Join(homeDir, "mail.json"), []byte(fmt.Sprintf(`{
+  "google": {
+    "access_token": "mail-token",
+    "api_base_url": %q
+  }
+}
+`, mailServer.URL)), 0o600); err != nil {
+		t.Fatalf("write mail config: %v", err)
+	}
+
+	notionServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/search" {
+			t.Fatalf("unexpected notion path %s", request.URL.Path)
+		}
+		if got := request.Header.Get("Authorization"); got != "Bearer notion-token" {
+			t.Fatalf("expected notion bearer token, got %q", got)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"object":"list","results":[{"object":"page","id":"runtime-notion-page","created_time":"2026-06-07T08:00:00.000Z","last_edited_time":"2026-06-07T09:00:00.000Z","url":"https://notion.test/runtime","properties":{"title":{"type":"title","title":[{"plain_text":"Runtime Notion page"}]}}}],"has_more":false}`))
+	}))
+	defer notionServer.Close()
+	if err := os.WriteFile(filepath.Join(homeDir, "notion.json"), []byte(fmt.Sprintf(`{
+  "access_token": "notion-token",
+  "api_base_url": %q
+}
+`, notionServer.URL)), 0o600); err != nil {
+		t.Fatalf("write notion config: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:              homeDir,
+		DatabasePath:         initResult.DatabasePath,
+		WatchDirs:            []string{watchDir},
+		CalendarPollInterval: 10 * time.Millisecond,
+		MailPollInterval:     10 * time.Millisecond,
+		NotionPollInterval:   10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("run start failed: %v", err)
+	}
+	if !strings.Contains(capture.Status.Message, "Monitoring:") ||
+		!strings.Contains(capture.Status.Message, "calendar.google") ||
+		!strings.Contains(capture.Status.Message, "mail.google") ||
+		!strings.Contains(capture.Status.Message, "notion") {
+		t.Fatalf("expected start message to report monitored connectors, got:\n%s", capture.Status.Message)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- capture.Run(ctx)
+	}()
+
+	waitForEventTypeSummary(t, initResult.DatabasePath, "calendar.event", "Runtime calendar event")
+	waitForEventTypeSummary(t, initResult.DatabasePath, "mail.message", "Runtime mail message")
+	waitForEventTypeSummary(t, initResult.DatabasePath, "notion.page", "Runtime Notion page")
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("capture run failed: %v", err)
+	}
+}
+
+func TestConnectorsListAndUpdatePollingSettings(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, "notion.json"), []byte(`{"access_token":"notion-token"}`), 0o600); err != nil {
+		t.Fatalf("write notion config: %v", err)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "connectors", "list", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("workgraph connectors list failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "- notion: connected, enabled") {
+		t.Fatalf("expected connected enabled Notion connector, got:\n%s", output)
+	}
+
+	output, err = runworkgraph(t, repoRoot, "connectors", "disable", "--home", homeDir, "notion")
+	if err != nil {
+		t.Fatalf("workgraph connectors disable failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Connector notion disabled") {
+		t.Fatalf("expected disable output, got:\n%s", output)
+	}
+
+	output, err = runworkgraph(t, repoRoot, "connectors", "interval", "--home", homeDir, "notion", "30m")
+	if err != nil {
+		t.Fatalf("workgraph connectors interval failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Connector notion interval: 30m0s") {
+		t.Fatalf("expected interval output, got:\n%s", output)
+	}
+
+	output, err = runworkgraph(t, repoRoot, "connectors", "list", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("workgraph connectors list failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "- notion: connected, disabled, interval 30m0s") {
+		t.Fatalf("expected disabled Notion connector with interval, got:\n%s", output)
+	}
+}
+
+func waitForEventTypeSummary(t *testing.T, dbPath, eventType, summary string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if eventWithSummaryExists(t, dbPath, eventType, summary) {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s summary %q", eventType, summary)
+}
+
+func eventWithSummaryExists(t *testing.T, dbPath, eventType, summary string) bool {
+	t.Helper()
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type = ? AND COALESCE(summary, '') LIKE ?`, eventType, "%"+summary+"%").Scan(&count); err != nil {
+		t.Fatalf("query events: %v", err)
+	}
+	return count > 0
+}

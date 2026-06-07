@@ -13,6 +13,11 @@ Scenario: Inspect connector polling
 
 Scenario: Change connector polling without disconnecting
   Given Notion is connected
-  When I disable the Notion connector
+  When I run "workgraph connectors disable notion"
   Then workgraph stops polling Notion
   And the Notion account remains connected for later re-enabling
+
+Scenario: Change connector interval
+  Given Notion is connected
+  When I run "workgraph connectors interval notion 30m"
+  Then workgraph stores the Notion polling interval without changing Notion credentials

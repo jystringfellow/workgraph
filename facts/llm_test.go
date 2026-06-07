@@ -1,6 +1,7 @@
 package facts
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func TestLLMAddListAndUseProfiles(t *testing.T) {
@@ -303,4 +307,91 @@ func TestLLMSummarizeTodayDryRunDoesNotCallProvider(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(homeDir, "memory")); err == nil {
 		t.Fatalf("expected dry-run not to create or write memory directory")
 	}
+}
+
+func TestLLMSummarizeTodayDryRunCollapsesFileChurn(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		http.Error(response, "dry run should not call provider", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	if output, err := runworkgraph(t, repoRoot, "llm", "add", "local-summary",
+		"--home", homeDir,
+		"--provider", "openai-compatible",
+		"--base-url", server.URL+"/v1",
+		"--model", "summary-model",
+	); err != nil {
+		t.Fatalf("workgraph llm add failed: %v\n%s", err, output)
+	}
+	if output, err := runworkgraph(t, repoRoot, "llm", "use", "local-summary",
+		"--home", homeDir,
+		"--for", "summarize",
+	); err != nil {
+		t.Fatalf("workgraph llm use summarize failed: %v\n%s", err, output)
+	}
+
+	dbPath := filepath.Join(homeDir, "workgraph.db")
+	insertLLMEvent(t, dbPath, "file-1", "file.modified", "2026-06-07T10:00:00Z", "workgraph", "", `{"path":"/repo/workgraph/run.go","operation":"modified"}`)
+	insertLLMEvent(t, dbPath, "file-2", "file.modified", "2026-06-07T10:01:00Z", "workgraph", "", `{"path":"/repo/workgraph/run.go","operation":"modified"}`)
+	insertLLMEvent(t, dbPath, "file-3", "file.modified", "2026-06-07T10:02:00Z", "workgraph", "", `{"path":"/repo/workgraph/facts/llm_test.go","operation":"modified"}`)
+	insertLLMEvent(t, dbPath, "file-4", "file.created", "2026-06-07T10:03:00Z", "workgraph", "", `{"path":"/repo/workgraph/connector.go","operation":"created"}`)
+	insertLLMEvent(t, dbPath, "commit-1", "git.commit", "2026-06-07T10:04:00Z", "workgraph", "feat: improve connector runtime", `{"commit":"abcdef123456","branch":"main","subject":"feat: improve connector runtime"}`)
+
+	output, err := runworkgraph(t, repoRoot, "llm", "summarize", "today",
+		"--home", homeDir,
+		"--dry-run",
+	)
+	if err != nil {
+		t.Fatalf("workgraph llm summarize today dry-run failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Use the file change summaries as evidence, not as individual tasks.") {
+		t.Fatalf("expected improved prompt guidance, got:\n%s", output)
+	}
+	if !strings.Contains(string(output), "file changes: 4 events across 3 files") {
+		t.Fatalf("expected file churn summary, got:\n%s", output)
+	}
+	if !strings.Contains(string(output), "modified: 3") || !strings.Contains(string(output), "created: 1") {
+		t.Fatalf("expected file operation counts, got:\n%s", output)
+	}
+	if strings.Contains(string(output), "file.modified /repo/workgraph/run.go") {
+		t.Fatalf("expected dry-run context to collapse repeated file events, got:\n%s", output)
+	}
+	if !strings.Contains(string(output), "git.commit feat: improve connector runtime") {
+		t.Fatalf("expected non-file work evidence to remain, got:\n%s", output)
+	}
+}
+
+func insertLLMEvent(t *testing.T, dbPath, id, eventType, timestamp, project, summary, payload string) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	_, err = db.Exec(`INSERT INTO events (id, source, type, timestamp, payload_json, project, summary, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		id,
+		strings.Split(eventType, ".")[0],
+		eventType,
+		timestamp,
+		payload,
+		emptyNull(project),
+		emptyNull(summary),
+		time.Now().UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		t.Fatalf("insert event %s: %v", id, err)
+	}
+}
+
+func emptyNull(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }

@@ -388,12 +388,101 @@ func llmTodayContextAndPrompt(homeDir string) (string, string, error) {
 		return "", "", err
 	}
 	prompt := strings.Join([]string{
-		"Summarize today's captured work context.",
-		"Group related activity when possible.",
-		"Call out notable projects and open loops.",
+		"Summarize today's captured work context for a work journal.",
+		"Group activity into a few coherent work threads rather than restating the timeline.",
+		"Prefer outcomes, decisions, merged work, active projects, and open loops.",
+		"Use the file change summaries as evidence, not as individual tasks.",
+		"Ignore transient editor scratch files and repeated save churn unless the affected area is important.",
 		"Use only the provided context.",
 	}, "\n")
-	return today.Message, prompt, nil
+	return llmTodayContext(today, time.Now().Location()), prompt, nil
+}
+
+func llmTodayContext(today TodayResult, location *time.Location) string {
+	lines := []string{
+		"Today",
+		fmt.Sprintf("%s: %s", today.Date, pluralize(len(today.Events), "event")),
+	}
+	if len(today.Events) == 0 {
+		lines = append(lines, "No activity has been captured today.")
+		return strings.Join(lines, "\n")
+	}
+	projects := todayProjectCounts(today.Events)
+	if len(projects) > 0 {
+		lines = append(lines, "", "Projects")
+		for _, project := range projects {
+			lines = append(lines, fmt.Sprintf("- %s: %s", project.Name, pluralize(project.Count, "event")))
+		}
+	}
+	lines = append(lines, "", "Sessions")
+	for _, session := range today.Sessions {
+		lines = append(lines, llmTodaySessionLines(session, location)...)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func llmTodaySessionLines(session TodaySession, location *time.Location) []string {
+	lines := []string{fmt.Sprintf("- %s %s (%s)", sessionRange(session, location), projectLabel(session.Project), pluralize(len(session.Events), "event"))}
+	fileEvents := make([]TodayEvent, 0)
+	for _, event := range session.Events {
+		if strings.HasPrefix(event.Type, "file.") {
+			fileEvents = append(fileEvents, event)
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("  - %s %s %s", event.Timestamp.In(location).Format("15:04"), event.Type, eventLabel(event)))
+	}
+	if len(fileEvents) > 0 {
+		lines = append(lines, llmFileChangeSummaryLines(fileEvents)...)
+	}
+	return lines
+}
+
+func llmFileChangeSummaryLines(events []TodayEvent) []string {
+	operations := map[string]int{}
+	files := map[string]bool{}
+	dirs := map[string]int{}
+	for _, event := range events {
+		operation := strings.TrimPrefix(event.Type, "file.")
+		if operation == "" {
+			operation = "changed"
+		}
+		operations[operation]++
+		if event.Path != "" {
+			files[event.Path] = true
+			dirs[filepath.Dir(event.Path)]++
+		}
+	}
+	lines := []string{fmt.Sprintf("  - file changes: %s across %s", pluralize(len(events), "event"), pluralize(len(files), "file"))}
+	for _, operation := range sortedCountKeys(operations) {
+		lines = append(lines, fmt.Sprintf("    - %s: %d", operation, operations[operation]))
+	}
+	for _, dir := range topCountKeys(dirs, 5) {
+		lines = append(lines, fmt.Sprintf("    - touched %s (%s)", dir, pluralize(dirs[dir], "event")))
+	}
+	return lines
+}
+
+func sortedCountKeys(counts map[string]int) []string {
+	keys := make([]string, 0, len(counts))
+	for key := range counts {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func topCountKeys(counts map[string]int, limit int) []string {
+	keys := sortedCountKeys(counts)
+	sort.SliceStable(keys, func(i, j int) bool {
+		if counts[keys[i]] == counts[keys[j]] {
+			return keys[i] < keys[j]
+		}
+		return counts[keys[i]] > counts[keys[j]]
+	})
+	if len(keys) > limit {
+		return keys[:limit]
+	}
+	return keys
 }
 
 func resolveLLMProfile(config llmConnectorConfig, requestedProfile string, task string) (string, llmProfile, error) {
