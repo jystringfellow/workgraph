@@ -1,0 +1,214 @@
+# Connectors
+
+Connectors let workgraph capture context from services you already use. Setup is
+local-first: credentials and connector settings are stored under
+`~/.workgraph/`, and routine capture runs when you explicitly start workgraph.
+
+```sh
+workgraph start
+```
+
+Use connector controls to see what will be monitored:
+
+```sh
+workgraph connectors list
+workgraph connectors disable <connector>
+workgraph connectors enable <connector>
+workgraph connectors interval <connector> 15m
+```
+
+## Slack
+
+Connect Slack:
+
+```sh
+workgraph slack connect
+```
+
+Collect specific channels while connecting:
+
+```sh
+workgraph slack connect --channel C1234567890
+```
+
+Opt into direct and group direct messages explicitly:
+
+```sh
+workgraph slack connect --include-dms
+```
+
+If you use a Slack List as a todo list, save its List id while connecting:
+
+```sh
+workgraph slack connect --list <list-id>
+```
+
+`workgraph start` then monitors that List as connector `slack.lists`.
+
+Run a one-off Slack List capture for debugging:
+
+```sh
+workgraph slack lists capture --list-id <list-id>
+```
+
+Disconnect Slack:
+
+```sh
+workgraph slack disconnect
+```
+
+## Notion
+
+Connect Notion:
+
+```sh
+workgraph notion connect
+```
+
+Disconnect Notion:
+
+```sh
+workgraph notion disconnect
+```
+
+Inspect Notion's local object index and captured page previews:
+
+```sh
+workgraph notion index list
+workgraph notion index show <notion-page-or-database-id>
+```
+
+Run a one-off Notion capture for debugging:
+
+```sh
+workgraph notion capture
+```
+
+## Azure Boards
+
+Connect Azure Boards:
+
+```sh
+workgraph azure boards connect \
+  --organization <org> \
+  --project <project> \
+  --team <team>
+```
+
+Limit capture to one or more area paths:
+
+```sh
+workgraph azure boards connect \
+  --organization <org> \
+  --project <project> \
+  --team <team> \
+  --area-path '<area-path>'
+```
+
+Multiple `--area-path` flags are allowed and are combined as alternatives in
+the default WIQL query. You can also provide a custom query:
+
+```sh
+workgraph azure boards connect \
+  --organization <org> \
+  --project <project> \
+  --wiql '<wiql>'
+```
+
+Azure Boards uses the Microsoft OAuth PKCE flow and stores local connector
+settings in `~/.workgraph/azure-boards.json`. After connecting, `workgraph
+start` monitors matching work items as connector `azure.boards`.
+
+Run a one-off capture for debugging:
+
+```sh
+workgraph azure boards capture \
+  --organization <org> \
+  --project <project> \
+  --team <team>
+```
+
+Disconnect Azure Boards:
+
+```sh
+workgraph azure boards disconnect
+```
+
+## Calendar
+
+Connect a calendar provider:
+
+```sh
+workgraph calendar connect google
+```
+
+Collect specific calendars while connecting:
+
+```sh
+workgraph calendar connect google --calendar-id <calendar-id>
+```
+
+Disconnect a calendar provider:
+
+```sh
+workgraph calendar disconnect google
+```
+
+Run a one-off capture for debugging:
+
+```sh
+workgraph calendar capture --provider google --calendar-id <calendar-id>
+```
+
+## Mail
+
+Connect a mail provider:
+
+```sh
+workgraph mail connect google
+```
+
+Disconnect a mail provider:
+
+```sh
+workgraph mail disconnect google
+```
+
+Run a one-off capture for debugging:
+
+```sh
+workgraph mail capture --provider google --mailbox-id <mailbox-id>
+```
+
+## Git And GitHub
+
+Git capture is local and does not require account connection:
+
+```sh
+workgraph git capture
+```
+
+GitHub capture currently supports deterministic capture commands and local
+remote-derived context:
+
+```sh
+workgraph github capture
+```
+
+A future `workgraph github connect` command is expected to make GitHub setup
+consistent with the other provider connectors. See `../specs/connector-runtime.md`
+for the target connector model.
+
+## Manual Capture
+
+Manual `capture` commands remain useful for imports, backfills, deterministic
+tests, and troubleshooting. Routine capture should normally be:
+
+```sh
+workgraph init
+workgraph <provider> connect
+workgraph start
+```
+
+`workgraph start` should include enabled connected providers by default unless
+you disable them with `workgraph connectors disable <connector>`.
