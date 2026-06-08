@@ -63,10 +63,12 @@
 - [ ] Meeting ingestion (Zoom, Google Meet, Microsoft Teams metadata/transcripts when explicitly available)
    - [ ] Meeting notes archive with index, decisions, and action items.
 - [ ] Work tracking ingestion (Jira, Azure DevOps, Linear)
-   - [ ] Azure DevOps authentication via Microsoft Entra ID as a separate connector from Microsoft Graph mail/calendar.
+   - [x] Azure DevOps authentication via Microsoft Entra ID as a separate connector from Microsoft Graph mail/calendar.
+   - [ ] Advanced manual-token/PAT setup for enterprise environments where OAuth app approval is blocked or slow.
 - [ ] Knowledge base ingestion (Notion, Confluence, Google Docs/Drive)
    - [x] Notion OAuth connect/disconnect.
    - [x] Notion page/database capture into normalized knowledge events.
+   - [ ] Advanced manual-token setup for Notion internal integrations when OAuth is not practical.
    - [ ] Knowledge claim notes for durable beliefs and decision rationale.
    - [ ] Rich local HTML artifacts/reports linked to memory and evidence.
 - [ ] LLM connector
@@ -82,6 +84,7 @@
 - [ ] SQLite encryption at rest
 - [ ] OS credential-store backed encryption keys
 - [ ] Connector credential hardening
+- [ ] Manual-token connector setup pattern: OAuth remains the default, while `connect-token` style commands support local-only PAT/internal-token use with clear warnings.
 - [ ] Hosted LLM opt-in controls
 - [ ] Local outbound LLM filtering for secrets and configured sensitive patterns
 - [ ] Network destination transparency
