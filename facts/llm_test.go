@@ -3,6 +3,7 @@ package facts
 import (
 	"database/sql"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -251,6 +252,85 @@ func TestLLMTestUsesOpenAICompatibleProfile(t *testing.T) {
 	}
 }
 
+func TestLLMTestUsesBedrockInferenceProfileARN(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	t.Setenv("AWS_ACCESS_KEY_ID", "test-access-key")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret-key")
+	t.Setenv("AWS_SESSION_TOKEN", "test-session-token")
+
+	modelARN := "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+	var gotPath string
+	var gotAuthorization string
+	var gotBody string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		gotPath = request.URL.EscapedPath()
+		gotAuthorization = request.Header.Get("Authorization")
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatalf("read bedrock request: %v", err)
+		}
+		gotBody = string(body)
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{
+  "output": {
+    "message": {
+      "role": "assistant",
+      "content": [{"text": "bedrock test ok"}]
+    }
+  },
+  "stopReason": "end_turn"
+}`))
+	}))
+	defer server.Close()
+
+	if output, err := runworkgraph(t, repoRoot, "llm", "add", "bedrock-test",
+		"--home", homeDir,
+		"--provider", "bedrock",
+		"--region", "us-east-1",
+		"--model-arn", modelARN,
+		"--base-url", server.URL,
+	); err != nil {
+		t.Fatalf("workgraph llm add bedrock failed: %v\n%s", err, output)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "llm", "test",
+		"--home", homeDir,
+		"--profile", "bedrock-test",
+	)
+	if err != nil {
+		t.Fatalf("workgraph llm test bedrock failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(gotPath, "/model/") || !strings.HasSuffix(gotPath, "/converse") {
+		t.Fatalf("expected Bedrock Converse model path, got %q", gotPath)
+	}
+	if !strings.Contains(gotPath, "inference-profile") {
+		t.Fatalf("expected inference profile ARN in escaped path, got %q", gotPath)
+	}
+	if !strings.Contains(gotAuthorization, "AWS4-HMAC-SHA256") {
+		t.Fatalf("expected signed Bedrock request, got authorization %q", gotAuthorization)
+	}
+	if !strings.Contains(gotBody, "Reply with a short confirmation") {
+		t.Fatalf("expected llm test prompt in Bedrock request, got %s", gotBody)
+	}
+	for _, expected := range []string{
+		"LLM test complete",
+		"Profile: bedrock-test",
+		"Provider: bedrock",
+		modelARN,
+		"bedrock://us-east-1/" + modelARN,
+		"bedrock test ok",
+	} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected bedrock test output to include %q, got:\n%s", expected, output)
+		}
+	}
+}
+
 func TestLLMSummarizeTodayDryRunDoesNotCallProvider(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
@@ -336,11 +416,12 @@ func TestLLMSummarizeTodayDryRunCollapsesFileChurn(t *testing.T) {
 	}
 
 	dbPath := filepath.Join(homeDir, "workgraph.db")
-	insertLLMEvent(t, dbPath, "file-1", "file.modified", "2026-06-07T10:00:00Z", "workgraph", "", `{"path":"/repo/workgraph/run.go","operation":"modified"}`)
-	insertLLMEvent(t, dbPath, "file-2", "file.modified", "2026-06-07T10:01:00Z", "workgraph", "", `{"path":"/repo/workgraph/run.go","operation":"modified"}`)
-	insertLLMEvent(t, dbPath, "file-3", "file.modified", "2026-06-07T10:02:00Z", "workgraph", "", `{"path":"/repo/workgraph/facts/llm_test.go","operation":"modified"}`)
-	insertLLMEvent(t, dbPath, "file-4", "file.created", "2026-06-07T10:03:00Z", "workgraph", "", `{"path":"/repo/workgraph/connector.go","operation":"created"}`)
-	insertLLMEvent(t, dbPath, "commit-1", "git.commit", "2026-06-07T10:04:00Z", "workgraph", "feat: improve connector runtime", `{"commit":"abcdef123456","branch":"main","subject":"feat: improve connector runtime"}`)
+	start := time.Now().UTC().Add(-5 * time.Minute)
+	insertLLMEvent(t, dbPath, "file-1", "file.modified", start.Format(time.RFC3339Nano), "workgraph", "", `{"path":"/repo/workgraph/run.go","operation":"modified"}`)
+	insertLLMEvent(t, dbPath, "file-2", "file.modified", start.Add(time.Minute).Format(time.RFC3339Nano), "workgraph", "", `{"path":"/repo/workgraph/run.go","operation":"modified"}`)
+	insertLLMEvent(t, dbPath, "file-3", "file.modified", start.Add(2*time.Minute).Format(time.RFC3339Nano), "workgraph", "", `{"path":"/repo/workgraph/facts/llm_test.go","operation":"modified"}`)
+	insertLLMEvent(t, dbPath, "file-4", "file.created", start.Add(3*time.Minute).Format(time.RFC3339Nano), "workgraph", "", `{"path":"/repo/workgraph/connector.go","operation":"created"}`)
+	insertLLMEvent(t, dbPath, "commit-1", "git.commit", start.Add(4*time.Minute).Format(time.RFC3339Nano), "workgraph", "feat: improve connector runtime", `{"commit":"abcdef123456","branch":"main","subject":"feat: improve connector runtime"}`)
 
 	output, err := runworkgraph(t, repoRoot, "llm", "summarize", "today",
 		"--home", homeDir,
@@ -363,6 +444,216 @@ func TestLLMSummarizeTodayDryRunCollapsesFileChurn(t *testing.T) {
 	}
 	if !strings.Contains(string(output), "git.commit feat: improve connector runtime") {
 		t.Fatalf("expected non-file work evidence to remain, got:\n%s", output)
+	}
+}
+
+func TestLLMSummarizeTodayDryRunIncludesNotionContentPreview(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		http.Error(response, "dry run should not call provider", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	if output, err := runworkgraph(t, repoRoot, "llm", "add", "local-summary",
+		"--home", homeDir,
+		"--provider", "openai-compatible",
+		"--base-url", server.URL+"/v1",
+		"--model", "summary-model",
+	); err != nil {
+		t.Fatalf("workgraph llm add failed: %v\n%s", err, output)
+	}
+	if output, err := runworkgraph(t, repoRoot, "llm", "use", "local-summary",
+		"--home", homeDir,
+		"--for", "summarize",
+	); err != nil {
+		t.Fatalf("workgraph llm use summarize failed: %v\n%s", err, output)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	insertLLMEvent(t, filepath.Join(homeDir, "workgraph.db"), "notion-preview-1", "notion.page_updated", now, "workgraph", "Updated launch plan", `{"title":"Updated launch plan","content_preview":"## Launch checklist\nAdded beta rollout notes.\n- [ ] Confirm Slack Lists scope."}`)
+
+	output, err := runworkgraph(t, repoRoot, "llm", "summarize", "today",
+		"--home", homeDir,
+		"--dry-run",
+	)
+	if err != nil {
+		t.Fatalf("workgraph llm summarize today dry-run failed: %v\n%s", err, output)
+	}
+	for _, expected := range []string{
+		"notion.page_updated Updated launch plan",
+		"content preview:",
+		"## Launch checklist",
+		"Added beta rollout notes.",
+		"- [ ] Confirm Slack Lists scope.",
+	} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected summary context to include %q, got:\n%s", expected, output)
+		}
+	}
+}
+
+func TestLLMSummarizeTodayCallsOpenAICompatibleProfile(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	var gotPath string
+	var gotModel string
+	var gotMessages []map[string]string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		gotPath = request.URL.Path
+		var body struct {
+			Model    string              `json:"model"`
+			Messages []map[string]string `json:"messages"`
+			Stream   bool                `json:"stream"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatalf("decode summarize request: %v", err)
+		}
+		gotModel = body.Model
+		gotMessages = body.Messages
+		if !body.Stream {
+			t.Fatalf("expected streaming chat completion request, got %#v", body)
+		}
+		response.Header().Set("Content-Type", "text/event-stream")
+		_, _ = response.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"You advanced workgraph \"}}]}\n\n"))
+		_, _ = response.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"connector runtime.\"}}]}\n\n"))
+		_, _ = response.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	if output, err := runworkgraph(t, repoRoot, "llm", "add", "local-summary",
+		"--home", homeDir,
+		"--provider", "openai-compatible",
+		"--base-url", server.URL+"/v1",
+		"--model", "summary-model",
+	); err != nil {
+		t.Fatalf("workgraph llm add failed: %v\n%s", err, output)
+	}
+	if output, err := runworkgraph(t, repoRoot, "llm", "use", "local-summary",
+		"--home", homeDir,
+		"--for", "summarize",
+	); err != nil {
+		t.Fatalf("workgraph llm use summarize failed: %v\n%s", err, output)
+	}
+	insertLLMEvent(t, filepath.Join(homeDir, "workgraph.db"), "commit-1", "git.commit", time.Now().UTC().Format(time.RFC3339Nano), "workgraph", "feat: improve connector runtime", `{"commit":"abcdef123456","branch":"main","subject":"feat: improve connector runtime"}`)
+
+	output, err := runworkgraph(t, repoRoot, "llm", "summarize", "today",
+		"--home", homeDir,
+	)
+	if err != nil {
+		t.Fatalf("workgraph llm summarize today failed: %v\n%s", err, output)
+	}
+	if gotPath != "/v1/chat/completions" {
+		t.Fatalf("expected OpenAI-compatible chat completions path, got %q", gotPath)
+	}
+	if gotModel != "summary-model" {
+		t.Fatalf("expected configured model, got %q", gotModel)
+	}
+	if len(gotMessages) != 2 {
+		t.Fatalf("expected system and user messages, got %#v", gotMessages)
+	}
+	if gotMessages[0]["role"] != "system" || !strings.Contains(gotMessages[0]["content"], "workgraph daily work summaries") {
+		t.Fatalf("expected summarize system prompt, got %#v", gotMessages)
+	}
+	if gotMessages[1]["role"] != "user" ||
+		!strings.Contains(gotMessages[1]["content"], "Prompt:") ||
+		!strings.Contains(gotMessages[1]["content"], "Context:") ||
+		!strings.Contains(gotMessages[1]["content"], "git.commit feat: improve connector runtime") {
+		t.Fatalf("expected prompt and context in user message, got %#v", gotMessages)
+	}
+	for _, expected := range []string{
+		"LLM summarize today streaming",
+		"Profile: local-summary",
+		"Provider: openai-compatible",
+		"Model: summary-model",
+		"Thinking...",
+		"Summary:",
+		"You advanced workgraph connector runtime.",
+	} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected summary output to include %q, got:\n%s", expected, output)
+		}
+	}
+}
+
+func TestLLMSummarizeTodayCallsBedrockProfile(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	t.Setenv("AWS_ACCESS_KEY_ID", "test-access-key")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret-key")
+
+	var gotBody string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatalf("read bedrock summarize request: %v", err)
+		}
+		gotBody = string(body)
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{
+  "output": {
+    "message": {
+      "role": "assistant",
+      "content": [{"text": "Bedrock summarized the workgraph day."}]
+    }
+  },
+  "stopReason": "end_turn"
+}`))
+	}))
+	defer server.Close()
+
+	modelARN := "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+	if output, err := runworkgraph(t, repoRoot, "llm", "add", "bedrock-summary",
+		"--home", homeDir,
+		"--provider", "bedrock",
+		"--region", "us-east-1",
+		"--model-arn", modelARN,
+		"--base-url", server.URL,
+	); err != nil {
+		t.Fatalf("workgraph llm add bedrock failed: %v\n%s", err, output)
+	}
+	if output, err := runworkgraph(t, repoRoot, "llm", "use", "bedrock-summary",
+		"--home", homeDir,
+		"--for", "summarize",
+	); err != nil {
+		t.Fatalf("workgraph llm use bedrock summarize failed: %v\n%s", err, output)
+	}
+	insertLLMEvent(t, filepath.Join(homeDir, "workgraph.db"), "notion-1", "notion.page_updated", time.Now().UTC().Format(time.RFC3339Nano), "workgraph", "Updated launch plan", `{"title":"Updated launch plan","content_preview":"## Launch checklist\nAdded beta rollout notes."}`)
+
+	output, err := runworkgraph(t, repoRoot, "llm", "summarize", "today",
+		"--home", homeDir,
+		"--no-stream",
+	)
+	if err != nil {
+		t.Fatalf("workgraph llm summarize today bedrock failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(gotBody, "Summarize today's captured work context") ||
+		!strings.Contains(gotBody, "notion.page_updated Updated launch plan") {
+		t.Fatalf("expected Bedrock summarize request to include prompt and context, got %s", gotBody)
+	}
+	for _, expected := range []string{
+		"LLM summarize today complete",
+		"Profile: bedrock-summary",
+		"Provider: bedrock",
+		"Model: " + modelARN,
+		"Summary:",
+		"Bedrock summarized the workgraph day.",
+	} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected Bedrock summary output to include %q, got:\n%s", expected, output)
+		}
 	}
 }
 

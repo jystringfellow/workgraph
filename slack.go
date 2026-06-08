@@ -73,6 +73,15 @@ type SlackAPICaptureResult struct {
 	ThreadCursors map[string]string
 }
 
+type SlackListCaptureConfig struct {
+	HomeDir      string
+	DatabasePath string
+	Token        string
+	ListID       string
+	APIBaseURL   string
+	HTTPClient   *http.Client
+}
+
 type SlackChannel struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
@@ -93,6 +102,7 @@ type SlackConnectConfig struct {
 	State            string
 	ExpectedState    string
 	Channels         []string
+	ListIDs          []string
 	IncludeDMs       bool
 	Scopes           []string
 	APIBaseURL       string
@@ -130,6 +140,7 @@ type slackConnectorConfig struct {
 	TeamName     string   `json:"team_name,omitempty"`
 	BotUserID    string   `json:"bot_user_id,omitempty"`
 	Channels     []string `json:"channels"`
+	ListIDs      []string `json:"list_ids,omitempty"`
 	IncludeDMs   bool     `json:"include_dms,omitempty"`
 	UserScopes   []string `json:"user_scopes"`
 	APIBaseURL   string   `json:"api_base_url,omitempty"`
@@ -251,6 +262,47 @@ type slackRevokeResponse struct {
 	Revoked bool   `json:"revoked"`
 }
 
+type slackListsItemsResponse struct {
+	OK     bool            `json:"ok"`
+	Error  string          `json:"error"`
+	Items  []slackListItem `json:"items"`
+	Needed string          `json:"needed"`
+}
+
+type slackListItem struct {
+	ID               string           `json:"id"`
+	ListID           string           `json:"list_id"`
+	DateCreated      int64            `json:"date_created"`
+	Fields           []slackListField `json:"fields"`
+	CreatedBy        string           `json:"created_by"`
+	UpdatedTimestamp string           `json:"updated_timestamp"`
+	UpdatedBy        string           `json:"updated_by"`
+	ParentRecordID   string           `json:"parent_record_id"`
+	Archived         bool             `json:"archived"`
+	IsSubscribed     bool             `json:"is_subscribed"`
+	Saved            map[string]any   `json:"saved,omitempty"`
+	SavedFields      map[string]any   `json:"saved_fields,omitempty"`
+}
+
+type slackListField struct {
+	Key      string          `json:"key"`
+	ColumnID string          `json:"column_id"`
+	Value    any             `json:"value"`
+	Text     string          `json:"text"`
+	Raw      json.RawMessage `json:"-"`
+}
+
+func (field *slackListField) UnmarshalJSON(data []byte) error {
+	type alias slackListField
+	var parsed alias
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return err
+	}
+	*field = slackListField(parsed)
+	field.Raw = append(field.Raw[:0], data...)
+	return nil
+}
+
 // CaptureSlackEvents stores Slack events from a local export file.
 func CaptureSlackEvents(config SlackCaptureConfig) (SlackCaptureResult, error) {
 	status, err := prepareRunStatus(RunConfig{
@@ -305,6 +357,187 @@ func CaptureSlackEvents(config SlackCaptureConfig) (SlackCaptureResult, error) {
 	}
 	result.Message = slackCaptureMessage(result)
 	return result, nil
+}
+
+func CaptureSlackList(config SlackListCaptureConfig) (SlackCaptureResult, error) {
+	status, err := prepareRunStatus(RunConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath})
+	if err != nil {
+		return SlackCaptureResult{}, err
+	}
+	if config.DatabasePath == "" {
+		config.DatabasePath = status.DatabasePath
+	}
+	if config.Token == "" {
+		stored, err := readSlackConnectorConfig(status.HomeDir)
+		if err != nil {
+			return SlackCaptureResult{}, err
+		}
+		config.Token = stored.AccessToken
+		if config.APIBaseURL == "" {
+			config.APIBaseURL = stored.APIBaseURL
+		}
+	}
+	if config.Token == "" || config.ListID == "" {
+		return SlackCaptureResult{}, errors.New("slack list token and list id are required")
+	}
+	items, err := slackListItems(config)
+	if err != nil {
+		return SlackCaptureResult{}, err
+	}
+	db, err := sql.Open("sqlite3", status.DatabasePath)
+	if err != nil {
+		return SlackCaptureResult{}, err
+	}
+	defer db.Close()
+	stored := 0
+	for _, item := range items {
+		if item.ListID == "" {
+			item.ListID = config.ListID
+		}
+		inserted, err := storeSlackListItem(db, item)
+		if err != nil {
+			return SlackCaptureResult{}, err
+		}
+		if inserted {
+			stored++
+		}
+	}
+	result := SlackCaptureResult{HomeDir: status.HomeDir, DatabasePath: status.DatabasePath, EventsStored: stored}
+	result.Message = strings.Join([]string{"Slack List capture complete", "Home: " + status.HomeDir, "Database: " + status.DatabasePath, fmt.Sprintf("Events stored: %d", stored)}, "\n")
+	return result, nil
+}
+
+func slackListItems(config SlackListCaptureConfig) ([]slackListItem, error) {
+	values := url.Values{}
+	values.Set("list_id", config.ListID)
+	baseURL := config.APIBaseURL
+	if baseURL == "" {
+		baseURL = "https://slack.com/api"
+	}
+	request, err := http.NewRequest(http.MethodPost, strings.TrimRight(baseURL, "/")+"/slackLists.items.list", strings.NewReader(values.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("create slack list request: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+config.Token)
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := config.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("fetch slack list items: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(response.Body, 1024))
+		return nil, fmt.Errorf("fetch slack list items: status %s: %s", response.Status, strings.TrimSpace(string(body)))
+	}
+	var apiResponse slackListsItemsResponse
+	if err := json.NewDecoder(response.Body).Decode(&apiResponse); err != nil {
+		return nil, fmt.Errorf("parse slack list items response: %w", err)
+	}
+	if !apiResponse.OK {
+		if apiResponse.Error == "" {
+			apiResponse.Error = "unknown_error"
+		}
+		if apiResponse.Needed != "" {
+			return nil, fmt.Errorf("slack api slackLists.items.list: %s; needed scope: %s", apiResponse.Error, apiResponse.Needed)
+		}
+		return nil, fmt.Errorf("slack api slackLists.items.list: %s", apiResponse.Error)
+	}
+	return apiResponse.Items, nil
+}
+
+func storeSlackListItem(db *sql.DB, item slackListItem) (bool, error) {
+	payload, err := json.Marshal(item)
+	if err != nil {
+		return false, fmt.Errorf("encode slack list item: %w", err)
+	}
+	timestamp := slackListItemTimestamp(item)
+	result, err := db.Exec(`INSERT OR IGNORE INTO events
+		(id, source, type, timestamp, payload_json, project, actor, summary, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		fmt.Sprintf("slack.list_item:%s:%s", item.ListID, item.ID),
+		"slack",
+		"slack.list_item",
+		timestamp.UTC().Format(time.RFC3339Nano),
+		string(payload),
+		"slack-list:"+item.ListID,
+		slackListActor(item),
+		slackListSummary(item),
+		time.Now().UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return false, fmt.Errorf("store slack list item: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("store slack list item: %w", err)
+	}
+	return rows > 0, nil
+}
+
+func slackListItemTimestamp(item slackListItem) time.Time {
+	for _, candidate := range []string{item.UpdatedTimestamp, fmt.Sprint(item.DateCreated)} {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" || candidate == "0" {
+			continue
+		}
+		if parsed, err := time.Parse(time.RFC3339Nano, candidate); err == nil {
+			return parsed.UTC()
+		}
+		if unix, err := strconv.ParseFloat(candidate, 64); err == nil {
+			seconds := int64(unix)
+			nanos := int64((unix - float64(seconds)) * 1_000_000_000)
+			return time.Unix(seconds, nanos).UTC()
+		}
+	}
+	return time.Now().UTC()
+}
+
+func slackListActor(item slackListItem) string {
+	for _, candidate := range []string{item.UpdatedBy, item.CreatedBy} {
+		if strings.TrimSpace(candidate) != "" {
+			return strings.TrimSpace(candidate)
+		}
+	}
+	return ""
+}
+
+func slackListSummary(item slackListItem) string {
+	for _, field := range item.Fields {
+		if strings.TrimSpace(field.Text) != "" {
+			return strings.TrimSpace(field.Text)
+		}
+		if text := slackListFieldValueText(field.Value); text != "" {
+			return text
+		}
+	}
+	return item.ID
+}
+
+func slackListFieldValueText(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case map[string]any:
+		for _, key := range []string{"text", "name", "title", "value"} {
+			if text, ok := typed[key].(string); ok && strings.TrimSpace(text) != "" {
+				return strings.TrimSpace(text)
+			}
+		}
+	case []any:
+		parts := []string{}
+		for _, item := range typed {
+			if text := slackListFieldValueText(item); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, ", ")
+	}
+	return ""
 }
 
 // ConnectSlack prepares or completes Slack OAuth setup.
@@ -376,6 +609,7 @@ func ConnectSlack(config SlackConnectConfig) (SlackConnectResult, error) {
 		TeamName:     token.Team.Name,
 		BotUserID:    token.BotUserID,
 		Channels:     append([]string(nil), config.Channels...),
+		ListIDs:      append([]string(nil), config.ListIDs...),
 		IncludeDMs:   config.IncludeDMs && slackHasDMScopes(slackOAuthUserScopes(token)),
 		UserScopes:   slackOAuthUserScopes(token),
 		APIBaseURL:   config.APIBaseURL,
@@ -505,6 +739,7 @@ func ConnectSlackWithBrowser(ctx context.Context, config SlackConnectConfig) (Sl
 		TeamName:     token.Team.Name,
 		BotUserID:    token.BotUserID,
 		Channels:     append([]string(nil), config.Channels...),
+		ListIDs:      append([]string(nil), config.ListIDs...),
 		IncludeDMs:   config.IncludeDMs && slackHasDMScopes(slackOAuthUserScopes(token)),
 		UserScopes:   slackOAuthUserScopes(token),
 		APIBaseURL:   config.APIBaseURL,
@@ -774,6 +1009,9 @@ func slackCollectionModeLine(config slackConnectorConfig) string {
 	mode := "Collection: auto-discover visible public and private channels"
 	if len(config.Channels) > 0 {
 		mode = fmt.Sprintf("Collection: %d explicit channel(s)", len(config.Channels))
+	}
+	if len(config.ListIDs) > 0 {
+		mode += fmt.Sprintf(" plus %d Slack List(s)", len(config.ListIDs))
 	}
 	if config.IncludeDMs {
 		mode += " plus opted-in DMs and group DMs"
@@ -1427,7 +1665,7 @@ func slackScopes(configured []string, includeDMs bool) []string {
 	if len(configured) > 0 {
 		return append([]string(nil), configured...)
 	}
-	scopes := []string{"channels:history", "channels:read", "groups:history", "groups:read", "users:read", "team:read"}
+	scopes := []string{"channels:history", "channels:read", "groups:history", "groups:read", "users:read", "team:read", "lists:read"}
 	if includeDMs {
 		scopes = append(scopes, "im:history", "im:read", "mpim:history", "mpim:read")
 	}

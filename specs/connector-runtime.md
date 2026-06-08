@@ -12,6 +12,7 @@ workgraph github connect
 workgraph calendar connect google
 workgraph mail connect google
 workgraph notion connect
+workgraph azure boards connect --organization <org> --project <project>
 workgraph start
 ```
 
@@ -63,6 +64,7 @@ workgraph slack connect
 workgraph calendar connect google
 workgraph mail connect google
 workgraph notion connect
+workgraph azure boards connect
 ```
 
 Future GitHub setup should follow the same pattern. GitHub currently polls from
@@ -82,20 +84,22 @@ in connector status as an enabled local source when file/git capture is active.
 5. Add Notion polling from stored settings.
 6. Add `workgraph connectors list`, `enable`, `disable`, and `interval`.
 7. Introduce `workgraph connectors poll --once` with a shared result shape.
-8. Move Slack daemon polling behind the same connector poll status model while
-   preserving its existing connect/disconnect restart behavior.
+8. Move Slack daemon polling and Slack Lists polling behind the same connector
+   poll status model while preserving Slack connect/disconnect restart behavior.
 9. Move GitHub `gh` polling behind the same connector poll status model and add
    optional `github connect` validation/config.
-10. Show connector polling in `workgraph status`.
-11. Wire the shared poll loop into `workgraph start` by default for connected
+10. Add Azure Boards polling from local Microsoft OAuth settings.
+11. Show connector polling in `workgraph status`.
+12. Wire the shared poll loop into `workgraph start` by default for connected
     providers.
 
 ## Connector State
 
 Each connected provider should expose:
 
-- connector id, such as `slack`, `github`, `calendar.google`,
-  `calendar.microsoft`, `mail.google`, `mail.microsoft`, or `notion`
+- connector id, such as `slack`, `slack.lists`, `github`, `calendar.google`,
+  `calendar.microsoft`, `mail.google`, `mail.microsoft`, `notion`, or
+  `azure.boards`
 - enabled/disabled polling
 - poll interval
 - last successful poll time

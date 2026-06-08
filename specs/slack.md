@@ -36,9 +36,9 @@ authorized user and polls them for messages and thread replies. Users may pass
 `--channel <channel-id>` during connect or run to restrict collection to an
 explicit allowlist.
 
-Slack OAuth requests baseline channel, private-channel, user profile, and
-workspace metadata read access so stored communication events can use readable
-conversation and actor names while retaining Slack ids as evidence.
+Slack OAuth requests baseline channel, private-channel, user profile, workspace
+metadata, and Lists read access so stored communication and List events can use
+readable context while retaining Slack ids as evidence.
 
 Direct messages and group direct messages are not collected by default. Users
 must explicitly opt in with `--include-dms` during connect or
@@ -63,8 +63,8 @@ disconnecting and reconnecting with `--include-dms`.
 
 When Slack connect or disconnect updates local connector settings and
 background capture is already running, workgraph restarts that background
-daemon so the Slack token, channels, and permission state take effect without a manual
-`workgraph stop` and `workgraph start`.
+daemon so the Slack token, channels, configured Lists, and permission state take
+effect without a manual `workgraph stop` and `workgraph start`.
 
 Slack's current daemon polling should participate in the shared connector
 runtime. `workgraph slack connect` makes Slack capture-ready, and
@@ -135,6 +135,42 @@ The first MVP ingests:
 
 - channel messages
 - thread replies
+
+Slack Lists are a separate todo/work-planning surface. The first Slack Lists
+slice is read-only and explicit:
+
+```text
+workgraph slack connect --list <list-id>
+workgraph slack lists capture --list-id <list-id>
+```
+
+After a List id is saved during Slack connect, `workgraph start` polls that List
+under connector id `slack.lists`. Users can inspect or tune the polling
+separately from normal Slack message polling:
+
+```text
+workgraph connectors list
+workgraph connectors disable slack.lists
+workgraph connectors interval slack.lists 15m
+```
+
+Slack's Lists API exposes `slackLists.items.list`, which requires the
+`lists:read` scope and a List id. The method returns rows/items with item ids,
+field/cell values, column ids, text fallbacks, related Slack messages/files/List
+records when present, created/updated users, `updated_timestamp`, archived
+state, subscription state, and reminder metadata. workgraph should preserve
+those fields as structured evidence instead of trying to infer a single
+universal task model too early.
+
+For Craig's current workflow, the first useful interpretation layer should map
+recognizable planning buckets such as `today`, `this week`, `this month`, `this
+quarter`, `prioritized`, and `backlog` into supplemental labels when they appear
+in fields or text fallbacks. The raw field values and column ids remain the
+source of truth because Slack List schemas can vary across workspaces.
+
+Slack Lists capture must not create, update, archive, reorder, or comment on
+List items. Any future Slack List actions must follow suggest -> draft ->
+approve -> act.
 
 Slack events should be stored in the existing event store:
 

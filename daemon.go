@@ -29,6 +29,7 @@ type DaemonConfig struct {
 	WatchDirs       []string
 	SlackToken      string
 	SlackChannels   []string
+	SlackListIDs    []string
 	SlackIncludeDMs bool
 	SlackAPIBaseURL string
 }
@@ -98,6 +99,9 @@ func StartDaemon(config DaemonConfig) (DaemonStatus, error) {
 	for _, channel := range config.SlackChannels {
 		args = append(args, "--slack-channel", channel)
 	}
+	for _, listID := range config.SlackListIDs {
+		args = append(args, "--slack-list", listID)
+	}
 	if config.SlackIncludeDMs {
 		args = append(args, "--slack-include-dms")
 	}
@@ -137,6 +141,7 @@ func RunDaemon(config DaemonConfig) error {
 		WatchDirs:       config.WatchDirs,
 		SlackToken:      config.SlackToken,
 		SlackChannels:   config.SlackChannels,
+		SlackListIDs:    config.SlackListIDs,
 		SlackIncludeDMs: config.SlackIncludeDMs,
 		SlackAPIBaseURL: config.SlackAPIBaseURL,
 	})

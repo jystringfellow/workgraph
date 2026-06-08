@@ -1,7 +1,9 @@
 package workgraph
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +14,11 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 )
 
 const llmTaskSummarize = "summarize"
@@ -50,8 +57,10 @@ type LLMTestConfig struct {
 }
 
 type LLMSummarizeTodayConfig struct {
-	HomeDir string
-	DryRun  bool
+	HomeDir    string
+	DryRun     bool
+	HTTPClient *http.Client
+	Stream     func(string) error
 }
 
 type LLMResult struct {
@@ -78,6 +87,7 @@ type llmProfile struct {
 type openAICompatibleRequest struct {
 	Model    string                    `json:"model"`
 	Messages []openAICompatibleMessage `json:"messages"`
+	Stream   bool                      `json:"stream,omitempty"`
 }
 
 type openAICompatibleMessage struct {
@@ -88,6 +98,14 @@ type openAICompatibleMessage struct {
 type openAICompatibleResponse struct {
 	Choices []struct {
 		Message openAICompatibleMessage `json:"message"`
+	} `json:"choices"`
+}
+
+type openAICompatibleStreamResponse struct {
+	Choices []struct {
+		Delta struct {
+			Content string `json:"content"`
+		} `json:"delta"`
 	} `json:"choices"`
 }
 
@@ -275,10 +293,7 @@ func TestLLMProfile(config LLMTestConfig) (LLMResult, error) {
 	if err != nil {
 		return LLMResult{}, err
 	}
-	if profile.Provider != "openai-compatible" {
-		return LLMResult{}, fmt.Errorf("llm test only supports openai-compatible profiles for now, got %q", profile.Provider)
-	}
-	responseText, err := callOpenAICompatible(config.HTTPClient, profile, []openAICompatibleMessage{
+	responseText, err := callLLMProfile(config.HTTPClient, profile, []openAICompatibleMessage{
 		{Role: "system", Content: "You are testing a local language model connection."},
 		{Role: "user", Content: "Reply with a short confirmation that the model connection works."},
 	})
@@ -291,8 +306,8 @@ func TestLLMProfile(config LLMTestConfig) (LLMResult, error) {
 			"LLM test complete",
 			"Profile: " + profileName,
 			"Provider: " + profile.Provider,
-			"Model: " + profile.Model,
-			"Destination: " + profile.BaseURL,
+			"Model: " + llmProfileModelLabel(profile),
+			"Destination: " + llmProfileDestination(profile),
 			"Response: " + responseText,
 		}, "\n"),
 	}, nil
@@ -333,7 +348,88 @@ func SummarizeTodayWithLLM(config LLMSummarizeTodayConfig) (LLMResult, error) {
 			}, "\n"),
 		}, nil
 	}
-	return LLMResult{}, errors.New("llm summarize today is only implemented for --dry-run")
+	messages := []openAICompatibleMessage{
+		{Role: "system", Content: "You write concise workgraph daily work summaries from captured local work evidence."},
+		{Role: "user", Content: strings.Join([]string{
+			"Prompt:",
+			prompt,
+			"",
+			"Context:",
+			context,
+		}, "\n")},
+	}
+	var responseText string
+	if config.Stream != nil {
+		if err := config.Stream(strings.Join([]string{
+			"LLM summarize today streaming",
+			"Profile: " + profileName,
+			"Provider: " + profile.Provider,
+			"Model: " + llmProfileModelLabel(profile),
+			"Destination: " + llmProfileDestination(profile),
+			"",
+			"Thinking...",
+			"",
+			"Summary:",
+		}, "\n") + "\n"); err != nil {
+			return LLMResult{}, err
+		}
+		responseText, err = callLLMProfileStream(config.HTTPClient, profile, messages, config.Stream)
+	} else {
+		responseText, err = callLLMProfile(config.HTTPClient, profile, messages)
+	}
+	if err != nil {
+		return LLMResult{}, err
+	}
+	if config.Stream != nil {
+		if err := config.Stream("\n"); err != nil {
+			return LLMResult{}, err
+		}
+		return LLMResult{ConfigPath: llmConfigPath(homeDir)}, nil
+	}
+	return LLMResult{
+		ConfigPath: llmConfigPath(homeDir),
+		Message: strings.Join([]string{
+			"LLM summarize today complete",
+			"Profile: " + profileName,
+			"Provider: " + profile.Provider,
+			"Model: " + llmProfileModelLabel(profile),
+			"Destination: " + llmProfileDestination(profile),
+			"",
+			"Summary:",
+			responseText,
+		}, "\n"),
+	}, nil
+}
+
+func callLLMProfile(client *http.Client, profile llmProfile, messages []openAICompatibleMessage) (string, error) {
+	switch profile.Provider {
+	case "openai-compatible":
+		return callOpenAICompatible(client, profile, messages)
+	case "bedrock":
+		return callBedrockConverse(client, profile, messages)
+	default:
+		return "", fmt.Errorf("llm calls do not support provider %q yet", profile.Provider)
+	}
+}
+
+func callLLMProfileStream(client *http.Client, profile llmProfile, messages []openAICompatibleMessage, stream func(string) error) (string, error) {
+	switch profile.Provider {
+	case "openai-compatible":
+		return callOpenAICompatibleStream(client, profile, messages, stream)
+	case "bedrock":
+		return callBedrockConverseStream(client, profile, messages, stream)
+	default:
+		response, err := callLLMProfile(client, profile, messages)
+		if err != nil {
+			return "", err
+		}
+		if stream != nil && response != "" {
+			if err := stream(response); err != nil {
+				return "", err
+			}
+		}
+		return response, nil
+	}
 }
 
 func callOpenAICompatible(client *http.Client, profile llmProfile, messages []openAICompatibleMessage) (string, error) {
@@ -380,6 +476,223 @@ func callOpenAICompatible(client *http.Client, profile llmProfile, messages []op
 		return "", errors.New("OpenAI-compatible response did not include assistant text")
 	}
 	return strings.TrimSpace(parsed.Choices[0].Message.Content), nil
+}
+
+func callOpenAICompatibleStream(client *http.Client, profile llmProfile, messages []openAICompatibleMessage, stream func(string) error) (string, error) {
+	if client == nil {
+		client = &http.Client{Timeout: 60 * time.Second}
+	}
+	body, err := json.Marshal(openAICompatibleRequest{
+		Model:    profile.Model,
+		Messages: messages,
+		Stream:   true,
+	})
+	if err != nil {
+		return "", fmt.Errorf("encode OpenAI-compatible request: %w", err)
+	}
+	requestURL := strings.TrimRight(profile.BaseURL, "/") + "/chat/completions"
+	request, err := http.NewRequest(http.MethodPost, requestURL, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("build OpenAI-compatible request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "text/event-stream")
+	if profile.APIKeyEnv != "" {
+		if key := os.Getenv(profile.APIKeyEnv); key != "" {
+			request.Header.Set("Authorization", "Bearer "+key)
+		}
+	}
+
+	response, err := client.Do(request)
+	if err != nil {
+		return "", fmt.Errorf("call OpenAI-compatible profile: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		responseBody, err := io.ReadAll(response.Body)
+		if err != nil {
+			return "", fmt.Errorf("read OpenAI-compatible response: %w", err)
+		}
+		return "", fmt.Errorf("call OpenAI-compatible profile: status %d: %s", response.StatusCode, strings.TrimSpace(string(responseBody)))
+	}
+
+	var builder strings.Builder
+	scanner := bufio.NewScanner(response.Body)
+	scanner.Buffer(make([]byte, 1024), 1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, ":") {
+			continue
+		}
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "[DONE]" {
+			break
+		}
+		var parsed openAICompatibleStreamResponse
+		if err := json.Unmarshal([]byte(data), &parsed); err != nil {
+			return "", fmt.Errorf("parse OpenAI-compatible stream response: %w", err)
+		}
+		for _, choice := range parsed.Choices {
+			chunk := choice.Delta.Content
+			if chunk == "" {
+				continue
+			}
+			builder.WriteString(chunk)
+			if stream != nil {
+				if err := stream(chunk); err != nil {
+					return "", err
+				}
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("read OpenAI-compatible stream response: %w", err)
+	}
+	if strings.TrimSpace(builder.String()) == "" {
+		return "", errors.New("OpenAI-compatible stream response did not include assistant text")
+	}
+	return strings.TrimSpace(builder.String()), nil
+}
+
+func callBedrockConverse(client *http.Client, profile llmProfile, messages []openAICompatibleMessage) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	loadOptions := []func(*awsconfig.LoadOptions) error{
+		awsconfig.WithRegion(profile.Region),
+	}
+	if profile.AWSProfile != "" {
+		loadOptions = append(loadOptions, awsconfig.WithSharedConfigProfile(profile.AWSProfile))
+	}
+	if client != nil {
+		loadOptions = append(loadOptions, awsconfig.WithHTTPClient(client))
+	}
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, loadOptions...)
+	if err != nil {
+		return "", fmt.Errorf("load Bedrock AWS config: %w", err)
+	}
+	if profile.BaseURL != "" {
+		cfg.BaseEndpoint = aws.String(profile.BaseURL)
+	}
+
+	bedrock := bedrockruntime.NewFromConfig(cfg)
+	output, err := bedrock.Converse(ctx, &bedrockruntime.ConverseInput{
+		ModelId: aws.String(profile.ModelARN),
+		Messages: []types.Message{
+			{
+				Role: types.ConversationRoleUser,
+				Content: []types.ContentBlock{
+					&types.ContentBlockMemberText{Value: bedrockPromptText(messages)},
+				},
+			},
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("call Bedrock profile: %w", err)
+	}
+	message, ok := output.Output.(*types.ConverseOutputMemberMessage)
+	if !ok {
+		return "", errors.New("Bedrock response did not include a message")
+	}
+	for _, block := range message.Value.Content {
+		text, ok := block.(*types.ContentBlockMemberText)
+		if ok && strings.TrimSpace(text.Value) != "" {
+			return strings.TrimSpace(text.Value), nil
+		}
+	}
+	return "", errors.New("Bedrock response did not include assistant text")
+}
+
+func callBedrockConverseStream(client *http.Client, profile llmProfile, messages []openAICompatibleMessage, stream func(string) error) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	cfg, err := bedrockAWSConfig(ctx, client, profile)
+	if err != nil {
+		return "", err
+	}
+	bedrock := bedrockruntime.NewFromConfig(cfg)
+	output, err := bedrock.ConverseStream(ctx, &bedrockruntime.ConverseStreamInput{
+		ModelId: aws.String(profile.ModelARN),
+		Messages: []types.Message{
+			{
+				Role: types.ConversationRoleUser,
+				Content: []types.ContentBlock{
+					&types.ContentBlockMemberText{Value: bedrockPromptText(messages)},
+				},
+			},
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("call Bedrock profile: %w", err)
+	}
+	eventStream := output.GetStream()
+	defer eventStream.Close()
+
+	var builder strings.Builder
+	for event := range eventStream.Events() {
+		delta, ok := event.(*types.ConverseStreamOutputMemberContentBlockDelta)
+		if !ok {
+			continue
+		}
+		text, ok := delta.Value.Delta.(*types.ContentBlockDeltaMemberText)
+		if !ok || text.Value == "" {
+			continue
+		}
+		builder.WriteString(text.Value)
+		if stream != nil {
+			if err := stream(text.Value); err != nil {
+				return "", err
+			}
+		}
+	}
+	if err := eventStream.Err(); err != nil {
+		return "", fmt.Errorf("read Bedrock stream response: %w", err)
+	}
+	if strings.TrimSpace(builder.String()) == "" {
+		return "", errors.New("Bedrock stream response did not include assistant text")
+	}
+	return strings.TrimSpace(builder.String()), nil
+}
+
+func bedrockAWSConfig(ctx context.Context, client *http.Client, profile llmProfile) (aws.Config, error) {
+	loadOptions := []func(*awsconfig.LoadOptions) error{
+		awsconfig.WithRegion(profile.Region),
+	}
+	if profile.AWSProfile != "" {
+		loadOptions = append(loadOptions, awsconfig.WithSharedConfigProfile(profile.AWSProfile))
+	}
+	if client != nil {
+		loadOptions = append(loadOptions, awsconfig.WithHTTPClient(client))
+	}
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, loadOptions...)
+	if err != nil {
+		return aws.Config{}, fmt.Errorf("load Bedrock AWS config: %w", err)
+	}
+	if profile.BaseURL != "" {
+		cfg.BaseEndpoint = aws.String(profile.BaseURL)
+	}
+	return cfg, nil
+}
+
+func bedrockPromptText(messages []openAICompatibleMessage) string {
+	var parts []string
+	for _, message := range messages {
+		content := strings.TrimSpace(message.Content)
+		if content == "" {
+			continue
+		}
+		role := strings.TrimSpace(message.Role)
+		if role == "" {
+			parts = append(parts, content)
+			continue
+		}
+		parts = append(parts, strings.ToUpper(role[:1])+role[1:]+":\n"+content)
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 func llmTodayContextAndPrompt(homeDir string) (string, string, error) {
@@ -430,11 +743,49 @@ func llmTodaySessionLines(session TodaySession, location *time.Location) []strin
 			continue
 		}
 		lines = append(lines, fmt.Sprintf("  - %s %s %s", event.Timestamp.In(location).Format("15:04"), event.Type, eventLabel(event)))
+		lines = append(lines, llmEventDetailLines(event)...)
 	}
 	if len(fileEvents) > 0 {
 		lines = append(lines, llmFileChangeSummaryLines(fileEvents)...)
 	}
 	return lines
+}
+
+func llmEventDetailLines(event TodayEvent) []string {
+	var payload struct {
+		URL            string `json:"url"`
+		Permalink      string `json:"permalink"`
+		ContentPreview string `json:"content_preview"`
+	}
+	if err := json.Unmarshal([]byte(event.Payload), &payload); err != nil {
+		return nil
+	}
+	var lines []string
+	link := payload.URL
+	if link == "" {
+		link = payload.Permalink
+	}
+	if link != "" {
+		lines = append(lines, "    - link: "+link)
+	}
+	if strings.TrimSpace(payload.ContentPreview) != "" {
+		lines = append(lines, "    - content preview:")
+		for _, line := range strings.Split(capLLMDetail(payload.ContentPreview, 1200), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				lines = append(lines, "      "+line)
+			}
+		}
+	}
+	return lines
+}
+
+func capLLMDetail(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	return strings.TrimSpace(value[:limit]) + "\n..."
 }
 
 func llmFileChangeSummaryLines(events []TodayEvent) []string {

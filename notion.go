@@ -87,6 +87,35 @@ type NotionDisconnectResult struct {
 	Message    string
 }
 
+type NotionIndexListConfig struct {
+	HomeDir      string
+	DatabasePath string
+	Limit        int
+}
+
+type NotionIndexShowConfig struct {
+	HomeDir      string
+	DatabasePath string
+	ID           string
+}
+
+type NotionIndexResult struct {
+	Items   []NotionIndexItem
+	Item    NotionIndexItem
+	Message string
+}
+
+type NotionIndexItem struct {
+	ID              string
+	ObjectType      string
+	Title           string
+	URL             string
+	LastEditedTime  string
+	LastEditedBy    string
+	ContentPreview  string
+	ContentSyncedAt string
+}
+
 type notionConnectorConfig struct {
 	AccessToken          string          `json:"access_token"`
 	RefreshToken         string          `json:"refresh_token,omitempty"`
@@ -122,15 +151,28 @@ type notionSearchResponse struct {
 	HasMore    bool                 `json:"has_more"`
 }
 
+type notionBlockChildrenResponse struct {
+	Results    []notionBlock `json:"results"`
+	NextCursor string        `json:"next_cursor"`
+	HasMore    bool          `json:"has_more"`
+}
+
 type notionSearchResult struct {
-	Object         string                    `json:"object"`
-	ID             string                    `json:"id"`
-	CreatedTime    string                    `json:"created_time"`
-	LastEditedTime string                    `json:"last_edited_time"`
-	URL            string                    `json:"url"`
-	Properties     map[string]notionProperty `json:"properties,omitempty"`
-	Title          []notionRichText          `json:"title,omitempty"`
-	Parent         json.RawMessage           `json:"parent,omitempty"`
+	Object         string                     `json:"object"`
+	ID             string                     `json:"id"`
+	CreatedTime    string                     `json:"created_time"`
+	CreatedBy      notionUserRef              `json:"created_by"`
+	LastEditedTime string                     `json:"last_edited_time"`
+	LastEditedBy   notionUserRef              `json:"last_edited_by"`
+	URL            string                     `json:"url"`
+	Properties     map[string]json.RawMessage `json:"properties,omitempty"`
+	Title          []notionRichText           `json:"title,omitempty"`
+	Parent         json.RawMessage            `json:"parent,omitempty"`
+}
+
+type notionUserRef struct {
+	Object string `json:"object"`
+	ID     string `json:"id"`
 }
 
 type notionProperty struct {
@@ -142,14 +184,45 @@ type notionRichText struct {
 	PlainText string `json:"plain_text"`
 }
 
+type notionBlock struct {
+	Object           string          `json:"object"`
+	ID               string          `json:"id"`
+	Type             string          `json:"type"`
+	Paragraph        notionTextBlock `json:"paragraph"`
+	Heading1         notionTextBlock `json:"heading_1"`
+	Heading2         notionTextBlock `json:"heading_2"`
+	Heading3         notionTextBlock `json:"heading_3"`
+	BulletedListItem notionTextBlock `json:"bulleted_list_item"`
+	NumberedListItem notionTextBlock `json:"numbered_list_item"`
+	ToDo             notionTextBlock `json:"to_do"`
+	Toggle           notionTextBlock `json:"toggle"`
+	Quote            notionTextBlock `json:"quote"`
+	Callout          notionTextBlock `json:"callout"`
+	ChildPage        struct {
+		Title string `json:"title"`
+	} `json:"child_page"`
+	ChildDatabase struct {
+		Title string `json:"title"`
+	} `json:"child_database"`
+}
+
+type notionTextBlock struct {
+	RichText []notionRichText `json:"rich_text"`
+	Checked  bool             `json:"checked"`
+}
+
 type notionEventPayload struct {
 	Object         string          `json:"object"`
 	ID             string          `json:"id"`
 	Title          string          `json:"title,omitempty"`
 	URL            string          `json:"url,omitempty"`
 	CreatedTime    string          `json:"created_time,omitempty"`
+	CreatedBy      string          `json:"created_by,omitempty"`
 	LastEditedTime string          `json:"last_edited_time,omitempty"`
+	LastEditedBy   string          `json:"last_edited_by,omitempty"`
 	Parent         json.RawMessage `json:"parent,omitempty"`
+	Properties     any             `json:"properties,omitempty"`
+	ContentPreview string          `json:"content_preview,omitempty"`
 }
 
 // CaptureNotion stores metadata for shared Notion pages and databases.
@@ -165,6 +238,7 @@ func CaptureNotion(config NotionCaptureConfig) (NotionCaptureResult, error) {
 	if config.DatabasePath == "" {
 		config.DatabasePath = status.DatabasePath
 	}
+	currentUserID := ""
 	if config.Token == "" {
 		stored, err := readNotionConnectorConfig(status.HomeDir)
 		if err != nil {
@@ -177,6 +251,7 @@ func CaptureNotion(config NotionCaptureConfig) (NotionCaptureResult, error) {
 		if config.APIBaseURL == "" {
 			config.APIBaseURL = stored.APIBaseURL
 		}
+		currentUserID = notionOwnerUserID(stored.Owner)
 	}
 	if config.Token == "" {
 		return NotionCaptureResult{}, errors.New("notion token is required")
@@ -195,6 +270,9 @@ func CaptureNotion(config NotionCaptureConfig) (NotionCaptureResult, error) {
 	if err := db.Ping(); err != nil {
 		return NotionCaptureResult{}, fmt.Errorf("open database: %w", err)
 	}
+	if err := createSchema(db); err != nil {
+		return NotionCaptureResult{}, fmt.Errorf("create database schema: %w", err)
+	}
 
 	stored := 0
 	for _, object := range objects {
@@ -206,6 +284,13 @@ func CaptureNotion(config NotionCaptureConfig) (NotionCaptureResult, error) {
 			return NotionCaptureResult{}, err
 		}
 		if inserted {
+			stored++
+		}
+		indexed, err := updateNotionIndexAndStoreActivity(db, object, currentUserID, config)
+		if err != nil {
+			return NotionCaptureResult{}, err
+		}
+		if indexed {
 			stored++
 		}
 	}
@@ -388,6 +473,65 @@ func DisconnectNotion(config NotionDisconnectConfig) (NotionDisconnectResult, er
 	}, nil
 }
 
+func ListNotionIndex(config NotionIndexListConfig) (NotionIndexResult, error) {
+	db, err := openNotionIndexDatabase(config.HomeDir, config.DatabasePath)
+	if err != nil {
+		return NotionIndexResult{}, err
+	}
+	defer db.Close()
+	limit := config.Limit
+	if limit <= 0 {
+		limit = 25
+	}
+	rows, err := db.Query(`SELECT notion_id, object_type, COALESCE(title, ''), COALESCE(url, ''), COALESCE(last_edited_time, ''), COALESCE(last_edited_by, ''), COALESCE(content_preview, ''), COALESCE(content_synced_at, '')
+		FROM notion_index
+		ORDER BY COALESCE(last_edited_time, last_seen_at) DESC, notion_id
+		LIMIT ?`, limit)
+	if err != nil {
+		return NotionIndexResult{}, fmt.Errorf("query Notion index: %w", err)
+	}
+	defer rows.Close()
+	var items []NotionIndexItem
+	for rows.Next() {
+		var item NotionIndexItem
+		if err := rows.Scan(&item.ID, &item.ObjectType, &item.Title, &item.URL, &item.LastEditedTime, &item.LastEditedBy, &item.ContentPreview, &item.ContentSyncedAt); err != nil {
+			return NotionIndexResult{}, fmt.Errorf("scan Notion index: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return NotionIndexResult{}, fmt.Errorf("query Notion index: %w", err)
+	}
+	result := NotionIndexResult{Items: items}
+	result.Message = notionIndexListMessage(items)
+	return result, nil
+}
+
+func ShowNotionIndex(config NotionIndexShowConfig) (NotionIndexResult, error) {
+	id := strings.TrimSpace(config.ID)
+	if id == "" {
+		return NotionIndexResult{}, errors.New("notion index id is required")
+	}
+	db, err := openNotionIndexDatabase(config.HomeDir, config.DatabasePath)
+	if err != nil {
+		return NotionIndexResult{}, err
+	}
+	defer db.Close()
+	var item NotionIndexItem
+	err = db.QueryRow(`SELECT notion_id, object_type, COALESCE(title, ''), COALESCE(url, ''), COALESCE(last_edited_time, ''), COALESCE(last_edited_by, ''), COALESCE(content_preview, ''), COALESCE(content_synced_at, '')
+		FROM notion_index
+		WHERE notion_id = ?`, id).Scan(&item.ID, &item.ObjectType, &item.Title, &item.URL, &item.LastEditedTime, &item.LastEditedBy, &item.ContentPreview, &item.ContentSyncedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return NotionIndexResult{}, fmt.Errorf("notion index item %q not found", id)
+		}
+		return NotionIndexResult{}, fmt.Errorf("read Notion index item: %w", err)
+	}
+	result := NotionIndexResult{Item: item}
+	result.Message = notionIndexShowMessage(item)
+	return result, nil
+}
+
 func notionSearchAll(config NotionCaptureConfig) ([]notionSearchResult, error) {
 	baseURL := resolveNotionAPIBaseURL(config.APIBaseURL)
 	client := config.HTTPClient
@@ -441,6 +585,117 @@ func notionSearchAll(config NotionCaptureConfig) ([]notionSearchResult, error) {
 	return results, nil
 }
 
+func notionPageContentPreview(config NotionCaptureConfig, pageID string) (string, error) {
+	baseURL := resolveNotionAPIBaseURL(config.APIBaseURL)
+	client := config.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	var blocks []notionBlock
+	cursor := ""
+	for {
+		requestURL := strings.TrimRight(baseURL, "/") + "/v1/blocks/" + url.PathEscape(pageID) + "/children?page_size=100"
+		if cursor != "" {
+			requestURL += "&start_cursor=" + url.QueryEscape(cursor)
+		}
+		request, err := http.NewRequest(http.MethodGet, requestURL, nil)
+		if err != nil {
+			return "", fmt.Errorf("build Notion block request: %w", err)
+		}
+		request.Header.Set("Authorization", "Bearer "+config.Token)
+		request.Header.Set("Notion-Version", DefaultNotionAPIVersion)
+
+		response, err := client.Do(request)
+		if err != nil {
+			return "", fmt.Errorf("fetch Notion page content: %w", err)
+		}
+		responseBody, readErr := io.ReadAll(response.Body)
+		closeErr := response.Body.Close()
+		if readErr != nil {
+			return "", fmt.Errorf("read Notion block response: %w", readErr)
+		}
+		if closeErr != nil {
+			return "", fmt.Errorf("close Notion block response: %w", closeErr)
+		}
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			return "", fmt.Errorf("fetch Notion page content: status %d: %s", response.StatusCode, strings.TrimSpace(string(responseBody)))
+		}
+		var parsed notionBlockChildrenResponse
+		if err := json.Unmarshal(responseBody, &parsed); err != nil {
+			return "", fmt.Errorf("parse Notion block response: %w", err)
+		}
+		blocks = append(blocks, parsed.Results...)
+		if !parsed.HasMore || parsed.NextCursor == "" {
+			break
+		}
+		cursor = parsed.NextCursor
+	}
+	return notionContentPreview(blocks), nil
+}
+
+func notionContentPreview(blocks []notionBlock) string {
+	var lines []string
+	for _, block := range blocks {
+		line := notionBlockPreviewLine(block)
+		if line == "" {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return capNotionContentPreview(strings.Join(lines, "\n"), 4000)
+}
+
+func notionBlockPreviewLine(block notionBlock) string {
+	switch block.Type {
+	case "paragraph":
+		return notionPlainText(block.Paragraph.RichText)
+	case "heading_1":
+		return prefixNotionPreview("# ", notionPlainText(block.Heading1.RichText))
+	case "heading_2":
+		return prefixNotionPreview("## ", notionPlainText(block.Heading2.RichText))
+	case "heading_3":
+		return prefixNotionPreview("### ", notionPlainText(block.Heading3.RichText))
+	case "bulleted_list_item":
+		return prefixNotionPreview("- ", notionPlainText(block.BulletedListItem.RichText))
+	case "numbered_list_item":
+		return prefixNotionPreview("1. ", notionPlainText(block.NumberedListItem.RichText))
+	case "to_do":
+		marker := "- [ ] "
+		if block.ToDo.Checked {
+			marker = "- [x] "
+		}
+		return prefixNotionPreview(marker, notionPlainText(block.ToDo.RichText))
+	case "toggle":
+		return prefixNotionPreview("Toggle: ", notionPlainText(block.Toggle.RichText))
+	case "quote":
+		return prefixNotionPreview("> ", notionPlainText(block.Quote.RichText))
+	case "callout":
+		return notionPlainText(block.Callout.RichText)
+	case "child_page":
+		return prefixNotionPreview("Page: ", block.ChildPage.Title)
+	case "child_database":
+		return prefixNotionPreview("Database: ", block.ChildDatabase.Title)
+	default:
+		return ""
+	}
+}
+
+func prefixNotionPreview(prefix string, text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	return prefix + text
+}
+
+func capNotionContentPreview(preview string, limit int) string {
+	preview = strings.TrimSpace(preview)
+	if limit <= 0 || len(preview) <= limit {
+		return preview
+	}
+	return strings.TrimSpace(preview[:limit]) + "\n..."
+}
+
 func storeNotionEvent(db *sql.DB, object notionSearchResult) (bool, error) {
 	title := notionTitle(object)
 	timestamp := object.LastEditedTime
@@ -458,8 +713,11 @@ func storeNotionEvent(db *sql.DB, object notionSearchResult) (bool, error) {
 		Title:          title,
 		URL:            object.URL,
 		CreatedTime:    object.CreatedTime,
+		CreatedBy:      object.CreatedBy.ID,
 		LastEditedTime: object.LastEditedTime,
+		LastEditedBy:   object.LastEditedBy.ID,
 		Parent:         object.Parent,
+		Properties:     object.Properties,
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
@@ -499,16 +757,185 @@ func storeNotionEvent(db *sql.DB, object notionSearchResult) (bool, error) {
 	return rows > 0, nil
 }
 
+func updateNotionIndexAndStoreActivity(db *sql.DB, object notionSearchResult, currentUserID string, config NotionCaptureConfig) (bool, error) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	title := notionTitle(object)
+	propertiesJSON, err := json.Marshal(object.Properties)
+	if err != nil {
+		return false, fmt.Errorf("encode Notion properties snapshot: %w", err)
+	}
+	parentJSON := string(object.Parent)
+	if parentJSON == "" {
+		parentJSON = "{}"
+	}
+	createdTime, err := normalizeNotionTimestamp(object.CreatedTime)
+	if err != nil {
+		return false, err
+	}
+	lastEditedTime, err := normalizeNotionTimestamp(object.LastEditedTime)
+	if err != nil {
+		return false, err
+	}
+
+	previous, existed, err := readNotionIndexEntry(db, object.ID)
+	if err != nil {
+		return false, err
+	}
+	contentPreview := ""
+	contentSyncedAt := ""
+	shouldStoreActivity := existed && currentUserID != "" && object.LastEditedBy.ID == currentUserID && previous.LastEditedTime != lastEditedTime
+	if shouldStoreActivity && object.Object == "page" {
+		contentPreview, err = notionPageContentPreview(config, object.ID)
+		if err != nil {
+			return false, err
+		}
+		contentSyncedAt = now
+	}
+	_, err = db.Exec(`INSERT INTO notion_index (
+			notion_id, object_type, title, url, parent_json, properties_json,
+			content_preview, content_synced_at, created_time, created_by, last_edited_time, last_edited_by,
+			source, first_seen_at, last_seen_at, last_synced_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(notion_id) DO UPDATE SET
+			object_type = excluded.object_type,
+			title = excluded.title,
+			url = excluded.url,
+			parent_json = excluded.parent_json,
+			properties_json = excluded.properties_json,
+			content_preview = COALESCE(excluded.content_preview, notion_index.content_preview),
+			content_synced_at = COALESCE(excluded.content_synced_at, notion_index.content_synced_at),
+			created_time = excluded.created_time,
+			created_by = excluded.created_by,
+			last_edited_time = excluded.last_edited_time,
+			last_edited_by = excluded.last_edited_by,
+			source = excluded.source,
+			last_seen_at = excluded.last_seen_at,
+			last_synced_at = excluded.last_synced_at`,
+		object.ID,
+		object.Object,
+		emptyStringAsNull(title),
+		emptyStringAsNull(object.URL),
+		parentJSON,
+		string(propertiesJSON),
+		emptyStringAsNull(contentPreview),
+		emptyStringAsNull(contentSyncedAt),
+		emptyStringAsNull(createdTime),
+		emptyStringAsNull(object.CreatedBy.ID),
+		emptyStringAsNull(lastEditedTime),
+		emptyStringAsNull(object.LastEditedBy.ID),
+		"search",
+		now,
+		now,
+		now,
+	)
+	if err != nil {
+		return false, fmt.Errorf("store Notion index: %w", err)
+	}
+	if !shouldStoreActivity {
+		return false, nil
+	}
+	return storeNotionActivityEvent(db, object, title, createdTime, lastEditedTime, contentPreview)
+}
+
+type notionIndexEntry struct {
+	LastEditedTime string
+}
+
+func readNotionIndexEntry(db *sql.DB, notionID string) (notionIndexEntry, bool, error) {
+	var entry notionIndexEntry
+	err := db.QueryRow(`SELECT COALESCE(last_edited_time, '') FROM notion_index WHERE notion_id = ?`, notionID).Scan(&entry.LastEditedTime)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return notionIndexEntry{}, false, nil
+		}
+		return notionIndexEntry{}, false, fmt.Errorf("read Notion index: %w", err)
+	}
+	return entry, true, nil
+}
+
+func storeNotionActivityEvent(db *sql.DB, object notionSearchResult, title string, createdTime string, lastEditedTime string, contentPreview string) (bool, error) {
+	eventType := "notion." + object.Object + "_updated"
+	payload := notionEventPayload{
+		Object:         object.Object,
+		ID:             object.ID,
+		Title:          title,
+		URL:            object.URL,
+		CreatedTime:    createdTime,
+		CreatedBy:      object.CreatedBy.ID,
+		LastEditedTime: lastEditedTime,
+		LastEditedBy:   object.LastEditedBy.ID,
+		Parent:         object.Parent,
+		Properties:     object.Properties,
+		ContentPreview: contentPreview,
+	}
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return false, fmt.Errorf("encode Notion activity payload: %w", err)
+	}
+	_, err = db.Exec(`INSERT INTO events (
+			id, source, type, timestamp, payload_json, project, actor, summary, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO NOTHING`,
+		notionEventID(eventType, object.ID+":"+lastEditedTime),
+		"notion",
+		eventType,
+		lastEditedTime,
+		string(payloadJSON),
+		emptyStringAsNull(""),
+		emptyStringAsNull(object.LastEditedBy.ID),
+		emptyStringAsNull(title),
+		time.Now().UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return false, fmt.Errorf("store Notion activity event: %w", err)
+	}
+	return true, nil
+}
+
 func notionTitle(object notionSearchResult) string {
 	if object.Object == "database" {
 		return notionPlainText(object.Title)
 	}
 	for _, property := range object.Properties {
-		if property.Type == "title" {
-			if title := notionPlainText(property.Title); title != "" {
+		var parsed notionProperty
+		if err := json.Unmarshal(property, &parsed); err != nil {
+			continue
+		}
+		if parsed.Type == "title" {
+			if title := notionPlainText(parsed.Title); title != "" {
 				return title
 			}
 		}
+	}
+	return ""
+}
+
+func normalizeNotionTimestamp(timestamp string) (string, error) {
+	if timestamp == "" {
+		return "", nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, timestamp)
+	if err != nil {
+		return "", fmt.Errorf("parse Notion timestamp %q: %w", timestamp, err)
+	}
+	return parsed.UTC().Format(time.RFC3339Nano), nil
+}
+
+func notionOwnerUserID(owner json.RawMessage) string {
+	if len(owner) == 0 {
+		return ""
+	}
+	var parsed struct {
+		Type string `json:"type"`
+		User struct {
+			ID string `json:"id"`
+		} `json:"user"`
+	}
+	if err := json.Unmarshal(owner, &parsed); err != nil {
+		return ""
+	}
+	if parsed.Type == "user" {
+		return parsed.User.ID
 	}
 	return ""
 }
@@ -534,6 +961,76 @@ func notionCaptureMessage(result NotionCaptureResult) string {
 		"Database: " + result.DatabasePath,
 		fmt.Sprintf("Events stored: %d", result.EventsStored),
 	}, "\n")
+}
+
+func openNotionIndexDatabase(homeDir string, databasePath string) (*sql.DB, error) {
+	status, err := prepareRunStatus(RunConfig{
+		HomeDir:      homeDir,
+		DatabasePath: databasePath,
+	})
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite3", status.DatabasePath)
+	if err != nil {
+		return nil, fmt.Errorf("open database: %w", err)
+	}
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("open database: %w", err)
+	}
+	if err := createSchema(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("create database schema: %w", err)
+	}
+	return db, nil
+}
+
+func notionIndexListMessage(items []NotionIndexItem) string {
+	lines := []string{"Notion index", fmt.Sprintf("%s indexed", pluralize(len(items), "item"))}
+	if len(items) == 0 {
+		lines = append(lines, "No Notion objects indexed yet.")
+		return strings.Join(lines, "\n")
+	}
+	for _, item := range items {
+		title := item.Title
+		if title == "" {
+			title = "(untitled)"
+		}
+		lines = append(lines, fmt.Sprintf("- %s %s %s", item.ID, item.ObjectType, title))
+		if item.LastEditedTime != "" {
+			lines = append(lines, "  last edited: "+item.LastEditedTime)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func notionIndexShowMessage(item NotionIndexItem) string {
+	lines := []string{
+		"Notion index item",
+		"ID: " + item.ID,
+		"Type: " + item.ObjectType,
+	}
+	if item.Title != "" {
+		lines = append(lines, "Title: "+item.Title)
+	}
+	if item.URL != "" {
+		lines = append(lines, "URL: "+item.URL)
+	}
+	if item.LastEditedTime != "" {
+		lines = append(lines, "Last edited: "+item.LastEditedTime)
+	}
+	if item.LastEditedBy != "" {
+		lines = append(lines, "Last edited by: "+item.LastEditedBy)
+	}
+	if item.ContentSyncedAt != "" {
+		lines = append(lines, "Content synced: "+item.ContentSyncedAt)
+	}
+	if strings.TrimSpace(item.ContentPreview) != "" {
+		lines = append(lines, "", "Content preview:")
+		lines = append(lines, item.ContentPreview)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func notionAuthorizationURL(config NotionConnectConfig, state string) string {

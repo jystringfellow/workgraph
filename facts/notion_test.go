@@ -144,6 +144,301 @@ func TestNotionCaptureStoresSharedPagesAndDatabases(t *testing.T) {
 	}
 }
 
+func TestNotionCaptureIndexesObjectsAndStoresChangedByMeActivity(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, "notion.json"), []byte(`{
+  "access_token": "notion-token",
+  "owner": {"type": "user", "user": {"id": "user-me"}}
+}`), 0o600); err != nil {
+		t.Fatalf("write notion config: %v", err)
+	}
+	dbPath := filepath.Join(homeDir, "workgraph.db")
+	seedNotionIndex(t, dbPath, "page-1", "page", "Old title", "2026-06-07T15:00:00Z", "user-me")
+	seedNotionIndex(t, dbPath, "page-2", "page", "Other old title", "2026-06-07T15:00:00Z", "user-me")
+
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/v1/search":
+			_, _ = response.Write([]byte(`{
+  "object": "list",
+  "results": [
+    {
+      "object": "page",
+      "id": "page-1",
+      "created_time": "2026-06-07T14:00:00.000Z",
+      "created_by": {"object": "user", "id": "user-me"},
+      "last_edited_time": "2026-06-07T16:30:00.000Z",
+      "last_edited_by": {"object": "user", "id": "user-me"},
+      "url": "https://www.notion.so/page-1",
+      "parent": {"type": "workspace", "workspace": true},
+      "properties": {
+        "title": {
+          "id": "title",
+          "type": "title",
+          "title": [{"plain_text": "Updated launch plan"}]
+        },
+        "Status": {"id": "status", "type": "status", "status": {"name": "In progress"}}
+      }
+    },
+    {
+      "object": "page",
+      "id": "page-2",
+      "created_time": "2026-06-07T14:00:00.000Z",
+      "created_by": {"object": "user", "id": "user-me"},
+      "last_edited_time": "2026-06-07T16:45:00.000Z",
+      "last_edited_by": {"object": "user", "id": "user-someone-else"},
+      "url": "https://www.notion.so/page-2",
+      "properties": {
+        "title": {
+          "id": "title",
+          "type": "title",
+          "title": [{"plain_text": "Someone else's update"}]
+        }
+      }
+    }
+  ],
+  "next_cursor": null,
+  "has_more": false
+}`))
+		case request.Method == http.MethodGet && request.URL.Path == "/v1/blocks/page-1/children":
+			_, _ = response.Write([]byte(`{"object":"list","results":[],"next_cursor":null,"has_more":false}`))
+		default:
+			t.Fatalf("unexpected Notion request %s %s", request.Method, request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	output, err := runworkgraph(t, repoRoot, "notion", "capture",
+		"--home", homeDir,
+		"--notion-api-base", server.URL,
+	)
+	if err != nil {
+		t.Fatalf("workgraph notion capture failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Events stored: 3") {
+		t.Fatalf("expected metadata and changed-by-me activity events, got:\n%s", output)
+	}
+	activity := notionEvent(t, dbPath, "notion.page_updated", "page-1:2026-06-07T16:30:00Z")
+	if activity.Timestamp != "2026-06-07T16:30:00Z" {
+		t.Fatalf("expected activity timestamp from last_edited_time, got %q", activity.Timestamp)
+	}
+	if activity.Summary != "Updated launch plan" {
+		t.Fatalf("expected activity summary from title, got %q", activity.Summary)
+	}
+	for _, expected := range []string{
+		`"object":"page"`,
+		`"id":"page-1"`,
+		`"last_edited_by":"user-me"`,
+		`"properties"`,
+		`"Status"`,
+		`"In progress"`,
+	} {
+		if !strings.Contains(activity.PayloadJSON, expected) {
+			t.Fatalf("expected activity payload to include %s, got %s", expected, activity.PayloadJSON)
+		}
+	}
+
+	index := notionIndexRow(t, dbPath, "page-1")
+	if index.Title != "Updated launch plan" || index.LastEditedTime != "2026-06-07T16:30:00Z" || index.LastEditedBy != "user-me" {
+		t.Fatalf("expected updated notion index, got %#v", index)
+	}
+	if !strings.Contains(index.PropertiesJSON, `"Status"`) || !strings.Contains(index.PropertiesJSON, `"In progress"`) {
+		t.Fatalf("expected properties snapshot in index, got %s", index.PropertiesJSON)
+	}
+	otherIndex := notionIndexRow(t, dbPath, "page-2")
+	if otherIndex.Title != "Someone else's update" || otherIndex.LastEditedBy != "user-someone-else" {
+		t.Fatalf("expected other-user page to be indexed, got %#v", otherIndex)
+	}
+	if notionEventExists(t, dbPath, "notion.page_updated", "page-2:2026-06-07T16:45:00Z") {
+		t.Fatalf("expected other-user page update not to create personal activity event")
+	}
+}
+
+func TestNotionCaptureFetchesPreviewForChangedByMePages(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, "notion.json"), []byte(`{
+  "access_token": "notion-token",
+  "owner": {"type": "user", "user": {"id": "user-me"}}
+}`), 0o600); err != nil {
+		t.Fatalf("write notion config: %v", err)
+	}
+	dbPath := filepath.Join(homeDir, "workgraph.db")
+	seedNotionIndex(t, dbPath, "page-1", "page", "Old launch plan", "2026-06-07T15:00:00Z", "user-me")
+	seedNotionIndex(t, dbPath, "page-2", "page", "Other old title", "2026-06-07T15:00:00Z", "user-me")
+
+	blockRequests := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/v1/search":
+			_, _ = response.Write([]byte(`{
+  "object": "list",
+  "results": [
+    {
+      "object": "page",
+      "id": "page-1",
+      "created_time": "2026-06-07T14:00:00.000Z",
+      "created_by": {"object": "user", "id": "user-me"},
+      "last_edited_time": "2026-06-07T16:30:00.000Z",
+      "last_edited_by": {"object": "user", "id": "user-me"},
+      "url": "https://www.notion.so/page-1",
+      "properties": {
+        "title": {
+          "id": "title",
+          "type": "title",
+          "title": [{"plain_text": "Updated launch plan"}]
+        }
+      }
+    },
+    {
+      "object": "page",
+      "id": "page-2",
+      "created_time": "2026-06-07T14:00:00.000Z",
+      "created_by": {"object": "user", "id": "user-me"},
+      "last_edited_time": "2026-06-07T16:45:00.000Z",
+      "last_edited_by": {"object": "user", "id": "user-someone-else"},
+      "url": "https://www.notion.so/page-2",
+      "properties": {
+        "title": {
+          "id": "title",
+          "type": "title",
+          "title": [{"plain_text": "Someone else's update"}]
+        }
+      }
+    }
+  ],
+  "next_cursor": null,
+  "has_more": false
+}`))
+		case request.Method == http.MethodGet && request.URL.Path == "/v1/blocks/page-1/children":
+			blockRequests["page-1"]++
+			_, _ = response.Write([]byte(`{
+  "object": "list",
+  "results": [
+    {
+      "object": "block",
+      "id": "block-1",
+      "type": "heading_2",
+      "heading_2": {"rich_text": [{"plain_text": "Launch checklist"}]}
+    },
+    {
+      "object": "block",
+      "id": "block-2",
+      "type": "paragraph",
+      "paragraph": {"rich_text": [{"plain_text": "Added beta rollout notes and owner follow-ups."}]}
+    },
+    {
+      "object": "block",
+      "id": "block-3",
+      "type": "to_do",
+      "to_do": {"checked": false, "rich_text": [{"plain_text": "Confirm Notion polling preview."}]}
+    }
+  ],
+  "next_cursor": null,
+  "has_more": false
+}`))
+		case request.Method == http.MethodGet && request.URL.Path == "/v1/blocks/page-2/children":
+			blockRequests["page-2"]++
+			http.Error(response, "page-2 blocks should not be fetched", http.StatusInternalServerError)
+		default:
+			t.Fatalf("unexpected Notion request %s %s", request.Method, request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	output, err := runworkgraph(t, repoRoot, "notion", "capture",
+		"--home", homeDir,
+		"--notion-api-base", server.URL,
+	)
+	if err != nil {
+		t.Fatalf("workgraph notion capture failed: %v\n%s", err, output)
+	}
+	if blockRequests["page-1"] != 1 {
+		t.Fatalf("expected changed-by-me page blocks to be fetched once, got %#v", blockRequests)
+	}
+	if blockRequests["page-2"] != 0 {
+		t.Fatalf("expected other-user page blocks not to be fetched, got %#v", blockRequests)
+	}
+
+	activity := notionEvent(t, dbPath, "notion.page_updated", "page-1:2026-06-07T16:30:00Z")
+	for _, expected := range []string{
+		`"content_preview"`,
+		`## Launch checklist`,
+		`Added beta rollout notes and owner follow-ups.`,
+		`- [ ] Confirm Notion polling preview.`,
+	} {
+		if !strings.Contains(activity.PayloadJSON, expected) {
+			t.Fatalf("expected activity payload to include %s, got %s", expected, activity.PayloadJSON)
+		}
+	}
+
+	index := notionIndexRow(t, dbPath, "page-1")
+	if !strings.Contains(index.ContentPreview, "Launch checklist") || !strings.Contains(index.ContentPreview, "Confirm Notion polling preview") {
+		t.Fatalf("expected content preview in notion index, got %#v", index)
+	}
+}
+
+func TestNotionIndexListAndShowInspectStoredPages(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	dbPath := filepath.Join(homeDir, "workgraph.db")
+	seedNotionIndex(t, dbPath, "page-1", "page", "Updated launch plan", "2026-06-08T15:00:00Z", "user-me")
+	setNotionIndexPreview(t, dbPath, "page-1", "## Launch checklist\nAdded beta rollout notes.")
+
+	output, err := runworkgraph(t, repoRoot, "notion", "index", "list",
+		"--home", homeDir,
+	)
+	if err != nil {
+		t.Fatalf("workgraph notion index list failed: %v\n%s", err, output)
+	}
+	for _, expected := range []string{
+		"Notion index",
+		"page-1",
+		"page",
+		"Updated launch plan",
+		"2026-06-08T15:00:00Z",
+	} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected notion index list output to include %q, got:\n%s", expected, output)
+		}
+	}
+
+	output, err = runworkgraph(t, repoRoot, "notion", "index", "show", "page-1",
+		"--home", homeDir,
+	)
+	if err != nil {
+		t.Fatalf("workgraph notion index show failed: %v\n%s", err, output)
+	}
+	for _, expected := range []string{
+		"Notion index item",
+		"ID: page-1",
+		"Type: page",
+		"Title: Updated launch plan",
+		"Content preview:",
+		"## Launch checklist",
+		"Added beta rollout notes.",
+	} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected notion index show output to include %q, got:\n%s", expected, output)
+		}
+	}
+}
+
 func TestNotionConnectOAuthStoresConnectorConfig(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
@@ -331,6 +626,14 @@ type storedNotionEvent struct {
 	PayloadJSON string
 }
 
+type storedNotionIndex struct {
+	Title          string
+	LastEditedTime string
+	LastEditedBy   string
+	PropertiesJSON string
+	ContentPreview string
+}
+
 func notionEvent(t *testing.T, dbPath, eventType, objectID string) storedNotionEvent {
 	t.Helper()
 
@@ -347,6 +650,82 @@ func notionEvent(t *testing.T, dbPath, eventType, objectID string) storedNotionE
 		t.Fatalf("read Notion event %s: %v", id, err)
 	}
 	return event
+}
+
+func seedNotionIndex(t *testing.T, dbPath, notionID, objectType, title, lastEditedTime, lastEditedBy string) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	now := "2026-06-07T15:00:00Z"
+	_, err = db.Exec(`INSERT INTO notion_index (
+			notion_id, object_type, title, url, parent_json, properties_json,
+			created_time, created_by, last_edited_time, last_edited_by,
+			source, first_seen_at, last_seen_at, last_synced_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		notionID,
+		objectType,
+		title,
+		"",
+		nil,
+		`{}`,
+		lastEditedTime,
+		lastEditedBy,
+		lastEditedTime,
+		lastEditedBy,
+		"search",
+		now,
+		now,
+		now,
+	)
+	if err != nil {
+		t.Fatalf("seed notion index: %v", err)
+	}
+}
+
+func notionIndexRow(t *testing.T, dbPath, notionID string) storedNotionIndex {
+	t.Helper()
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	var row storedNotionIndex
+	err = db.QueryRow(`SELECT title, last_edited_time, last_edited_by, COALESCE(properties_json, ''), COALESCE(content_preview, '') FROM notion_index WHERE notion_id = ?`, notionID).Scan(&row.Title, &row.LastEditedTime, &row.LastEditedBy, &row.PropertiesJSON, &row.ContentPreview)
+	if err != nil {
+		t.Fatalf("read notion index %s: %v", notionID, err)
+	}
+	return row
+}
+
+func setNotionIndexPreview(t *testing.T, dbPath, notionID, preview string) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	_, err = db.Exec(`UPDATE notion_index SET content_preview = ?, content_synced_at = ? WHERE notion_id = ?`, preview, "2026-06-08T15:01:00Z", notionID)
+	if err != nil {
+		t.Fatalf("set notion index preview: %v", err)
+	}
+}
+
+func notionEventExists(t *testing.T, dbPath, eventType, objectID string) bool {
+	t.Helper()
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	var count int
+	id := fmt.Sprintf("%s:%s", eventType, objectID)
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE id = ?`, id).Scan(&count); err != nil {
+		t.Fatalf("count notion event %s: %v", id, err)
+	}
+	return count > 0
 }
 
 func notionAuthorizationURL(t *testing.T, output string) string {

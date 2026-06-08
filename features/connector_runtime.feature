@@ -1,7 +1,7 @@
 Feature: Connector runtime
 
 Scenario: Connected providers are capture-ready
-  Given workgraph has connected Slack, calendar, mail, and Notion accounts
+  Given workgraph has connected Slack, Slack Lists, calendar, mail, Notion, and Azure Boards accounts
   When I run "workgraph start"
   Then workgraph polls enabled connected providers at visible intervals
   And manual capture commands remain available for imports and debugging
