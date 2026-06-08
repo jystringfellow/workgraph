@@ -25,6 +25,14 @@ Scenario: Test an OpenAI-compatible LLM profile
   And the output includes the selected profile, provider, model, destination, and response text
   And no connector data or memory content is sent for the test command
 
+Scenario: Use a Bedrock inference profile for LLM tasks
+  Given workgraph has a Bedrock LLM profile with an inference profile ARN
+  When I run "workgraph llm test --profile bedrock-work"
+  Then workgraph calls Bedrock Runtime Converse with the configured ARN as the model id
+  And the output includes the selected profile, provider, ARN, destination, and response text
+  When I route summarize tasks to "bedrock-work"
+  Then "workgraph llm summarize today" uses the Bedrock profile for generation
+
 Scenario: Preview today's LLM summary without sending data
   Given workgraph has captured local events today
   And workgraph has a configured LLM profile for summarize tasks
@@ -33,6 +41,16 @@ Scenario: Preview today's LLM summary without sending data
   And workgraph prints the focused context and prompt that would be sent
   And workgraph does not call the LLM provider
   And workgraph does not write memory files
+
+Scenario: Stream today's LLM summary
+  Given workgraph has captured local events today
+  And workgraph has a configured LLM profile for summarize tasks
+  When I run "workgraph llm summarize today"
+  Then workgraph prints the selected profile and request destination
+  And workgraph shows that it is thinking before the first model chunk arrives
+  And workgraph streams summary text as the provider returns it
+  When I run "workgraph llm summarize today --no-stream"
+  Then workgraph prints the complete summary after the provider call finishes
 
 Scenario: Future LLM association suggestions stay reviewable
   Given workgraph has related Slack, calendar, GitHub, Notion, mail, and local file events

@@ -45,10 +45,14 @@ type RunConfig struct {
 	GitHubCommand string
 	// SlackPollInterval controls Slack message capture while running.
 	SlackPollInterval time.Duration
+	// SlackListPollInterval controls Slack List item capture while running.
+	SlackListPollInterval time.Duration
 	// SlackToken is the Slack API bearer token used for read-only polling.
 	SlackToken string
 	// SlackChannels are explicit Slack channel ids to poll.
 	SlackChannels []string
+	// SlackListIDs are explicit Slack List ids to poll.
+	SlackListIDs []string
 	// SlackIncludeDMs opts into Slack IM and MPIM discovery.
 	SlackIncludeDMs bool
 	// SlackSelfUserID is the authorized Slack user id for self-authored events.
@@ -69,6 +73,10 @@ type RunConfig struct {
 	NotionPollInterval time.Duration
 	// NotionHTTPClient overrides the Notion API HTTP client for tests.
 	NotionHTTPClient *http.Client
+	// AzureBoardsPollInterval controls connected Azure Boards capture while running.
+	AzureBoardsPollInterval time.Duration
+	// AzureBoardsHTTPClient overrides the Azure Boards API HTTP client for tests.
+	AzureBoardsHTTPClient *http.Client
 }
 
 // RunStatus describes an active capture process.
@@ -99,43 +107,48 @@ type CapturedEvent struct {
 
 // RunCapture watches local files and stores events until stopped.
 type RunCapture struct {
-	Status               RunStatus
-	Events               <-chan CapturedEvent
-	db                   *sql.DB
-	watcher              *fsnotify.Watcher
-	homeDir              string
-	databasePath         string
-	watchDirs            []string
-	ignorePaths          []string
-	ignoreNames          []string
-	watchBudget          *watchBudget
-	gitEnabled           bool
-	gitPollInterval      time.Duration
-	githubEnabled        bool
-	githubPollInterval   time.Duration
-	githubCommand        string
-	slackEnabled         bool
-	slackPollInterval    time.Duration
-	slackToken           string
-	slackChannels        []string
-	slackIncludeDMs      bool
-	slackSelfUserID      string
-	slackAPIBaseURL      string
-	slackHTTPClient      *http.Client
-	slackCursors         map[string]string
-	slackThreadCursors   map[string]string
-	calendarPollInterval time.Duration
-	calendarProviders    []string
-	calendarHTTPClient   *http.Client
-	mailPollInterval     time.Duration
-	mailProviders        []string
-	mailHTTPClient       *http.Client
-	notionPollInterval   time.Duration
-	notionEnabled        bool
-	notionHTTPClient     *http.Client
-	suppressedCreates    map[string]time.Time
-	deleteCoalesceDelay  time.Duration
-	events               chan CapturedEvent
+	Status                  RunStatus
+	Events                  <-chan CapturedEvent
+	db                      *sql.DB
+	watcher                 *fsnotify.Watcher
+	homeDir                 string
+	databasePath            string
+	watchDirs               []string
+	ignorePaths             []string
+	ignoreNames             []string
+	watchBudget             *watchBudget
+	gitEnabled              bool
+	gitPollInterval         time.Duration
+	githubEnabled           bool
+	githubPollInterval      time.Duration
+	githubCommand           string
+	slackEnabled            bool
+	slackPollInterval       time.Duration
+	slackListPollInterval   time.Duration
+	slackToken              string
+	slackChannels           []string
+	slackListIDs            []string
+	slackIncludeDMs         bool
+	slackSelfUserID         string
+	slackAPIBaseURL         string
+	slackHTTPClient         *http.Client
+	slackCursors            map[string]string
+	slackThreadCursors      map[string]string
+	calendarPollInterval    time.Duration
+	calendarProviders       []string
+	calendarHTTPClient      *http.Client
+	mailPollInterval        time.Duration
+	mailProviders           []string
+	mailHTTPClient          *http.Client
+	notionPollInterval      time.Duration
+	notionEnabled           bool
+	notionHTTPClient        *http.Client
+	azureBoardsEnabled      bool
+	azureBoardsPollInterval time.Duration
+	azureBoardsHTTPClient   *http.Client
+	suppressedCreates       map[string]time.Time
+	deleteCoalesceDelay     time.Duration
+	events                  chan CapturedEvent
 }
 
 type fileEventPayload struct {
@@ -199,13 +212,21 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 
 	slackToken := config.SlackToken
 	slackChannels := append([]string(nil), config.SlackChannels...)
+	slackListIDs := append([]string(nil), config.SlackListIDs...)
 	slackIncludeDMs := config.SlackIncludeDMs
 	slackSelfUserID := config.SlackSelfUserID
 	slackAPIBaseURL := config.SlackAPIBaseURL
-	if slackToken == "" && len(slackChannels) == 0 {
+	if slackToken == "" || len(slackChannels) == 0 || len(slackListIDs) == 0 {
 		if slackConfig, err := readSlackConnectorConfig(status.HomeDir); err == nil {
-			slackToken = slackConfig.AccessToken
-			slackChannels = append([]string(nil), slackConfig.Channels...)
+			if slackToken == "" {
+				slackToken = slackConfig.AccessToken
+			}
+			if len(slackChannels) == 0 {
+				slackChannels = append([]string(nil), slackConfig.Channels...)
+			}
+			if len(slackListIDs) == 0 {
+				slackListIDs = append([]string(nil), slackConfig.ListIDs...)
+			}
 			slackIncludeDMs = slackConfig.IncludeDMs
 			slackSelfUserID = slackConfig.AuthedUserID
 			if slackAPIBaseURL == "" {
@@ -222,49 +243,55 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 	calendarProviders := connectedCalendarProviders(status.HomeDir, connectorState)
 	mailProviders := connectedMailProviders(status.HomeDir, connectorState)
 	notionEnabled := notionConnectorConnected(status.HomeDir) && connectorEnabled(connectorState, "notion")
+	azureBoardsEnabled := azureBoardsConnectorConnected(status.HomeDir) && connectorEnabled(connectorState, "azure.boards")
 	status.MonitoredConnectors = monitoredConnectorIDs(status.HomeDir, connectorState)
 
 	status.Message = runMessage(status)
 	events := make(chan CapturedEvent, 128)
 
 	return &RunCapture{
-		Status:               status,
-		Events:               events,
-		db:                   db,
-		watcher:              watcher,
-		homeDir:              status.HomeDir,
-		databasePath:         status.DatabasePath,
-		watchDirs:            status.WatchDirs,
-		ignorePaths:          status.IgnorePaths,
-		ignoreNames:          status.IgnoreNames,
-		watchBudget:          budget,
-		gitEnabled:           connectorEnabled(connectorState, "git"),
-		gitPollInterval:      connectorInterval(connectorState, "git", gitPollInterval(config.GitPollInterval)),
-		githubEnabled:        connectorEnabled(connectorState, "github"),
-		githubPollInterval:   connectorInterval(connectorState, "github", githubPollInterval(config.GitHubPollInterval)),
-		githubCommand:        config.GitHubCommand,
-		slackEnabled:         connectorEnabled(connectorState, "slack"),
-		slackPollInterval:    connectorInterval(connectorState, "slack", slackPollInterval(config.SlackPollInterval)),
-		slackToken:           slackToken,
-		slackChannels:        slackChannels,
-		slackIncludeDMs:      slackIncludeDMs,
-		slackSelfUserID:      slackSelfUserID,
-		slackAPIBaseURL:      slackAPIBaseURL,
-		slackHTTPClient:      config.SlackHTTPClient,
-		slackCursors:         map[string]string{},
-		slackThreadCursors:   map[string]string{},
-		calendarPollInterval: connectorInterval(connectorState, "calendar.google", calendarPollInterval(config.CalendarPollInterval)),
-		calendarProviders:    calendarProviders,
-		calendarHTTPClient:   config.CalendarHTTPClient,
-		mailPollInterval:     connectorInterval(connectorState, "mail.google", mailPollInterval(config.MailPollInterval)),
-		mailProviders:        mailProviders,
-		mailHTTPClient:       config.MailHTTPClient,
-		notionPollInterval:   connectorInterval(connectorState, "notion", notionPollInterval(config.NotionPollInterval)),
-		notionEnabled:        notionEnabled,
-		notionHTTPClient:     config.NotionHTTPClient,
-		suppressedCreates:    map[string]time.Time{},
-		deleteCoalesceDelay:  75 * time.Millisecond,
-		events:               events,
+		Status:                  status,
+		Events:                  events,
+		db:                      db,
+		watcher:                 watcher,
+		homeDir:                 status.HomeDir,
+		databasePath:            status.DatabasePath,
+		watchDirs:               status.WatchDirs,
+		ignorePaths:             status.IgnorePaths,
+		ignoreNames:             status.IgnoreNames,
+		watchBudget:             budget,
+		gitEnabled:              connectorEnabled(connectorState, "git"),
+		gitPollInterval:         connectorInterval(connectorState, "git", gitPollInterval(config.GitPollInterval)),
+		githubEnabled:           connectorEnabled(connectorState, "github"),
+		githubPollInterval:      connectorInterval(connectorState, "github", githubPollInterval(config.GitHubPollInterval)),
+		githubCommand:           config.GitHubCommand,
+		slackEnabled:            connectorEnabled(connectorState, "slack"),
+		slackPollInterval:       connectorInterval(connectorState, "slack", slackPollInterval(config.SlackPollInterval)),
+		slackListPollInterval:   connectorInterval(connectorState, "slack.lists", slackListPollInterval(config.SlackListPollInterval)),
+		slackToken:              slackToken,
+		slackChannels:           slackChannels,
+		slackListIDs:            slackListIDs,
+		slackIncludeDMs:         slackIncludeDMs,
+		slackSelfUserID:         slackSelfUserID,
+		slackAPIBaseURL:         slackAPIBaseURL,
+		slackHTTPClient:         config.SlackHTTPClient,
+		slackCursors:            map[string]string{},
+		slackThreadCursors:      map[string]string{},
+		calendarPollInterval:    connectorInterval(connectorState, "calendar.google", calendarPollInterval(config.CalendarPollInterval)),
+		calendarProviders:       calendarProviders,
+		calendarHTTPClient:      config.CalendarHTTPClient,
+		mailPollInterval:        connectorInterval(connectorState, "mail.google", mailPollInterval(config.MailPollInterval)),
+		mailProviders:           mailProviders,
+		mailHTTPClient:          config.MailHTTPClient,
+		notionPollInterval:      connectorInterval(connectorState, "notion", notionPollInterval(config.NotionPollInterval)),
+		notionEnabled:           notionEnabled,
+		notionHTTPClient:        config.NotionHTTPClient,
+		azureBoardsEnabled:      azureBoardsEnabled,
+		azureBoardsPollInterval: connectorInterval(connectorState, "azure.boards", azureBoardsPollInterval(config.AzureBoardsPollInterval)),
+		azureBoardsHTTPClient:   config.AzureBoardsHTTPClient,
+		suppressedCreates:       map[string]time.Time{},
+		deleteCoalesceDelay:     75 * time.Millisecond,
+		events:                  events,
 	}, nil
 }
 
@@ -278,12 +305,16 @@ func (capture *RunCapture) Run(ctx context.Context) error {
 	defer githubTicker.Stop()
 	slackTicker := time.NewTicker(capture.slackPollInterval)
 	defer slackTicker.Stop()
+	slackListTicker := time.NewTicker(capture.slackListPollInterval)
+	defer slackListTicker.Stop()
 	calendarTicker := time.NewTicker(capture.calendarPollInterval)
 	defer calendarTicker.Stop()
 	mailTicker := time.NewTicker(capture.mailPollInterval)
 	defer mailTicker.Stop()
 	notionTicker := time.NewTicker(capture.notionPollInterval)
 	defer notionTicker.Stop()
+	azureBoardsTicker := time.NewTicker(capture.azureBoardsPollInterval)
+	defer azureBoardsTicker.Stop()
 
 	for {
 		select {
@@ -301,6 +332,10 @@ func (capture *RunCapture) Run(ctx context.Context) error {
 			if err := capture.captureSlackEvents(); err != nil {
 				return err
 			}
+		case <-slackListTicker.C:
+			if err := capture.captureSlackListItems(); err != nil {
+				return err
+			}
 		case <-calendarTicker.C:
 			if err := capture.captureCalendarEvents(); err != nil {
 				return err
@@ -311,6 +346,10 @@ func (capture *RunCapture) Run(ctx context.Context) error {
 			}
 		case <-notionTicker.C:
 			if err := capture.captureNotionEvents(); err != nil {
+				return err
+			}
+		case <-azureBoardsTicker.C:
+			if err := capture.captureAzureBoardsEvents(); err != nil {
 				return err
 			}
 		case event, ok := <-capture.watcher.Events:
@@ -364,6 +403,11 @@ func connectedMailProviders(homeDir string, state connectorRuntimeFile) []string
 func notionConnectorConnected(homeDir string) bool {
 	config, err := readNotionConnectorConfig(homeDir)
 	return err == nil && strings.TrimSpace(config.AccessToken) != ""
+}
+
+func azureBoardsConnectorConnected(homeDir string) bool {
+	config, err := readAzureBoardsConnectorConfig(homeDir)
+	return err == nil && strings.TrimSpace(config.AccessToken) != "" && strings.TrimSpace(config.Organization) != "" && strings.TrimSpace(config.Project) != ""
 }
 
 func monitoredConnectorIDs(homeDir string, state connectorRuntimeFile) []string {
@@ -433,6 +477,26 @@ func (capture *RunCapture) captureSlackEvents() error {
 	return nil
 }
 
+func (capture *RunCapture) captureSlackListItems() error {
+	if !capture.slackEnabled || capture.slackToken == "" || len(capture.slackListIDs) == 0 {
+		return nil
+	}
+	for _, listID := range capture.slackListIDs {
+		_, err := CaptureSlackList(SlackListCaptureConfig{
+			HomeDir:      capture.homeDir,
+			DatabasePath: capture.databasePath,
+			Token:        capture.slackToken,
+			ListID:       listID,
+			APIBaseURL:   capture.slackAPIBaseURL,
+			HTTPClient:   capture.slackHTTPClient,
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (capture *RunCapture) captureCalendarEvents() error {
 	for _, provider := range capture.calendarProviders {
 		_, err := CaptureCalendarEvents(CalendarCaptureConfig{
@@ -472,6 +536,18 @@ func (capture *RunCapture) captureNotionEvents() error {
 		HomeDir:      capture.homeDir,
 		DatabasePath: capture.databasePath,
 		HTTPClient:   capture.notionHTTPClient,
+	})
+	return err
+}
+
+func (capture *RunCapture) captureAzureBoardsEvents() error {
+	if !capture.azureBoardsEnabled {
+		return nil
+	}
+	_, err := CaptureAzureBoards(AzureBoardsCaptureConfig{
+		HomeDir:      capture.homeDir,
+		DatabasePath: capture.databasePath,
+		HTTPClient:   capture.azureBoardsHTTPClient,
 	})
 	return err
 }
@@ -949,6 +1025,20 @@ func mailPollInterval(interval time.Duration) time.Duration {
 func notionPollInterval(interval time.Duration) time.Duration {
 	if interval <= 0 {
 		return 10 * time.Minute
+	}
+	return interval
+}
+
+func slackListPollInterval(interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return 5 * time.Minute
+	}
+	return interval
+}
+
+func azureBoardsPollInterval(interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return 5 * time.Minute
 	}
 	return interval
 }

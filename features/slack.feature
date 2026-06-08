@@ -55,3 +55,20 @@ Scenario: Configure Slack polling without disconnecting
   When I disable the Slack connector
   Then workgraph stops polling Slack
   And the Slack account remains connected for later re-enabling
+
+Scenario: Capture Slack List todo items read-only
+  Given Slack is connected with lists read access
+  And I have configured a Slack List id for my todo list
+  When I run "workgraph start"
+  Then workgraph periodically captures the Slack List
+  And workgraph stores one event per visible List item
+  And each event preserves item fields, column ids, reminders, creator, updater, and archived state
+  And workgraph does not create, update, archive, or reorder Slack List items
+
+Scenario: Capture a Slack List manually for debugging
+  Given Slack is connected with lists read access
+  And I have a Slack List id
+  When I run "workgraph slack lists capture --list-id L123"
+  Then workgraph stores one event per visible List item
+  And each event preserves item fields, column ids, reminders, creator, updater, and archived state
+  And workgraph does not create, update, archive, or reorder Slack List items

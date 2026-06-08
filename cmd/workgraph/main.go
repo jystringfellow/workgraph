@@ -38,8 +38,12 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runCalendar(args[1:], stdout, stderr)
 	case "mail":
 		return runMail(args[1:], stdout, stderr)
+	case "azure":
+		return runAzure(args[1:], stdout, stderr)
 	case "llm":
 		return runLLM(args[1:], stdout, stderr)
+	case "events":
+		return runEvents(args[1:], stdout, stderr)
 	case "notion":
 		return runNotion(args[1:], stdout, stderr)
 	case "memory":
@@ -62,6 +66,47 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unknown command: %s\n", args[0])
 		return 2
 	}
+}
+
+func runEvents(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph events <today>")
+		return 2
+	}
+	switch args[0] {
+	case "today":
+		return runEventsToday(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "unknown events command: %s\n", args[0])
+		return 2
+	}
+}
+
+func runEventsToday(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("events today", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
+	eventType := flags.String("type", "", "Event type to include")
+	limit := flags.Int("limit", 0, "Maximum number of matching events to show")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+
+	result, err := workgraph.EventsToday(workgraph.EventsTodayConfig{
+		HomeDir:      *homeDir,
+		DatabasePath: *databasePath,
+		Type:         *eventType,
+		Limit:        *limit,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph events today: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
 }
 
 func runLLM(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -243,6 +288,7 @@ func runLLMSummarize(args []string, stdout io.Writer, stderr io.Writer) int {
 
 	homeDir := flags.String("home", "", "workgraph home directory")
 	dryRun := flags.Bool("dry-run", false, "Preview prompt and context without calling the provider")
+	noStream := flags.Bool("no-stream", false, "Print the summary after the provider call completes")
 
 	if err := flags.Parse(args[1:]); err != nil {
 		return 2
@@ -252,15 +298,24 @@ func runLLMSummarize(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 2
 	}
 
-	result, err := workgraph.SummarizeTodayWithLLM(workgraph.LLMSummarizeTodayConfig{
+	summarizeConfig := workgraph.LLMSummarizeTodayConfig{
 		HomeDir: *homeDir,
 		DryRun:  *dryRun,
-	})
+	}
+	if !*dryRun && !*noStream {
+		summarizeConfig.Stream = func(chunk string) error {
+			_, err := fmt.Fprint(stdout, chunk)
+			return err
+		}
+	}
+	result, err := workgraph.SummarizeTodayWithLLM(summarizeConfig)
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph llm summarize today: %v\n", err)
 		return 1
 	}
-	fmt.Fprintln(stdout, result.Message)
+	if result.Message != "" {
+		fmt.Fprintln(stdout, result.Message)
+	}
 	return 0
 }
 
@@ -377,10 +432,80 @@ func runNotion(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runNotionConnect(args[1:], stdout, stderr)
 	case "disconnect":
 		return runNotionDisconnect(args[1:], stdout, stderr)
+	case "index":
+		return runNotionIndex(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown notion command: %s\n", args[0])
 		return 2
 	}
+}
+
+func runNotionIndex(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph notion index <list|show>")
+		return 2
+	}
+	switch args[0] {
+	case "list":
+		return runNotionIndexList(args[1:], stdout, stderr)
+	case "show":
+		return runNotionIndexShow(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "unknown notion index command: %s\n", args[0])
+		return 2
+	}
+}
+
+func runNotionIndexList(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("notion index list", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
+	limit := flags.Int("limit", 25, "Maximum number of indexed Notion objects to show")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	result, err := workgraph.ListNotionIndex(workgraph.NotionIndexListConfig{
+		HomeDir:      *homeDir,
+		DatabasePath: *databasePath,
+		Limit:        *limit,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph notion index list: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runNotionIndexShow(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph notion index show <notion-id>")
+		return 2
+	}
+	id := args[0]
+	flags := flag.NewFlagSet("notion index show", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
+
+	if err := flags.Parse(args[1:]); err != nil {
+		return 2
+	}
+	result, err := workgraph.ShowNotionIndex(workgraph.NotionIndexShowConfig{
+		HomeDir:      *homeDir,
+		DatabasePath: *databasePath,
+		ID:           id,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph notion index show: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
 }
 
 func runNotionCapture(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -807,10 +932,158 @@ func runSlack(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runSlackConnect(args[1:], stdout, stderr)
 	case "disconnect":
 		return runSlackDisconnect(args[1:], stdout, stderr)
+	case "lists":
+		return runSlackLists(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown slack command: %s\n", args[0])
 		return 2
 	}
+}
+
+func runAzure(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph azure <boards>")
+		return 2
+	}
+	switch args[0] {
+	case "boards":
+		return runAzureBoards(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "unknown azure command: %s\n", args[0])
+		return 2
+	}
+}
+
+func runAzureBoards(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph azure boards <connect|capture|disconnect>")
+		return 2
+	}
+	switch args[0] {
+	case "connect":
+		return runAzureBoardsConnect(args[1:], stdout, stderr)
+	case "capture":
+		return runAzureBoardsCapture(args[1:], stdout, stderr)
+	case "disconnect":
+		return runAzureBoardsDisconnect(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "unknown azure boards command: %s\n", args[0])
+		return 2
+	}
+}
+
+func runAzureBoardsConnect(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("azure boards connect", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	clientID := flags.String("client-id", os.Getenv("WORKGRAPH_AZURE_DEVOPS_CLIENT_ID"), "Azure DevOps OAuth client id")
+	redirectURI := flags.String("redirect-uri", workgraph.DefaultAzureBoardsRedirectURI, "Azure Boards OAuth redirect URI")
+	code := flags.String("code", "", "Azure Boards OAuth code returned to the redirect URI")
+	codeVerifier := flags.String("code-verifier", "", "Azure Boards OAuth PKCE verifier")
+	state := flags.String("state", "", "Azure Boards OAuth state")
+	expectedState := flags.String("expected-state", "", "Expected Azure Boards OAuth state")
+	organization := flags.String("organization", "", "Azure DevOps organization name")
+	project := flags.String("project", "", "Azure DevOps project name")
+	team := flags.String("team", "", "Azure DevOps team name")
+	wiql := flags.String("wiql", "", "Custom Azure Boards WIQL query")
+	authBaseURL := flags.String("azure-auth-base", "", "Azure Boards OAuth authorization base URL")
+	tokenURL := flags.String("azure-token-url", "", "Azure Boards OAuth token URL")
+	apiBaseURL := flags.String("azure-api-base", "", "Azure DevOps API base URL")
+	noBrowser := flags.Bool("no-browser", false, "Print the OAuth URL instead of opening a browser")
+	areaPaths := watchDirFlags{}
+	flags.Var(&areaPaths, "area-path", "Azure Boards area path to include")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+
+	config := workgraph.AzureBoardsConnectConfig{
+		HomeDir:       *homeDir,
+		ClientID:      *clientID,
+		RedirectURI:   *redirectURI,
+		Code:          *code,
+		CodeVerifier:  *codeVerifier,
+		State:         *state,
+		ExpectedState: *expectedState,
+		Organization:  *organization,
+		Project:       *project,
+		Team:          *team,
+		AreaPaths:     areaPaths,
+		WIQL:          *wiql,
+		AuthBaseURL:   *authBaseURL,
+		TokenURL:      *tokenURL,
+		APIBaseURL:    *apiBaseURL,
+	}
+	var result workgraph.AzureBoardsResult
+	var err error
+	if *code == "" && !*noBrowser {
+		result, err = workgraph.ConnectAzureBoardsWithBrowser(context.Background(), config)
+	} else {
+		result, err = workgraph.ConnectAzureBoards(config)
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph azure boards connect: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runAzureBoardsCapture(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("azure boards capture", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
+	token := flags.String("token", os.Getenv("WORKGRAPH_AZURE_DEVOPS_TOKEN"), "Azure DevOps access token")
+	organization := flags.String("organization", "", "Azure DevOps organization name")
+	project := flags.String("project", "", "Azure DevOps project name")
+	team := flags.String("team", "", "Azure DevOps team name")
+	wiql := flags.String("wiql", "", "Custom Azure Boards WIQL query")
+	apiBaseURL := flags.String("azure-api-base", "", "Azure DevOps API base URL")
+	areaPaths := watchDirFlags{}
+	flags.Var(&areaPaths, "area-path", "Azure Boards area path to include")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+
+	result, err := workgraph.CaptureAzureBoards(workgraph.AzureBoardsCaptureConfig{
+		HomeDir:      *homeDir,
+		DatabasePath: *databasePath,
+		Token:        *token,
+		Organization: *organization,
+		Project:      *project,
+		Team:         *team,
+		AreaPaths:    areaPaths,
+		WIQL:         *wiql,
+		APIBaseURL:   *apiBaseURL,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph azure boards capture: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runAzureBoardsDisconnect(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("azure boards disconnect", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+
+	result, err := workgraph.DisconnectAzureBoards(workgraph.AzureBoardsCaptureConfig{HomeDir: *homeDir})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph azure boards disconnect: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
 }
 
 func runSlackDisconnect(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -863,6 +1136,50 @@ func runSlackCapture(args []string, stdout io.Writer, stderr io.Writer) int {
 	return 0
 }
 
+func runSlackLists(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph slack lists <capture>")
+		return 2
+	}
+	switch args[0] {
+	case "capture":
+		return runSlackListsCapture(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "unknown slack lists command: %s\n", args[0])
+		return 2
+	}
+}
+
+func runSlackListsCapture(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("slack lists capture", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
+	token := flags.String("token", os.Getenv("WORKGRAPH_SLACK_TOKEN"), "Slack API token")
+	listID := flags.String("list-id", "", "Slack List id to capture")
+	slackAPIBaseURL := flags.String("slack-api-base", "", "Slack API base URL")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+
+	result, err := workgraph.CaptureSlackList(workgraph.SlackListCaptureConfig{
+		HomeDir:      *homeDir,
+		DatabasePath: *databasePath,
+		Token:        *token,
+		ListID:       *listID,
+		APIBaseURL:   *slackAPIBaseURL,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph slack lists capture: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
 func runSlackConnect(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags := flag.NewFlagSet("slack connect", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -877,6 +1194,8 @@ func runSlackConnect(args []string, stdout io.Writer, stderr io.Writer) int {
 	slackAPIBaseURL := flags.String("slack-api-base", "", "Slack API base URL")
 	channels := watchDirFlags{}
 	flags.Var(&channels, "channel", "Slack channel id to collect after connecting")
+	listIDs := watchDirFlags{}
+	flags.Var(&listIDs, "list", "Slack List id to collect after connecting")
 	includeDMs := flags.Bool("include-dms", false, "Opt into collecting Slack direct and group direct messages")
 
 	if err := flags.Parse(args); err != nil {
@@ -893,6 +1212,7 @@ func runSlackConnect(args []string, stdout io.Writer, stderr io.Writer) int {
 		State:            *state,
 		ExpectedState:    *state,
 		Channels:         channels,
+		ListIDs:          listIDs,
 		IncludeDMs:       *includeDMs,
 		APIBaseURL:       *slackAPIBaseURL,
 	}
@@ -1260,6 +1580,8 @@ func runCaptureStart(args []string, stdout io.Writer, stderr io.Writer) int {
 	slackAPIBaseURL := flags.String("slack-api-base", "", "Slack API base URL")
 	slackChannels := watchDirFlags{}
 	flags.Var(&slackChannels, "slack-channel", "Slack channel id to collect while running")
+	slackListIDs := watchDirFlags{}
+	flags.Var(&slackListIDs, "slack-list", "Slack List id to collect while running")
 	slackIncludeDMs := flags.Bool("slack-include-dms", false, "Opt into collecting Slack direct and group direct messages")
 
 	if err := flags.Parse(args); err != nil {
@@ -1273,6 +1595,7 @@ func runCaptureStart(args []string, stdout io.Writer, stderr io.Writer) int {
 			WatchDirs:       watchDirs,
 			SlackToken:      *slackToken,
 			SlackChannels:   slackChannels,
+			SlackListIDs:    slackListIDs,
 			SlackIncludeDMs: *slackIncludeDMs,
 			SlackAPIBaseURL: *slackAPIBaseURL,
 		})
@@ -1294,6 +1617,7 @@ func runCaptureStart(args []string, stdout io.Writer, stderr io.Writer) int {
 		WatchDirs:       watchDirs,
 		SlackToken:      *slackToken,
 		SlackChannels:   slackChannels,
+		SlackListIDs:    slackListIDs,
 		SlackIncludeDMs: *slackIncludeDMs,
 		SlackAPIBaseURL: *slackAPIBaseURL,
 	})
@@ -1458,6 +1782,8 @@ func parseCaptureControlConfig(command string, args []string, stderr io.Writer) 
 	slackAPIBaseURL := flags.String("slack-api-base", "", "Slack API base URL")
 	slackChannels := watchDirFlags{}
 	flags.Var(&slackChannels, "slack-channel", "Slack channel id to collect while running")
+	slackListIDs := watchDirFlags{}
+	flags.Var(&slackListIDs, "slack-list", "Slack List id to collect while running")
 	slackIncludeDMs := flags.Bool("slack-include-dms", false, "Opt into collecting Slack direct and group direct messages")
 
 	if err := flags.Parse(args); err != nil {
@@ -1470,6 +1796,7 @@ func parseCaptureControlConfig(command string, args []string, stderr io.Writer) 
 		WatchDirs:       watchDirs,
 		SlackToken:      *slackToken,
 		SlackChannels:   slackChannels,
+		SlackListIDs:    slackListIDs,
 		SlackIncludeDMs: *slackIncludeDMs,
 		SlackAPIBaseURL: *slackAPIBaseURL,
 	}, true

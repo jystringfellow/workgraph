@@ -276,6 +276,24 @@ func createSchema(db *sql.DB) error {
 			created_at TEXT NOT NULL,
 			UNIQUE (memory_doc_path, event_id, relation)
 		);`,
+		`CREATE TABLE IF NOT EXISTS notion_index (
+			notion_id TEXT PRIMARY KEY,
+			object_type TEXT NOT NULL,
+			title TEXT,
+			url TEXT,
+			parent_json TEXT CHECK (parent_json IS NULL OR json_valid(parent_json)),
+			properties_json TEXT CHECK (properties_json IS NULL OR json_valid(properties_json)),
+			content_preview TEXT,
+			content_synced_at TEXT,
+			created_time TEXT,
+			created_by TEXT,
+			last_edited_time TEXT,
+			last_edited_by TEXT,
+			source TEXT NOT NULL,
+			first_seen_at TEXT NOT NULL,
+			last_seen_at TEXT NOT NULL,
+			last_synced_at TEXT NOT NULL
+		);`,
 	}
 
 	for _, statement := range statements {
@@ -284,5 +302,40 @@ func createSchema(db *sql.DB) error {
 		}
 	}
 
+	if err := ensureColumn(db, "notion_index", "content_preview", "TEXT"); err != nil {
+		return err
+	}
+	if err := ensureColumn(db, "notion_index", "content_synced_at", "TEXT"); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func ensureColumn(db *sql.DB, table string, column string, definition string) error {
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name string
+		var columnType string
+		var notNull int
+		var defaultValue any
+		var primaryKey int
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition)
+	return err
 }

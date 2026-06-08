@@ -240,6 +240,21 @@ The output is deterministic plain text. When events exist, it includes `Today`,
 `Projects`, and `Sessions` sections. Sessions are inferred from same-project
 events that happen within 30 minutes of each other.
 
+To inspect captured events without opening SQLite:
+
+```sh
+go run ./cmd/workgraph events today
+go run ./cmd/workgraph events today --type notion.page_updated
+go run ./cmd/workgraph events today --type slack.message --limit 10
+```
+
+To inspect Notion's local object index and captured page previews:
+
+```sh
+go run ./cmd/workgraph notion index list
+go run ./cmd/workgraph notion index show <notion-page-or-database-id>
+```
+
 To resume a project from captured events and explicit project memory:
 
 ```sh
@@ -300,6 +315,84 @@ workgraph init
 ```
 
 Published release binaries may come later. For now, source builds and `go install` are the expected install paths.
+
+## New Machine Setup
+
+For a second machine, install from the current source checkout or from GitHub,
+then initialize local state on that machine:
+
+```sh
+git clone https://github.com/jystringfellow/workgraph.git
+cd workgraph
+go install ./cmd/workgraph
+workgraph init
+workgraph start
+```
+
+If installing directly from GitHub is more convenient:
+
+```sh
+go install github.com/jystringfellow/workgraph/cmd/workgraph@latest
+workgraph init
+workgraph start
+```
+
+`workgraph start` uses the machine-local `~/.workgraph/config.json`, connected
+accounts, and connector polling settings. OAuth-backed connectors need to be
+connected once per machine because tokens are stored locally:
+
+```sh
+workgraph slack connect
+workgraph notion connect
+workgraph azure boards connect --organization <org> --project <project> --team <team> --area-path '<area-path>'
+```
+
+Use `workgraph connectors list` to confirm what will be monitored, and
+`workgraph status` to confirm the daemon is running.
+
+If you use a Slack List as a todo list, save its List id while connecting Slack:
+
+```sh
+workgraph slack connect --list <list-id>
+```
+
+`workgraph start` then monitors that List as connector `slack.lists`. You can
+also run a one-off capture for debugging:
+
+```sh
+workgraph slack lists capture --list-id <list-id>
+```
+
+Azure Boards uses the Microsoft OAuth PKCE flow and stores its local connector
+settings in `~/.workgraph/azure-boards.json`. After connecting, `workgraph
+start` monitors matching work items as connector `azure.boards`. Multiple
+`--area-path` flags are allowed and are combined as alternatives in the default
+WIQL query.
+
+To use an AWS Bedrock inference profile for summaries, make sure your normal AWS
+credentials work first:
+
+```sh
+aws sts get-caller-identity --profile work
+```
+
+Then add and route a Bedrock LLM profile:
+
+```sh
+workgraph llm add bedrock-work \
+  --provider bedrock \
+  --aws-profile work \
+  --region us-east-1 \
+  --model-arn arn:aws:bedrock:us-east-1:123456789012:inference-profile/example
+
+workgraph llm test --profile bedrock-work
+workgraph llm use bedrock-work --for summarize
+workgraph llm summarize today --dry-run
+workgraph llm summarize today
+```
+
+The Bedrock call uses local AWS credential resolution through the AWS SDK and
+sends the configured ARN as the Bedrock Runtime Converse model id.
 
 ## Inspecting The Database
 

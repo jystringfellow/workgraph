@@ -119,6 +119,72 @@ func TestSlackCaptureStoresThreadReplyWithoutDuplicateEvent(t *testing.T) {
 	}
 }
 
+func TestSlackListCaptureStoresTodoItemsReadOnly(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	var requestedListID string
+	slackAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/slackLists.items.list" {
+			t.Fatalf("unexpected Slack Lists path %s", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("expected Slack Lists POST, got %s", r.Method)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer slack-token" {
+			t.Fatalf("expected bearer token, got %q", got)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("parse list form: %v", err)
+		}
+		requestedListID = r.PostForm.Get("list_id")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true,"items":[{"id":"I123","list_id":"LTODO","date_created":1780934400,"updated_timestamp":"1780938000.000000","updated_by":"U123","created_by":"U456","fields":[{"key":"task","column_id":"Ctask","text":"Finish workgraph Azure Boards slice","value":"Finish workgraph Azure Boards slice"},{"key":"bucket","column_id":"Cbucket","text":"today","value":"today"}]}]}`))
+	}))
+	defer slackAPI.Close()
+
+	output, err := runworkgraph(t, repoRoot, "slack", "lists", "capture",
+		"--home", homeDir,
+		"--token", "slack-token",
+		"--list-id", "LTODO",
+		"--slack-api-base", slackAPI.URL+"/api",
+	)
+	if err != nil {
+		t.Fatalf("workgraph slack lists capture failed: %v\n%s", err, output)
+	}
+	if requestedListID != "LTODO" {
+		t.Fatalf("expected requested list id LTODO, got %q", requestedListID)
+	}
+	if !strings.Contains(string(output), "Events stored: 1") {
+		t.Fatalf("expected stored count, got:\n%s", output)
+	}
+
+	event := slackListEvent(t, filepath.Join(homeDir, "workgraph.db"), "LTODO", "I123")
+	if event.Project != "slack-list:LTODO" {
+		t.Fatalf("expected list project, got %q", event.Project)
+	}
+	if event.Actor != "U123" {
+		t.Fatalf("expected updated_by actor, got %q", event.Actor)
+	}
+	if event.Summary != "Finish workgraph Azure Boards slice" {
+		t.Fatalf("expected task summary, got %q", event.Summary)
+	}
+	for _, expected := range []string{
+		`"id":"I123"`,
+		`"list_id":"LTODO"`,
+		`"text":"Finish workgraph Azure Boards slice"`,
+		`"text":"today"`,
+	} {
+		if !strings.Contains(event.PayloadJSON, expected) {
+			t.Fatalf("expected payload to include %s, got %s", expected, event.PayloadJSON)
+		}
+	}
+}
+
 func TestRunCollectsConfiguredSlackMessagesAndThreadReplies(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
@@ -773,6 +839,9 @@ func TestSlackConnectPrintsOAuthURLWithoutStoringToken(t *testing.T) {
 	if !strings.Contains(query.Get("user_scope"), "team:read") {
 		t.Fatalf("expected workspace metadata scope in authorization URL, got %q", query.Get("user_scope"))
 	}
+	if !strings.Contains(query.Get("user_scope"), "lists:read") {
+		t.Fatalf("expected Slack Lists read scope in authorization URL, got %q", query.Get("user_scope"))
+	}
 	if _, err := os.Stat(filepath.Join(homeDir, "slack.json")); !os.IsNotExist(err) {
 		t.Fatalf("expected slack config not to be written before code exchange, stat err: %v", err)
 	}
@@ -983,6 +1052,7 @@ func TestSlackConnectExchangesCodeAndStoresConnectorConfig(t *testing.T) {
 		State:         "fixed-state",
 		ExpectedState: "fixed-state",
 		Channels:      []string{"C123", "C456"},
+		ListIDs:       []string{"LTODO"},
 		APIBaseURL:    "https://slack.test/api",
 		HTTPClient:    client,
 	})
@@ -1017,6 +1087,7 @@ func TestSlackConnectExchangesCodeAndStoresConnectorConfig(t *testing.T) {
 		TeamID       string   `json:"team_id"`
 		TeamName     string   `json:"team_name"`
 		Channels     []string `json:"channels"`
+		ListIDs      []string `json:"list_ids"`
 		UserScopes   []string `json:"user_scopes"`
 		APIBaseURL   string   `json:"api_base_url"`
 	}
@@ -1031,6 +1102,9 @@ func TestSlackConnectExchangesCodeAndStoresConnectorConfig(t *testing.T) {
 	}
 	if strings.Join(stored.Channels, ",") != "C123,C456" {
 		t.Fatalf("expected stored channels, got %#v", stored.Channels)
+	}
+	if strings.Join(stored.ListIDs, ",") != "LTODO" {
+		t.Fatalf("expected stored Slack List ids, got %#v", stored.ListIDs)
 	}
 	if strings.Join(stored.UserScopes, ",") != "channels:history,channels:read,groups:history,groups:read,users:read,team:read" {
 		t.Fatalf("expected stored OAuth user scopes, got %#v", stored.UserScopes)
@@ -1291,6 +1365,29 @@ func slackEvent(t *testing.T, dbPath, eventType, channelID, ts string) storedSla
 	`, eventType, channelID, ts).Scan(&event.Project, &event.Actor, &event.Summary, &event.PayloadJSON)
 	if err != nil {
 		t.Fatalf("query slack event: %v", err)
+	}
+	return event
+}
+
+func slackListEvent(t *testing.T, dbPath, listID, itemID string) storedSlackEvent {
+	t.Helper()
+
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+
+	var event storedSlackEvent
+	err = db.QueryRow(`
+		SELECT project, actor, summary, payload_json
+		FROM events
+		WHERE source = 'slack'
+			AND type = 'slack.list_item'
+			AND id = ?
+	`, "slack.list_item:"+listID+":"+itemID).Scan(&event.Project, &event.Actor, &event.Summary, &event.PayloadJSON)
+	if err != nil {
+		t.Fatalf("query slack list event: %v", err)
 	}
 	return event
 }

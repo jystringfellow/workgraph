@@ -140,11 +140,13 @@ func connectorStatuses(homeDir string, state connectorRuntimeFile) []ConnectorSt
 		"git",
 		"github",
 		"slack",
+		"slack.lists",
 		"calendar.google",
 		"calendar.microsoft",
 		"mail.google",
 		"mail.microsoft",
 		"notion",
+		"azure.boards",
 	}
 	statuses := make([]ConnectorStatus, 0, len(ids))
 	for _, id := range ids {
@@ -168,6 +170,9 @@ func connectorConnected(homeDir string, id string) bool {
 	case "slack":
 		config, err := readSlackConnectorConfig(homeDir)
 		return err == nil && strings.TrimSpace(config.AccessToken) != ""
+	case "slack.lists":
+		config, err := readSlackConnectorConfig(homeDir)
+		return err == nil && strings.TrimSpace(config.AccessToken) != "" && len(config.ListIDs) > 0
 	case "calendar.google":
 		config, err := readCalendarConnectorConfig(homeDir)
 		return err == nil && config.Google != nil && strings.TrimSpace(config.Google.AccessToken) != ""
@@ -182,6 +187,8 @@ func connectorConnected(homeDir string, id string) bool {
 		return err == nil && config.Microsoft != nil && strings.TrimSpace(config.Microsoft.AccessToken) != ""
 	case "notion":
 		return notionConnectorConnected(homeDir)
+	case "azure.boards":
+		return azureBoardsConnectorConnected(homeDir)
 	default:
 		return false
 	}
@@ -205,7 +212,7 @@ func connectorHomeDir(homeDir string) (string, error) {
 func normalizeConnectorID(id string) (string, error) {
 	id = strings.ToLower(strings.TrimSpace(id))
 	switch id {
-	case "git", "github", "slack", "calendar.google", "calendar.microsoft", "mail.google", "mail.microsoft", "notion":
+	case "git", "github", "slack", "slack.lists", "calendar.google", "calendar.microsoft", "mail.google", "mail.microsoft", "notion", "azure.boards":
 		return id, nil
 	case "calendar":
 		return "", fmt.Errorf("connector %q is ambiguous: use calendar.google or calendar.microsoft", id)
@@ -288,12 +295,16 @@ func defaultConnectorInterval(id string) time.Duration {
 		return githubPollInterval(0)
 	case "slack":
 		return slackPollInterval(0)
+	case "slack.lists":
+		return slackListPollInterval(0)
 	case "calendar.google", "calendar.microsoft":
 		return calendarPollInterval(0)
 	case "mail.google", "mail.microsoft":
 		return mailPollInterval(0)
 	case "notion":
 		return notionPollInterval(0)
+	case "azure.boards":
+		return azureBoardsPollInterval(0)
 	default:
 		return 0
 	}

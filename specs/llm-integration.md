@@ -77,10 +77,11 @@ For the first slice, local OpenAI-compatible profiles do not require credentials
 Hosted API profiles should prefer environment variable references such as
 `api_key_env` over storing raw API keys. Bedrock profiles should prefer normal
 AWS local credential resolution through `aws_profile`, region, and `model_arn`.
-The ARN may identify a foundation model, provisioned throughput, imported
-model, or inference profile. A plain `model_id` can be accepted as a convenience
-later, but ARNs are the preferred durable shape because tools such as Claude
-Code and cloud governance workflows commonly expect them.
+The ARN may identify a foundation model, provisioned throughput, or inference
+profile supported by Bedrock Runtime's Converse API. A plain `model_id` can be
+accepted as a convenience later, but ARNs are the preferred durable shape
+because tools such as Claude Code and cloud governance workflows commonly expect
+them.
 
 Initial commands:
 
@@ -94,6 +95,7 @@ workgraph llm test
 workgraph llm test --profile <profile>
 workgraph llm summarize today --dry-run
 workgraph llm summarize today
+workgraph llm summarize today --no-stream
 ```
 
 Future provider commands may add provider-specific flags for OpenAI, Anthropic,
@@ -132,6 +134,8 @@ Input:
 - selected `today` events from SQLite
 - relevant local memory excerpts when available
 - event ids or source ids needed for traceability
+- provider-specific previews when available, such as Notion page
+  `content_preview`
 
 Output:
 
@@ -150,6 +154,14 @@ Dry-run behavior:
 - prints the selected context and prompt
 - prints selected profile and destination
 - does not call the provider
+
+Streaming behavior:
+
+- `workgraph llm summarize today` streams provider output by default
+- the command prints the selected profile, destination, and a `Thinking...`
+  status before provider text arrives
+- `--no-stream` keeps deterministic full-response output for debugging,
+  tests, and terminals where streaming is undesirable
 
 ### `associate_events` (future)
 
@@ -249,14 +261,34 @@ summary dry run:
 After this slice, add real `summarize today` generation and persistence, then
 Bedrock, then third-party hosted providers.
 
+## Current Bedrock Slice
+
+Bedrock profiles use the AWS SDK for Go v2 and Bedrock Runtime `Converse`.
+workgraph passes the configured `model_arn` as the Converse `ModelId`, which
+supports inference profile ARNs. Credentials are resolved through the normal AWS
+SDK chain, optionally scoped by `aws_profile`, and requests use the configured
+region.
+
+Supported commands:
+
+```text
+workgraph llm test --profile <bedrock-profile>
+workgraph llm use <bedrock-profile> --for summarize
+workgraph llm summarize today
+```
+
+Dry-run behavior remains provider-independent and does not call Bedrock.
+
 ## Roadmap Checklist
 
-- [ ] LLM config file with named profiles and task routing.
-- [ ] OpenAI-compatible provider for local model endpoints.
-- [ ] `workgraph llm test`.
-- [ ] `workgraph llm summarize today --dry-run`.
-- [ ] `workgraph llm summarize today` supplemental summary output.
-- [ ] Bedrock profile support through local AWS credentials.
+- [x] LLM config file with named profiles and task routing.
+- [x] OpenAI-compatible provider for local model endpoints.
+- [x] `workgraph llm test`.
+- [x] `workgraph llm summarize today --dry-run`.
+- [x] `workgraph llm summarize today` supplemental summary output.
+- [x] Streaming `workgraph llm summarize today` output.
+- [x] Include captured content previews in summary context.
+- [x] Bedrock profile support through local AWS credentials.
 - [ ] Hosted provider support for OpenAI, Anthropic, Google, and similar APIs.
 - [ ] Association suggestions across Slack, calendar, GitHub, Notion, mail, and
   local file events.

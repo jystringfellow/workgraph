@@ -142,6 +142,96 @@ func TestRunPollsConnectedCalendarMailAndNotion(t *testing.T) {
 	}
 }
 
+func TestRunPollsConnectedSlackListsAndAzureBoards(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	watchDir := filepath.Join(tempDir, "project")
+	if err := os.MkdirAll(watchDir, 0o755); err != nil {
+		t.Fatalf("create watch dir: %v", err)
+	}
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	slackServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/slackLists.items.list" {
+			t.Fatalf("unexpected Slack Lists path %s", request.URL.Path)
+		}
+		if got := request.Header.Get("Authorization"); got != "Bearer slack-token" {
+			t.Fatalf("expected Slack bearer token, got %q", got)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"ok":true,"items":[{"id":"runtime-list-item","list_id":"LTODO","updated_timestamp":"1780938000.000000","updated_by":"U123","fields":[{"key":"task","text":"Runtime Slack List task","value":"Runtime Slack List task"}]}]}`))
+	}))
+	defer slackServer.Close()
+	if err := os.WriteFile(filepath.Join(homeDir, "slack.json"), []byte(fmt.Sprintf(`{
+  "access_token": "slack-token",
+  "channels": [],
+  "list_ids": ["LTODO"],
+  "api_base_url": %q
+}
+`, slackServer.URL+"/api")), 0o600); err != nil {
+		t.Fatalf("write slack config: %v", err)
+	}
+
+	azureServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if got := request.Header.Get("Authorization"); got != "Bearer azure-token" {
+			t.Fatalf("expected Azure bearer token, got %q", got)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/acme/Work/_apis/wit/wiql":
+			_, _ = response.Write([]byte(`{"workItems":[{"id":456}]}`))
+		case "/acme/Work/_apis/wit/workitemsbatch":
+			_, _ = response.Write([]byte(`{"value":[{"id":456,"url":"https://dev.azure.com/acme/Work/_workitems/edit/456","fields":{"System.Title":"Runtime Azure Boards item","System.State":"Active","System.WorkItemType":"Task","System.AssignedTo":{"displayName":"Craig Stringfellow"},"System.ChangedDate":"2026-06-08T13:00:00Z","System.AreaPath":"Work\\Platform"}}]}`))
+		default:
+			t.Fatalf("unexpected Azure Boards path %s", request.URL.Path)
+		}
+	}))
+	defer azureServer.Close()
+	if err := os.WriteFile(filepath.Join(homeDir, "azure-boards.json"), []byte(fmt.Sprintf(`{
+  "access_token": "azure-token",
+  "organization": "acme",
+  "project": "Work",
+  "team": "Platform",
+  "area_paths": ["Work\\Platform"],
+  "api_base_url": %q
+}
+`, azureServer.URL)), 0o600); err != nil {
+		t.Fatalf("write azure boards config: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:                 homeDir,
+		DatabasePath:            initResult.DatabasePath,
+		WatchDirs:               []string{watchDir},
+		SlackListPollInterval:   10 * time.Millisecond,
+		AzureBoardsPollInterval: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("run start failed: %v", err)
+	}
+	if !strings.Contains(capture.Status.Message, "slack.lists") ||
+		!strings.Contains(capture.Status.Message, "azure.boards") {
+		t.Fatalf("expected start message to report Slack Lists and Azure Boards, got:\n%s", capture.Status.Message)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- capture.Run(ctx)
+	}()
+
+	waitForEventTypeSummary(t, initResult.DatabasePath, "slack.list_item", "Runtime Slack List task")
+	waitForEventTypeSummary(t, initResult.DatabasePath, "azure_boards.work_item", "Runtime Azure Boards item")
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("capture run failed: %v", err)
+	}
+}
+
 func TestConnectorsListAndUpdatePollingSettings(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")

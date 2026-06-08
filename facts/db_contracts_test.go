@@ -199,6 +199,34 @@ func TestMemoryLinksTableHasRequiredColumns(t *testing.T) {
 	}
 }
 
+func TestNotionIndexTableHasRequiredColumns(t *testing.T) {
+	db := openContractDatabase(t)
+
+	columns := tableColumns(t, db, "notion_index")
+	for _, column := range []string{
+		"notion_id",
+		"object_type",
+		"title",
+		"url",
+		"parent_json",
+		"properties_json",
+		"content_preview",
+		"content_synced_at",
+		"created_time",
+		"created_by",
+		"last_edited_time",
+		"last_edited_by",
+		"source",
+		"first_seen_at",
+		"last_seen_at",
+		"last_synced_at",
+	} {
+		if !columns[column] {
+			t.Fatalf("expected notion_index table to have column %q, got %#v", column, columns)
+		}
+	}
+}
+
 func TestDraftTablesDocumentFutureIntent(t *testing.T) {
 	t.Skip("TBD: draft tables are documented but not required for Phase 0")
 }
