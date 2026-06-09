@@ -110,3 +110,11 @@ Each connected provider should expose:
 The first implementation may store this state in the provider config files or a
 small connector state file. A later pass can normalize it once patterns
 stabilize.
+
+`connectors.json` records the first shared poll metadata:
+
+- `last_poll_at`: RFC3339 timestamp for the last completed poll
+- `last_error`: most recent poll error, cleared after a successful poll
+
+`workgraph connectors list` should display last poll, last error, and the next
+poll time derived from `last_poll_at + interval` when those values are known.

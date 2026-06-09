@@ -29,6 +29,9 @@ type ConnectorStatus struct {
 	Connected bool
 	Enabled   bool
 	Interval  time.Duration
+	LastPoll  string
+	LastError string
+	NextPoll  string
 }
 
 // ConnectorUpdateConfig controls connector polling updates.
@@ -65,8 +68,10 @@ type connectorRuntimeFile struct {
 }
 
 type connectorRuntimeEntry struct {
-	Enabled  *bool  `json:"enabled,omitempty"`
-	Interval string `json:"interval,omitempty"`
+	Enabled   *bool  `json:"enabled,omitempty"`
+	Interval  string `json:"interval,omitempty"`
+	LastPoll  string `json:"last_poll_at,omitempty"`
+	LastError string `json:"last_error,omitempty"`
 }
 
 // ListConnectors reports known connector polling state.
@@ -213,14 +218,42 @@ func connectorStatuses(homeDir string, state connectorRuntimeFile) []ConnectorSt
 	statuses := make([]ConnectorStatus, 0, len(ids))
 	for _, id := range ids {
 		connected := connectorConnected(homeDir, id)
+		entry := state.entry(id)
 		statuses = append(statuses, ConnectorStatus{
 			ID:        id,
 			Connected: connected,
 			Enabled:   connectorEnabled(state, id),
 			Interval:  connectorInterval(state, id, defaultConnectorInterval(id)),
+			LastPoll:  entry.LastPoll,
+			LastError: entry.LastError,
+			NextPoll:  connectorNextPoll(entry, defaultConnectorInterval(id)),
 		})
 	}
 	return statuses
+}
+
+func recordConnectorPollSuccess(homeDir string, id string, when time.Time) error {
+	return recordConnectorPollResult(homeDir, id, when, "")
+}
+
+func recordConnectorPollError(homeDir string, id string, when time.Time, pollErr error) error {
+	message := ""
+	if pollErr != nil {
+		message = pollErr.Error()
+	}
+	return recordConnectorPollResult(homeDir, id, when, message)
+}
+
+func recordConnectorPollResult(homeDir string, id string, when time.Time, lastError string) error {
+	state, err := readConnectorRuntimeFile(homeDir)
+	if err != nil {
+		return err
+	}
+	entry := state.entry(id)
+	entry.LastPoll = when.UTC().Format(time.RFC3339)
+	entry.LastError = strings.TrimSpace(lastError)
+	state.Connectors[id] = entry
+	return writeConnectorRuntimeFile(homeDir, state)
 }
 
 func connectorConnected(homeDir string, id string) bool {
@@ -349,6 +382,23 @@ func connectorInterval(state connectorRuntimeFile, id string, fallback time.Dura
 	return interval
 }
 
+func connectorNextPoll(entry connectorRuntimeEntry, fallback time.Duration) string {
+	if strings.TrimSpace(entry.LastPoll) == "" {
+		return ""
+	}
+	lastPoll, err := time.Parse(time.RFC3339, entry.LastPoll)
+	if err != nil {
+		return ""
+	}
+	interval := fallback
+	if entry.Interval != "" {
+		if parsed, err := time.ParseDuration(entry.Interval); err == nil && parsed > 0 {
+			interval = parsed
+		}
+	}
+	return lastPoll.Add(interval).UTC().Format(time.RFC3339)
+}
+
 func defaultConnectorInterval(id string) time.Duration {
 	switch id {
 	case "git":
@@ -387,7 +437,17 @@ func connectorListMessage(result ConnectorListResult) string {
 		if status.Enabled {
 			enabled = "enabled"
 		}
-		lines = append(lines, fmt.Sprintf("- %s: %s, %s, interval %s", status.ID, connected, enabled, status.Interval))
+		line := fmt.Sprintf("- %s: %s, %s, interval %s", status.ID, connected, enabled, status.Interval)
+		if status.LastPoll != "" {
+			line += ", last poll " + status.LastPoll
+		}
+		if status.LastError != "" {
+			line += ", last error " + status.LastError
+		}
+		if status.NextPoll != "" {
+			line += ", next poll " + status.NextPoll
+		}
+		lines = append(lines, line)
 	}
 	lines = append(lines, "Config: "+connectorRuntimePath(result.HomeDir))
 	return strings.Join(lines, "\n")

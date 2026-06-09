@@ -276,6 +276,46 @@ func TestConnectorsListAndUpdatePollingSettings(t *testing.T) {
 	}
 }
 
+func TestConnectorsListShowsPollDetails(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, "connectors.json"), []byte(`{
+  "connectors": {
+    "notion": {
+      "enabled": true,
+      "interval": "30m",
+      "last_poll_at": "2026-06-09T10:00:00Z",
+      "last_error": "rate limited"
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write connector runtime config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, "notion.json"), []byte(`{"access_token":"notion-token"}`), 0o600); err != nil {
+		t.Fatalf("write notion config: %v", err)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "connectors", "list", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("workgraph connectors list failed: %v\n%s", err, output)
+	}
+	for _, expected := range []string{
+		"- notion: connected, enabled, interval 30m0s",
+		"last poll 2026-06-09T10:00:00Z",
+		"last error rate limited",
+		"next poll 2026-06-09T10:30:00Z",
+	} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected connector poll detail %q, got:\n%s", expected, output)
+		}
+	}
+}
+
 func waitForEventTypeSummary(t *testing.T, dbPath, eventType, summary string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)

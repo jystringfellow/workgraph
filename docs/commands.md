@@ -113,6 +113,15 @@ workgraph status
 workgraph stop
 ```
 
+Diagnose local readiness without contacting provider APIs or exposing secrets:
+
+```sh
+workgraph doctor
+```
+
+Doctor reports initialization, daemon state, configured watch roots, OAuth
+connector token presence, and LLM profile readiness.
+
 For debugging, keep capture attached to the current terminal and print captured
 events:
 
