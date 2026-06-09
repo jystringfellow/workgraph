@@ -5,6 +5,17 @@ workgraph captures local git commits as first-class events.
 Local git capture runs as part of `workgraph start`, so commits made while the
 daemon is active are captured without a separate manual step.
 
+Local git can be connected into the shared connector runtime without
+credentials:
+
+```text
+workgraph git connect
+```
+
+Connecting git enables the `git` connector in `connectors.json` so `workgraph
+start` includes local git capture unless the user disables it with
+`workgraph connectors disable git`.
+
 Manual capture is also available for debugging and backfill:
 
 ```text

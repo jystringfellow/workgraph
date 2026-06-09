@@ -72,6 +72,46 @@ func TestGitHubCaptureStoresPullRequestEvent(t *testing.T) {
 	}
 }
 
+func TestGitHubConnectValidatesGHAndEnablesSharedConnectorPolling(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	ghPath := writeFakeGH(t, tempDir, 5000)
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "github", "connect", "--home", homeDir, "--gh", ghPath)
+	if err != nil {
+		t.Fatalf("workgraph github connect failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "GitHub connected") {
+		t.Fatalf("expected github connect output, got:\n%s", output)
+	}
+	if !strings.Contains(string(output), "workgraph connectors disable github") {
+		t.Fatalf("expected disable guidance, got:\n%s", output)
+	}
+	if !strings.Contains(string(output), "workgraph connectors interval github") {
+		t.Fatalf("expected interval guidance, got:\n%s", output)
+	}
+
+	logContents, err := os.ReadFile(filepath.Join(tempDir, "gh.log"))
+	if err != nil {
+		t.Fatalf("read gh log: %v", err)
+	}
+	if !strings.Contains(string(logContents), "auth status") {
+		t.Fatalf("expected github connect to validate gh auth status, got log:\n%s", logContents)
+	}
+
+	output, err = runworkgraph(t, repoRoot, "connectors", "list", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("workgraph connectors list failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "- github: connected, enabled") {
+		t.Fatalf("expected enabled github connector, got:\n%s", output)
+	}
+}
+
 func TestGitHubCaptureLinksProjectByLocalRemote(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
@@ -482,6 +522,10 @@ func writeFakeGH(t *testing.T, dir string, remaining int) string {
 echo "$@" >> "` + filepath.Join(dir, "gh.log") + `"
 if [ "$1" = "api" ] && [ "$2" = "rate_limit" ]; then
   printf '{"resources":{"core":{"remaining":` + fmtInt(remaining) + `}}}'
+  exit 0
+fi
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+  printf 'github.com\n  Logged in\n'
   exit 0
 fi
 if [ "$1" = "search" ] && [ "$2" = "prs" ]; then

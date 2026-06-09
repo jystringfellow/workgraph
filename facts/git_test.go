@@ -64,6 +64,37 @@ func TestGitCaptureStoresLocalCommitEvent(t *testing.T) {
 	}
 }
 
+func TestGitConnectEnablesSharedConnectorPolling(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "git", "connect", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("workgraph git connect failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Git connected") {
+		t.Fatalf("expected git connect output, got:\n%s", output)
+	}
+	if !strings.Contains(string(output), "workgraph connectors disable git") {
+		t.Fatalf("expected disable guidance, got:\n%s", output)
+	}
+	if !strings.Contains(string(output), "workgraph connectors interval git") {
+		t.Fatalf("expected interval guidance, got:\n%s", output)
+	}
+
+	output, err = runworkgraph(t, repoRoot, "connectors", "list", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("workgraph connectors list failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "- git: connected, enabled") {
+		t.Fatalf("expected enabled git connector, got:\n%s", output)
+	}
+}
+
 func TestGitCaptureDoesNotDuplicateCommitEvents(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")

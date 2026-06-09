@@ -1239,12 +1239,42 @@ func runGitHub(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	switch args[0] {
+	case "connect":
+		return runGitHubConnect(args[1:], stdout, stderr)
 	case "capture":
 		return runGitHubCapture(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown github command: %s\n", args[0])
 		return 2
 	}
+}
+
+func runGitHubConnect(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("github connect", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	gh := flags.String("gh", "", "gh-compatible executable for GitHub auth validation")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph github connect")
+		return 2
+	}
+
+	result, err := workgraph.ConnectGitHub(workgraph.ConnectorConnectConfig{
+		HomeDir:       *homeDir,
+		GitHubCommand: *gh,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph github connect: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
 }
 
 func runGitHubCapture(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -1280,12 +1310,40 @@ func runGit(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	switch args[0] {
+	case "connect":
+		return runGitConnect(args[1:], stdout, stderr)
 	case "capture":
 		return runGitCapture(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown git command: %s\n", args[0])
 		return 2
 	}
+}
+
+func runGitConnect(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("git connect", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph git connect")
+		return 2
+	}
+
+	result, err := workgraph.ConnectGit(workgraph.ConnectorConnectConfig{
+		HomeDir: *homeDir,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph git connect: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
 }
 
 func runMemory(args []string, stdout io.Writer, stderr io.Writer) int {

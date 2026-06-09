@@ -1,5 +1,11 @@
 Feature: Git integration
 
+Scenario: Connect local git capture
+  Given workgraph has been initialized
+  When I run "workgraph git connect"
+  Then git is enabled for shared connector polling
+  And workgraph reports how to disable or change git polling
+
 Scenario: Capture local git commits
   Given workgraph has been initialized
   And a configured watch root contains a git repository with a commit

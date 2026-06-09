@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -40,6 +41,20 @@ type ConnectorUpdateConfig struct {
 
 // ConnectorUpdateResult describes a connector polling update.
 type ConnectorUpdateResult struct {
+	HomeDir string
+	ID      string
+	Message string
+}
+
+// ConnectorConnectConfig controls local connector setup.
+type ConnectorConnectConfig struct {
+	HomeDir       string
+	ID            string
+	GitHubCommand string
+}
+
+// ConnectorConnectResult describes local connector setup.
+type ConnectorConnectResult struct {
 	HomeDir string
 	ID      string
 	Message string
@@ -132,6 +147,53 @@ func SetConnectorInterval(config ConnectorUpdateConfig) (ConnectorUpdateResult, 
 		HomeDir: homeDir,
 		ID:      id,
 		Message: fmt.Sprintf("Connector %s interval: %s\nConfig: %s", id, config.Interval, connectorRuntimePath(homeDir)),
+	}, nil
+}
+
+// ConnectGit enables local git capture in the shared connector runtime.
+func ConnectGit(config ConnectorConnectConfig) (ConnectorConnectResult, error) {
+	return connectRuntimeConnector(config.HomeDir, "git", "")
+}
+
+// ConnectGitHub validates the GitHub CLI and enables GitHub polling.
+func ConnectGitHub(config ConnectorConnectConfig) (ConnectorConnectResult, error) {
+	gh := strings.TrimSpace(config.GitHubCommand)
+	if gh == "" {
+		gh = "gh"
+	}
+	if output, err := exec.Command(gh, "auth", "status").CombinedOutput(); err != nil {
+		details := strings.TrimSpace(string(output))
+		if details == "" {
+			details = err.Error()
+		}
+		return ConnectorConnectResult{}, fmt.Errorf("validate GitHub CLI authentication: %s", details)
+	}
+	return connectRuntimeConnector(config.HomeDir, "github", "")
+}
+
+func connectRuntimeConnector(homeDir string, id string, interval string) (ConnectorConnectResult, error) {
+	homeDir, err := connectorHomeDir(homeDir)
+	if err != nil {
+		return ConnectorConnectResult{}, err
+	}
+	state, err := readConnectorRuntimeFile(homeDir)
+	if err != nil {
+		return ConnectorConnectResult{}, err
+	}
+	entry := state.entry(id)
+	enabled := true
+	entry.Enabled = &enabled
+	if interval != "" {
+		entry.Interval = interval
+	}
+	state.Connectors[id] = entry
+	if err := writeConnectorRuntimeFile(homeDir, state); err != nil {
+		return ConnectorConnectResult{}, err
+	}
+	return ConnectorConnectResult{
+		HomeDir: homeDir,
+		ID:      id,
+		Message: connectorConnectMessage(homeDir, id),
 	}, nil
 }
 
@@ -329,4 +391,21 @@ func connectorListMessage(result ConnectorListResult) string {
 	}
 	lines = append(lines, "Config: "+connectorRuntimePath(result.HomeDir))
 	return strings.Join(lines, "\n")
+}
+
+func connectorConnectMessage(homeDir string, id string) string {
+	name := id
+	if id == "git" {
+		name = "Git"
+	}
+	if id == "github" {
+		name = "GitHub"
+	}
+	return strings.Join([]string{
+		fmt.Sprintf("%s connected", name),
+		fmt.Sprintf("Polling enabled for connector %s.", id),
+		fmt.Sprintf("Disable: workgraph connectors disable %s", id),
+		fmt.Sprintf("Interval: workgraph connectors interval %s <duration>", id),
+		"Config: " + connectorRuntimePath(homeDir),
+	}, "\n")
 }
