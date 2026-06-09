@@ -432,6 +432,10 @@ func (capture *RunCapture) captureGitCommits() error {
 		MaxCommits:   20,
 	})
 	if err != nil {
+		_ = recordConnectorPollError(capture.homeDir, "git", time.Now(), err)
+		return err
+	}
+	if err := recordConnectorPollSuccess(capture.homeDir, "git", time.Now()); err != nil {
 		return err
 	}
 	for _, event := range result.Events {
@@ -450,6 +454,13 @@ func (capture *RunCapture) captureGitHubEvents() error {
 		WatchDirs:     capture.watchDirs,
 		GitHubCommand: capture.githubCommand,
 	})
+	if err != nil {
+		_ = recordConnectorPollError(capture.homeDir, "github", time.Now(), err)
+		return err
+	}
+	if err := recordConnectorPollSuccess(capture.homeDir, "github", time.Now()); err != nil {
+		return err
+	}
 	return err
 }
 
@@ -470,6 +481,10 @@ func (capture *RunCapture) captureSlackEvents() error {
 		ThreadCursors: capture.slackThreadCursors,
 	})
 	if err != nil {
+		_ = recordConnectorPollError(capture.homeDir, "slack", time.Now(), err)
+		return err
+	}
+	if err := recordConnectorPollSuccess(capture.homeDir, "slack", time.Now()); err != nil {
 		return err
 	}
 	capture.slackCursors = result.Cursors
@@ -491,14 +506,19 @@ func (capture *RunCapture) captureSlackListItems() error {
 			HTTPClient:   capture.slackHTTPClient,
 		})
 		if err != nil {
+			_ = recordConnectorPollError(capture.homeDir, "slack.lists", time.Now(), err)
 			return err
 		}
+	}
+	if err := recordConnectorPollSuccess(capture.homeDir, "slack.lists", time.Now()); err != nil {
+		return err
 	}
 	return nil
 }
 
 func (capture *RunCapture) captureCalendarEvents() error {
 	for _, provider := range capture.calendarProviders {
+		id := "calendar." + provider
 		_, err := CaptureCalendarEvents(CalendarCaptureConfig{
 			HomeDir:      capture.homeDir,
 			DatabasePath: capture.databasePath,
@@ -507,6 +527,10 @@ func (capture *RunCapture) captureCalendarEvents() error {
 			HTTPClient:   capture.calendarHTTPClient,
 		})
 		if err != nil {
+			_ = recordConnectorPollError(capture.homeDir, id, time.Now(), err)
+			return err
+		}
+		if err := recordConnectorPollSuccess(capture.homeDir, id, time.Now()); err != nil {
 			return err
 		}
 	}
@@ -515,6 +539,7 @@ func (capture *RunCapture) captureCalendarEvents() error {
 
 func (capture *RunCapture) captureMailMessages() error {
 	for _, provider := range capture.mailProviders {
+		id := "mail." + provider
 		_, err := CaptureMailMessages(MailCaptureConfig{
 			HomeDir:      capture.homeDir,
 			DatabasePath: capture.databasePath,
@@ -522,6 +547,10 @@ func (capture *RunCapture) captureMailMessages() error {
 			HTTPClient:   capture.mailHTTPClient,
 		})
 		if err != nil {
+			_ = recordConnectorPollError(capture.homeDir, id, time.Now(), err)
+			return err
+		}
+		if err := recordConnectorPollSuccess(capture.homeDir, id, time.Now()); err != nil {
 			return err
 		}
 	}
@@ -537,6 +566,13 @@ func (capture *RunCapture) captureNotionEvents() error {
 		DatabasePath: capture.databasePath,
 		HTTPClient:   capture.notionHTTPClient,
 	})
+	if err != nil {
+		_ = recordConnectorPollError(capture.homeDir, "notion", time.Now(), err)
+		return err
+	}
+	if err := recordConnectorPollSuccess(capture.homeDir, "notion", time.Now()); err != nil {
+		return err
+	}
 	return err
 }
 
@@ -549,6 +585,13 @@ func (capture *RunCapture) captureAzureBoardsEvents() error {
 		DatabasePath: capture.databasePath,
 		HTTPClient:   capture.azureBoardsHTTPClient,
 	})
+	if err != nil {
+		_ = recordConnectorPollError(capture.homeDir, "azure.boards", time.Now(), err)
+		return err
+	}
+	if err := recordConnectorPollSuccess(capture.homeDir, "azure.boards", time.Now()); err != nil {
+		return err
+	}
 	return err
 }
 

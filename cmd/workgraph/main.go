@@ -30,6 +30,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runConfig(args[1:], stdout, stderr)
 	case "connectors":
 		return runConnectors(args[1:], stdout, stderr)
+	case "doctor":
+		return runDoctor(args[1:], stdout, stderr)
 	case "git":
 		return runGit(args[1:], stdout, stderr)
 	case "github":
@@ -66,6 +68,31 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unknown command: %s\n", args[0])
 		return 2
 	}
+}
+
+func runDoctor(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph doctor")
+		return 2
+	}
+
+	result, err := workgraph.Doctor(workgraph.DoctorConfig{
+		HomeDir: *homeDir,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph doctor: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
 }
 
 func runEvents(args []string, stdout io.Writer, stderr io.Writer) int {
