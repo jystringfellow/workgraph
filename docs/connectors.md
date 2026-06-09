@@ -185,6 +185,7 @@ workgraph mail capture --provider google --mailbox-id <mailbox-id>
 Git capture is local and does not require account connection:
 
 ```sh
+workgraph git connect
 workgraph git capture
 ```
 
@@ -192,12 +193,12 @@ GitHub capture currently supports deterministic capture commands and local
 remote-derived context:
 
 ```sh
+workgraph github connect
 workgraph github capture
 ```
 
-A future `workgraph github connect` command is expected to make GitHub setup
-consistent with the other provider connectors. See `../specs/connector-runtime.md`
-for the target connector model.
+`workgraph github connect` validates the authenticated `gh` CLI and enables
+GitHub in the shared connector runtime.
 
 ## Manual Capture
 
