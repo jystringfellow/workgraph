@@ -262,7 +262,7 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 		watchBudget:             budget,
 		gitEnabled:              connectorEnabled(connectorState, "git"),
 		gitPollInterval:         connectorInterval(connectorState, "git", gitPollInterval(config.GitPollInterval)),
-		githubEnabled:           connectorEnabled(connectorState, "github"),
+		githubEnabled:           connectorEnabled(connectorState, "github") && connectorReadyForPolling(connectorState, "github"),
 		githubPollInterval:      connectorInterval(connectorState, "github", githubPollInterval(config.GitHubPollInterval)),
 		githubCommand:           config.GitHubCommand,
 		slackEnabled:            connectorEnabled(connectorState, "slack"),
@@ -414,7 +414,7 @@ func monitoredConnectorIDs(homeDir string, state connectorRuntimeFile) []string 
 	statuses := connectorStatuses(homeDir, state)
 	ids := make([]string, 0, len(statuses))
 	for _, status := range statuses {
-		if status.Connected && status.Enabled {
+		if status.Connected && status.Enabled && connectorReadyForPolling(state, status.ID) {
 			ids = append(ids, status.ID)
 		}
 	}

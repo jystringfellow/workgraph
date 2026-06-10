@@ -25,13 +25,16 @@ type ConnectorListResult struct {
 
 // ConnectorStatus describes one connector's polling state.
 type ConnectorStatus struct {
-	ID        string
-	Connected bool
-	Enabled   bool
-	Interval  time.Duration
-	LastPoll  string
-	LastError string
-	NextPoll  string
+	ID                  string
+	Connected           bool
+	Enabled             bool
+	Interval            time.Duration
+	SetupState          string
+	LastValidated       string
+	LastValidationError string
+	LastPoll            string
+	LastError           string
+	NextPoll            string
 }
 
 // ConnectorUpdateConfig controls connector polling updates.
@@ -68,10 +71,13 @@ type connectorRuntimeFile struct {
 }
 
 type connectorRuntimeEntry struct {
-	Enabled   *bool  `json:"enabled,omitempty"`
-	Interval  string `json:"interval,omitempty"`
-	LastPoll  string `json:"last_poll_at,omitempty"`
-	LastError string `json:"last_error,omitempty"`
+	Enabled             *bool  `json:"enabled,omitempty"`
+	Interval            string `json:"interval,omitempty"`
+	SetupState          string `json:"setup_state,omitempty"`
+	LastValidated       string `json:"last_validated_at,omitempty"`
+	LastValidationError string `json:"last_validation_error,omitempty"`
+	LastPoll            string `json:"last_poll_at,omitempty"`
+	LastError           string `json:"last_error,omitempty"`
 }
 
 // ListConnectors reports known connector polling state.
@@ -90,6 +96,24 @@ func ListConnectors(config ConnectorListConfig) (ConnectorListResult, error) {
 		Connectors: statuses,
 	}
 	result.Message = connectorListMessage(result)
+	return result, nil
+}
+
+// StatusConnectors reports setup and polling state for known connectors.
+func StatusConnectors(config ConnectorListConfig) (ConnectorListResult, error) {
+	homeDir, err := connectorHomeDir(config.HomeDir)
+	if err != nil {
+		return ConnectorListResult{}, err
+	}
+	state, err := readConnectorRuntimeFile(homeDir)
+	if err != nil {
+		return ConnectorListResult{}, err
+	}
+	result := ConnectorListResult{
+		HomeDir:    homeDir,
+		Connectors: connectorStatuses(homeDir, state),
+	}
+	result.Message = connectorStatusMessage(result)
 	return result, nil
 }
 
@@ -162,6 +186,10 @@ func ConnectGit(config ConnectorConnectConfig) (ConnectorConnectResult, error) {
 
 // ConnectGitHub validates the GitHub CLI and enables GitHub polling.
 func ConnectGitHub(config ConnectorConnectConfig) (ConnectorConnectResult, error) {
+	homeDir, err := connectorHomeDir(config.HomeDir)
+	if err != nil {
+		return ConnectorConnectResult{}, err
+	}
 	gh := strings.TrimSpace(config.GitHubCommand)
 	if gh == "" {
 		gh = "gh"
@@ -171,9 +199,12 @@ func ConnectGitHub(config ConnectorConnectConfig) (ConnectorConnectResult, error
 		if details == "" {
 			details = err.Error()
 		}
+		if recordErr := recordConnectorValidationError(homeDir, "github", time.Now(), details); recordErr != nil {
+			return ConnectorConnectResult{}, recordErr
+		}
 		return ConnectorConnectResult{}, fmt.Errorf("validate GitHub CLI authentication: %s", details)
 	}
-	return connectRuntimeConnector(config.HomeDir, "github", "")
+	return connectRuntimeConnector(homeDir, "github", "")
 }
 
 func connectRuntimeConnector(homeDir string, id string, interval string) (ConnectorConnectResult, error) {
@@ -188,6 +219,9 @@ func connectRuntimeConnector(homeDir string, id string, interval string) (Connec
 	entry := state.entry(id)
 	enabled := true
 	entry.Enabled = &enabled
+	entry.SetupState = "ready"
+	entry.LastValidated = time.Now().UTC().Format(time.RFC3339)
+	entry.LastValidationError = ""
 	if interval != "" {
 		entry.Interval = interval
 	}
@@ -220,16 +254,32 @@ func connectorStatuses(homeDir string, state connectorRuntimeFile) []ConnectorSt
 		connected := connectorConnected(homeDir, id)
 		entry := state.entry(id)
 		statuses = append(statuses, ConnectorStatus{
-			ID:        id,
-			Connected: connected,
-			Enabled:   connectorEnabled(state, id),
-			Interval:  connectorInterval(state, id, defaultConnectorInterval(id)),
-			LastPoll:  entry.LastPoll,
-			LastError: entry.LastError,
-			NextPoll:  connectorNextPoll(entry, defaultConnectorInterval(id)),
+			ID:                  id,
+			Connected:           connected,
+			Enabled:             connectorEnabled(state, id),
+			Interval:            connectorInterval(state, id, defaultConnectorInterval(id)),
+			SetupState:          connectorSetupState(entry),
+			LastValidated:       entry.LastValidated,
+			LastValidationError: entry.LastValidationError,
+			LastPoll:            entry.LastPoll,
+			LastError:           entry.LastError,
+			NextPoll:            connectorNextPoll(entry, defaultConnectorInterval(id)),
 		})
 	}
 	return statuses
+}
+
+func recordConnectorValidationError(homeDir string, id string, when time.Time, validationError string) error {
+	state, err := readConnectorRuntimeFile(homeDir)
+	if err != nil {
+		return err
+	}
+	entry := state.entry(id)
+	entry.SetupState = "error"
+	entry.LastValidated = when.UTC().Format(time.RFC3339)
+	entry.LastValidationError = strings.TrimSpace(validationError)
+	state.Connectors[id] = entry
+	return writeConnectorRuntimeFile(homeDir, state)
 }
 
 func recordConnectorPollSuccess(homeDir string, id string, when time.Time) error {
@@ -370,6 +420,25 @@ func connectorEnabled(state connectorRuntimeFile, id string) bool {
 	return *entry.Enabled
 }
 
+func connectorSetupState(entry connectorRuntimeEntry) string {
+	state := strings.TrimSpace(entry.SetupState)
+	if state == "" {
+		return "unknown"
+	}
+	return state
+}
+
+func connectorReadyForPolling(state connectorRuntimeFile, id string) bool {
+	entry := state.entry(id)
+	if strings.TrimSpace(entry.SetupState) == "error" || strings.TrimSpace(entry.SetupState) == "draft" {
+		return false
+	}
+	if id == "github" {
+		return strings.TrimSpace(entry.SetupState) == "ready"
+	}
+	return true
+}
+
 func connectorInterval(state connectorRuntimeFile, id string, fallback time.Duration) time.Duration {
 	entry := state.Connectors[id]
 	if entry.Interval == "" {
@@ -438,6 +507,42 @@ func connectorListMessage(result ConnectorListResult) string {
 			enabled = "enabled"
 		}
 		line := fmt.Sprintf("- %s: %s, %s, interval %s", status.ID, connected, enabled, status.Interval)
+		if status.LastPoll != "" {
+			line += ", last poll " + status.LastPoll
+		}
+		if status.LastError != "" {
+			line += ", last error " + status.LastError
+		}
+		if status.NextPoll != "" {
+			line += ", next poll " + status.NextPoll
+		}
+		lines = append(lines, line)
+	}
+	lines = append(lines, "Config: "+connectorRuntimePath(result.HomeDir))
+	return strings.Join(lines, "\n")
+}
+
+func connectorStatusMessage(result ConnectorListResult) string {
+	lines := []string{"Connector status"}
+	statuses := append([]ConnectorStatus(nil), result.Connectors...)
+	sort.SliceStable(statuses, func(i, j int) bool {
+		return statuses[i].ID < statuses[j].ID
+	})
+	for _, status := range statuses {
+		polling := "polling disabled"
+		if status.Enabled {
+			polling = "polling enabled"
+		}
+		if status.SetupState == "error" || status.SetupState == "draft" {
+			polling = "polling not ready"
+		}
+		line := fmt.Sprintf("- %s: setup %s, %s, interval %s", status.ID, status.SetupState, polling, status.Interval)
+		if status.LastValidated != "" {
+			line += ", last validated " + status.LastValidated
+		}
+		if status.LastValidationError != "" {
+			line += ", validation error " + status.LastValidationError
+		}
 		if status.LastPoll != "" {
 			line += ", last poll " + status.LastPoll
 		}

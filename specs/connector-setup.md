@@ -64,20 +64,20 @@ Each connector should expose setup status:
 
 Runtime polling must include only `ready` connectors.
 
-## First Implementation Slice
+## Reference Implementation
 
-The first setup handoff slice should use GitHub as the reference path because it
-has a simple local validation command:
+GitHub is the reference setup handoff path because it has a simple local
+validation command:
 
 ```text
 workgraph github connect
 workgraph connectors status
 ```
 
-Successful `gh auth status` should mark GitHub `ready`. Failed validation
-should mark GitHub `error`, preserve actionable validation text, and keep the
-connector out of runtime polling. Later provider setup flows should reuse the
-same state model.
+Successful `gh auth status` marks GitHub `ready`. Failed validation marks
+GitHub `error`, preserves actionable validation text, and keeps the connector
+out of runtime polling. Later provider setup flows should reuse the same state
+model.
 
 ## Security Notes
 

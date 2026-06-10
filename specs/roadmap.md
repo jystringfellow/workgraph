@@ -95,7 +95,7 @@ Priority labels used below:
 - [ ] Configurable connector framework
    - [ ] Connected services poll automatically from `workgraph start` with visible controls. [P0a, spec: `specs/connector-runtime.md`]
    - [ ] Memory routing/index file for loading relevant context by task.
-   - [ ] Connector setup handoff state: `draft`, `ready`, `error`, validation timestamps, validation errors, and `connectors status`. [P0a, spec: `specs/connector-runtime.md` and `specs/connector-setup.md`]
+   - [x] Connector setup handoff state: `draft`, `ready`, `error`, validation timestamps, validation errors, and `connectors status`. [P0a, spec: `specs/connector-runtime.md` and `specs/connector-setup.md`]
    - [ ] Interactive connector setup wizard for required/optional params with inline help. [P0a, spec: `specs/connector-setup.md`]
    - [ ] Connector setup validation flow (test connection before save, draft-and-resume support). [P0a, spec: `specs/connector-setup.md`]
 
