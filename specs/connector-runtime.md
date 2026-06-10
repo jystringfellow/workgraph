@@ -26,6 +26,8 @@ backfills, and one-off runs.
   can disable connector polling or individual connectors.
 - **Connect means capture-ready**: after a connector is connected, `workgraph
   start` should include it by default unless disabled.
+- **Validated setup first**: connectors should poll only after required settings
+  pass a local validation check.
 - **Manual capture remains**: `capture` commands continue to exist for testable
   deterministic ingestion and troubleshooting.
 - **One poll path per connector**: daemon polling and manual `connectors poll`
@@ -48,11 +50,17 @@ The first runtime control slice stores polling preferences in
 `connectors.json`. Disabling a connector stops polling without removing OAuth
 credentials from the provider-specific config file.
 
+Next runtime commands should include:
+
+```text
+workgraph connectors status
+workgraph connectors poll --once
+workgraph connectors poll --connector slack
+```
+
 Future runtime commands should include:
 
 ```text
-workgraph connectors poll --once
-workgraph connectors poll --connector slack
 workgraph start --no-connectors
 workgraph start --connector <connector>
 ```
@@ -92,6 +100,32 @@ in connector status as an enabled local source when file/git capture is active.
 11. Show connector polling in `workgraph status`.
 12. Wire the shared poll loop into `workgraph start` by default for connected
     providers.
+
+## Setup To Runtime Handoff
+
+Connector setup and connector runtime are separate concerns with a strict
+handoff:
+
+- setup collects required and optional connector settings
+- validation runs before settings are marked capture-ready
+- runtime polling only includes connectors marked capture-ready
+
+When setup is incomplete or validation fails, connector status should stay
+visible with a non-ready state and actionable error details.
+
+Suggested state shape per connector:
+
+- `setup_state`: `draft`, `ready`, or `error`
+- `last_validated_at`: RFC3339 timestamp
+- `last_validation_error`: latest validation failure text
+
+Draft settings should persist locally so users can resume setup later without
+re-entering all parameters.
+
+The next implementation slice should make `github connect` the reference path:
+successful `gh auth status` marks GitHub `ready`, failed validation marks it
+`error`, and `workgraph connectors status` shows setup state alongside polling
+state. Runtime polling should include only `ready` API connectors.
 
 ## Connector State
 

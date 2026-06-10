@@ -239,9 +239,10 @@ Contracts:
 
 ### recommendations
 
-Status: draft
+Status: draft, superseded by `suggestions`
 
-Represents system-generated suggestions.
+Represents the older name for system-generated suggestions. New implementation
+work should use `suggestions`.
 
 Fields:
 
@@ -258,6 +259,103 @@ Contracts:
 
 - `rationale` must include evidence
 - `status` is one of: `proposed`, `accepted`, `dismissed`, `acted`
+
+### suggestions
+
+Status: active target
+
+Represents system-generated suggestions that remain reviewable until the user
+acts. This is the shared substrate for watch-root suggestions, ignore-rule
+suggestions, what-next suggestions, and association suggestions.
+
+Required fields:
+
+- `id`
+- `type`
+- `title`
+- `reason`
+- `confidence`
+- `lane`
+- `status`
+- `evidence_json`
+- `created_at`
+- `updated_at`
+
+Optional fields:
+
+- `pattern_key`
+- `resolved_at`
+
+Contracts:
+
+- `id` is unique and stable for one suggestion instance
+- `type` is non-empty, such as `watch_root`, `ignore_path`, `ignore_name`,
+  `what_next`, or `association`
+- `reason` explains why the suggestion appeared
+- `confidence` is one of: `high`, `medium`, `low`
+- `lane` is one of: `baseline`, `semantic`, `manual`
+- `status` is one of: `proposed`, `reviewed`, `approved`, `dismissed`,
+  `snoozed`, `acted`
+- `evidence_json` is valid JSON and cites event ids, source ids, paths, or
+  provider object ids
+- `pattern_key` identifies repeatable suggestion patterns for coalescing and
+  suppression when available
+- low-confidence suggestions must not trigger irreversible mutations
+
+### suggestion_feedback
+
+Status: active target
+
+Append-only local feedback events for suggestion lifecycle actions.
+
+Required fields:
+
+- `id`
+- `suggestion_id`
+- `action`
+- `created_at`
+
+Optional fields:
+
+- `reason_code`
+- `note`
+
+Contracts:
+
+- `id` is unique
+- `suggestion_id` links to a suggestion id
+- `action` is one of: `reviewed`, `accepted`, `dismissed`, `snoozed`,
+  `completed`, `undone`
+- `reason_code` is stable when present so review metrics can group it
+- feedback events are append-only; updates to current suggestion state happen
+  on the suggestion row
+
+### suggestion_suppressions
+
+Status: active target
+
+Local suppression rules that hide recurring suggestion patterns without
+deleting evidence.
+
+Required fields:
+
+- `id`
+- `type`
+- `pattern_key`
+- `created_at`
+
+Optional fields:
+
+- `until_at`
+- `reason`
+
+Contracts:
+
+- `id` is unique
+- `type` matches the suggestion type being suppressed
+- `pattern_key` is non-empty
+- `until_at`, when present, is a valid RFC3339 timestamp
+- suppression is reversible and must not delete source evidence
 
 ### decisions
 

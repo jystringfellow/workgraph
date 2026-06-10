@@ -35,3 +35,20 @@ For Phase 0, sessions are inferred at query time. Consecutive events stay in the
 - they are no more than 30 minutes apart
 
 The stored `sessions` table remains available for future durable session summaries, but `today` does not require precomputed session rows.
+
+## What Next Suggestions (Future)
+
+`today` should eventually include an optional `What next` section driven by
+captured evidence.
+
+Requirements:
+
+- each suggestion cites the evidence used to produce it, such as event ids,
+	source ids, or concrete artifact references
+- each suggestion includes a short reason users can inspect
+- users can suppress or dismiss a suggestion pattern without editing data
+	manually
+- suggestions remain non-destructive drafts until explicitly approved
+
+Suggestion rendering and suppression behavior should align with
+`specs/suggestion-explainability.md`.
