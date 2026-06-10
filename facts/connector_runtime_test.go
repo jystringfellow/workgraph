@@ -316,6 +316,46 @@ func TestConnectorsListShowsPollDetails(t *testing.T) {
 	}
 }
 
+func TestConnectorsStatusShowsSetupAndPollState(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, "connectors.json"), []byte(`{
+  "connectors": {
+    "github": {
+      "enabled": true,
+      "interval": "5m",
+      "setup_state": "ready",
+      "last_validated_at": "2026-06-10T09:00:00Z",
+      "last_poll_at": "2026-06-10T09:05:00Z"
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write connector runtime config: %v", err)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("workgraph connectors status failed: %v\n%s", err, output)
+	}
+	for _, expected := range []string{
+		"Connector status",
+		"- github: setup ready",
+		"last validated 2026-06-10T09:00:00Z",
+		"polling enabled",
+		"last poll 2026-06-10T09:05:00Z",
+		"next poll 2026-06-10T09:10:00Z",
+	} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected connector status detail %q, got:\n%s", expected, output)
+		}
+	}
+}
+
 func waitForEventTypeSummary(t *testing.T, dbPath, eventType, summary string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)

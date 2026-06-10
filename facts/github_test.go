@@ -110,6 +110,53 @@ func TestGitHubConnectValidatesGHAndEnablesSharedConnectorPolling(t *testing.T) 
 	if !strings.Contains(string(output), "- github: connected, enabled") {
 		t.Fatalf("expected enabled github connector, got:\n%s", output)
 	}
+
+	output, err = runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("workgraph connectors status failed: %v\n%s", err, output)
+	}
+	for _, expected := range []string{
+		"- github: setup ready",
+		"last validated",
+		"polling enabled",
+	} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected github connector status to include %q, got:\n%s", expected, output)
+		}
+	}
+}
+
+func TestGitHubConnectFailureRecordsValidationError(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	ghPath := writeFakeGHAuthFailure(t, tempDir)
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "github", "connect", "--home", homeDir, "--gh", ghPath)
+	if err == nil {
+		t.Fatalf("expected workgraph github connect to fail, got:\n%s", output)
+	}
+	if !strings.Contains(string(output), "missing authentication") {
+		t.Fatalf("expected auth failure output, got:\n%s", output)
+	}
+
+	output, err = runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("workgraph connectors status failed: %v\n%s", err, output)
+	}
+	for _, expected := range []string{
+		"- github: setup error",
+		"last validated",
+		"validation error missing authentication",
+		"polling not ready",
+	} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected github connector status to include %q, got:\n%s", expected, output)
+		}
+	}
 }
 
 func TestGitHubCaptureLinksProjectByLocalRemote(t *testing.T) {
@@ -372,6 +419,7 @@ func TestRunCapturesGitHubPullRequestsThroughGHCLI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init failed: %v", err)
 	}
+	connectGitHubForTest(t, homeDir, ghPath)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -416,6 +464,7 @@ func TestRunSkipsGitHubPollingWhenRateLimitIsLow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init failed: %v", err)
 	}
+	connectGitHubForTest(t, homeDir, ghPath)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -473,6 +522,7 @@ func TestRunBoundsGitHubRepositoryQueriesPerPoll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init failed: %v", err)
 	}
+	connectGitHubForTest(t, homeDir, ghPath)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -541,6 +591,39 @@ exit 1
 `
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake gh: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "gh.log"), nil, 0o644); err != nil {
+		t.Fatalf("write gh log: %v", err)
+	}
+	return path
+}
+
+func connectGitHubForTest(t *testing.T, homeDir string, ghPath string) {
+	t.Helper()
+
+	if _, err := workgraph.ConnectGitHub(workgraph.ConnectorConnectConfig{
+		HomeDir:       homeDir,
+		GitHubCommand: ghPath,
+	}); err != nil {
+		t.Fatalf("connect github for test: %v", err)
+	}
+}
+
+func writeFakeGHAuthFailure(t *testing.T, dir string) string {
+	t.Helper()
+
+	path := filepath.Join(dir, "gh")
+	script := `#!/bin/sh
+echo "$@" >> "` + filepath.Join(dir, "gh.log") + `"
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+  printf 'missing authentication\n' >&2
+  exit 1
+fi
+printf 'unexpected gh args: %s\n' "$*" >&2
+exit 1
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake gh auth failure: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "gh.log"), nil, 0o644); err != nil {
 		t.Fatalf("write gh log: %v", err)

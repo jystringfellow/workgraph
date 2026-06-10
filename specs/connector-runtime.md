@@ -122,10 +122,10 @@ Suggested state shape per connector:
 Draft settings should persist locally so users can resume setup later without
 re-entering all parameters.
 
-The next implementation slice should make `github connect` the reference path:
-successful `gh auth status` marks GitHub `ready`, failed validation marks it
-`error`, and `workgraph connectors status` shows setup state alongside polling
-state. Runtime polling should include only `ready` API connectors.
+`github connect` is the reference path for setup handoff: successful `gh auth
+status` marks GitHub `ready`, failed validation marks it `error`, and
+`workgraph connectors status` shows setup state alongside polling state.
+Runtime polling should include only `ready` API connectors.
 
 ## Connector State
 

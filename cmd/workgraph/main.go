@@ -348,13 +348,15 @@ func runLLMSummarize(args []string, stdout io.Writer, stderr io.Writer) int {
 
 func runConnectors(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: workgraph connectors <list|enable|disable|interval>")
+		fmt.Fprintln(stderr, "usage: workgraph connectors <list|status|enable|disable|interval>")
 		return 2
 	}
 
 	switch args[0] {
 	case "list":
 		return runConnectorsList(args[1:], stdout, stderr)
+	case "status":
+		return runConnectorsStatus(args[1:], stdout, stderr)
 	case "enable":
 		return runConnectorsEnable(args[1:], stdout, stderr)
 	case "disable":
@@ -379,6 +381,24 @@ func runConnectorsList(args []string, stdout io.Writer, stderr io.Writer) int {
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph connectors list: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runConnectorsStatus(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("connectors status", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	result, err := workgraph.StatusConnectors(workgraph.ConnectorListConfig{
+		HomeDir: *homeDir,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph connectors status: %v\n", err)
 		return 1
 	}
 	fmt.Fprintln(stdout, result.Message)

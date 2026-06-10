@@ -188,6 +188,7 @@ List and tune connector polling:
 
 ```sh
 workgraph connectors list
+workgraph connectors status
 workgraph connectors disable <connector>
 workgraph connectors enable <connector>
 workgraph connectors interval <connector> 15m
