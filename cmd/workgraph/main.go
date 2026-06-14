@@ -471,7 +471,7 @@ func runLLMSummarize(args []string, stdout io.Writer, stderr io.Writer) int {
 
 func runConnectors(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: workgraph connectors <list|status|poll|enable|disable|interval>")
+		fmt.Fprintln(stderr, "usage: workgraph connectors <list|status|poll|validate|enable|disable|interval>")
 		return 2
 	}
 
@@ -482,6 +482,8 @@ func runConnectors(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runConnectorsStatus(args[1:], stdout, stderr)
 	case "poll":
 		return runConnectorsPoll(args[1:], stdout, stderr)
+	case "validate":
+		return runConnectorsValidate(args[1:], stdout, stderr)
 	case "enable":
 		return runConnectorsEnable(args[1:], stdout, stderr)
 	case "disable":
@@ -524,6 +526,31 @@ func runConnectorsStatus(args []string, stdout io.Writer, stderr io.Writer) int 
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph connectors status: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runConnectorsValidate(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("connectors validate", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	gh := flags.String("gh", "", "gh-compatible executable for GitHub auth validation")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 1 {
+		fmt.Fprintln(stderr, "usage: workgraph connectors validate <connector>")
+		return 2
+	}
+	result, err := workgraph.ValidateConnector(workgraph.ConnectorValidateConfig{
+		HomeDir:       *homeDir,
+		ID:            flags.Arg(0),
+		GitHubCommand: *gh,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph connectors validate: %v\n", err)
 		return 1
 	}
 	fmt.Fprintln(stdout, result.Message)
