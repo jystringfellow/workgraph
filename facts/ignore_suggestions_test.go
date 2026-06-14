@@ -104,11 +104,86 @@ func TestSuggestsIgnoreNameFromRecurringGeneratedBasename(t *testing.T) {
 }
 
 func TestApprovingIgnorePathSuggestionAddsPathToConfig(t *testing.T) {
-	t.Skip("TBD: approving an ignore-path suggestion appends the suggested path to ignore_paths")
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	ignorePath := filepath.Join(tempDir, "project", "GeneratedCache")
+	if err := os.MkdirAll(ignorePath, 0o755); err != nil {
+		t.Fatalf("create ignored path: %v", err)
+	}
+
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	suggestion, err := workgraph.UpsertSuggestion(workgraph.SuggestionUpsert{
+		HomeDir:      homeDir,
+		DatabasePath: initResult.DatabasePath,
+		Type:         "ignore_path",
+		PatternKey:   ignorePath,
+		Title:        "Ignore noisy generated path",
+		Reason:       "8 file events were captured under a generated-looking path.",
+		Confidence:   "high",
+		Lane:         "baseline",
+		EvidenceJSON: `{"event_ids":["event-1"],"paths":["` + filepath.ToSlash(filepath.Join(ignorePath, "asset.tmp")) + `"]}`,
+	})
+	if err != nil {
+		t.Fatalf("create suggestion: %v", err)
+	}
+
+	approved, err := workgraph.ApproveSuggestion(workgraph.SuggestionStatusUpdate{
+		HomeDir:      homeDir,
+		DatabasePath: initResult.DatabasePath,
+		ID:           suggestion.ID,
+	})
+	if err != nil {
+		t.Fatalf("approve suggestion: %v", err)
+	}
+
+	config := readInitConfig(t, filepath.Join(homeDir, "config.json"))
+	if !containsString(config.IgnorePaths, ignorePath) {
+		t.Fatalf("expected approved ignore path in config, got %#v", config.IgnorePaths)
+	}
+	if approved.Status != "approved" {
+		t.Fatalf("expected suggestion approved, got %#v", approved)
+	}
+	assertSuggestionFeedback(t, initResult.DatabasePath, suggestion.ID, "accepted")
 }
 
 func TestApprovingIgnoreNameSuggestionAddsNameToConfig(t *testing.T) {
-	t.Skip("TBD: approving an ignore-name suggestion appends the suggested basename to ignore_names")
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	ignoreName := "CacheData"
+
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	suggestion, err := workgraph.UpsertSuggestion(workgraph.SuggestionUpsert{
+		HomeDir:      homeDir,
+		DatabasePath: initResult.DatabasePath,
+		Type:         "ignore_name",
+		PatternKey:   ignoreName,
+		Title:        "Ignore recurring generated name",
+		Reason:       "9 file events were captured under a repeated generated-looking basename.",
+		Confidence:   "high",
+		Lane:         "baseline",
+		EvidenceJSON: `{"event_ids":["event-1"],"paths":["/tmp/project/module-a/CacheData/item.tmp"]}`,
+	})
+	if err != nil {
+		t.Fatalf("create suggestion: %v", err)
+	}
+
+	output := runWorkgraphCommand(t, nil, "suggestions", "approve", suggestion.ID, "--home", homeDir, "--database", initResult.DatabasePath)
+	if !strings.Contains(output, "Suggestion approved") || !strings.Contains(output, suggestion.ID) {
+		t.Fatalf("expected approve output, got:\n%s", output)
+	}
+
+	config := readInitConfig(t, filepath.Join(homeDir, "config.json"))
+	if !containsString(config.IgnoreNames, ignoreName) {
+		t.Fatalf("expected approved ignore name in config, got %#v", config.IgnoreNames)
+	}
+	assertSuggestionStatus(t, initResult.DatabasePath, suggestion.ID, "approved")
+	assertSuggestionFeedback(t, initResult.DatabasePath, suggestion.ID, "accepted")
 }
 
 func TestDuplicateIgnoreSuggestionsAreCoalesced(t *testing.T) {
@@ -234,6 +309,34 @@ func assertNoSuggestion(t *testing.T, databasePath string, suggestionType string
 	}
 	if count != 0 {
 		t.Fatalf("expected no %s suggestion for %q, got %d", suggestionType, patternKey, count)
+	}
+}
+
+func assertSuggestionStatus(t *testing.T, databasePath string, suggestionID string, expected string) {
+	t.Helper()
+
+	db := openIgnoreSuggestionDB(t, databasePath)
+	defer db.Close()
+	var status string
+	if err := db.QueryRow(`SELECT status FROM suggestions WHERE id = ?`, suggestionID).Scan(&status); err != nil {
+		t.Fatalf("read suggestion status: %v", err)
+	}
+	if status != expected {
+		t.Fatalf("expected suggestion status %q, got %q", expected, status)
+	}
+}
+
+func assertSuggestionFeedback(t *testing.T, databasePath string, suggestionID string, expectedAction string) {
+	t.Helper()
+
+	db := openIgnoreSuggestionDB(t, databasePath)
+	defer db.Close()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM suggestion_feedback WHERE suggestion_id = ? AND action = ?`, suggestionID, expectedAction).Scan(&count); err != nil {
+		t.Fatalf("count suggestion feedback: %v", err)
+	}
+	if count == 0 {
+		t.Fatalf("expected suggestion feedback action %q for %q", expectedAction, suggestionID)
 	}
 }
 

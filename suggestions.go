@@ -305,6 +305,46 @@ func DismissSuggestion(config SuggestionStatusUpdate) (Suggestion, error) {
 	return readSuggestionByID(db, config.ID)
 }
 
+func ApproveSuggestion(config SuggestionStatusUpdate) (Suggestion, error) {
+	db, err := openSuggestionDatabase(config.HomeDir, config.DatabasePath)
+	if err != nil {
+		return Suggestion{}, err
+	}
+	suggestion, err := readSuggestionByID(db, config.ID)
+	db.Close()
+	if err != nil {
+		return Suggestion{}, err
+	}
+
+	switch suggestion.Type {
+	case "ignore_path":
+		if _, err := addIgnorePath(ConfigIgnoreConfig{HomeDir: config.HomeDir, Path: suggestion.PatternKey}); err != nil {
+			return Suggestion{}, err
+		}
+	case "ignore_name":
+		if _, err := addIgnoreName(ConfigIgnoreConfig{HomeDir: config.HomeDir, Name: suggestion.PatternKey}); err != nil {
+			return Suggestion{}, err
+		}
+	default:
+		return Suggestion{}, fmt.Errorf("approval is not implemented for suggestion type %q", suggestion.Type)
+	}
+
+	config.Status = "approved"
+	if strings.TrimSpace(config.ReasonCode) == "" {
+		config.ReasonCode = "user_approved"
+	}
+	if err := UpdateSuggestionStatus(config); err != nil {
+		return Suggestion{}, err
+	}
+
+	db, err = openSuggestionDatabase(config.HomeDir, config.DatabasePath)
+	if err != nil {
+		return Suggestion{}, err
+	}
+	defer db.Close()
+	return readSuggestionByID(db, config.ID)
+}
+
 func openSuggestionDatabase(homeDir string, databasePath string) (*sql.DB, error) {
 	status, err := prepareRunStatus(RunConfig{HomeDir: homeDir, DatabasePath: databasePath})
 	if err != nil {

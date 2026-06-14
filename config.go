@@ -22,6 +22,13 @@ type ConfigWatchResult struct {
 	Message    string
 }
 
+// ConfigIgnoreConfig controls updates to config ignore rules.
+type ConfigIgnoreConfig struct {
+	HomeDir string
+	Path    string
+	Name    string
+}
+
 // AddWatchDir prepends a resolved watch directory to workgraph config.
 func AddWatchDir(config ConfigWatchConfig) (ConfigWatchResult, error) {
 	homeDir, err := resolveHomeDir(config.HomeDir)
@@ -96,6 +103,76 @@ func removePath(path string, paths []string) []string {
 		result = append(result, existing)
 	}
 	return result
+}
+
+func addIgnorePath(config ConfigIgnoreConfig) (string, error) {
+	homeDir, err := resolvedConfigHome(config.HomeDir)
+	if err != nil {
+		return "", err
+	}
+	configPath := filepath.Join(homeDir, "config.json")
+	localConfig, err := readConfig(configPath)
+	if err != nil {
+		return "", err
+	}
+
+	ignorePath := strings.TrimSpace(config.Path)
+	if ignorePath == "" {
+		return "", fmt.Errorf("ignore path is required")
+	}
+	ignorePath, err = filepath.Abs(ignorePath)
+	if err != nil {
+		return "", fmt.Errorf("resolve ignore path: %w", err)
+	}
+	localConfig.IgnorePaths = appendUniqueString(localConfig.IgnorePaths, ignorePath)
+	if err := writeConfig(configPath, localConfig); err != nil {
+		return "", err
+	}
+	return ignorePath, nil
+}
+
+func addIgnoreName(config ConfigIgnoreConfig) (string, error) {
+	homeDir, err := resolvedConfigHome(config.HomeDir)
+	if err != nil {
+		return "", err
+	}
+	configPath := filepath.Join(homeDir, "config.json")
+	localConfig, err := readConfig(configPath)
+	if err != nil {
+		return "", err
+	}
+
+	ignoreName := strings.TrimSpace(config.Name)
+	if ignoreName == "" {
+		return "", fmt.Errorf("ignore name is required")
+	}
+	localConfig.IgnoreNames = appendUniqueString(localConfig.IgnoreNames, ignoreName)
+	if err := writeConfig(configPath, localConfig); err != nil {
+		return "", err
+	}
+	return ignoreName, nil
+}
+
+func resolvedConfigHome(homeDir string) (string, error) {
+	homeDir, err := resolveHomeDir(homeDir)
+	if err != nil {
+		return "", err
+	}
+	homeDir, err = filepath.Abs(homeDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve workgraph home: %w", err)
+	}
+	return homeDir, nil
+}
+
+func appendUniqueString(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return append([]string(nil), values...)
+		}
+	}
+	result := append([]string(nil), values...)
+	return append(result, value)
 }
 
 func writeConfig(configPath string, config configFile) error {

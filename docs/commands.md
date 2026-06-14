@@ -198,12 +198,19 @@ Dismiss a suggestion without deleting its evidence:
 workgraph suggestions dismiss <id> --reason <code>
 ```
 
+Approve an ignore-rule suggestion and update local config:
+
+```sh
+workgraph suggestions approve <id>
+```
+
 Suggestions are local SQLite records with evidence, confidence, lifecycle
 status, feedback, and suppression support. Local file capture may create
 proposed ignore-rule suggestions when generated-looking paths produce repeated
-file events. This command surface is intentionally read/review oriented;
-approval actions are separate slices. No LLM profile is required for suggestion
-storage or deterministic ignore-rule suggestions.
+file events. Approval is explicit: approving an `ignore_path` suggestion appends
+to `ignore_paths`, and approving an `ignore_name` suggestion appends to
+`ignore_names`. No LLM profile is required for suggestion storage or
+deterministic ignore-rule suggestions.
 
 ## Connectors
 
