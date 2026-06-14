@@ -227,6 +227,54 @@ func TestNotionIndexTableHasRequiredColumns(t *testing.T) {
 	}
 }
 
+func TestSuggestionsTablesHaveRequiredColumns(t *testing.T) {
+	db := openContractDatabase(t)
+
+	suggestionColumns := tableColumns(t, db, "suggestions")
+	for _, column := range []string{"id", "type", "title", "reason", "confidence", "lane", "status", "evidence_json", "created_at", "updated_at", "pattern_key", "resolved_at"} {
+		if !suggestionColumns[column] {
+			t.Fatalf("expected suggestions table to have column %q, got %#v", column, suggestionColumns)
+		}
+	}
+
+	feedbackColumns := tableColumns(t, db, "suggestion_feedback")
+	for _, column := range []string{"id", "suggestion_id", "action", "created_at", "reason_code", "note"} {
+		if !feedbackColumns[column] {
+			t.Fatalf("expected suggestion_feedback table to have column %q, got %#v", column, feedbackColumns)
+		}
+	}
+
+	suppressionColumns := tableColumns(t, db, "suggestion_suppressions")
+	for _, column := range []string{"id", "type", "pattern_key", "created_at", "until_at", "reason"} {
+		if !suppressionColumns[column] {
+			t.Fatalf("expected suggestion_suppressions table to have column %q, got %#v", column, suppressionColumns)
+		}
+	}
+}
+
+func TestSuggestionsTableRejectsInvalidEvidenceJSON(t *testing.T) {
+	db := openContractDatabase(t)
+
+	_, err := db.Exec(`INSERT INTO suggestions
+		(id, type, pattern_key, title, reason, confidence, lane, status, evidence_json, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"invalid-evidence",
+		"ignore_path",
+		"/repo/build",
+		"Ignore build",
+		"Generated build files were captured.",
+		"high",
+		"baseline",
+		"proposed",
+		`not-json`,
+		"2026-05-25T12:00:00Z",
+		"2026-05-25T12:00:00Z",
+	)
+	if err == nil {
+		t.Fatalf("expected invalid suggestion evidence_json to be rejected")
+	}
+}
+
 func TestDraftTablesDocumentFutureIntent(t *testing.T) {
 	t.Skip("TBD: draft tables are documented but not required for Phase 0")
 }

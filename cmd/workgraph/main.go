@@ -46,6 +46,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runLLM(args[1:], stdout, stderr)
 	case "events":
 		return runEvents(args[1:], stdout, stderr)
+	case "suggestions":
+		return runSuggestions(args[1:], stdout, stderr)
 	case "notion":
 		return runNotion(args[1:], stdout, stderr)
 	case "memory":
@@ -68,6 +70,90 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unknown command: %s\n", args[0])
 		return 2
 	}
+}
+
+func runSuggestions(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph suggestions <list|dismiss>")
+		return 2
+	}
+	switch args[0] {
+	case "list":
+		return runSuggestionsList(args[1:], stdout, stderr)
+	case "dismiss":
+		return runSuggestionsDismiss(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "unknown suggestions command: %s\n", args[0])
+		return 2
+	}
+}
+
+func runSuggestionsList(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("suggestions list", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
+	status := flags.String("status", "", "Suggestion status to include")
+	limit := flags.Int("limit", 25, "Maximum number of suggestions to show")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph suggestions list")
+		return 2
+	}
+
+	result, err := workgraph.ListSuggestions(workgraph.SuggestionListConfig{
+		HomeDir:      *homeDir,
+		DatabasePath: *databasePath,
+		Status:       *status,
+		Limit:        *limit,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph suggestions list: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runSuggestionsDismiss(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph suggestions dismiss <id> --reason <code>")
+		return 2
+	}
+	id := args[0]
+	flags := flag.NewFlagSet("suggestions dismiss "+id, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
+	reason := flags.String("reason", "", "Stable dismiss reason code")
+	note := flags.String("note", "", "Optional dismiss note")
+
+	if err := flags.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph suggestions dismiss <id> --reason <code>")
+		return 2
+	}
+
+	suggestion, err := workgraph.DismissSuggestion(workgraph.SuggestionStatusUpdate{
+		HomeDir:      *homeDir,
+		DatabasePath: *databasePath,
+		ID:           id,
+		ReasonCode:   *reason,
+		FeedbackNote: *note,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph suggestions dismiss: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "Suggestion dismissed\nid: %s\nstatus: %s\n", suggestion.ID, suggestion.Status)
+	return 0
 }
 
 func runDoctor(args []string, stdout io.Writer, stderr io.Writer) int {
