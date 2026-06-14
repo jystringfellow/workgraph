@@ -356,6 +356,51 @@ func TestConnectorsStatusShowsSetupAndPollState(t *testing.T) {
 	}
 }
 
+func TestConnectorsPollOnceCapturesReadyConnector(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	notionServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/search" {
+			t.Fatalf("unexpected notion path %s", request.URL.Path)
+		}
+		if got := request.Header.Get("Authorization"); got != "Bearer notion-token" {
+			t.Fatalf("expected notion bearer token, got %q", got)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"object":"list","results":[{"object":"page","id":"poll-once-notion-page","created_time":"2026-06-07T08:00:00.000Z","last_edited_time":"2026-06-07T09:00:00.000Z","url":"https://notion.test/poll-once","properties":{"title":{"type":"title","title":[{"plain_text":"Poll once Notion page"}]}}}],"has_more":false}`))
+	}))
+	defer notionServer.Close()
+	if err := os.WriteFile(filepath.Join(homeDir, "notion.json"), []byte(fmt.Sprintf(`{
+  "access_token": "notion-token",
+  "api_base_url": %q
+}
+`, notionServer.URL)), 0o600); err != nil {
+		t.Fatalf("write notion config: %v", err)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "connectors", "poll", "--once", "--connector", "notion", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("workgraph connectors poll failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Connector poll complete") || !strings.Contains(string(output), "notion: ok") {
+		t.Fatalf("expected poll output, got:\n%s", output)
+	}
+	waitForEventTypeSummary(t, filepath.Join(homeDir, "workgraph.db"), "notion.page", "Poll once Notion page")
+
+	statusOutput, err := runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("workgraph connectors status failed: %v\n%s", err, statusOutput)
+	}
+	if !strings.Contains(string(statusOutput), "- notion:") || !strings.Contains(string(statusOutput), "last poll ") {
+		t.Fatalf("expected status to include Notion last poll, got:\n%s", statusOutput)
+	}
+}
+
 func waitForEventTypeSummary(t *testing.T, dbPath, eventType, summary string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)

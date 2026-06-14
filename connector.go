@@ -66,6 +66,28 @@ type ConnectorConnectResult struct {
 	Message string
 }
 
+// ConnectorPollConfig controls one-shot connector polling.
+type ConnectorPollConfig struct {
+	HomeDir      string
+	DatabasePath string
+	ID           string
+	Once         bool
+}
+
+// ConnectorPollResult describes a one-shot connector polling run.
+type ConnectorPollResult struct {
+	HomeDir string
+	Results []ConnectorPollConnectorResult
+	Message string
+}
+
+// ConnectorPollConnectorResult describes one connector's one-shot poll result.
+type ConnectorPollConnectorResult struct {
+	ID     string
+	Status string
+	Error  string
+}
+
 type connectorRuntimeFile struct {
 	Connectors map[string]connectorRuntimeEntry `json:"connectors,omitempty"`
 }
@@ -207,6 +229,50 @@ func ConnectGitHub(config ConnectorConnectConfig) (ConnectorConnectResult, error
 	return connectRuntimeConnector(homeDir, "github", "")
 }
 
+func PollConnectors(config ConnectorPollConfig) (ConnectorPollResult, error) {
+	if !config.Once {
+		return ConnectorPollResult{}, fmt.Errorf("connector polling currently requires --once")
+	}
+	homeDir, err := connectorHomeDir(config.HomeDir)
+	if err != nil {
+		return ConnectorPollResult{}, err
+	}
+	dbPath := strings.TrimSpace(config.DatabasePath)
+	if dbPath == "" {
+		dbPath = filepath.Join(homeDir, "workgraph.db")
+	}
+	dbPath, err = filepath.Abs(dbPath)
+	if err != nil {
+		return ConnectorPollResult{}, fmt.Errorf("resolve database path: %w", err)
+	}
+
+	state, err := readConnectorRuntimeFile(homeDir)
+	if err != nil {
+		return ConnectorPollResult{}, err
+	}
+	ids, err := pollConnectorIDs(homeDir, state, config.ID)
+	if err != nil {
+		return ConnectorPollResult{}, err
+	}
+
+	result := ConnectorPollResult{HomeDir: homeDir}
+	for _, id := range ids {
+		pollResult := ConnectorPollConnectorResult{ID: id, Status: "ok"}
+		if err := pollConnectorOnce(homeDir, dbPath, id); err != nil {
+			pollResult.Status = "error"
+			pollResult.Error = err.Error()
+		}
+		result.Results = append(result.Results, pollResult)
+	}
+	result.Message = connectorPollMessage(result)
+	for _, item := range result.Results {
+		if item.Status == "error" {
+			return result, fmt.Errorf("poll connector %s: %s", item.ID, item.Error)
+		}
+	}
+	return result, nil
+}
+
 func connectRuntimeConnector(homeDir string, id string, interval string) (ConnectorConnectResult, error) {
 	homeDir, err := connectorHomeDir(homeDir)
 	if err != nil {
@@ -234,6 +300,87 @@ func connectRuntimeConnector(homeDir string, id string, interval string) (Connec
 		ID:      id,
 		Message: connectorConnectMessage(homeDir, id),
 	}, nil
+}
+
+func pollConnectorIDs(homeDir string, state connectorRuntimeFile, requested string) ([]string, error) {
+	if strings.TrimSpace(requested) != "" {
+		id, err := normalizeConnectorID(requested)
+		if err != nil {
+			return nil, err
+		}
+		if !connectorConnected(homeDir, id) {
+			return nil, fmt.Errorf("connector %s is not connected", id)
+		}
+		if !connectorEnabled(state, id) {
+			return nil, fmt.Errorf("connector %s is disabled", id)
+		}
+		if !connectorReadyForPolling(state, id) {
+			return nil, fmt.Errorf("connector %s is not ready", id)
+		}
+		return []string{id}, nil
+	}
+	return monitoredConnectorIDs(homeDir, state), nil
+}
+
+func pollConnectorOnce(homeDir string, databasePath string, id string) error {
+	capture := &RunCapture{
+		homeDir:      homeDir,
+		databasePath: databasePath,
+		watchDirs:    []string{},
+		events:       make(chan CapturedEvent, 128),
+	}
+	switch id {
+	case "git":
+		capture.gitEnabled = true
+		return capture.captureGitCommits()
+	case "github":
+		capture.githubEnabled = true
+		return capture.captureGitHubEvents()
+	case "slack":
+		config, err := readSlackConnectorConfig(homeDir)
+		if err != nil {
+			return err
+		}
+		capture.slackEnabled = true
+		capture.slackToken = config.AccessToken
+		capture.slackChannels = append([]string(nil), config.Channels...)
+		capture.slackIncludeDMs = config.IncludeDMs
+		capture.slackSelfUserID = config.AuthedUserID
+		capture.slackAPIBaseURL = config.APIBaseURL
+		capture.slackCursors = map[string]string{}
+		capture.slackThreadCursors = map[string]string{}
+		return capture.captureSlackEvents()
+	case "slack.lists":
+		config, err := readSlackConnectorConfig(homeDir)
+		if err != nil {
+			return err
+		}
+		capture.slackEnabled = true
+		capture.slackToken = config.AccessToken
+		capture.slackListIDs = append([]string(nil), config.ListIDs...)
+		capture.slackAPIBaseURL = config.APIBaseURL
+		return capture.captureSlackListItems()
+	case "calendar.google":
+		capture.calendarProviders = []string{"google"}
+		return capture.captureCalendarEvents()
+	case "calendar.microsoft":
+		capture.calendarProviders = []string{"microsoft"}
+		return capture.captureCalendarEvents()
+	case "mail.google":
+		capture.mailProviders = []string{"google"}
+		return capture.captureMailMessages()
+	case "mail.microsoft":
+		capture.mailProviders = []string{"microsoft"}
+		return capture.captureMailMessages()
+	case "notion":
+		capture.notionEnabled = true
+		return capture.captureNotionEvents()
+	case "azure.boards":
+		capture.azureBoardsEnabled = true
+		return capture.captureAzureBoardsEvents()
+	default:
+		return fmt.Errorf("unsupported connector %s", id)
+	}
 }
 
 func connectorStatuses(homeDir string, state connectorRuntimeFile) []ConnectorStatus {
@@ -551,6 +698,26 @@ func connectorStatusMessage(result ConnectorListResult) string {
 		}
 		if status.NextPoll != "" {
 			line += ", next poll " + status.NextPoll
+		}
+		lines = append(lines, line)
+	}
+	lines = append(lines, "Config: "+connectorRuntimePath(result.HomeDir))
+	return strings.Join(lines, "\n")
+}
+
+func connectorPollMessage(result ConnectorPollResult) string {
+	lines := []string{"Connector poll complete"}
+	results := append([]ConnectorPollConnectorResult(nil), result.Results...)
+	sort.SliceStable(results, func(i, j int) bool {
+		return results[i].ID < results[j].ID
+	})
+	if len(results) == 0 {
+		lines = append(lines, "No ready enabled connectors to poll.")
+	}
+	for _, result := range results {
+		line := fmt.Sprintf("- %s: %s", result.ID, result.Status)
+		if result.Error != "" {
+			line += ", error " + result.Error
 		}
 		lines = append(lines, line)
 	}
