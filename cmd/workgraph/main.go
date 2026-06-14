@@ -80,6 +80,8 @@ func runSuggestions(args []string, stdout io.Writer, stderr io.Writer) int {
 	switch args[0] {
 	case "list":
 		return runSuggestionsList(args[1:], stdout, stderr)
+	case "approve":
+		return runSuggestionsApprove(args[1:], stdout, stderr)
 	case "dismiss":
 		return runSuggestionsDismiss(args[1:], stdout, stderr)
 	default:
@@ -116,6 +118,41 @@ func runSuggestionsList(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 1
 	}
 	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runSuggestionsApprove(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph suggestions approve <id>")
+		return 2
+	}
+	id := args[0]
+	flags := flag.NewFlagSet("suggestions approve "+id, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
+	note := flags.String("note", "", "Optional approval note")
+
+	if err := flags.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph suggestions approve <id>")
+		return 2
+	}
+
+	suggestion, err := workgraph.ApproveSuggestion(workgraph.SuggestionStatusUpdate{
+		HomeDir:      *homeDir,
+		DatabasePath: *databasePath,
+		ID:           id,
+		FeedbackNote: *note,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph suggestions approve: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "Suggestion approved\nid: %s\nstatus: %s\n", suggestion.ID, suggestion.Status)
 	return 0
 }
 
