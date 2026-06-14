@@ -199,9 +199,11 @@ workgraph suggestions dismiss <id> --reason <code>
 ```
 
 Suggestions are local SQLite records with evidence, confidence, lifecycle
-status, feedback, and suppression support. This command surface is intentionally
-read/review oriented; suggestion producers and approval actions are separate
-slices. No LLM profile is required for the shared suggestion storage.
+status, feedback, and suppression support. Local file capture may create
+proposed ignore-rule suggestions when generated-looking paths produce repeated
+file events. This command surface is intentionally read/review oriented;
+approval actions are separate slices. No LLM profile is required for suggestion
+storage or deterministic ignore-rule suggestions.
 
 ## Connectors
 
