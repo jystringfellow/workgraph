@@ -224,6 +224,13 @@ workgraph connectors enable <connector>
 workgraph connectors interval <connector> 15m
 ```
 
+Poll ready enabled connectors once without starting the daemon:
+
+```sh
+workgraph connectors poll --once
+workgraph connectors poll --once --connector notion
+```
+
 See the [connectors guide](connectors.md) for provider-specific setup.
 
 ## Local Database

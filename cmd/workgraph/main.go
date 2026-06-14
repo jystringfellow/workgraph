@@ -471,7 +471,7 @@ func runLLMSummarize(args []string, stdout io.Writer, stderr io.Writer) int {
 
 func runConnectors(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: workgraph connectors <list|status|enable|disable|interval>")
+		fmt.Fprintln(stderr, "usage: workgraph connectors <list|status|poll|enable|disable|interval>")
 		return 2
 	}
 
@@ -480,6 +480,8 @@ func runConnectors(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runConnectorsList(args[1:], stdout, stderr)
 	case "status":
 		return runConnectorsStatus(args[1:], stdout, stderr)
+	case "poll":
+		return runConnectorsPoll(args[1:], stdout, stderr)
 	case "enable":
 		return runConnectorsEnable(args[1:], stdout, stderr)
 	case "disable":
@@ -522,6 +524,37 @@ func runConnectorsStatus(args []string, stdout io.Writer, stderr io.Writer) int 
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph connectors status: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runConnectorsPoll(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("connectors poll", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
+	connector := flags.String("connector", "", "Connector id to poll")
+	once := flags.Bool("once", false, "Poll once and exit")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph connectors poll --once [--connector <connector>]")
+		return 2
+	}
+	result, err := workgraph.PollConnectors(workgraph.ConnectorPollConfig{
+		HomeDir:      *homeDir,
+		DatabasePath: *databasePath,
+		ID:           *connector,
+		Once:         *once,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph connectors poll: %v\n", err)
+		if result.Message != "" {
+			fmt.Fprintln(stdout, result.Message)
+		}
 		return 1
 	}
 	fmt.Fprintln(stdout, result.Message)
