@@ -182,6 +182,27 @@ When matching project memory exists, resume includes it beside recent activity.
 When activity exists but memory does not, resume prints the Markdown path where
 that project context can be added.
 
+## Suggestions
+
+Inspect locally stored suggestions:
+
+```sh
+workgraph suggestions list
+workgraph suggestions list --status proposed
+workgraph suggestions list --limit 10
+```
+
+Dismiss a suggestion without deleting its evidence:
+
+```sh
+workgraph suggestions dismiss <id> --reason <code>
+```
+
+Suggestions are local SQLite records with evidence, confidence, lifecycle
+status, feedback, and suppression support. This command surface is intentionally
+read/review oriented; suggestion producers and approval actions are separate
+slices. No LLM profile is required for the shared suggestion storage.
+
 ## Connectors
 
 List and tune connector polling:

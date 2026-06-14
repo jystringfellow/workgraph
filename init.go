@@ -294,6 +294,38 @@ func createSchema(db *sql.DB) error {
 			last_seen_at TEXT NOT NULL,
 			last_synced_at TEXT NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS suggestions (
+			id TEXT PRIMARY KEY,
+			type TEXT NOT NULL,
+			pattern_key TEXT,
+			title TEXT NOT NULL,
+			reason TEXT NOT NULL,
+			confidence TEXT NOT NULL CHECK (confidence IN ('high', 'medium', 'low')),
+			lane TEXT NOT NULL CHECK (lane IN ('baseline', 'semantic', 'manual')),
+			status TEXT NOT NULL CHECK (status IN ('proposed', 'reviewed', 'approved', 'dismissed', 'snoozed', 'acted')),
+			evidence_json TEXT NOT NULL CHECK (json_valid(evidence_json)),
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			resolved_at TEXT,
+			UNIQUE (type, pattern_key)
+		);`,
+		`CREATE TABLE IF NOT EXISTS suggestion_feedback (
+			id TEXT PRIMARY KEY,
+			suggestion_id TEXT NOT NULL,
+			action TEXT NOT NULL CHECK (action IN ('reviewed', 'accepted', 'approved', 'dismissed', 'snoozed', 'completed', 'undone')),
+			reason_code TEXT,
+			note TEXT,
+			created_at TEXT NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS suggestion_suppressions (
+			id TEXT PRIMARY KEY,
+			type TEXT NOT NULL,
+			pattern_key TEXT NOT NULL,
+			reason TEXT,
+			until_at TEXT,
+			created_at TEXT NOT NULL,
+			UNIQUE (type, pattern_key)
+		);`,
 	}
 
 	for _, statement := range statements {
