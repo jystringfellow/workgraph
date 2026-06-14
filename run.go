@@ -27,6 +27,13 @@ var ErrNotInitialized = errors.New("workgraph is not initialized")
 
 var errWatchLimitReached = errors.New("watch limit reached")
 
+const ignorePathSuggestionEventThreshold = 8
+const ignoreNameSuggestionEventThreshold = 8
+const ignoreNameSuggestionDistinctPathThreshold = 3
+const ignoreSuggestionRecentEventLimit = 200
+
+var ignoreSuggestionWindow = 10 * time.Minute
+
 // RunConfig controls foreground event capture.
 type RunConfig struct {
 	HomeDir               string
@@ -719,6 +726,9 @@ func (capture *RunCapture) recordFileEvent(now time.Time, operation string, path
 	if err != nil {
 		return fmt.Errorf("record file event: %w", err)
 	}
+	if err := capture.suggestIgnoreRules(now, path); err != nil {
+		return err
+	}
 
 	capture.events <- CapturedEvent{
 		Type:      "file." + operation,
@@ -727,6 +737,192 @@ func (capture *RunCapture) recordFileEvent(now time.Time, operation string, path
 	}
 
 	return nil
+}
+
+type ignoreSuggestionEvent struct {
+	ID        string
+	Timestamp string
+	Path      string
+	Parent    string
+	Name      string
+}
+
+func (capture *RunCapture) suggestIgnoreRules(now time.Time, path string) error {
+	parent := filepath.Dir(path)
+	name := filepath.Base(parent)
+	if !looksGeneratedIgnoreCandidate(name) {
+		return nil
+	}
+
+	events, err := capture.fileEventsForIgnoreSuggestions(now)
+	if err != nil {
+		return err
+	}
+	if err := capture.suggestIgnorePath(now, parent, events); err != nil {
+		return err
+	}
+	if err := capture.suggestIgnoreName(now, name, events); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (capture *RunCapture) suggestIgnorePath(now time.Time, parent string, events []ignoreSuggestionEvent) error {
+	var matches []ignoreSuggestionEvent
+	for _, event := range events {
+		if sameOrChild(event.Path, parent) {
+			matches = append(matches, event)
+		}
+	}
+	if len(matches) < ignorePathSuggestionEventThreshold {
+		return nil
+	}
+	if capture.suggestionSuppressed("ignore_path", parent, now) {
+		return nil
+	}
+
+	evidence, err := ignoreSuggestionEvidenceJSON(matches)
+	if err != nil {
+		return err
+	}
+	_, err = UpsertSuggestion(SuggestionUpsert{
+		HomeDir:      capture.homeDir,
+		DatabasePath: capture.databasePath,
+		Type:         "ignore_path",
+		PatternKey:   parent,
+		Title:        "Ignore noisy generated path",
+		Reason:       fmt.Sprintf("%d file events were captured under generated-looking path %s.", len(matches), parent),
+		Confidence:   "high",
+		Lane:         "baseline",
+		EvidenceJSON: evidence,
+	})
+	return err
+}
+
+func (capture *RunCapture) suggestIgnoreName(now time.Time, name string, events []ignoreSuggestionEvent) error {
+	var matches []ignoreSuggestionEvent
+	parents := map[string]bool{}
+	for _, event := range events {
+		if event.Name != name {
+			continue
+		}
+		matches = append(matches, event)
+		parents[event.Parent] = true
+	}
+	if len(matches) < ignoreNameSuggestionEventThreshold || len(parents) < ignoreNameSuggestionDistinctPathThreshold {
+		return nil
+	}
+	if capture.suggestionSuppressed("ignore_name", name, now) {
+		return nil
+	}
+
+	evidence, err := ignoreSuggestionEvidenceJSON(matches)
+	if err != nil {
+		return err
+	}
+	_, err = UpsertSuggestion(SuggestionUpsert{
+		HomeDir:      capture.homeDir,
+		DatabasePath: capture.databasePath,
+		Type:         "ignore_name",
+		PatternKey:   name,
+		Title:        "Ignore recurring generated name",
+		Reason:       fmt.Sprintf("%d file events were captured under repeated generated-looking basename %s across %d paths.", len(matches), name, len(parents)),
+		Confidence:   "high",
+		Lane:         "baseline",
+		EvidenceJSON: evidence,
+	})
+	return err
+}
+
+func (capture *RunCapture) fileEventsForIgnoreSuggestions(now time.Time) ([]ignoreSuggestionEvent, error) {
+	since := now.Add(-ignoreSuggestionWindow).Format(time.RFC3339Nano)
+	rows, err := capture.db.Query(`SELECT id, timestamp, path FROM (
+			SELECT id, timestamp, json_extract(payload_json, '$.path') AS path
+			FROM events
+			WHERE source = 'file' AND timestamp >= ?
+			ORDER BY timestamp DESC
+			LIMIT ?
+		) ORDER BY timestamp ASC`, since, ignoreSuggestionRecentEventLimit)
+	if err != nil {
+		return nil, fmt.Errorf("query file events for ignore suggestions: %w", err)
+	}
+	defer rows.Close()
+
+	var events []ignoreSuggestionEvent
+	for rows.Next() {
+		var event ignoreSuggestionEvent
+		if err := rows.Scan(&event.ID, &event.Timestamp, &event.Path); err != nil {
+			return nil, fmt.Errorf("scan file event for ignore suggestions: %w", err)
+		}
+		event.Parent = filepath.Dir(event.Path)
+		event.Name = filepath.Base(event.Parent)
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("query file events for ignore suggestions: %w", err)
+	}
+	return events, nil
+}
+
+func (capture *RunCapture) suggestionSuppressed(suggestionType string, patternKey string, now time.Time) bool {
+	rows, err := capture.db.Query(`SELECT until_at FROM suggestion_suppressions WHERE type = ? AND pattern_key = ?`, suggestionType, patternKey)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var until sql.NullString
+		if err := rows.Scan(&until); err != nil {
+			return false
+		}
+		if !until.Valid {
+			return true
+		}
+		untilAt, err := time.Parse(time.RFC3339, until.String)
+		if err != nil {
+			return true
+		}
+		if now.Before(untilAt) {
+			return true
+		}
+	}
+	return false
+}
+
+func ignoreSuggestionEvidenceJSON(events []ignoreSuggestionEvent) (string, error) {
+	eventIDs := make([]string, 0, len(events))
+	paths := make([]string, 0, len(events))
+	seenPaths := map[string]bool{}
+	for _, event := range events {
+		eventIDs = append(eventIDs, event.ID)
+		if !seenPaths[event.Path] {
+			paths = append(paths, event.Path)
+			seenPaths[event.Path] = true
+		}
+	}
+	evidence := map[string]any{
+		"event_ids":     eventIDs,
+		"paths":         paths,
+		"event_count":   len(events),
+		"first_seen_at": events[0].Timestamp,
+		"last_seen_at":  events[len(events)-1].Timestamp,
+	}
+	encoded, err := json.Marshal(evidence)
+	if err != nil {
+		return "", fmt.Errorf("encode ignore suggestion evidence: %w", err)
+	}
+	return string(encoded), nil
+}
+
+func looksGeneratedIgnoreCandidate(name string) bool {
+	normalized := strings.ToLower(name)
+	for _, marker := range []string{"cache", "generated", "tmp", "temp", "derived", ".noindex", "userdata"} {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func readConfig(configPath string) (configFile, error) {
