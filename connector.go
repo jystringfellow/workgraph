@@ -66,6 +66,20 @@ type ConnectorConnectResult struct {
 	Message string
 }
 
+// ConnectorValidateConfig controls connector setup validation.
+type ConnectorValidateConfig struct {
+	HomeDir       string
+	ID            string
+	GitHubCommand string
+}
+
+// ConnectorValidateResult describes connector setup validation.
+type ConnectorValidateResult struct {
+	HomeDir string
+	ID      string
+	Message string
+}
+
 // ConnectorPollConfig controls one-shot connector polling.
 type ConnectorPollConfig struct {
 	HomeDir      string
@@ -208,10 +222,39 @@ func ConnectGit(config ConnectorConnectConfig) (ConnectorConnectResult, error) {
 
 // ConnectGitHub validates the GitHub CLI and enables GitHub polling.
 func ConnectGitHub(config ConnectorConnectConfig) (ConnectorConnectResult, error) {
-	homeDir, err := connectorHomeDir(config.HomeDir)
+	result, err := ValidateConnector(ConnectorValidateConfig{
+		HomeDir:       config.HomeDir,
+		ID:            "github",
+		GitHubCommand: config.GitHubCommand,
+	})
 	if err != nil {
 		return ConnectorConnectResult{}, err
 	}
+	return ConnectorConnectResult{
+		HomeDir: result.HomeDir,
+		ID:      result.ID,
+		Message: connectorConnectMessage(result.HomeDir, result.ID),
+	}, nil
+}
+
+func ValidateConnector(config ConnectorValidateConfig) (ConnectorValidateResult, error) {
+	homeDir, err := connectorHomeDir(config.HomeDir)
+	if err != nil {
+		return ConnectorValidateResult{}, err
+	}
+	id, err := normalizeConnectorID(config.ID)
+	if err != nil {
+		return ConnectorValidateResult{}, err
+	}
+	switch id {
+	case "github":
+		return validateGitHubConnector(homeDir, config)
+	default:
+		return ConnectorValidateResult{}, fmt.Errorf("validation is not implemented for connector %s", id)
+	}
+}
+
+func validateGitHubConnector(homeDir string, config ConnectorValidateConfig) (ConnectorValidateResult, error) {
 	gh := strings.TrimSpace(config.GitHubCommand)
 	if gh == "" {
 		gh = "gh"
@@ -222,11 +265,18 @@ func ConnectGitHub(config ConnectorConnectConfig) (ConnectorConnectResult, error
 			details = err.Error()
 		}
 		if recordErr := recordConnectorValidationError(homeDir, "github", time.Now(), details); recordErr != nil {
-			return ConnectorConnectResult{}, recordErr
+			return ConnectorValidateResult{}, recordErr
 		}
-		return ConnectorConnectResult{}, fmt.Errorf("validate GitHub CLI authentication: %s", details)
+		return ConnectorValidateResult{}, fmt.Errorf("validate GitHub CLI authentication: %s", details)
 	}
-	return connectRuntimeConnector(homeDir, "github", "")
+	if _, err := connectRuntimeConnector(homeDir, "github", ""); err != nil {
+		return ConnectorValidateResult{}, err
+	}
+	return ConnectorValidateResult{
+		HomeDir: homeDir,
+		ID:      "github",
+		Message: fmt.Sprintf("Connector github validation passed\nConfig: %s", connectorRuntimePath(homeDir)),
+	}, nil
 }
 
 func PollConnectors(config ConnectorPollConfig) (ConnectorPollResult, error) {

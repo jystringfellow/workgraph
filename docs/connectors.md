@@ -201,6 +201,12 @@ workgraph github capture
 `workgraph github connect` validates the authenticated `gh` CLI and enables
 GitHub in the shared connector runtime.
 
+You can rerun validation without changing provider credentials:
+
+```sh
+workgraph connectors validate github
+```
+
 ## Manual Capture
 
 Manual `capture` commands remain useful for imports, backfills, deterministic

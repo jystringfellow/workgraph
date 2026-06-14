@@ -159,6 +159,70 @@ func TestGitHubConnectFailureRecordsValidationError(t *testing.T) {
 	}
 }
 
+func TestConnectorsValidateGitHubUpdatesSetupState(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	ghPath := writeFakeGH(t, tempDir, 5000)
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "connectors", "validate", "--home", homeDir, "--gh", ghPath, "github")
+	if err != nil {
+		t.Fatalf("workgraph connectors validate failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Connector github validation passed") {
+		t.Fatalf("expected validation success output, got:\n%s", output)
+	}
+
+	output, err = runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("workgraph connectors status failed: %v\n%s", err, output)
+	}
+	for _, expected := range []string{
+		"- github: setup ready",
+		"last validated",
+		"polling enabled",
+	} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected github connector status to include %q, got:\n%s", expected, output)
+		}
+	}
+}
+
+func TestConnectorsValidateGitHubFailureRecordsValidationError(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	ghPath := writeFakeGHAuthFailure(t, tempDir)
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "connectors", "validate", "--home", homeDir, "--gh", ghPath, "github")
+	if err == nil {
+		t.Fatalf("expected connectors validate to fail, got:\n%s", output)
+	}
+	if !strings.Contains(string(output), "missing authentication") {
+		t.Fatalf("expected auth failure output, got:\n%s", output)
+	}
+
+	output, err = runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("workgraph connectors status failed: %v\n%s", err, output)
+	}
+	for _, expected := range []string{
+		"- github: setup error",
+		"validation error missing authentication",
+		"polling not ready",
+	} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected github connector status to include %q, got:\n%s", expected, output)
+		}
+	}
+}
+
 func TestGitHubCaptureLinksProjectByLocalRemote(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
