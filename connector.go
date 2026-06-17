@@ -718,9 +718,6 @@ func connectorSetupState(id string, connected bool, entry connectorRuntimeEntry)
 	if !connected {
 		return "not connected"
 	}
-	if connectorPollingUnsupported(id) {
-		return "not supported"
-	}
 	if id == "github" {
 		return "not validated"
 	}
@@ -728,9 +725,6 @@ func connectorSetupState(id string, connected bool, entry connectorRuntimeEntry)
 }
 
 func connectorReadyForPolling(state connectorRuntimeFile, id string) bool {
-	if connectorPollingUnsupported(id) {
-		return false
-	}
 	entry := state.entry(id)
 	if strings.TrimSpace(entry.SetupState) == "error" || strings.TrimSpace(entry.SetupState) == "draft" {
 		return false
@@ -805,12 +799,6 @@ func connectorHealthFindings(homeDir string, state connectorRuntimeFile) []Conne
 				Status:  "needs reconnect",
 				Details: "last poll failed with invalid credentials",
 			})
-		case connectorPollingUnsupported(status.ID) && status.Connected:
-			findings = append(findings, ConnectorHealthFinding{
-				ID:      status.ID,
-				Status:  "not supported",
-				Details: "polling is not implemented yet",
-			})
 		case status.ID == "github" && strings.TrimSpace(entry.SetupState) == "":
 			findings = append(findings, ConnectorHealthFinding{
 				ID:      status.ID,
@@ -857,7 +845,7 @@ func upgradeConnectorRuntimeState(homeDir string, state *connectorRuntimeFile) [
 			}
 			continue
 		}
-		if !status.Connected || status.ID == "github" || connectorPollingUnsupported(status.ID) {
+		if !status.Connected || status.ID == "github" {
 			continue
 		}
 		if strings.TrimSpace(entry.SetupState) == "" {
@@ -878,10 +866,6 @@ func connectorAuthFailure(lastError string) bool {
 	return strings.Contains(normalized, "status 401") ||
 		strings.Contains(normalized, "unauthenticated") ||
 		strings.Contains(normalized, "invalid credentials")
-}
-
-func connectorPollingUnsupported(id string) bool {
-	return id == "calendar.microsoft"
 }
 
 func connectorListMessage(result ConnectorListResult) string {

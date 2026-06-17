@@ -183,6 +183,41 @@ type googleCalendarEvent struct {
 	Status         string                 `json:"status"`
 }
 
+type microsoftCalendarEventsResponse struct {
+	Value []microsoftCalendarEvent `json:"value"`
+}
+
+type microsoftCalendarEvent struct {
+	ID               string                    `json:"id"`
+	Subject          string                    `json:"subject"`
+	Start            microsoftCalendarDateTime `json:"start"`
+	End              microsoftCalendarDateTime `json:"end"`
+	Location         microsoftCalendarLocation `json:"location"`
+	OnlineMeetingURL string                    `json:"onlineMeetingUrl"`
+	Organizer        microsoftCalendarPerson   `json:"organizer"`
+	Attendees        []microsoftCalendarPerson `json:"attendees"`
+	ShowAs           string                    `json:"showAs"`
+	IsCancelled      bool                      `json:"isCancelled"`
+}
+
+type microsoftCalendarDateTime struct {
+	DateTime string `json:"dateTime"`
+	TimeZone string `json:"timeZone"`
+}
+
+type microsoftCalendarLocation struct {
+	DisplayName string `json:"displayName"`
+}
+
+type microsoftCalendarPerson struct {
+	EmailAddress microsoftCalendarEmailAddress `json:"emailAddress"`
+}
+
+type microsoftCalendarEmailAddress struct {
+	Name    string `json:"name"`
+	Address string `json:"address"`
+}
+
 type googleCalendarDateTime struct {
 	DateTime string `json:"dateTime"`
 	Date     string `json:"date"`
@@ -876,6 +911,77 @@ func refreshGoogleCalendarAccessToken(config CalendarCaptureConfig, stored *goog
 	return &refreshed, nil
 }
 
+func refreshMicrosoftCalendarAccessToken(config CalendarCaptureConfig, stored *microsoftCalendarConnectorConfig) (*microsoftCalendarConnectorConfig, error) {
+	if stored.RefreshToken == "" {
+		return nil, errors.New("microsoft calendar refresh token is required")
+	}
+	clientID := config.ClientID
+	if clientID == "" {
+		clientID = stored.ClientID
+	}
+	clientID = resolveMicrosoftCalendarClientID(clientID)
+	if clientID == "" {
+		return nil, errors.New("microsoft calendar client id is required for token refresh")
+	}
+	tokenURL := config.TokenURL
+	if tokenURL == "" {
+		tokenURL = stored.TokenURL
+	}
+	tokenURL = resolveMicrosoftCalendarTokenURL(tokenURL)
+
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", stored.RefreshToken)
+	form.Set("client_id", clientID)
+
+	request, err := http.NewRequest(http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("build Microsoft Calendar refresh request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := config.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("refresh Microsoft Calendar token: %w", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read Microsoft Calendar refresh response: %w", err)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("refresh Microsoft Calendar token: status %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var token googleOAuthTokenResponse
+	if err := json.Unmarshal(body, &token); err != nil {
+		return nil, fmt.Errorf("parse Microsoft Calendar refresh response: %w", err)
+	}
+	if token.AccessToken == "" {
+		return nil, errors.New("microsoft calendar refresh response did not include an access token")
+	}
+
+	refreshed := *stored
+	refreshed.AccessToken = token.AccessToken
+	if token.RefreshToken != "" {
+		refreshed.RefreshToken = token.RefreshToken
+	}
+	if token.TokenType != "" {
+		refreshed.TokenType = token.TokenType
+	}
+	if token.Scope != "" {
+		refreshed.Scopes = strings.Fields(token.Scope)
+	}
+	refreshed.ExpiresAt = googleCalendarTokenExpiresAt(token)
+	refreshed.ClientID = clientID
+	refreshed.TokenURL = tokenURL
+	return &refreshed, nil
+}
+
 func storeGoogleCalendarConnection(homeDir string, config CalendarConnectConfig, token googleOAuthTokenResponse) (CalendarConnectResult, error) {
 	if token.AccessToken == "" {
 		return CalendarConnectResult{}, errors.New("google calendar oauth response did not include an access token")
@@ -982,6 +1088,17 @@ func googleCalendarTokenNeedsRefresh(config *googleCalendarConnectorConfig) (boo
 	return time.Until(expiresAt) <= 5*time.Minute, nil
 }
 
+func microsoftCalendarTokenNeedsRefresh(config *microsoftCalendarConnectorConfig) (bool, error) {
+	if config.ExpiresAt == "" {
+		return false, nil
+	}
+	expiresAt, err := time.Parse(time.RFC3339Nano, config.ExpiresAt)
+	if err != nil {
+		return false, fmt.Errorf("parse Microsoft Calendar token expiry: %w", err)
+	}
+	return time.Until(expiresAt) <= 5*time.Minute, nil
+}
+
 func googleCalendarTokenExpiresAt(token googleOAuthTokenResponse) string {
 	if token.ExpiresIn <= 0 {
 		return ""
@@ -1077,6 +1194,8 @@ func calendarEvents(config CalendarCaptureConfig) ([]calendarExportEvent, error)
 	switch strings.ToLower(config.Provider) {
 	case "google":
 		return calendarEventsFromGoogle(config)
+	case "microsoft":
+		return calendarEventsFromMicrosoft(config)
 	case "":
 		return nil, errors.New("events file or provider is required")
 	default:
@@ -1192,6 +1311,178 @@ func calendarEventsFromGoogle(config CalendarCaptureConfig) ([]calendarExportEve
 		events = append(events, normalized)
 	}
 	return events, nil
+}
+
+func calendarEventsFromMicrosoft(config CalendarCaptureConfig) ([]calendarExportEvent, error) {
+	token := config.Token
+	calendarID := config.CalendarID
+	if token == "" {
+		stored, err := readCalendarConnectorConfig(config.HomeDir)
+		if err == nil && stored.Microsoft != nil {
+			microsoftConfig := stored.Microsoft
+			needsRefresh, err := microsoftCalendarTokenNeedsRefresh(microsoftConfig)
+			if err != nil {
+				return nil, err
+			}
+			if needsRefresh {
+				refreshed, err := refreshMicrosoftCalendarAccessToken(config, microsoftConfig)
+				if err != nil {
+					return nil, err
+				}
+				stored.Microsoft = refreshed
+				if err := writeCalendarConnectorConfig(calendarConfigPath(config.HomeDir), stored); err != nil {
+					return nil, err
+				}
+				microsoftConfig = refreshed
+			}
+			token = microsoftConfig.AccessToken
+			if calendarID == "" && len(microsoftConfig.CalendarIDs) > 0 {
+				calendarID = microsoftConfig.CalendarIDs[0]
+			}
+			if config.APIBaseURL == "" {
+				config.APIBaseURL = microsoftConfig.APIBaseURL
+			}
+		}
+	}
+	if strings.TrimSpace(token) == "" {
+		return nil, errors.New("calendar token is required")
+	}
+	if calendarID == "" {
+		calendarID = "primary"
+	}
+
+	baseURL := config.APIBaseURL
+	if baseURL == "" {
+		baseURL = "https://graph.microsoft.com"
+	}
+	endpoint, err := microsoftCalendarEventsEndpoint(baseURL, calendarID)
+	if err != nil {
+		return nil, err
+	}
+	requestURL, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("build Microsoft Calendar events URL: %w", err)
+	}
+	query := requestURL.Query()
+	query.Set("$orderby", "start/dateTime")
+	requestURL.RawQuery = query.Encode()
+
+	request, err := http.NewRequest(http.MethodGet, requestURL.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("build Microsoft Calendar request: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Prefer", `outlook.timezone="UTC"`)
+
+	client := config.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("request Microsoft Calendar events: %w", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read Microsoft Calendar response: %w", err)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("request Microsoft Calendar events: status %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var apiResponse microsoftCalendarEventsResponse
+	if err := json.Unmarshal(body, &apiResponse); err != nil {
+		return nil, fmt.Errorf("parse Microsoft Calendar response: %w", err)
+	}
+
+	events := make([]calendarExportEvent, 0, len(apiResponse.Value))
+	for _, event := range apiResponse.Value {
+		normalized, err := microsoftCalendarExportEvent(calendarID, event)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, normalized)
+	}
+	return events, nil
+}
+
+func microsoftCalendarEventsEndpoint(baseURL string, calendarID string) (string, error) {
+	if calendarID == "primary" {
+		endpoint, err := url.JoinPath(baseURL, "v1.0", "me", "calendar", "events")
+		if err != nil {
+			return "", fmt.Errorf("build Microsoft Calendar events URL: %w", err)
+		}
+		return endpoint, nil
+	}
+	endpoint, err := url.JoinPath(baseURL, "v1.0", "me", "calendars", calendarID, "events")
+	if err != nil {
+		return "", fmt.Errorf("build Microsoft Calendar events URL: %w", err)
+	}
+	return endpoint, nil
+}
+
+func microsoftCalendarExportEvent(calendarID string, event microsoftCalendarEvent) (calendarExportEvent, error) {
+	start, err := microsoftCalendarTimestamp(event.Start)
+	if err != nil {
+		return calendarExportEvent{}, fmt.Errorf("parse Microsoft Calendar event start %q: %w", event.ID, err)
+	}
+	end, err := microsoftCalendarTimestamp(event.End)
+	if err != nil {
+		return calendarExportEvent{}, fmt.Errorf("parse Microsoft Calendar event end %q: %w", event.ID, err)
+	}
+
+	status := event.ShowAs
+	if event.IsCancelled {
+		status = "cancelled"
+	}
+	return calendarExportEvent{
+		Provider:   "microsoft",
+		CalendarID: calendarID,
+		EventID:    event.ID,
+		Title:      event.Subject,
+		Start:      start,
+		End:        end,
+		Location:   event.Location.DisplayName,
+		MeetingURL: event.OnlineMeetingURL,
+		Organizer:  microsoftCalendarPersonName(event.Organizer),
+		Attendees:  microsoftCalendarAttendees(event.Attendees),
+		Status:     status,
+	}, nil
+}
+
+func microsoftCalendarTimestamp(value microsoftCalendarDateTime) (string, error) {
+	text := strings.TrimSpace(value.DateTime)
+	if text == "" {
+		return "", errors.New("dateTime is required")
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, text); err == nil {
+		return parsed.UTC().Format(time.RFC3339Nano), nil
+	}
+	if parsed, err := time.Parse("2006-01-02T15:04:05.9999999", text); err == nil {
+		return parsed.UTC().Format(time.RFC3339Nano), nil
+	}
+	if parsed, err := time.Parse("2006-01-02T15:04:05", text); err == nil {
+		return parsed.UTC().Format(time.RFC3339Nano), nil
+	}
+	return "", fmt.Errorf("unsupported dateTime %q", text)
+}
+
+func microsoftCalendarAttendees(attendees []microsoftCalendarPerson) []string {
+	result := make([]string, 0, len(attendees))
+	for _, attendee := range attendees {
+		if name := microsoftCalendarPersonName(attendee); name != "" {
+			result = append(result, name)
+		}
+	}
+	return result
+}
+
+func microsoftCalendarPersonName(person microsoftCalendarPerson) string {
+	if person.EmailAddress.Name != "" {
+		return person.EmailAddress.Name
+	}
+	return person.EmailAddress.Address
 }
 
 func googleCalendarExportEvent(calendarID string, event googleCalendarEvent) (calendarExportEvent, error) {

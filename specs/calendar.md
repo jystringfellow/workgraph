@@ -10,16 +10,24 @@ The first calendar contract is a normalized JSON capture path:
 workgraph calendar capture --events-file <calendar-events.json>
 ```
 
-The first provider adapter is Google Calendar:
+The first provider adapters are Google Calendar and Microsoft Calendar:
 
 ```text
 workgraph calendar capture --provider google --calendar-id primary --token <access-token>
+workgraph calendar capture --provider microsoft --calendar-id primary --token <access-token>
 ```
 
 The Google adapter reads events from the Google Calendar events endpoint and
 maps Google-specific fields into the same normalized event contract. Direct
 token capture is mainly a fact-friendly adapter path; user-facing use should go
 through connection setup.
+
+The Microsoft adapter reads events from Microsoft Graph calendar endpoints and
+maps Graph-specific fields into the same normalized event contract. The default
+`primary` calendar id maps to the user's default Graph calendar; explicit
+calendar ids use `/me/calendars/{id}/events`. Microsoft capture requests UTC
+event date-times with the Graph `Prefer: outlook.timezone="UTC"` header before
+normalizing timestamps.
 
 Google Calendar connection setup uses OAuth:
 
@@ -192,6 +200,13 @@ https://graph.microsoft.com/Calendars.Read.Shared
 Azure DevOps access must not be bundled into the initial Microsoft Calendar
 Graph authorization URL. Azure DevOps uses a different resource than Microsoft
 Graph and should be handled by the work tracking connector.
+
+Connected Microsoft Calendar settings are capture-ready once stored locally.
+Routine connector polling uses the stored access token, selected calendar ids,
+and Graph API base URL from `calendar.json`. When stored Microsoft Calendar
+credentials are expired or close to expiry, capture refreshes the access token
+through the configured Microsoft identity token endpoint before calling
+Microsoft Graph.
 
 `workgraph calendar disconnect microsoft` removes local Microsoft Calendar
 connector settings but does not revoke Microsoft app consent remotely. Microsoft
