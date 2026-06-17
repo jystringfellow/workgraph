@@ -620,6 +620,192 @@ func TestNotionConnectOAuthStoresConnectorConfig(t *testing.T) {
 	}
 }
 
+func TestNotionConnectTokenStoresConfigAndEnablesRuntimePolling(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	var searchRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		searchRequests++
+		if request.Method != http.MethodPost || request.URL.Path != "/v1/search" {
+			t.Fatalf("expected validation search request, got %s %s", request.Method, request.URL.Path)
+		}
+		if got := request.Header.Get("Authorization"); got != "Bearer notion-token" {
+			t.Fatalf("expected bearer token, got %q", got)
+		}
+		if got := request.Header.Get("Notion-Version"); got == "" {
+			t.Fatalf("expected Notion-Version header")
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"object":"list","results":[],"next_cursor":null,"has_more":false}`))
+	}))
+	defer server.Close()
+
+	output, err := runworkgraph(t, repoRoot, "notion", "connect-token",
+		"--home", homeDir,
+		"--token", "notion-token",
+		"--notion-api-base", server.URL,
+	)
+	if err != nil {
+		t.Fatalf("workgraph notion connect-token failed: %v\n%s", err, output)
+	}
+	if searchRequests != 1 {
+		t.Fatalf("expected one validation search request, got %d", searchRequests)
+	}
+	if !strings.Contains(string(output), "Notion connected") || !strings.Contains(string(output), "notion connected") {
+		t.Fatalf("expected token connection and runtime handoff output, got:\n%s", output)
+	}
+
+	contents, err := os.ReadFile(filepath.Join(homeDir, "notion.json"))
+	if err != nil {
+		t.Fatalf("read notion config: %v", err)
+	}
+	var stored struct {
+		AccessToken string `json:"access_token"`
+		APIBaseURL  string `json:"api_base_url"`
+		TokenType   string `json:"token_type"`
+		ClientID    string `json:"client_id"`
+		TokenURL    string `json:"token_url"`
+	}
+	if err := json.Unmarshal(contents, &stored); err != nil {
+		t.Fatalf("parse notion config: %v", err)
+	}
+	if stored.AccessToken != "notion-token" || stored.APIBaseURL != server.URL {
+		t.Fatalf("expected stored manual-token config, got %#v", stored)
+	}
+	if stored.TokenType != "" || stored.ClientID != "" || stored.TokenURL != "" {
+		t.Fatalf("expected manual-token config not to store OAuth metadata, got %#v", stored)
+	}
+
+	runtimeContents, err := os.ReadFile(filepath.Join(homeDir, "connectors.json"))
+	if err != nil {
+		t.Fatalf("read connector runtime config: %v", err)
+	}
+	for _, expected := range []string{
+		`"notion"`,
+		`"enabled": true`,
+		`"setup_state": "ready"`,
+		`"last_validated_at"`,
+	} {
+		if !strings.Contains(string(runtimeContents), expected) {
+			t.Fatalf("expected runtime config to include %q, got:\n%s", expected, runtimeContents)
+		}
+	}
+
+	output, err = runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("workgraph connectors status failed: %v\n%s", err, output)
+	}
+	for _, expected := range []string{
+		"- notion: setup ready",
+		"polling enabled",
+		"last validated ",
+	} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected connector status detail %q, got:\n%s", expected, output)
+		}
+	}
+}
+
+func TestNotionConnectTokenValidationFailureDoesNotStoreReadyState(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "notion", "connect-token",
+		"--home", homeDir,
+	)
+	if err == nil {
+		t.Fatalf("expected missing token to fail, got:\n%s", output)
+	}
+	if _, statErr := os.Stat(filepath.Join(homeDir, "notion.json")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected missing token not to store notion config, stat err: %v", statErr)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		http.Error(response, `{"message":"invalid token"}`, http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	output, err = runworkgraph(t, repoRoot, "notion", "connect-token",
+		"--home", homeDir,
+		"--token", "bad-token",
+		"--notion-api-base", server.URL,
+	)
+	if err == nil {
+		t.Fatalf("expected invalid token to fail, got:\n%s", output)
+	}
+	if _, statErr := os.Stat(filepath.Join(homeDir, "notion.json")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected invalid token not to store notion config, stat err: %v", statErr)
+	}
+	statusOutput, statusErr := runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)
+	if statusErr != nil {
+		t.Fatalf("workgraph connectors status failed: %v\n%s", statusErr, statusOutput)
+	}
+	if strings.Contains(string(statusOutput), "- notion: setup ready") {
+		t.Fatalf("expected invalid token not to store ready state, got:\n%s", statusOutput)
+	}
+	if !strings.Contains(string(statusOutput), "- notion: setup error") || !strings.Contains(string(statusOutput), "validation error") {
+		t.Fatalf("expected validation failure to be visible, got:\n%s", statusOutput)
+	}
+}
+
+func TestNotionConnectorValidateUsesStoredToken(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	var searchRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		searchRequests++
+		if request.Method != http.MethodPost || request.URL.Path != "/v1/search" {
+			t.Fatalf("expected validation search request, got %s %s", request.Method, request.URL.Path)
+		}
+		if got := request.Header.Get("Authorization"); got != "Bearer notion-token" {
+			t.Fatalf("expected bearer token, got %q", got)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"object":"list","results":[],"next_cursor":null,"has_more":false}`))
+	}))
+	defer server.Close()
+
+	if err := os.WriteFile(filepath.Join(homeDir, "notion.json"), []byte(fmt.Sprintf(`{
+  "access_token": "notion-token",
+  "api_base_url": %q
+}`, server.URL)), 0o600); err != nil {
+		t.Fatalf("write notion config: %v", err)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "connectors", "validate", "--home", homeDir, "notion")
+	if err != nil {
+		t.Fatalf("workgraph connectors validate notion failed: %v\n%s", err, output)
+	}
+	if searchRequests != 1 {
+		t.Fatalf("expected one validation search request, got %d", searchRequests)
+	}
+	if !strings.Contains(string(output), "Connector notion validation passed") {
+		t.Fatalf("expected validation passed output, got:\n%s", output)
+	}
+
+	statusOutput, statusErr := runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)
+	if statusErr != nil {
+		t.Fatalf("workgraph connectors status failed: %v\n%s", statusErr, statusOutput)
+	}
+	if !strings.Contains(string(statusOutput), "- notion: setup ready") || !strings.Contains(string(statusOutput), "polling enabled") {
+		t.Fatalf("expected validation to mark Notion ready, got:\n%s", statusOutput)
+	}
+}
+
 type storedNotionEvent struct {
 	Timestamp   string
 	Summary     string

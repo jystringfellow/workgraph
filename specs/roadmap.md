@@ -85,7 +85,7 @@ Priority labels used below:
 - [ ] Knowledge base ingestion (Notion, Confluence, Google Docs/Drive)
    - [x] Notion OAuth connect/disconnect.
    - [x] Notion page/database capture into normalized knowledge events.
-   - [ ] Advanced manual-token setup for Notion internal integrations when OAuth is not practical.
+   - [x] Advanced manual-token setup for Notion internal integrations when OAuth is not practical.
    - [ ] Knowledge claim notes for durable beliefs and decision rationale.
    - [ ] Rich local HTML artifacts/reports linked to memory and evidence.
 - [ ] LLM connector
@@ -104,7 +104,7 @@ Priority labels used below:
 - [ ] SQLite encryption at rest
 - [ ] OS credential-store backed encryption keys
 - [ ] Connector credential hardening
-- [ ] Manual-token connector setup pattern: OAuth remains the default, while `connect-token` style commands support local-only PAT/internal-token use with clear warnings.
+- [x] Manual-token connector setup pattern: OAuth remains the default, while `connect-token` style commands support local-only PAT/internal-token use with clear warnings.
 - [ ] Hosted LLM opt-in controls [P1, spec: `specs/enterprise-security.md`]
 - [ ] Local outbound LLM filtering for secrets and configured sensitive patterns
 - [ ] Network destination transparency [P1, spec: `specs/enterprise-security.md`]

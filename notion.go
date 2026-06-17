@@ -76,6 +76,14 @@ type NotionConnectResult struct {
 	Message          string
 }
 
+// NotionConnectTokenConfig controls local Notion internal-integration token setup.
+type NotionConnectTokenConfig struct {
+	HomeDir    string
+	Token      string
+	APIBaseURL string
+	HTTPClient *http.Client
+}
+
 // NotionDisconnectConfig controls Notion disconnect behavior.
 type NotionDisconnectConfig struct {
 	HomeDir string
@@ -358,6 +366,46 @@ func ConnectNotion(config NotionConnectConfig) (NotionConnectResult, error) {
 	return storeNotionConnection(homeDir, config, token)
 }
 
+// ConnectNotionWithToken validates and stores a local Notion integration token.
+func ConnectNotionWithToken(config NotionConnectTokenConfig) (NotionConnectResult, error) {
+	homeDir, err := resolveNotionHomeDir(config.HomeDir)
+	if err != nil {
+		return NotionConnectResult{}, err
+	}
+	token := strings.TrimSpace(config.Token)
+	if token == "" {
+		_ = recordConnectorValidationError(homeDir, "notion", time.Now(), "notion token is required")
+		return NotionConnectResult{}, errors.New("notion token is required")
+	}
+	apiBaseURL := resolveNotionAPIBaseURL(config.APIBaseURL)
+	if err := validateNotionToken(token, apiBaseURL, config.HTTPClient); err != nil {
+		_ = recordConnectorValidationError(homeDir, "notion", time.Now(), err.Error())
+		return NotionConnectResult{}, err
+	}
+	configPath := notionConfigPath(homeDir)
+	stored := notionConnectorConfig{
+		AccessToken: token,
+		APIBaseURL:  apiBaseURL,
+	}
+	if err := writeNotionConnectorConfig(configPath, stored); err != nil {
+		return NotionConnectResult{}, err
+	}
+	runtimeResult, err := connectRuntimeConnector(homeDir, "notion", "")
+	if err != nil {
+		return NotionConnectResult{}, err
+	}
+	return NotionConnectResult{
+		ConfigPath: configPath,
+		Configured: true,
+		Message: strings.Join([]string{
+			"Notion connected",
+			"Manual token stored locally. Use a Notion internal integration token with the narrowest workspace access practical.",
+			"Config: " + configPath,
+			runtimeResult.Message,
+		}, "\n"),
+	}, nil
+}
+
 // ConnectNotionWithBrowser completes Notion OAuth with a local callback.
 func ConnectNotionWithBrowser(ctx context.Context, config NotionConnectConfig) (NotionConnectResult, error) {
 	homeDir, err := resolveNotionHomeDir(config.HomeDir)
@@ -583,6 +631,43 @@ func notionSearchAll(config NotionCaptureConfig) ([]notionSearchResult, error) {
 		cursor = parsed.NextCursor
 	}
 	return results, nil
+}
+
+func validateNotionToken(token string, apiBaseURL string, client *http.Client) error {
+	if strings.TrimSpace(token) == "" {
+		return errors.New("notion token is required")
+	}
+	body := bytes.NewReader([]byte(`{"page_size":1}`))
+	request, err := http.NewRequest(http.MethodPost, strings.TrimRight(apiBaseURL, "/")+"/v1/search", body)
+	if err != nil {
+		return fmt.Errorf("build Notion validation request: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Notion-Version", DefaultNotionAPIVersion)
+	if client == nil {
+		client = http.DefaultClient
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("validate Notion token: %w", err)
+	}
+	responseBody, readErr := io.ReadAll(response.Body)
+	closeErr := response.Body.Close()
+	if readErr != nil {
+		return fmt.Errorf("read Notion validation response: %w", readErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close Notion validation response: %w", closeErr)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("validate Notion token: status %d: %s", response.StatusCode, strings.TrimSpace(string(responseBody)))
+	}
+	var parsed notionSearchResponse
+	if err := json.Unmarshal(responseBody, &parsed); err != nil {
+		return fmt.Errorf("parse Notion validation response: %w", err)
+	}
+	return nil
 }
 
 func notionPageContentPreview(config NotionCaptureConfig, pageID string) (string, error) {

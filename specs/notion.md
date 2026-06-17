@@ -8,6 +8,7 @@ Notion connection setup uses OAuth:
 
 ```text
 workgraph notion connect
+workgraph notion connect-token --token <internal-integration-token>
 workgraph notion capture
 workgraph notion connect --no-browser
 workgraph notion connect --code <oauth-code> --state <state>
@@ -33,6 +34,14 @@ Notion connect commands should be idempotent when already connected. If Notion
 has local connector settings and the user runs `workgraph notion connect`
 without an explicit OAuth code, workgraph should not open OAuth again. It should
 print that Notion is already connected and return successfully.
+
+When OAuth is not practical, users can connect a Notion internal integration
+token with `workgraph notion connect-token --token <token>`. Manual-token setup
+validates the token with a Notion `/v1/search` request before writing local
+settings. Successful setup stores the same local `notion.json` connector config
+shape used by OAuth, with an access token and provider API base URL, then marks
+the `notion` connector runtime state as ready, enabled, and validated. Failed or
+missing tokens must not write `notion.json` and must not mark Notion ready.
 
 `workgraph notion disconnect` removes local Notion connector settings.
 Disconnecting does not revoke access at Notion because Notion revocation is
