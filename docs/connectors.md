@@ -13,10 +13,18 @@ Use connector controls to see what will be monitored:
 ```sh
 workgraph connectors list
 workgraph connectors status
+workgraph connectors doctor
+workgraph connectors upgrade
 workgraph connectors disable <connector>
 workgraph connectors enable <connector>
 workgraph connectors interval <connector> 15m
 ```
+
+`connectors doctor` reports local connector state that needs attention, such as
+legacy configs without setup handoff state or credentials that recently failed
+with invalid-auth errors. `connectors upgrade` performs a local-only
+reconciliation of `connectors.json`; it does not contact provider APIs or
+overwrite stored tokens.
 
 ## Slack
 
