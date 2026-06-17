@@ -207,6 +207,97 @@ func TestCalendarCaptureMapsGoogleCalendarEvents(t *testing.T) {
 	}
 }
 
+func TestCalendarCaptureMapsMicrosoftCalendarEvents(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	var gotPath string
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		gotPath = request.URL.Path
+		gotAuth = request.Header.Get("Authorization")
+		if got := request.Header.Get("Prefer"); got != `outlook.timezone="UTC"` {
+			t.Fatalf("expected UTC Microsoft timezone preference, got %q", got)
+		}
+		if request.URL.Query().Get("$orderby") != "start/dateTime" {
+			t.Fatalf("expected Microsoft orderby start/dateTime, got %q", request.URL.RawQuery)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{
+  "value": [
+    {
+      "id": "microsoft-event-1",
+      "subject": "Roadmap review",
+      "start": {"dateTime": "2026-05-21T09:00:00", "timeZone": "Pacific Standard Time"},
+      "end": {"dateTime": "2026-05-21T09:45:00", "timeZone": "Pacific Standard Time"},
+      "location": {"displayName": "Board Room"},
+      "onlineMeetingUrl": "https://teams.microsoft.com/road-map",
+      "organizer": {"emailAddress": {"name": "Ada Lovelace", "address": "ada@example.test"}},
+      "attendees": [
+        {"emailAddress": {"name": "Grace Hopper", "address": "grace@example.test"}},
+        {"emailAddress": {"address": "stringfellow@example.test"}}
+      ],
+      "showAs": "busy",
+      "isCancelled": false
+    }
+  ]
+}`))
+	}))
+	defer server.Close()
+
+	output, err := runworkgraph(t, repoRoot, "calendar", "capture",
+		"--home", homeDir,
+		"--provider", "microsoft",
+		"--calendar-id", "primary",
+		"--token", "test-token",
+		"--calendar-api-base", server.URL,
+	)
+	if err != nil {
+		t.Fatalf("workgraph calendar capture failed: %v\n%s", err, output)
+	}
+	if gotPath != "/v1.0/me/calendar/events" {
+		t.Fatalf("expected Microsoft events endpoint, got %q", gotPath)
+	}
+	if gotAuth != "Bearer test-token" {
+		t.Fatalf("expected bearer token, got %q", gotAuth)
+	}
+
+	event := calendarEvent(t, filepath.Join(homeDir, "workgraph.db"), "microsoft", "primary", "microsoft-event-1")
+	if event.Timestamp != "2026-05-21T09:00:00Z" {
+		t.Fatalf("expected UTC start timestamp, got %q", event.Timestamp)
+	}
+	if event.Actor != "Ada Lovelace" {
+		t.Fatalf("expected organizer display name, got %q", event.Actor)
+	}
+	if event.Summary != "Roadmap review" {
+		t.Fatalf("expected Microsoft subject as title, got %q", event.Summary)
+	}
+	for _, expected := range []string{
+		`"provider":"microsoft"`,
+		`"calendar_id":"primary"`,
+		`"event_id":"microsoft-event-1"`,
+		`"title":"Roadmap review"`,
+		`"start":"2026-05-21T09:00:00Z"`,
+		`"end":"2026-05-21T09:45:00Z"`,
+		`"location":"Board Room"`,
+		`"meeting_url":"https://teams.microsoft.com/road-map"`,
+		`"organizer":"Ada Lovelace"`,
+		`"attendees":["Grace Hopper","stringfellow@example.test"]`,
+		`"status":"busy"`,
+	} {
+		if !strings.Contains(event.PayloadJSON, expected) {
+			t.Fatalf("expected payload to include %s, got %s", expected, event.PayloadJSON)
+		}
+	}
+	if !strings.Contains(string(output), "Events stored: 1") {
+		t.Fatalf("expected capture summary, got:\n%s", output)
+	}
+}
+
 func TestGoogleCalendarCaptureRefreshesExpiredStoredToken(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
@@ -292,6 +383,107 @@ func TestGoogleCalendarCaptureRefreshesExpiredStoredToken(t *testing.T) {
 	event := calendarEvent(t, filepath.Join(homeDir, "workgraph.db"), "google", "primary", "refreshed-event")
 	if event.Summary != "Refreshed token event" {
 		t.Fatalf("expected refreshed token event capture, got %#v", event)
+	}
+}
+
+func TestMicrosoftCalendarCaptureRefreshesExpiredStoredToken(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	var tokenRequestForm url.Values
+	var captureAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/token":
+			if err := request.ParseForm(); err != nil {
+				t.Fatalf("parse token request form: %v", err)
+			}
+			tokenRequestForm = request.Form
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = response.Write([]byte(`{
+  "access_token": "fresh-microsoft-access-token",
+  "refresh_token": "fresh-microsoft-refresh-token",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "scope": "openid profile email offline_access https://graph.microsoft.com/Calendars.Read"
+}`))
+		case "/v1.0/me/calendars/work/events":
+			captureAuth = request.Header.Get("Authorization")
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = response.Write([]byte(`{
+  "value": [
+    {
+      "id": "refreshed-microsoft-event",
+      "subject": "Refreshed Microsoft calendar event",
+      "start": {"dateTime": "2026-06-01T12:00:00Z", "timeZone": "UTC"},
+      "end": {"dateTime": "2026-06-01T12:30:00Z", "timeZone": "UTC"}
+    }
+  ]
+}`))
+		default:
+			t.Fatalf("unexpected Microsoft calendar path %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	expired := time.Now().UTC().Add(-1 * time.Hour).Format(time.RFC3339Nano)
+	configPath := filepath.Join(homeDir, "calendar.json")
+	if err := os.WriteFile(configPath, []byte(fmt.Sprintf(`{
+  "microsoft": {
+    "access_token": "expired-microsoft-access-token",
+    "refresh_token": "microsoft-refresh-token",
+    "token_type": "Bearer",
+    "expires_at": %q,
+    "calendar_ids": ["work"],
+    "api_base_url": %q,
+    "client_id": "client-id",
+    "token_url": %q
+  }
+}
+`, expired, server.URL, server.URL+"/token")), 0o600); err != nil {
+		t.Fatalf("write calendar config: %v", err)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "calendar", "capture",
+		"--home", homeDir,
+		"--provider", "microsoft",
+	)
+	if err != nil {
+		t.Fatalf("workgraph calendar capture failed: %v\n%s", err, output)
+	}
+	if tokenRequestForm.Get("grant_type") != "refresh_token" {
+		t.Fatalf("expected refresh_token grant, got %#v", tokenRequestForm)
+	}
+	if tokenRequestForm.Get("refresh_token") != "microsoft-refresh-token" {
+		t.Fatalf("expected stored refresh token, got %#v", tokenRequestForm)
+	}
+	if tokenRequestForm.Get("client_id") != "client-id" {
+		t.Fatalf("expected stored client id, got %#v", tokenRequestForm)
+	}
+	if captureAuth != "Bearer fresh-microsoft-access-token" {
+		t.Fatalf("expected capture to use refreshed Microsoft access token, got %q", captureAuth)
+	}
+
+	contents, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read refreshed calendar config: %v", err)
+	}
+	for _, expected := range []string{
+		`"access_token": "fresh-microsoft-access-token"`,
+		`"refresh_token": "fresh-microsoft-refresh-token"`,
+		`"token_url": "` + server.URL + `/token"`,
+	} {
+		if !strings.Contains(string(contents), expected) {
+			t.Fatalf("expected refreshed Microsoft config to include %q, got:\n%s", expected, contents)
+		}
+	}
+	event := calendarEvent(t, filepath.Join(homeDir, "workgraph.db"), "microsoft", "work", "refreshed-microsoft-event")
+	if event.Summary != "Refreshed Microsoft calendar event" {
+		t.Fatalf("expected refreshed Microsoft event capture, got %#v", event)
 	}
 }
 
@@ -623,6 +815,73 @@ func TestMicrosoftCalendarConnectOAuthUsesPKCEAndStoresConnectorConfig(t *testin
 	}
 	if stored.Microsoft.ClientID != "client-id" || stored.Microsoft.TokenURL != server.URL+"/token" {
 		t.Fatalf("expected stored Microsoft OAuth metadata, got %#v", stored.Microsoft)
+	}
+}
+
+func TestMicrosoftCalendarCaptureUsesStoredConnectorConfig(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	var captureAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1.0/me/calendars/work/events" {
+			t.Fatalf("expected Microsoft work calendar events endpoint, got %q", request.URL.Path)
+		}
+		if got := request.Header.Get("Prefer"); got != `outlook.timezone="UTC"` {
+			t.Fatalf("expected UTC Microsoft timezone preference, got %q", got)
+		}
+		captureAuth = request.Header.Get("Authorization")
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{
+  "value": [
+    {
+      "id": "connected-microsoft-event",
+      "subject": "Connected Microsoft calendar event",
+      "start": {"dateTime": "2026-06-01T12:00:00Z", "timeZone": "UTC"},
+      "end": {"dateTime": "2026-06-01T12:30:00Z", "timeZone": "UTC"},
+      "organizer": {"emailAddress": {"address": "organizer@example.test"}},
+      "isCancelled": false
+    }
+  ]
+}`))
+	}))
+	defer server.Close()
+	if err := os.WriteFile(filepath.Join(homeDir, "calendar.json"), []byte(fmt.Sprintf(`{
+  "microsoft": {
+    "access_token": "microsoft-access-token",
+    "calendar_ids": ["work"],
+    "api_base_url": %q
+  }
+}
+`, server.URL)), 0o600); err != nil {
+		t.Fatalf("write calendar config: %v", err)
+	}
+
+	statusOutput, statusErr := runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)
+	if statusErr != nil {
+		t.Fatalf("workgraph connectors status failed: %v\n%s", statusErr, statusOutput)
+	}
+	if !strings.Contains(string(statusOutput), "- calendar.microsoft: setup ready, polling enabled") {
+		t.Fatalf("expected Microsoft Calendar to be ready for polling, got:\n%s", statusOutput)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "calendar", "capture",
+		"--home", homeDir,
+		"--provider", "microsoft",
+	)
+	if err != nil {
+		t.Fatalf("workgraph calendar capture from stored config failed: %v\n%s", err, output)
+	}
+	if captureAuth != "Bearer microsoft-access-token" {
+		t.Fatalf("expected capture to use stored access token, got %q", captureAuth)
+	}
+	event := calendarEvent(t, filepath.Join(homeDir, "workgraph.db"), "microsoft", "work", "connected-microsoft-event")
+	if event.Summary != "Connected Microsoft calendar event" || event.Actor != "organizer@example.test" {
+		t.Fatalf("expected connected Microsoft calendar event capture, got %#v", event)
 	}
 }
 

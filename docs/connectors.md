@@ -156,24 +156,28 @@ Connect a calendar provider:
 
 ```sh
 workgraph calendar connect google
+workgraph calendar connect microsoft
 ```
 
 Collect specific calendars while connecting:
 
 ```sh
 workgraph calendar connect google --calendar-id <calendar-id>
+workgraph calendar connect microsoft --calendar-id <calendar-id>
 ```
 
 Disconnect a calendar provider:
 
 ```sh
 workgraph calendar disconnect google
+workgraph calendar disconnect microsoft
 ```
 
 Run a one-off capture for debugging:
 
 ```sh
 workgraph calendar capture --provider google --calendar-id <calendar-id>
+workgraph calendar capture --provider microsoft --calendar-id <calendar-id>
 ```
 
 ## Mail

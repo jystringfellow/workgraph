@@ -28,7 +28,7 @@ func TestRunPollsConnectedCalendarMailAndNotion(t *testing.T) {
 		t.Fatalf("init failed: %v", err)
 	}
 
-	calendarServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+	googleCalendarServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/calendar/v3/calendars/primary/events" {
 			t.Fatalf("unexpected calendar path %s", request.URL.Path)
 		}
@@ -38,15 +38,34 @@ func TestRunPollsConnectedCalendarMailAndNotion(t *testing.T) {
 		response.Header().Set("Content-Type", "application/json")
 		_, _ = response.Write([]byte(`{"items":[{"id":"calendar-runtime-event","summary":"Runtime calendar event","start":{"dateTime":"2026-06-07T09:00:00Z"},"end":{"dateTime":"2026-06-07T09:30:00Z"},"organizer":{"displayName":"Ada Lovelace"},"status":"confirmed"}]}`))
 	}))
-	defer calendarServer.Close()
+	defer googleCalendarServer.Close()
+	microsoftCalendarServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1.0/me/calendars/work/events" {
+			t.Fatalf("unexpected Microsoft calendar path %s", request.URL.Path)
+		}
+		if got := request.Header.Get("Authorization"); got != "Bearer microsoft-calendar-token" {
+			t.Fatalf("expected Microsoft calendar bearer token, got %q", got)
+		}
+		if got := request.Header.Get("Prefer"); got != `outlook.timezone="UTC"` {
+			t.Fatalf("expected UTC Microsoft timezone preference, got %q", got)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"value":[{"id":"microsoft-calendar-runtime-event","subject":"Runtime Microsoft calendar event","start":{"dateTime":"2026-06-07T10:00:00Z","timeZone":"UTC"},"end":{"dateTime":"2026-06-07T10:30:00Z","timeZone":"UTC"},"organizer":{"emailAddress":{"name":"Ada Lovelace"}},"showAs":"busy"}]}`))
+	}))
+	defer microsoftCalendarServer.Close()
 	if err := os.WriteFile(filepath.Join(homeDir, "calendar.json"), []byte(fmt.Sprintf(`{
   "google": {
     "access_token": "calendar-token",
     "calendar_ids": ["primary"],
     "api_base_url": %q
+  },
+  "microsoft": {
+    "access_token": "microsoft-calendar-token",
+    "calendar_ids": ["work"],
+    "api_base_url": %q
   }
 }
-`, calendarServer.URL)), 0o600); err != nil {
+`, googleCalendarServer.URL, microsoftCalendarServer.URL)), 0o600); err != nil {
 		t.Fatalf("write calendar config: %v", err)
 	}
 
@@ -123,6 +142,7 @@ func TestRunPollsConnectedCalendarMailAndNotion(t *testing.T) {
 	}
 	if !strings.Contains(capture.Status.Message, "Monitoring:") ||
 		!strings.Contains(capture.Status.Message, "calendar.google") ||
+		!strings.Contains(capture.Status.Message, "calendar.microsoft") ||
 		!strings.Contains(capture.Status.Message, "mail.google") ||
 		!strings.Contains(capture.Status.Message, "notion") {
 		t.Fatalf("expected start message to report monitored connectors, got:\n%s", capture.Status.Message)
@@ -133,6 +153,7 @@ func TestRunPollsConnectedCalendarMailAndNotion(t *testing.T) {
 	}()
 
 	waitForEventTypeSummary(t, initResult.DatabasePath, "calendar.event", "Runtime calendar event")
+	waitForEventTypeSummary(t, initResult.DatabasePath, "calendar.event", "Runtime Microsoft calendar event")
 	waitForEventTypeSummary(t, initResult.DatabasePath, "mail.message", "Runtime mail message")
 	waitForEventTypeSummary(t, initResult.DatabasePath, "notion.page", "Runtime Notion page")
 
@@ -448,7 +469,7 @@ func TestConnectorsStatusDerivesClearSetupState(t *testing.T) {
 		t.Fatalf("expected status not to show setup unknown, got:\n%s", output)
 	}
 	for _, expected := range []string{
-		"- calendar.microsoft: setup not supported, polling not ready",
+		"- calendar.microsoft: setup ready, polling enabled",
 		"- notion: setup ready",
 		"- azure.boards: setup not connected, polling not ready",
 	} {
@@ -494,7 +515,7 @@ func TestConnectorsDoctorReportsLegacySetupStateAndAuthErrors(t *testing.T) {
 	}
 	for _, expected := range []string{
 		"Connector health",
-		"- calendar.microsoft: not supported, polling is not implemented yet",
+		"- calendar.microsoft: needs upgrade, setup state missing for existing local config",
 		"- github: not validated, run workgraph github connect",
 		"- notion: needs upgrade, setup state missing for existing local config",
 		"- mail.google: needs reconnect, last poll failed with invalid credentials",
