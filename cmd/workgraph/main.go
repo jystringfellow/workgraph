@@ -471,7 +471,7 @@ func runLLMSummarize(args []string, stdout io.Writer, stderr io.Writer) int {
 
 func runConnectors(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: workgraph connectors <list|status|poll|validate|enable|disable|interval>")
+		fmt.Fprintln(stderr, "usage: workgraph connectors <list|status|doctor|upgrade|poll|validate|enable|disable|interval>")
 		return 2
 	}
 
@@ -480,6 +480,10 @@ func runConnectors(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runConnectorsList(args[1:], stdout, stderr)
 	case "status":
 		return runConnectorsStatus(args[1:], stdout, stderr)
+	case "doctor":
+		return runConnectorsDoctor(args[1:], stdout, stderr)
+	case "upgrade":
+		return runConnectorsUpgrade(args[1:], stdout, stderr)
 	case "poll":
 		return runConnectorsPoll(args[1:], stdout, stderr)
 	case "validate":
@@ -526,6 +530,50 @@ func runConnectorsStatus(args []string, stdout io.Writer, stderr io.Writer) int 
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph connectors status: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runConnectorsDoctor(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("connectors doctor", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph connectors doctor")
+		return 2
+	}
+	result, err := workgraph.DoctorConnectors(workgraph.ConnectorListConfig{
+		HomeDir: *homeDir,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph connectors doctor: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runConnectorsUpgrade(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("connectors upgrade", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph connectors upgrade")
+		return 2
+	}
+	result, err := workgraph.UpgradeConnectors(workgraph.ConnectorListConfig{
+		HomeDir: *homeDir,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph connectors upgrade: %v\n", err)
 		return 1
 	}
 	fmt.Fprintln(stdout, result.Message)

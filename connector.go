@@ -102,6 +102,27 @@ type ConnectorPollConnectorResult struct {
 	Error  string
 }
 
+// ConnectorDoctorResult describes connector setup health findings.
+type ConnectorDoctorResult struct {
+	HomeDir  string
+	Findings []ConnectorHealthFinding
+	Message  string
+}
+
+// ConnectorUpgradeResult describes local connector runtime migrations.
+type ConnectorUpgradeResult struct {
+	HomeDir string
+	Changes []string
+	Message string
+}
+
+// ConnectorHealthFinding describes one connector setup issue or status.
+type ConnectorHealthFinding struct {
+	ID      string
+	Status  string
+	Details string
+}
+
 type connectorRuntimeFile struct {
 	Connectors map[string]connectorRuntimeEntry `json:"connectors,omitempty"`
 }
@@ -150,6 +171,48 @@ func StatusConnectors(config ConnectorListConfig) (ConnectorListResult, error) {
 		Connectors: connectorStatuses(homeDir, state),
 	}
 	result.Message = connectorStatusMessage(result)
+	return result, nil
+}
+
+// DoctorConnectors reports local connector setup health and upgrade hints.
+func DoctorConnectors(config ConnectorListConfig) (ConnectorDoctorResult, error) {
+	homeDir, err := connectorHomeDir(config.HomeDir)
+	if err != nil {
+		return ConnectorDoctorResult{}, err
+	}
+	state, err := readConnectorRuntimeFile(homeDir)
+	if err != nil {
+		return ConnectorDoctorResult{}, err
+	}
+	result := ConnectorDoctorResult{
+		HomeDir:  homeDir,
+		Findings: connectorHealthFindings(homeDir, state),
+	}
+	result.Message = connectorDoctorMessage(result)
+	return result, nil
+}
+
+// UpgradeConnectors reconciles legacy local connector runtime state.
+func UpgradeConnectors(config ConnectorListConfig) (ConnectorUpgradeResult, error) {
+	homeDir, err := connectorHomeDir(config.HomeDir)
+	if err != nil {
+		return ConnectorUpgradeResult{}, err
+	}
+	state, err := readConnectorRuntimeFile(homeDir)
+	if err != nil {
+		return ConnectorUpgradeResult{}, err
+	}
+	changes := upgradeConnectorRuntimeState(homeDir, &state)
+	if len(changes) > 0 {
+		if err := writeConnectorRuntimeFile(homeDir, state); err != nil {
+			return ConnectorUpgradeResult{}, err
+		}
+	}
+	result := ConnectorUpgradeResult{
+		HomeDir: homeDir,
+		Changes: changes,
+	}
+	result.Message = connectorUpgradeMessage(result)
 	return result, nil
 }
 
@@ -485,7 +548,7 @@ func connectorStatuses(homeDir string, state connectorRuntimeFile) []ConnectorSt
 			Connected:           connected,
 			Enabled:             connectorEnabled(state, id),
 			Interval:            connectorInterval(state, id, defaultConnectorInterval(id)),
-			SetupState:          connectorSetupState(entry),
+			SetupState:          connectorSetupState(id, connected, entry),
 			LastValidated:       entry.LastValidated,
 			LastValidationError: entry.LastValidationError,
 			LastPoll:            entry.LastPoll,
@@ -647,15 +710,27 @@ func connectorEnabled(state connectorRuntimeFile, id string) bool {
 	return *entry.Enabled
 }
 
-func connectorSetupState(entry connectorRuntimeEntry) string {
+func connectorSetupState(id string, connected bool, entry connectorRuntimeEntry) string {
 	state := strings.TrimSpace(entry.SetupState)
-	if state == "" {
-		return "unknown"
+	if state != "" {
+		return state
 	}
-	return state
+	if !connected {
+		return "not connected"
+	}
+	if connectorPollingUnsupported(id) {
+		return "not supported"
+	}
+	if id == "github" {
+		return "not validated"
+	}
+	return "ready"
 }
 
 func connectorReadyForPolling(state connectorRuntimeFile, id string) bool {
+	if connectorPollingUnsupported(id) {
+		return false
+	}
 	entry := state.entry(id)
 	if strings.TrimSpace(entry.SetupState) == "error" || strings.TrimSpace(entry.SetupState) == "draft" {
 		return false
@@ -718,6 +793,97 @@ func defaultConnectorInterval(id string) time.Duration {
 	}
 }
 
+func connectorHealthFindings(homeDir string, state connectorRuntimeFile) []ConnectorHealthFinding {
+	statuses := connectorStatuses(homeDir, state)
+	findings := make([]ConnectorHealthFinding, 0, len(statuses))
+	for _, status := range statuses {
+		entry := state.entry(status.ID)
+		switch {
+		case connectorAuthFailure(entry.LastError):
+			findings = append(findings, ConnectorHealthFinding{
+				ID:      status.ID,
+				Status:  "needs reconnect",
+				Details: "last poll failed with invalid credentials",
+			})
+		case connectorPollingUnsupported(status.ID) && status.Connected:
+			findings = append(findings, ConnectorHealthFinding{
+				ID:      status.ID,
+				Status:  "not supported",
+				Details: "polling is not implemented yet",
+			})
+		case status.ID == "github" && strings.TrimSpace(entry.SetupState) == "":
+			findings = append(findings, ConnectorHealthFinding{
+				ID:      status.ID,
+				Status:  "not validated",
+				Details: "run workgraph github connect",
+			})
+		case status.Connected && strings.TrimSpace(entry.SetupState) == "" && status.ID != "git":
+			findings = append(findings, ConnectorHealthFinding{
+				ID:      status.ID,
+				Status:  "needs upgrade",
+				Details: "setup state missing for existing local config",
+			})
+		case status.SetupState == "error":
+			details := strings.TrimSpace(status.LastValidationError)
+			if details == "" {
+				details = strings.TrimSpace(status.LastError)
+			}
+			findings = append(findings, ConnectorHealthFinding{
+				ID:      status.ID,
+				Status:  "error",
+				Details: details,
+			})
+		}
+	}
+	sort.SliceStable(findings, func(i, j int) bool {
+		return findings[i].ID < findings[j].ID
+	})
+	return findings
+}
+
+func upgradeConnectorRuntimeState(homeDir string, state *connectorRuntimeFile) []string {
+	statuses := connectorStatuses(homeDir, *state)
+	changes := []string{}
+	now := time.Now().UTC().Format(time.RFC3339)
+	for _, status := range statuses {
+		entry := state.entry(status.ID)
+		if connectorAuthFailure(entry.LastError) {
+			if entry.SetupState != "error" || !strings.Contains(entry.LastValidationError, "invalid credentials") {
+				entry.SetupState = "error"
+				entry.LastValidated = now
+				entry.LastValidationError = "last poll failed with invalid credentials; reconnect " + status.ID
+				state.Connectors[status.ID] = entry
+				changes = append(changes, fmt.Sprintf("- %s: marked error; reconnect required", status.ID))
+			}
+			continue
+		}
+		if !status.Connected || status.ID == "github" || connectorPollingUnsupported(status.ID) {
+			continue
+		}
+		if strings.TrimSpace(entry.SetupState) == "" {
+			entry.SetupState = "ready"
+			if strings.TrimSpace(entry.LastValidated) == "" {
+				entry.LastValidated = now
+			}
+			state.Connectors[status.ID] = entry
+			changes = append(changes, fmt.Sprintf("- %s: marked ready from existing local config", status.ID))
+		}
+	}
+	sort.Strings(changes)
+	return changes
+}
+
+func connectorAuthFailure(lastError string) bool {
+	normalized := strings.ToLower(lastError)
+	return strings.Contains(normalized, "status 401") ||
+		strings.Contains(normalized, "unauthenticated") ||
+		strings.Contains(normalized, "invalid credentials")
+}
+
+func connectorPollingUnsupported(id string) bool {
+	return id == "calendar.microsoft"
+}
+
 func connectorListMessage(result ConnectorListResult) string {
 	lines := []string{"Connectors"}
 	statuses := append([]ConnectorStatus(nil), result.Connectors...)
@@ -749,6 +915,35 @@ func connectorListMessage(result ConnectorListResult) string {
 	return strings.Join(lines, "\n")
 }
 
+func connectorDoctorMessage(result ConnectorDoctorResult) string {
+	lines := []string{"Connector health"}
+	if len(result.Findings) == 0 {
+		lines = append(lines, "No connector setup issues found.")
+	} else {
+		for _, finding := range result.Findings {
+			line := fmt.Sprintf("- %s: %s", finding.ID, finding.Status)
+			if finding.Details != "" {
+				line += ", " + finding.Details
+			}
+			lines = append(lines, line)
+		}
+		lines = append(lines, "Run: workgraph connectors upgrade")
+	}
+	lines = append(lines, "Config: "+connectorRuntimePath(result.HomeDir))
+	return strings.Join(lines, "\n")
+}
+
+func connectorUpgradeMessage(result ConnectorUpgradeResult) string {
+	lines := []string{"Connector settings upgraded"}
+	if len(result.Changes) == 0 {
+		lines = append(lines, "No connector settings needed changes.")
+	} else {
+		lines = append(lines, result.Changes...)
+	}
+	lines = append(lines, "Config: "+connectorRuntimePath(result.HomeDir))
+	return strings.Join(lines, "\n")
+}
+
 func connectorStatusMessage(result ConnectorListResult) string {
 	lines := []string{"Connector status"}
 	statuses := append([]ConnectorStatus(nil), result.Connectors...)
@@ -760,7 +955,7 @@ func connectorStatusMessage(result ConnectorListResult) string {
 		if status.Enabled {
 			polling = "polling enabled"
 		}
-		if status.SetupState == "error" || status.SetupState == "draft" {
+		if status.SetupState != "ready" || !status.Connected {
 			polling = "polling not ready"
 		}
 		line := fmt.Sprintf("- %s: setup %s, %s, interval %s", status.ID, status.SetupState, polling, status.Interval)

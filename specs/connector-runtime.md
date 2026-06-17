@@ -54,6 +54,8 @@ Next runtime commands should include:
 
 ```text
 workgraph connectors status
+workgraph connectors doctor
+workgraph connectors upgrade
 workgraph connectors poll --once
 workgraph connectors poll --connector slack
 ```
@@ -126,6 +128,13 @@ re-entering all parameters.
 status` marks GitHub `ready`, failed validation marks it `error`, and
 `workgraph connectors status` shows setup state alongside polling state.
 Runtime polling should include only `ready` API connectors.
+
+When connector setup state evolves, `workgraph connectors doctor` should report
+legacy or inconsistent local state without making provider API calls.
+`workgraph connectors upgrade` should reconcile safe local-only runtime state,
+such as marking existing legacy local configs ready or marking connectors with
+recent invalid-auth poll errors as setup `error` with reconnect guidance. Upgrade
+must preserve tokens, polling preferences, and provider config files.
 
 ## Connector State
 

@@ -219,11 +219,17 @@ List and tune connector polling:
 ```sh
 workgraph connectors list
 workgraph connectors status
+workgraph connectors doctor
+workgraph connectors upgrade
 workgraph connectors validate github
 workgraph connectors disable <connector>
 workgraph connectors enable <connector>
 workgraph connectors interval <connector> 15m
 ```
+
+`connectors doctor` reports local setup issues and upgrade hints.
+`connectors upgrade` reconciles legacy connector runtime state locally without
+contacting provider APIs or rewriting credentials.
 
 Poll ready enabled connectors once without starting the daemon:
 

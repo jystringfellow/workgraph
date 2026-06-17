@@ -142,6 +142,71 @@ func TestRunPollsConnectedCalendarMailAndNotion(t *testing.T) {
 	}
 }
 
+func TestRunSkipsConnectorWithSetupError(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	watchDir := filepath.Join(tempDir, "project")
+	if err := os.MkdirAll(watchDir, 0o755); err != nil {
+		t.Fatalf("create watch dir: %v", err)
+	}
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	var requests int
+	notionServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests++
+		http.Error(response, "notion should not be polled", http.StatusInternalServerError)
+	}))
+	defer notionServer.Close()
+	if err := os.WriteFile(filepath.Join(homeDir, "notion.json"), []byte(fmt.Sprintf(`{
+  "access_token": "notion-token",
+  "api_base_url": %q
+}
+`, notionServer.URL)), 0o600); err != nil {
+		t.Fatalf("write notion config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, "connectors.json"), []byte(`{
+  "connectors": {
+    "notion": {
+      "enabled": true,
+      "setup_state": "error",
+      "last_validation_error": "reconnect notion"
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write connector runtime config: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:            homeDir,
+		DatabasePath:       initResult.DatabasePath,
+		WatchDirs:          []string{watchDir},
+		NotionPollInterval: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("run start failed: %v", err)
+	}
+	if strings.Contains(capture.Status.Message, "notion") {
+		t.Fatalf("expected setup-error Notion not to be monitored, got:\n%s", capture.Status.Message)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- capture.Run(ctx)
+	}()
+	time.Sleep(40 * time.Millisecond)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("capture run failed: %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("expected setup-error Notion not to be polled, got %d requests", requests)
+	}
+}
+
 func TestRunPollsConnectedSlackListsAndAzureBoards(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
@@ -352,6 +417,146 @@ func TestConnectorsStatusShowsSetupAndPollState(t *testing.T) {
 	} {
 		if !strings.Contains(string(output), expected) {
 			t.Fatalf("expected connector status detail %q, got:\n%s", expected, output)
+		}
+	}
+}
+
+func TestConnectorsStatusDerivesClearSetupState(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, "notion.json"), []byte(`{"access_token":"notion-token"}`), 0o600); err != nil {
+		t.Fatalf("write notion config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, "calendar.json"), []byte(`{
+  "microsoft": {
+    "access_token": "microsoft-calendar-token",
+    "calendar_ids": ["primary"]
+  }
+}`), 0o600); err != nil {
+		t.Fatalf("write calendar config: %v", err)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("workgraph connectors status failed: %v\n%s", err, output)
+	}
+	if strings.Contains(string(output), "setup unknown") {
+		t.Fatalf("expected status not to show setup unknown, got:\n%s", output)
+	}
+	for _, expected := range []string{
+		"- calendar.microsoft: setup not supported, polling not ready",
+		"- notion: setup ready",
+		"- azure.boards: setup not connected, polling not ready",
+	} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected connector status detail %q, got:\n%s", expected, output)
+		}
+	}
+}
+
+func TestConnectorsDoctorReportsLegacySetupStateAndAuthErrors(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, "notion.json"), []byte(`{"access_token":"notion-token"}`), 0o600); err != nil {
+		t.Fatalf("write notion config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, "calendar.json"), []byte(`{
+  "microsoft": {
+    "access_token": "microsoft-calendar-token",
+    "calendar_ids": ["primary"]
+  }
+}`), 0o600); err != nil {
+		t.Fatalf("write calendar config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, "connectors.json"), []byte(`{
+  "connectors": {
+    "mail.google": {
+      "last_poll_at": "2026-06-17T11:33:50Z",
+      "last_error": "request Gmail messages: status 401: Invalid Credentials"
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write connector runtime config: %v", err)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "connectors", "doctor", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("workgraph connectors doctor failed: %v\n%s", err, output)
+	}
+	for _, expected := range []string{
+		"Connector health",
+		"- calendar.microsoft: not supported, polling is not implemented yet",
+		"- github: not validated, run workgraph github connect",
+		"- notion: needs upgrade, setup state missing for existing local config",
+		"- mail.google: needs reconnect, last poll failed with invalid credentials",
+		"Run: workgraph connectors upgrade",
+	} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected connector doctor detail %q, got:\n%s", expected, output)
+		}
+	}
+}
+
+func TestConnectorsUpgradeNormalizesLegacySetupState(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, "notion.json"), []byte(`{"access_token":"notion-token"}`), 0o600); err != nil {
+		t.Fatalf("write notion config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, "connectors.json"), []byte(`{
+  "connectors": {
+    "mail.google": {
+      "last_poll_at": "2026-06-17T11:33:50Z",
+      "last_error": "request Gmail messages: status 401: Invalid Credentials"
+    },
+    "notion": {
+      "enabled": false,
+      "interval": "30m"
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write connector runtime config: %v", err)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "connectors", "upgrade", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("workgraph connectors upgrade failed: %v\n%s", err, output)
+	}
+	for _, expected := range []string{
+		"Connector settings upgraded",
+		"- mail.google: marked error; reconnect required",
+		"- notion: marked ready from existing local config",
+	} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected connector upgrade detail %q, got:\n%s", expected, output)
+		}
+	}
+
+	statusOutput, statusErr := runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)
+	if statusErr != nil {
+		t.Fatalf("workgraph connectors status failed: %v\n%s", statusErr, statusOutput)
+	}
+	for _, expected := range []string{
+		"- mail.google: setup error, polling not ready",
+		"validation error last poll failed with invalid credentials; reconnect mail.google",
+		"- notion: setup ready, polling disabled, interval 30m0s",
+	} {
+		if !strings.Contains(string(statusOutput), expected) {
+			t.Fatalf("expected connector status detail %q, got:\n%s", expected, statusOutput)
 		}
 	}
 }

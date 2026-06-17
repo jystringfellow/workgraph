@@ -130,6 +130,7 @@ type RunCapture struct {
 	githubPollInterval      time.Duration
 	githubCommand           string
 	slackEnabled            bool
+	slackListsEnabled       bool
 	slackPollInterval       time.Duration
 	slackListPollInterval   time.Duration
 	slackToken              string
@@ -249,8 +250,8 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 	}
 	calendarProviders := connectedCalendarProviders(status.HomeDir, connectorState)
 	mailProviders := connectedMailProviders(status.HomeDir, connectorState)
-	notionEnabled := notionConnectorConnected(status.HomeDir) && connectorEnabled(connectorState, "notion")
-	azureBoardsEnabled := azureBoardsConnectorConnected(status.HomeDir) && connectorEnabled(connectorState, "azure.boards")
+	notionEnabled := notionConnectorConnected(status.HomeDir) && connectorEnabled(connectorState, "notion") && connectorReadyForPolling(connectorState, "notion")
+	azureBoardsEnabled := azureBoardsConnectorConnected(status.HomeDir) && connectorEnabled(connectorState, "azure.boards") && connectorReadyForPolling(connectorState, "azure.boards")
 	status.MonitoredConnectors = monitoredConnectorIDs(status.HomeDir, connectorState)
 
 	status.Message = runMessage(status)
@@ -272,7 +273,8 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 		githubEnabled:           connectorEnabled(connectorState, "github") && connectorReadyForPolling(connectorState, "github"),
 		githubPollInterval:      connectorInterval(connectorState, "github", githubPollInterval(config.GitHubPollInterval)),
 		githubCommand:           config.GitHubCommand,
-		slackEnabled:            connectorEnabled(connectorState, "slack"),
+		slackEnabled:            connectorEnabled(connectorState, "slack") && connectorReadyForPolling(connectorState, "slack"),
+		slackListsEnabled:       connectorEnabled(connectorState, "slack.lists") && connectorReadyForPolling(connectorState, "slack.lists"),
 		slackPollInterval:       connectorInterval(connectorState, "slack", slackPollInterval(config.SlackPollInterval)),
 		slackListPollInterval:   connectorInterval(connectorState, "slack.lists", slackListPollInterval(config.SlackListPollInterval)),
 		slackToken:              slackToken,
@@ -383,10 +385,10 @@ func connectedCalendarProviders(homeDir string, state connectorRuntimeFile) []st
 		return nil
 	}
 	var providers []string
-	if config.Google != nil && strings.TrimSpace(config.Google.AccessToken) != "" && connectorEnabled(state, "calendar.google") {
+	if config.Google != nil && strings.TrimSpace(config.Google.AccessToken) != "" && connectorEnabled(state, "calendar.google") && connectorReadyForPolling(state, "calendar.google") {
 		providers = append(providers, "google")
 	}
-	if config.Microsoft != nil && strings.TrimSpace(config.Microsoft.AccessToken) != "" && connectorEnabled(state, "calendar.microsoft") {
+	if config.Microsoft != nil && strings.TrimSpace(config.Microsoft.AccessToken) != "" && connectorEnabled(state, "calendar.microsoft") && connectorReadyForPolling(state, "calendar.microsoft") {
 		providers = append(providers, "microsoft")
 	}
 	return providers
@@ -398,10 +400,10 @@ func connectedMailProviders(homeDir string, state connectorRuntimeFile) []string
 		return nil
 	}
 	var providers []string
-	if config.Google != nil && strings.TrimSpace(config.Google.AccessToken) != "" && connectorEnabled(state, "mail.google") {
+	if config.Google != nil && strings.TrimSpace(config.Google.AccessToken) != "" && connectorEnabled(state, "mail.google") && connectorReadyForPolling(state, "mail.google") {
 		providers = append(providers, "google")
 	}
-	if config.Microsoft != nil && strings.TrimSpace(config.Microsoft.AccessToken) != "" && connectorEnabled(state, "mail.microsoft") {
+	if config.Microsoft != nil && strings.TrimSpace(config.Microsoft.AccessToken) != "" && connectorEnabled(state, "mail.microsoft") && connectorReadyForPolling(state, "mail.microsoft") {
 		providers = append(providers, "microsoft")
 	}
 	return providers
@@ -500,7 +502,7 @@ func (capture *RunCapture) captureSlackEvents() error {
 }
 
 func (capture *RunCapture) captureSlackListItems() error {
-	if !capture.slackEnabled || capture.slackToken == "" || len(capture.slackListIDs) == 0 {
+	if !capture.slackListsEnabled || capture.slackToken == "" || len(capture.slackListIDs) == 0 {
 		return nil
 	}
 	for _, listID := range capture.slackListIDs {
