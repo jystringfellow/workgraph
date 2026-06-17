@@ -249,6 +249,8 @@ func ValidateConnector(config ConnectorValidateConfig) (ConnectorValidateResult,
 	switch id {
 	case "github":
 		return validateGitHubConnector(homeDir, config)
+	case "notion":
+		return validateNotionConnector(homeDir)
 	default:
 		return ConnectorValidateResult{}, fmt.Errorf("validation is not implemented for connector %s", id)
 	}
@@ -276,6 +278,34 @@ func validateGitHubConnector(homeDir string, config ConnectorValidateConfig) (Co
 		HomeDir: homeDir,
 		ID:      "github",
 		Message: fmt.Sprintf("Connector github validation passed\nConfig: %s", connectorRuntimePath(homeDir)),
+	}, nil
+}
+
+func validateNotionConnector(homeDir string) (ConnectorValidateResult, error) {
+	stored, err := readNotionConnectorConfig(homeDir)
+	if err != nil {
+		details := "notion is not connected"
+		if !os.IsNotExist(err) {
+			details = err.Error()
+		}
+		if recordErr := recordConnectorValidationError(homeDir, "notion", time.Now(), details); recordErr != nil {
+			return ConnectorValidateResult{}, recordErr
+		}
+		return ConnectorValidateResult{}, fmt.Errorf("validate Notion connection: %s", details)
+	}
+	if err := validateNotionToken(stored.AccessToken, resolveNotionAPIBaseURL(stored.APIBaseURL), nil); err != nil {
+		if recordErr := recordConnectorValidationError(homeDir, "notion", time.Now(), err.Error()); recordErr != nil {
+			return ConnectorValidateResult{}, recordErr
+		}
+		return ConnectorValidateResult{}, err
+	}
+	if _, err := connectRuntimeConnector(homeDir, "notion", ""); err != nil {
+		return ConnectorValidateResult{}, err
+	}
+	return ConnectorValidateResult{
+		HomeDir: homeDir,
+		ID:      "notion",
+		Message: fmt.Sprintf("Connector notion validation passed\nConfig: %s", connectorRuntimePath(homeDir)),
 	}, nil
 }
 

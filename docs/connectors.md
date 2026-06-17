@@ -66,6 +66,13 @@ Connect Notion:
 workgraph notion connect
 ```
 
+Connect Notion with a local internal integration token when OAuth is not
+practical:
+
+```sh
+workgraph notion connect-token --token <token>
+```
+
 Disconnect Notion:
 
 ```sh

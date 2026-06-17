@@ -660,6 +660,8 @@ func runNotion(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runNotionCapture(args[1:], stdout, stderr)
 	case "connect":
 		return runNotionConnect(args[1:], stdout, stderr)
+	case "connect-token":
+		return runNotionConnectToken(args[1:], stdout, stderr)
 	case "disconnect":
 		return runNotionDisconnect(args[1:], stdout, stderr)
 	case "index":
@@ -805,6 +807,36 @@ func runNotionConnect(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph notion connect: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runNotionConnectToken(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("notion connect-token", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	token := flags.String("token", "", "Notion internal integration token")
+	notionAPIBaseURL := flags.String("notion-api-base", "", "Notion API base URL")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph notion connect-token --token <token>")
+		return 2
+	}
+
+	result, err := workgraph.ConnectNotionWithToken(workgraph.NotionConnectTokenConfig{
+		HomeDir:    *homeDir,
+		Token:      *token,
+		APIBaseURL: *notionAPIBaseURL,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph notion connect-token: %v\n", err)
 		return 1
 	}
 
