@@ -338,6 +338,9 @@ func ConnectCalendarWithBrowser(ctx context.Context, config CalendarConnectConfi
 	if connected, err := calendarProviderConnected(homeDir, provider); err != nil {
 		return CalendarConnectResult{}, err
 	} else if connected {
+		if err := connectCalendarRuntimeProvider(homeDir, provider); err != nil {
+			return CalendarConnectResult{}, err
+		}
 		return calendarAlreadyConnectedResult(homeDir, provider), nil
 	}
 	switch provider {
@@ -470,6 +473,9 @@ func connectGoogleCalendar(config CalendarConnectConfig) (CalendarConnectResult,
 		if connected, err := calendarProviderConnected(homeDir, "google"); err != nil {
 			return CalendarConnectResult{}, err
 		} else if connected {
+			if err := connectCalendarRuntimeProvider(homeDir, "google"); err != nil {
+				return CalendarConnectResult{}, err
+			}
 			return calendarAlreadyConnectedResult(homeDir, "google"), nil
 		}
 	}
@@ -542,6 +548,9 @@ func connectMicrosoftCalendar(config CalendarConnectConfig) (CalendarConnectResu
 		if connected, err := calendarProviderConnected(homeDir, "microsoft"); err != nil {
 			return CalendarConnectResult{}, err
 		} else if connected {
+			if err := connectCalendarRuntimeProvider(homeDir, "microsoft"); err != nil {
+				return CalendarConnectResult{}, err
+			}
 			return calendarAlreadyConnectedResult(homeDir, "microsoft"), nil
 		}
 	}
@@ -662,6 +671,9 @@ func disconnectGoogleCalendar(config CalendarDisconnectConfig) (CalendarDisconne
 	if err := writeOrRemoveCalendarConnectorConfig(configPath, stored); err != nil {
 		return CalendarDisconnectResult{}, err
 	}
+	if err := clearRuntimeConnector(homeDir, "calendar.google"); err != nil {
+		return CalendarDisconnectResult{}, err
+	}
 
 	lines := []string{
 		"Google Calendar disconnected",
@@ -704,6 +716,9 @@ func disconnectMicrosoftCalendar(config CalendarDisconnectConfig) (CalendarDisco
 	configPath := calendarConfigPath(homeDir)
 	stored.Microsoft = nil
 	if err := writeOrRemoveCalendarConnectorConfig(configPath, stored); err != nil {
+		return CalendarDisconnectResult{}, err
+	}
+	if err := clearRuntimeConnector(homeDir, "calendar.microsoft"); err != nil {
 		return CalendarDisconnectResult{}, err
 	}
 
@@ -1005,6 +1020,9 @@ func storeGoogleCalendarConnection(homeDir string, config CalendarConnectConfig,
 	if err := writeCalendarConnectorConfig(configPath, stored); err != nil {
 		return CalendarConnectResult{}, err
 	}
+	if err := connectCalendarRuntimeProvider(homeDir, "google"); err != nil {
+		return CalendarConnectResult{}, err
+	}
 	return CalendarConnectResult{
 		ConfigPath: configPath,
 		Configured: true,
@@ -1033,6 +1051,9 @@ func storeMicrosoftCalendarConnection(homeDir string, config CalendarConnectConf
 		TokenURL:     resolveMicrosoftCalendarTokenURL(config.TokenURL),
 	}
 	if err := writeCalendarConnectorConfig(configPath, stored); err != nil {
+		return CalendarConnectResult{}, err
+	}
+	if err := connectCalendarRuntimeProvider(homeDir, "microsoft"); err != nil {
 		return CalendarConnectResult{}, err
 	}
 	return CalendarConnectResult{
@@ -1714,6 +1735,19 @@ func calendarAlreadyConnectedResult(homeDir string, provider string) CalendarCon
 			calendarProviderDisplayName(provider) + " is already connected",
 			"Config: " + configPath,
 		}, "\n"),
+	}
+}
+
+func connectCalendarRuntimeProvider(homeDir string, provider string) error {
+	switch strings.ToLower(provider) {
+	case "google":
+		_, err := connectRuntimeConnector(homeDir, "calendar.google", "")
+		return err
+	case "microsoft":
+		_, err := connectRuntimeConnector(homeDir, "calendar.microsoft", "")
+		return err
+	default:
+		return fmt.Errorf("unsupported calendar provider %q", provider)
 	}
 }
 

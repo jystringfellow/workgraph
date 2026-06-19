@@ -1023,6 +1023,25 @@ func TestCalendarConnectSkipsOAuthWhenProviderAlreadyConnected(t *testing.T) {
 `), 0o600); err != nil {
 		t.Fatalf("write calendar config: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(homeDir, "connectors.json"), []byte(`{
+  "connectors": {
+    "calendar.google": {
+      "setup_state": "error",
+      "last_validation_error": "last poll failed with invalid credentials; reconnect calendar.google",
+      "last_poll_at": "2026-06-17T11:33:50Z",
+      "last_error": "request Google Calendar events: status 401: Invalid Credentials"
+    },
+    "calendar.microsoft": {
+      "setup_state": "error",
+      "last_validation_error": "last poll failed with invalid credentials; reconnect calendar.microsoft",
+      "last_poll_at": "2026-06-17T11:33:50Z",
+      "last_error": "request Microsoft Calendar events: status 401: InvalidAuthenticationToken"
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write connector runtime config: %v", err)
+	}
 
 	output, err := runworkgraph(t, repoRoot, "calendar", "connect", "google",
 		"--home", homeDir,
@@ -1036,6 +1055,17 @@ func TestCalendarConnectSkipsOAuthWhenProviderAlreadyConnected(t *testing.T) {
 	if strings.Contains(string(output), "authorization URL") {
 		t.Fatalf("expected already connected Google connect not to print OAuth URL, got:\n%s", output)
 	}
+	statusOutput, statusErr := runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)
+	if statusErr != nil {
+		t.Fatalf("workgraph connectors status failed: %v\n%s", statusErr, statusOutput)
+	}
+	googleStatus := firstLineWithPrefix(string(statusOutput), "- calendar.google:")
+	if !strings.Contains(googleStatus, "setup ready, polling enabled") {
+		t.Fatalf("expected already connected Google Calendar to repair runtime setup state, got:\n%s", statusOutput)
+	}
+	if strings.Contains(googleStatus, "Invalid Credentials") || strings.Contains(googleStatus, "validation error") {
+		t.Fatalf("expected already connected Google Calendar to clear stale errors, got:\n%s", statusOutput)
+	}
 
 	output, err = runworkgraph(t, repoRoot, "calendar", "connect", "microsoft",
 		"--home", homeDir,
@@ -1048,6 +1078,17 @@ func TestCalendarConnectSkipsOAuthWhenProviderAlreadyConnected(t *testing.T) {
 	}
 	if strings.Contains(string(output), "authorization URL") {
 		t.Fatalf("expected already connected Microsoft connect not to print OAuth URL, got:\n%s", output)
+	}
+	statusOutput, statusErr = runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)
+	if statusErr != nil {
+		t.Fatalf("workgraph connectors status failed: %v\n%s", statusErr, statusOutput)
+	}
+	microsoftStatus := firstLineWithPrefix(string(statusOutput), "- calendar.microsoft:")
+	if !strings.Contains(microsoftStatus, "setup ready, polling enabled") {
+		t.Fatalf("expected already connected Microsoft Calendar to repair runtime setup state, got:\n%s", statusOutput)
+	}
+	if strings.Contains(microsoftStatus, "InvalidAuthenticationToken") || strings.Contains(microsoftStatus, "validation error") {
+		t.Fatalf("expected already connected Microsoft Calendar to clear stale errors, got:\n%s", statusOutput)
 	}
 }
 
@@ -1256,6 +1297,19 @@ func TestGoogleCalendarDisconnectRevokesTokenAndRemovesConnectorConfig(t *testin
 `), 0o600); err != nil {
 		t.Fatalf("write calendar config: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(homeDir, "connectors.json"), []byte(`{
+  "connectors": {
+    "calendar.google": {
+      "setup_state": "error",
+      "last_validation_error": "last poll failed with invalid credentials; reconnect calendar.google",
+      "last_poll_at": "2026-06-17T11:33:50Z",
+      "last_error": "request Google Calendar events: status 401: Invalid Credentials"
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write connector runtime config: %v", err)
+	}
 
 	var revokedToken string
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
@@ -1347,6 +1401,16 @@ func TestGoogleCalendarDisconnectRemovesConnectorConfigAndPreservesMicrosoft(t *
 	if !strings.Contains(string(output), "Google Calendar disconnected") {
 		t.Fatalf("expected disconnect message, got:\n%s", output)
 	}
+	statusOutput, statusErr := runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)
+	if statusErr != nil {
+		t.Fatalf("workgraph connectors status failed: %v\n%s", statusErr, statusOutput)
+	}
+	if !strings.Contains(string(statusOutput), "- calendar.google: setup not connected, polling not ready") {
+		t.Fatalf("expected Google Calendar disconnect to clear runtime setup state, got:\n%s", statusOutput)
+	}
+	if strings.Contains(string(statusOutput), "Invalid Credentials") || strings.Contains(string(statusOutput), "validation error") {
+		t.Fatalf("expected Google Calendar disconnect to clear stale errors, got:\n%s", statusOutput)
+	}
 
 	contents, err := os.ReadFile(configPath)
 	if err != nil {
@@ -1393,6 +1457,19 @@ func TestMicrosoftCalendarDisconnectRemovesConnectorConfigAndPreservesGoogle(t *
 `), 0o600); err != nil {
 		t.Fatalf("write calendar config: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(homeDir, "connectors.json"), []byte(`{
+  "connectors": {
+    "calendar.microsoft": {
+      "setup_state": "error",
+      "last_validation_error": "last poll failed with invalid credentials; reconnect calendar.microsoft",
+      "last_poll_at": "2026-06-17T11:33:50Z",
+      "last_error": "request Microsoft Calendar events: status 401: InvalidAuthenticationToken"
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write connector runtime config: %v", err)
+	}
 
 	output, err := runworkgraph(t, repoRoot, "calendar", "disconnect", "microsoft",
 		"--home", homeDir,
@@ -1408,6 +1485,16 @@ func TestMicrosoftCalendarDisconnectRemovesConnectorConfigAndPreservesGoogle(t *
 	}
 	if !strings.Contains(string(output), "To revoke Microsoft consent, remove workgraph from your Microsoft account or tenant app consent settings.") {
 		t.Fatalf("expected Microsoft consent revocation guidance, got:\n%s", output)
+	}
+	statusOutput, statusErr := runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)
+	if statusErr != nil {
+		t.Fatalf("workgraph connectors status failed: %v\n%s", statusErr, statusOutput)
+	}
+	if !strings.Contains(string(statusOutput), "- calendar.microsoft: setup not connected, polling not ready") {
+		t.Fatalf("expected Microsoft Calendar disconnect to clear runtime setup state, got:\n%s", statusOutput)
+	}
+	if strings.Contains(string(statusOutput), "InvalidAuthenticationToken") || strings.Contains(string(statusOutput), "validation error") {
+		t.Fatalf("expected Microsoft Calendar disconnect to clear stale errors, got:\n%s", statusOutput)
 	}
 
 	contents, err := os.ReadFile(configPath)

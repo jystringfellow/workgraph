@@ -120,6 +120,9 @@ func ConnectAzureBoards(config AzureBoardsConnectConfig) (AzureBoardsResult, err
 		if connected, err := azureBoardsConnected(homeDir); err != nil {
 			return AzureBoardsResult{}, err
 		} else if connected {
+			if _, err := connectRuntimeConnector(homeDir, "azure.boards", ""); err != nil {
+				return AzureBoardsResult{}, err
+			}
 			return AzureBoardsResult{ConfigPath: azureBoardsConfigPath(homeDir), Configured: true, Message: "Azure Boards is already connected\nConfig: " + azureBoardsConfigPath(homeDir)}, nil
 		}
 	}
@@ -171,6 +174,23 @@ func ConnectAzureBoards(config AzureBoardsConnectConfig) (AzureBoardsResult, err
 }
 
 func ConnectAzureBoardsWithBrowser(ctx context.Context, config AzureBoardsConnectConfig) (AzureBoardsResult, error) {
+	homeDir, err := resolveHomeDir(config.HomeDir)
+	if err != nil {
+		return AzureBoardsResult{}, err
+	}
+	homeDir, err = filepath.Abs(homeDir)
+	if err != nil {
+		return AzureBoardsResult{}, fmt.Errorf("resolve workgraph home: %w", err)
+	}
+	if connected, err := azureBoardsConnected(homeDir); err != nil {
+		return AzureBoardsResult{}, err
+	} else if connected {
+		if _, err := connectRuntimeConnector(homeDir, "azure.boards", ""); err != nil {
+			return AzureBoardsResult{}, err
+		}
+		return AzureBoardsResult{ConfigPath: azureBoardsConfigPath(homeDir), Configured: true, Message: "Azure Boards is already connected\nConfig: " + azureBoardsConfigPath(homeDir)}, nil
+	}
+	config.HomeDir = homeDir
 	if config.RedirectURI == "" {
 		config.RedirectURI = DefaultAzureBoardsRedirectURI
 	}
@@ -299,6 +319,9 @@ func DisconnectAzureBoards(config AzureBoardsCaptureConfig) (AzureBoardsResult, 
 		}
 		return AzureBoardsResult{}, fmt.Errorf("remove azure boards config: %w", err)
 	}
+	if err := clearRuntimeConnector(homeDir, "azure.boards"); err != nil {
+		return AzureBoardsResult{}, err
+	}
 	daemonRestarted, err := restartDaemonAfterAzureBoardsUpdate(homeDir)
 	if err != nil {
 		return AzureBoardsResult{}, err
@@ -370,6 +393,9 @@ func storeAzureBoardsConnection(homeDir string, config AzureBoardsConnectConfig,
 	stored := azureBoardsConnectorConfig{AccessToken: token.AccessToken, RefreshToken: token.RefreshToken, TokenType: token.TokenType, ExpiresAt: googleCalendarTokenExpiresAt(token), Scopes: strings.Fields(token.Scope), Organization: config.Organization, Project: config.Project, Team: config.Team, AreaPaths: config.AreaPaths, WIQL: config.WIQL, APIBaseURL: config.APIBaseURL, ClientID: config.ClientID, TokenURL: resolveAzureBoardsTokenURL(config.TokenURL)}
 	path := azureBoardsConfigPath(homeDir)
 	if err := writeJSON0600(path, stored); err != nil {
+		return AzureBoardsResult{}, err
+	}
+	if _, err := connectRuntimeConnector(homeDir, "azure.boards", ""); err != nil {
 		return AzureBoardsResult{}, err
 	}
 	daemonRestarted, err := restartDaemonAfterAzureBoardsUpdate(homeDir)
