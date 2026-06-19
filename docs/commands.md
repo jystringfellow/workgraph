@@ -80,6 +80,17 @@ Add a specific folder:
 workgraph settings add-watch /Volumes/Craig/Code
 ```
 
+Inspect effective settings:
+
+```sh
+workgraph settings get
+workgraph settings get --format json
+```
+
+The JSON form is intended for admin review and endpoint verification. It reports
+managed controls, provenance, and non-secret local settings counts without
+printing connector credentials or captured data.
+
 Added roots are treated as explicit and are placed before existing roots, so a
 project you care about does not get starved by broad default watches.
 

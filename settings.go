@@ -33,6 +33,7 @@ type SettingsIgnoreConfig struct {
 // SettingsGetConfig controls effective settings reporting.
 type SettingsGetConfig struct {
 	HomeDir string
+	Format  string
 }
 
 // SettingsGetResult describes effective settings visible to users/admins.
@@ -69,6 +70,13 @@ func GetSettings(config SettingsGetConfig) (SettingsGetResult, error) {
 	managed, managedPath, managedPresent, err := readManagedSettings()
 	if err != nil {
 		return SettingsGetResult{}, err
+	}
+
+	if config.Format == "json" {
+		return settingsGetJSON(settingsPath, managedPath, managedPresent, localSettings, managed)
+	}
+	if config.Format != "" && config.Format != "text" {
+		return SettingsGetResult{}, fmt.Errorf("unsupported settings format %q", config.Format)
 	}
 
 	lines := []string{
@@ -112,6 +120,110 @@ func GetSettings(config SettingsGetConfig) (SettingsGetResult, error) {
 		ManagedSettingsPath: managedPath,
 		Message:             strings.Join(lines, "\n"),
 	}, nil
+}
+
+type settingsGetJSONPayload struct {
+	Settings        settingsJSONInfo          `json:"settings"`
+	ManagedSettings managedSettingsJSONInfo   `json:"managed_settings"`
+	LLM             llmSettingsJSONInfo       `json:"llm"`
+	Connectors      connectorSettingsJSONInfo `json:"connectors"`
+}
+
+type settingsJSONInfo struct {
+	Path            string `json:"path"`
+	WatchDirCount   int    `json:"watch_directory_count"`
+	IgnorePathCount int    `json:"ignore_path_count"`
+	IgnoreNameCount int    `json:"ignore_name_count"`
+	Source          string `json:"source"`
+}
+
+type managedSettingsJSONInfo struct {
+	Active bool   `json:"active"`
+	Path   string `json:"path"`
+}
+
+type llmSettingsJSONInfo struct {
+	HostedEnabled  managedBoolJSONInfo        `json:"hosted_enabled"`
+	AllowedBaseURL managedStringSliceJSONInfo `json:"allowed_base_urls"`
+}
+
+type connectorSettingsJSONInfo struct {
+	Slack slackSettingsJSONInfo `json:"slack"`
+}
+
+type slackSettingsJSONInfo struct {
+	IncludeDMs managedBoolJSONInfo `json:"include_dms"`
+}
+
+type managedBoolJSONInfo struct {
+	Value  *bool  `json:"value"`
+	Locked bool   `json:"locked"`
+	Source string `json:"source"`
+}
+
+type managedStringSliceJSONInfo struct {
+	Value  []string `json:"value"`
+	Locked bool     `json:"locked"`
+	Source string   `json:"source"`
+}
+
+func settingsGetJSON(settingsPath, managedPath string, managedPresent bool, localSettings settingsFile, managed managedSettingsFile) (SettingsGetResult, error) {
+	payload := settingsGetJSONPayload{
+		Settings: settingsJSONInfo{
+			Path:            settingsPath,
+			WatchDirCount:   len(localSettings.WatchDirs),
+			IgnorePathCount: len(localSettings.IgnorePaths),
+			IgnoreNameCount: len(localSettings.IgnoreNames),
+			Source:          "user_config",
+		},
+		ManagedSettings: managedSettingsJSONInfo{
+			Active: managedPresent,
+			Path:   managedPath,
+		},
+		LLM: llmSettingsJSONInfo{
+			HostedEnabled:  boolManagedJSON(managed.LLM.HostedEnabled),
+			AllowedBaseURL: stringSliceManagedJSON(managed.LLM.AllowedBaseURL),
+		},
+		Connectors: connectorSettingsJSONInfo{
+			Slack: slackSettingsJSONInfo{
+				IncludeDMs: boolManagedJSON(managed.Connectors.Slack.IncludeDMs),
+			},
+		},
+	}
+	contents, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return SettingsGetResult{}, fmt.Errorf("encode settings JSON: %w", err)
+	}
+	return SettingsGetResult{
+		SettingsPath:        settingsPath,
+		ManagedSettingsPath: managedPath,
+		Message:             string(contents),
+	}, nil
+}
+
+func boolManagedJSON(setting managedBoolSetting) managedBoolJSONInfo {
+	source := "user_config"
+	if setting.Value != nil {
+		source = "managed"
+	}
+	return managedBoolJSONInfo{
+		Value:  setting.Value,
+		Locked: setting.Locked,
+		Source: source,
+	}
+}
+
+func stringSliceManagedJSON(setting managedStringSliceSetting) managedStringSliceJSONInfo {
+	source := "user_config"
+	if len(setting.Value) > 0 {
+		source = "managed"
+	}
+	value := append([]string(nil), setting.Value...)
+	return managedStringSliceJSONInfo{
+		Value:  value,
+		Locked: setting.Locked,
+		Source: source,
+	}
 }
 
 // DoctorSettings validates local and managed settings without printing secrets.
