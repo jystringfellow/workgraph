@@ -242,6 +242,11 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 			}
 		}
 	}
+	if err := enforceSlackDMManagedSettings(slackIncludeDMs); err != nil {
+		watcher.Close()
+		db.Close()
+		return nil, err
+	}
 	connectorState, err := readConnectorRuntimeFile(status.HomeDir)
 	if err != nil {
 		watcher.Close()

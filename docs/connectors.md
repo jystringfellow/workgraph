@@ -46,6 +46,10 @@ Opt into direct and group direct messages explicitly:
 workgraph slack connect --include-dms
 ```
 
+If admin-managed settings lock Slack DM capture off, workgraph refuses
+`--include-dms` before opening Slack OAuth and refuses capture startup if stored
+Slack settings would poll DMs.
+
 If you use a Slack List as a todo list, save its List id while connecting:
 
 ```sh

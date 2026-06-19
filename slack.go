@@ -560,6 +560,9 @@ func ConnectSlack(config SlackConnectConfig) (SlackConnectResult, error) {
 	if config.ClientID == "" {
 		return SlackConnectResult{}, errors.New("slack client id is required")
 	}
+	if err := enforceSlackDMManagedSettings(config.IncludeDMs); err != nil {
+		return SlackConnectResult{}, err
+	}
 	if config.ClientSecret == "" && config.Code != "" {
 		return SlackConnectResult{}, errors.New("slack client secret is required")
 	}
@@ -647,6 +650,9 @@ func ConnectSlackWithBrowser(ctx context.Context, config SlackConnectConfig) (Sl
 	config.ClientID = resolveSlackClientID(config.ClientID)
 	if config.ClientID == "" {
 		return SlackConnectResult{}, errors.New("slack client id is required for browser connect")
+	}
+	if err := enforceSlackDMManagedSettings(config.IncludeDMs); err != nil {
+		return SlackConnectResult{}, err
 	}
 
 	redirectURI := config.RedirectURI

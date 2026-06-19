@@ -68,6 +68,14 @@ func TestSettingsGetReportsManagedSettingsWithoutSecrets(t *testing.T) {
       "value": ["http://localhost:11434/v1"],
       "locked": true
     }
+  },
+  "connectors": {
+    "slack": {
+      "include_dms": {
+        "value": false,
+        "locked": true
+      }
+    }
   }
 }
 `), 0o600); err != nil {
@@ -88,6 +96,7 @@ func TestSettingsGetReportsManagedSettingsWithoutSecrets(t *testing.T) {
 		"Managed settings: " + managedPath,
 		"LLM hosted providers: disabled (managed settings locked)",
 		"LLM allowed base URLs: http://localhost:11434/v1 (managed settings locked)",
+		"Slack DM capture: disabled (managed settings locked)",
 	} {
 		if !strings.Contains(result.Message, expected) {
 			t.Fatalf("expected settings output to include %q, got:\n%s", expected, result.Message)

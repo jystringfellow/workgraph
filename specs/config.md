@@ -187,8 +187,9 @@ Example:
 
 Commands that display configuration should show whether each effective value
 came from defaults, user config, CLI flags, or managed settings. Diagnostics
-such as `workgraph doctor` should report the managed settings file path when
-one is active and should not expose secrets.
+such as `workgraph settings get`, `workgraph settings doctor`, and `workgraph
+doctor` should report the managed settings file path when one is active and
+should not expose secrets.
 
 ## Portability
 
