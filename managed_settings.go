@@ -12,11 +12,7 @@ import (
 	"strings"
 )
 
-const managedSettingsEnv = "WORKGRAPH_MANAGED_SETTINGS"
-
-type ManagedSettingsConfig struct {
-	Path string
-}
+var managedSettingsPathOverrideForTest string
 
 type managedSettingsFile struct {
 	Version int                `json:"version"`
@@ -38,14 +34,8 @@ type managedStringSliceSetting struct {
 	Locked bool     `json:"locked"`
 }
 
-func readManagedSettings(config ManagedSettingsConfig) (managedSettingsFile, string, bool, error) {
-	path := strings.TrimSpace(config.Path)
-	if path == "" {
-		path = strings.TrimSpace(os.Getenv(managedSettingsEnv))
-	}
-	if path == "" {
-		path = defaultManagedSettingsPath()
-	}
+func readManagedSettings() (managedSettingsFile, string, bool, error) {
+	path := defaultManagedSettingsPath()
 	if path == "" {
 		return managedSettingsFile{}, "", false, nil
 	}
@@ -63,7 +53,19 @@ func readManagedSettings(config ManagedSettingsConfig) (managedSettingsFile, str
 	return settings, path, true, nil
 }
 
+// SetManagedSettingsPathForTest redirects managed settings lookup for facts.
+func SetManagedSettingsPathForTest(path string) func() {
+	previous := managedSettingsPathOverrideForTest
+	managedSettingsPathOverrideForTest = path
+	return func() {
+		managedSettingsPathOverrideForTest = previous
+	}
+}
+
 func defaultManagedSettingsPath() string {
+	if managedSettingsPathOverrideForTest != "" {
+		return managedSettingsPathOverrideForTest
+	}
 	switch runtime.GOOS {
 	case "darwin":
 		return filepath.Join(string(filepath.Separator), "Library", "Application Support", "workgraph", "managed-settings.json")
@@ -77,8 +79,8 @@ func defaultManagedSettingsPath() string {
 	}
 }
 
-func enforceLLMManagedSettings(path string, profile llmProfile) error {
-	settings, _, present, err := readManagedSettings(ManagedSettingsConfig{Path: path})
+func enforceLLMManagedSettings(profile llmProfile) error {
+	settings, _, present, err := readManagedSettings()
 	if err != nil {
 		return err
 	}

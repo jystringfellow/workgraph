@@ -138,8 +138,10 @@ Suggested managed settings locations:
 %ProgramData%\workgraph\managed-settings.json
 ```
 
-For local development and facts, tests may inject an alternate managed settings
-path rather than requiring system directories.
+At runtime, managed settings are only read from the platform-managed path.
+They are not redirected by user settings, CLI flags, or environment variables.
+Facts may use internal test helpers to avoid writing to system directories, but
+that override is not part of the user-facing command surface.
 
 Managed settings can either provide defaults or lock specific settings. A locked
 managed setting takes precedence over CLI flags and user config because the

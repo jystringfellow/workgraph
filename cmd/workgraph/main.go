@@ -409,16 +409,14 @@ func runLLMTest(args []string, stdout io.Writer, stderr io.Writer) int {
 
 	homeDir := flags.String("home", "", "workgraph home directory")
 	profile := flags.String("profile", "", "LLM profile to test")
-	managedSettings := flags.String("managed-settings", "", "managed settings file path")
 
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
 
 	result, err := workgraph.TestLLMProfile(workgraph.LLMTestConfig{
-		HomeDir:             *homeDir,
-		Profile:             *profile,
-		ManagedSettingsPath: *managedSettings,
+		HomeDir: *homeDir,
+		Profile: *profile,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph llm test: %v\n", err)
@@ -441,7 +439,6 @@ func runLLMSummarize(args []string, stdout io.Writer, stderr io.Writer) int {
 	homeDir := flags.String("home", "", "workgraph home directory")
 	dryRun := flags.Bool("dry-run", false, "Preview prompt and context without calling the provider")
 	noStream := flags.Bool("no-stream", false, "Print the summary after the provider call completes")
-	managedSettings := flags.String("managed-settings", "", "managed settings file path")
 
 	if err := flags.Parse(args[1:]); err != nil {
 		return 2
@@ -452,9 +449,8 @@ func runLLMSummarize(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	summarizeConfig := workgraph.LLMSummarizeTodayConfig{
-		HomeDir:             *homeDir,
-		DryRun:              *dryRun,
-		ManagedSettingsPath: *managedSettings,
+		HomeDir: *homeDir,
+		DryRun:  *dryRun,
 	}
 	if !*dryRun && !*noStream {
 		summarizeConfig.Stream = func(chunk string) error {
@@ -1916,7 +1912,6 @@ func runSettingsGet(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 
 	homeDir := flags.String("home", "", "workgraph home directory")
-	managedSettings := flags.String("managed-settings", "", "managed settings file path")
 
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -1927,8 +1922,7 @@ func runSettingsGet(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	result, err := workgraph.GetSettings(workgraph.SettingsGetConfig{
-		HomeDir:             *homeDir,
-		ManagedSettingsPath: *managedSettings,
+		HomeDir: *homeDir,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph settings get: %v\n", err)
@@ -1944,7 +1938,6 @@ func runSettingsDoctor(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 
 	homeDir := flags.String("home", "", "workgraph home directory")
-	managedSettings := flags.String("managed-settings", "", "managed settings file path")
 
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -1955,8 +1948,7 @@ func runSettingsDoctor(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	result, err := workgraph.DoctorSettings(workgraph.SettingsDoctorConfig{
-		HomeDir:             *homeDir,
-		ManagedSettingsPath: *managedSettings,
+		HomeDir: *homeDir,
 	})
 	fmt.Fprintln(stdout, result.Message)
 	if err != nil {

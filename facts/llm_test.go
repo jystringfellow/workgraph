@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	workgraph "github.com/jystringfellow/workgraph"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -268,30 +269,31 @@ func TestManagedSettingsDisableHostedLLMProviders(t *testing.T) {
 `), 0o600); err != nil {
 		t.Fatalf("write managed settings: %v", err)
 	}
+	restoreManagedSettings := workgraph.SetManagedSettingsPathForTest(managedPath)
+	defer restoreManagedSettings()
 
-	repoRoot := repoRoot(t)
-	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
-		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("workgraph init failed: %v", err)
 	}
-	if output, err := runworkgraph(t, repoRoot, "llm", "add", "bedrock-hosted",
-		"--home", homeDir,
-		"--provider", "bedrock",
-		"--region", "us-east-1",
-		"--model-arn", "arn:aws:bedrock:us-east-1:123456789012:foundation-model/example",
-	); err != nil {
-		t.Fatalf("workgraph llm add bedrock failed: %v\n%s", err, output)
+	if _, err := workgraph.AddLLMProfile(workgraph.LLMAddProfileConfig{
+		HomeDir:  homeDir,
+		Name:     "bedrock-hosted",
+		Provider: "bedrock",
+		Region:   "us-east-1",
+		ModelARN: "arn:aws:bedrock:us-east-1:123456789012:foundation-model/example",
+	}); err != nil {
+		t.Fatalf("workgraph llm add bedrock failed: %v", err)
 	}
 
-	output, err := runworkgraph(t, repoRoot, "llm", "test",
-		"--home", homeDir,
-		"--profile", "bedrock-hosted",
-		"--managed-settings", managedPath,
-	)
+	_, err := workgraph.TestLLMProfile(workgraph.LLMTestConfig{
+		HomeDir: homeDir,
+		Profile: "bedrock-hosted",
+	})
 	if err == nil {
-		t.Fatalf("expected managed settings to block hosted LLM test, got:\n%s", output)
+		t.Fatalf("expected managed settings to block hosted LLM test")
 	}
-	if !strings.Contains(string(output), "hosted LLM providers are disabled by managed settings") {
-		t.Fatalf("expected managed settings error, got:\n%s", output)
+	if !strings.Contains(err.Error(), "hosted LLM providers are disabled by managed settings") {
+		t.Fatalf("expected managed settings error, got: %v", err)
 	}
 }
 

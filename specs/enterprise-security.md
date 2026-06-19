@@ -35,8 +35,10 @@ with endpoint management, network controls, and centrally approved OAuth apps.
 Requirements:
 
 - read managed settings from platform-appropriate admin locations
-- allow tests and development builds to inject an alternate managed settings
-  path without requiring system directories
+- do not allow user settings, CLI flags, or environment variables to redirect
+  the managed settings path at runtime
+- allow facts to use internal test helpers without making path redirection part
+  of the user-facing command surface
 - support locked values that override CLI flags and local user config
 - support unlocked managed defaults that local user config or CLI flags may
   override

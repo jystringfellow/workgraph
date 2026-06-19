@@ -32,8 +32,7 @@ type SettingsIgnoreConfig struct {
 
 // SettingsGetConfig controls effective settings reporting.
 type SettingsGetConfig struct {
-	HomeDir             string
-	ManagedSettingsPath string
+	HomeDir string
 }
 
 // SettingsGetResult describes effective settings visible to users/admins.
@@ -45,8 +44,7 @@ type SettingsGetResult struct {
 
 // SettingsDoctorConfig controls settings validation.
 type SettingsDoctorConfig struct {
-	HomeDir             string
-	ManagedSettingsPath string
+	HomeDir string
 }
 
 // SettingsDoctorResult describes settings validation output.
@@ -68,7 +66,7 @@ func GetSettings(config SettingsGetConfig) (SettingsGetResult, error) {
 	if err != nil {
 		return SettingsGetResult{}, err
 	}
-	managed, managedPath, managedPresent, err := readManagedSettings(ManagedSettingsConfig{Path: config.ManagedSettingsPath})
+	managed, managedPath, managedPresent, err := readManagedSettings()
 	if err != nil {
 		return SettingsGetResult{}, err
 	}
@@ -125,7 +123,7 @@ func DoctorSettings(config SettingsDoctorConfig) (SettingsDoctorResult, error) {
 		lines = append(lines, "Settings: ok", "Settings path: "+settingsPath)
 	}
 
-	_, managedPath, managedPresent, err := readManagedSettings(ManagedSettingsConfig{Path: config.ManagedSettingsPath})
+	_, managedPath, managedPresent, err := readManagedSettings()
 	if err != nil {
 		ok = false
 		lines = append(lines, "Managed settings: invalid", "Managed settings path: "+managedPath, "Managed settings error: "+err.Error())

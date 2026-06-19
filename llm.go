@@ -51,18 +51,16 @@ type LLMUseProfileConfig struct {
 }
 
 type LLMTestConfig struct {
-	HomeDir             string
-	Profile             string
-	ManagedSettingsPath string
-	HTTPClient          *http.Client
+	HomeDir    string
+	Profile    string
+	HTTPClient *http.Client
 }
 
 type LLMSummarizeTodayConfig struct {
-	HomeDir             string
-	DryRun              bool
-	ManagedSettingsPath string
-	HTTPClient          *http.Client
-	Stream              func(string) error
+	HomeDir    string
+	DryRun     bool
+	HTTPClient *http.Client
+	Stream     func(string) error
 }
 
 type LLMResult struct {
@@ -295,7 +293,7 @@ func TestLLMProfile(config LLMTestConfig) (LLMResult, error) {
 	if err != nil {
 		return LLMResult{}, err
 	}
-	if err := enforceLLMManagedSettings(config.ManagedSettingsPath, profile); err != nil {
+	if err := enforceLLMManagedSettings(profile); err != nil {
 		return LLMResult{}, err
 	}
 	responseText, err := callLLMProfile(config.HTTPClient, profile, []openAICompatibleMessage{
@@ -332,7 +330,7 @@ func SummarizeTodayWithLLM(config LLMSummarizeTodayConfig) (LLMResult, error) {
 		return LLMResult{}, err
 	}
 	if !config.DryRun {
-		if err := enforceLLMManagedSettings(config.ManagedSettingsPath, profile); err != nil {
+		if err := enforceLLMManagedSettings(profile); err != nil {
 			return LLMResult{}, err
 		}
 	}

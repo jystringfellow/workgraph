@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	workgraph "github.com/jystringfellow/workgraph"
 )
 
 func TestSettingsCommandAddWatchDefaultsToCurrentDirectory(t *testing.T) {
@@ -71,26 +73,15 @@ func TestSettingsGetReportsManagedSettingsWithoutSecrets(t *testing.T) {
 `), 0o600); err != nil {
 		t.Fatalf("write managed settings: %v", err)
 	}
+	restoreManagedSettings := workgraph.SetManagedSettingsPathForTest(managedPath)
+	defer restoreManagedSettings()
 
-	repoRoot := repoRoot(t)
-	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
-		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("workgraph init failed: %v", err)
 	}
-	if output, err := runworkgraph(t, repoRoot, "llm", "add", "hosted",
-		"--home", homeDir,
-		"--provider", "bedrock",
-		"--region", "us-east-1",
-		"--model-arn", "arn:aws:bedrock:us-east-1:123456789012:foundation-model/example",
-	); err != nil {
-		t.Fatalf("workgraph llm add failed: %v\n%s", err, output)
-	}
-
-	output, err := runworkgraph(t, repoRoot, "settings", "get",
-		"--home", homeDir,
-		"--managed-settings", managedPath,
-	)
+	result, err := workgraph.GetSettings(workgraph.SettingsGetConfig{HomeDir: homeDir})
 	if err != nil {
-		t.Fatalf("workgraph settings get failed: %v\n%s", err, output)
+		t.Fatalf("workgraph settings get failed: %v", err)
 	}
 	for _, expected := range []string{
 		"Effective workgraph settings",
@@ -98,12 +89,12 @@ func TestSettingsGetReportsManagedSettingsWithoutSecrets(t *testing.T) {
 		"LLM hosted providers: disabled (managed settings locked)",
 		"LLM allowed base URLs: http://localhost:11434/v1 (managed settings locked)",
 	} {
-		if !strings.Contains(string(output), expected) {
-			t.Fatalf("expected settings output to include %q, got:\n%s", expected, output)
+		if !strings.Contains(result.Message, expected) {
+			t.Fatalf("expected settings output to include %q, got:\n%s", expected, result.Message)
 		}
 	}
-	if strings.Contains(string(output), "do-not-print") {
-		t.Fatalf("expected settings output not to expose ignored managed secret fields, got:\n%s", output)
+	if strings.Contains(result.Message, "do-not-print") {
+		t.Fatalf("expected settings output not to expose ignored managed secret fields, got:\n%s", result.Message)
 	}
 }
 
