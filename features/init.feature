@@ -20,7 +20,7 @@ Scenario: Create the local memory repo
 Scenario: Create default config
   Given workgraph has not been initialized
   When I run "workgraph init"
-  Then the config file exists at "~/.workgraph/config.json"
+  Then the settings file exists at "~/.workgraph/settings.json"
   And the config watches existing common user-facing folders
   And the config does not watch the entire home directory when common folders exist
   And the config ignores the workgraph home directory

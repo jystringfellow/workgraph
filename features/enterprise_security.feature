@@ -18,3 +18,11 @@ Scenario: Filter hosted LLM requests locally
   When workgraph prepares captured context for an LLM request
   Then sensitive patterns are scrubbed locally before the request is sent
   And hosted AI can be disabled entirely
+
+Scenario: Apply admin-managed local policy
+  Given workgraph is running on a company-managed device
+  And managed settings disable hosted LLM providers
+  And managed settings disable Slack direct-message capture
+  When a local user config or CLI flag tries to override those locked values
+  Then workgraph keeps the managed values
+  And diagnostics report the managed settings source without exposing secrets

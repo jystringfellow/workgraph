@@ -23,7 +23,7 @@ func TestInitCreatesConfigWithSaneDefaultWatchRoots(t *testing.T) {
 		t.Fatalf("init failed: %v", err)
 	}
 
-	config := readInitConfig(t, filepath.Join(homeDir, "config.json"))
+	config := readInitSettings(t, filepath.Join(homeDir, "settings.json"))
 	expectedWatchDirs := []string{
 		filepath.Join(userHome, "Desktop"),
 		filepath.Join(userHome, "Documents"),
@@ -31,7 +31,7 @@ func TestInitCreatesConfigWithSaneDefaultWatchRoots(t *testing.T) {
 		filepath.Join(userHome, "Developer"),
 	}
 	if !reflect.DeepEqual(config.WatchDirs, expectedWatchDirs) {
-		t.Fatalf("expected config watch dirs %q, got %q", expectedWatchDirs, config.WatchDirs)
+		t.Fatalf("expected settings watch dirs %q, got %q", expectedWatchDirs, config.WatchDirs)
 	}
 	if !reflect.DeepEqual(config.ConservativeWatchDirs, expectedWatchDirs) {
 		t.Fatalf("expected default watch dirs to be conservative %q, got %q", expectedWatchDirs, config.ConservativeWatchDirs)
@@ -54,7 +54,7 @@ func TestConfigPersistsResolvedAbsoluteHomePath(t *testing.T) {
 		t.Fatalf("init failed: %v", err)
 	}
 
-	config := readInitConfig(t, filepath.Join(homeDir, "config.json"))
+	config := readInitSettings(t, filepath.Join(homeDir, "settings.json"))
 	if len(config.WatchDirs) == 0 {
 		t.Fatalf("expected watch dirs, got none")
 	}
@@ -68,7 +68,7 @@ func TestConfigPersistsResolvedAbsoluteHomePath(t *testing.T) {
 	}
 }
 
-func TestConfigIgnoresworkgraphHomeByDefault(t *testing.T) {
+func TestSettingsIgnoresworkgraphHomeByDefault(t *testing.T) {
 	homeDir := filepath.Join(t.TempDir(), ".workgraph")
 
 	_, err := workgraph.Init(workgraph.InitConfig{
@@ -78,7 +78,7 @@ func TestConfigIgnoresworkgraphHomeByDefault(t *testing.T) {
 		t.Fatalf("init failed: %v", err)
 	}
 
-	config := readInitConfig(t, filepath.Join(homeDir, "config.json"))
+	config := readInitSettings(t, filepath.Join(homeDir, "settings.json"))
 	workgraphHome, err := filepath.Abs(homeDir)
 	if err != nil {
 		t.Fatalf("resolve workgraph home: %v", err)
@@ -108,7 +108,7 @@ func TestConfigSupportsIgnoredPathsAndNames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init failed: %v", err)
 	}
-	writeInitConfig(t, initResult.ConfigPath, initConfigFile{
+	writeInitSettings(t, initResult.SettingsPath, initSettingsFile{
 		WatchDirs:   []string{watchDir},
 		IgnorePaths: []string{ignoredPath},
 		IgnoreNames: []string{"node_modules"},
@@ -166,7 +166,7 @@ func TestRunUsesConfiguredWatchDirsWhenNoWatchFlagIsProvided(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init failed: %v", err)
 	}
-	writeInitConfig(t, initResult.ConfigPath, initConfigFile{
+	writeInitSettings(t, initResult.SettingsPath, initSettingsFile{
 		WatchDirs:   []string{watchDir},
 		IgnorePaths: []string{homeDir},
 		IgnoreNames: []string{".git", "node_modules"},
@@ -204,7 +204,7 @@ func TestWatchFlagsOverrideConfiguredWatchRoots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init failed: %v", err)
 	}
-	writeInitConfig(t, initResult.ConfigPath, initConfigFile{
+	writeInitSettings(t, initResult.SettingsPath, initSettingsFile{
 		WatchDirs:   []string{configuredDir},
 		IgnorePaths: []string{ignoredDir},
 		IgnoreNames: []string{".git", "node_modules"},
@@ -261,9 +261,9 @@ func TestConfigAddWatchPrependsResolvedDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init failed: %v", err)
 	}
-	before := readInitConfig(t, initResult.ConfigPath)
+	before := readInitSettings(t, initResult.SettingsPath)
 
-	result, err := workgraph.AddWatchDir(workgraph.ConfigWatchConfig{
+	result, err := workgraph.AddWatchDir(workgraph.SettingsWatchConfig{
 		HomeDir: homeDir,
 		Path:    projectDir,
 	})
@@ -271,7 +271,7 @@ func TestConfigAddWatchPrependsResolvedDirectory(t *testing.T) {
 		t.Fatalf("add watch dir failed: %v", err)
 	}
 
-	config := readInitConfig(t, initResult.ConfigPath)
+	config := readInitSettings(t, initResult.SettingsPath)
 	projectDir, err = filepath.Abs(projectDir)
 	if err != nil {
 		t.Fatalf("resolve project dir: %v", err)
@@ -289,8 +289,8 @@ func TestConfigAddWatchPrependsResolvedDirectory(t *testing.T) {
 	if !reflect.DeepEqual(config.IgnoreNames, before.IgnoreNames) {
 		t.Fatalf("expected ignore names to be preserved")
 	}
-	if result.ConfigPath != initResult.ConfigPath {
-		t.Fatalf("expected result config path %q, got %q", initResult.ConfigPath, result.ConfigPath)
+	if result.SettingsPath != initResult.SettingsPath {
+		t.Fatalf("expected result settings path %q, got %q", initResult.SettingsPath, result.SettingsPath)
 	}
 	if result.AddedPath != projectDir {
 		t.Fatalf("expected added path %q, got %q", projectDir, result.AddedPath)
@@ -324,14 +324,14 @@ func TestConfigAddWatchDefaultsToCurrentDirectory(t *testing.T) {
 	}
 	defer os.Chdir(originalDir)
 
-	_, err = workgraph.AddWatchDir(workgraph.ConfigWatchConfig{
+	_, err = workgraph.AddWatchDir(workgraph.SettingsWatchConfig{
 		HomeDir: homeDir,
 	})
 	if err != nil {
 		t.Fatalf("add watch dir failed: %v", err)
 	}
 
-	config := readInitConfig(t, initResult.ConfigPath)
+	config := readInitSettings(t, initResult.SettingsPath)
 	resolvedProjectDir, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("resolve project dir: %v", err)
@@ -357,7 +357,7 @@ func TestConfigAddWatchIsIdempotent(t *testing.T) {
 	}
 
 	for i := 0; i < 2; i++ {
-		_, err := workgraph.AddWatchDir(workgraph.ConfigWatchConfig{
+		_, err := workgraph.AddWatchDir(workgraph.SettingsWatchConfig{
 			HomeDir: homeDir,
 			Path:    projectDir,
 		})
@@ -366,7 +366,7 @@ func TestConfigAddWatchIsIdempotent(t *testing.T) {
 		}
 	}
 
-	config := readInitConfig(t, initResult.ConfigPath)
+	config := readInitSettings(t, initResult.SettingsPath)
 	count := 0
 	for _, watchDir := range config.WatchDirs {
 		if watchDir == projectDir {
@@ -397,13 +397,13 @@ func TestConfigAddedWatchDirIsUsedBeforeHomeBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init failed: %v", err)
 	}
-	writeInitConfig(t, initResult.ConfigPath, initConfigFile{
+	writeInitSettings(t, initResult.SettingsPath, initSettingsFile{
 		WatchDirs:   []string{largeHome},
 		IgnorePaths: []string{homeDir},
 		IgnoreNames: []string{".git", "node_modules"},
 	})
 
-	_, err = workgraph.AddWatchDir(workgraph.ConfigWatchConfig{
+	_, err = workgraph.AddWatchDir(workgraph.SettingsWatchConfig{
 		HomeDir: homeDir,
 		Path:    externalProject,
 	})

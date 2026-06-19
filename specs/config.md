@@ -3,12 +3,16 @@
 workgraph keeps local configuration in the workgraph home:
 
 ```text
-~/.workgraph/config.json
+~/.workgraph/settings.json
 ```
 
-The config file answers what local paths workgraph watches and what paths it must never record.
+The settings file answers what local paths workgraph watches and what paths it must never record.
 
-Connector-specific secrets are stored separately from `config.json`. Slack OAuth
+Project-level settings are a non-goal for now. workgraph should use global user
+settings plus optional admin-managed settings so local repositories cannot
+quietly change capture or LLM behavior by carrying project config.
+
+Connector-specific secrets are stored separately from `settings.json`. Slack OAuth
 setup writes local connector settings to:
 
 ```text
@@ -20,7 +24,7 @@ with user-only file permissions.
 
 ## Defaults
 
-`workgraph init` creates `config.json` when it does not already exist.
+`workgraph init` creates `settings.json` when it does not already exist.
 
 By default, workgraph watches existing common user-facing folders under the current user's home directory instead of recursively watching the entire home directory. Paths are resolved with Go's `os.UserHomeDir()` and persisted as absolute paths, not as shell tokens such as `$HOME`.
 
@@ -78,14 +82,14 @@ Documents from spending the watch budget on app libraries or nested folder-only
 containers.
 
 Explicit watch roots added by users are not added to `conservative_watch_dirs`.
-If a user adds a directory with `workgraph config add-watch`, workgraph treats
+If a user adds a directory with `workgraph settings add-watch`, workgraph treats
 that path as intentional and may recurse normally, subject to ignore rules and
 the watch budget.
 
 Users can add a watch root with:
 
 ```text
-workgraph config add-watch [path]
+workgraph settings add-watch [path]
 ```
 
 If `path` is omitted, the command adds the current working directory. Added
@@ -107,13 +111,82 @@ This field is for high-noise project internals and generated content that common
 
 ## Precedence
 
-Capture path configuration uses this order:
+Normal capture path configuration uses this order when no managed setting is
+locked:
 
 ```text
-CLI flags > config file > defaults
+CLI flags > unlocked managed settings > settings file > defaults
 ```
 
 If one or more `--watch` flags are provided, capture uses those watch roots for that run. Ignored paths and ignored names still apply.
+
+Some deployments may provide admin-controlled managed settings outside the
+workgraph home directory. Managed settings are intended for company-managed
+devices or other controlled environments where an administrator wants
+workgraph's own behavior to be verifiable and consistent.
+
+Managed settings are not a general security boundary for arbitrary local
+software. They constrain approved workgraph builds and should be paired with
+normal endpoint, network, OAuth app, and software distribution controls when a
+company needs enforcement.
+
+Suggested managed settings locations:
+
+```text
+/etc/workgraph/managed-settings.json
+/Library/Application Support/workgraph/managed-settings.json
+%ProgramData%\workgraph\managed-settings.json
+```
+
+For local development and facts, tests may inject an alternate managed settings
+path rather than requiring system directories.
+
+Managed settings can either provide defaults or lock specific settings. A locked
+managed setting takes precedence over CLI flags and user config because the
+administrator has explicitly made that value non-overridable by workgraph.
+
+Effective precedence is therefore:
+
+```text
+locked managed settings > CLI flags > unlocked managed settings > settings file > defaults
+```
+
+Example:
+
+```json
+{
+  "version": 1,
+  "llm": {
+    "hosted_enabled": {
+      "value": false,
+      "locked": true
+    },
+    "allowed_base_urls": {
+      "value": ["http://localhost:11434/v1"],
+      "locked": true
+    }
+  },
+  "connectors": {
+    "slack": {
+      "include_dms": {
+        "value": false,
+        "locked": true
+      }
+    },
+    "mail": {
+      "capture_body": {
+        "value": false,
+        "locked": true
+      }
+    }
+  }
+}
+```
+
+Commands that display configuration should show whether each effective value
+came from defaults, user config, CLI flags, or managed settings. Diagnostics
+such as `workgraph doctor` should report the managed settings file path when
+one is active and should not expose secrets.
 
 ## Portability
 

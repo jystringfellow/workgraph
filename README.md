@@ -81,12 +81,12 @@ Then initialize local state:
 workgraph init
 ```
 
-This creates the local workgraph home, SQLite database, config file, and
+This creates the local workgraph home, SQLite database, settings file, and
 user-owned memory directory:
 
 - `~/.workgraph/`
 - `~/.workgraph/workgraph.db`
-- `~/.workgraph/config.json`
+- `~/.workgraph/settings.json`
 - `~/workgraph-memory/`
 - `~/workgraph-memory/projects/`
 

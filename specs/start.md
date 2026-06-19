@@ -35,10 +35,10 @@ Watching: 1 configured directory
 Monitoring: git, github, slack, notion
 ```
 
-Path configuration starts with `~/.workgraph/config.json`. By default,
+Path configuration starts with `~/.workgraph/settings.json`. By default,
 `workgraph init` configures capture to watch existing common user-facing folders
 and ignore workgraph internal storage. Users can add more roots with
-`workgraph config add-watch [path]`.
+`workgraph settings add-watch [path]`.
 
 CLI flags can choose watch roots for a single start:
 
@@ -76,7 +76,7 @@ Resource limits must not crash foreground signal handling.
 When the watch limit is reached, start output should stay compact. It should
 include the count of registered directories, the last directory successfully
 watched, the next directory that could not be watched, and guidance to add
-priority directories with `workgraph config add-watch`. The full registered
+priority directories with `workgraph settings add-watch`. The full registered
 directory list should remain available in runtime status for debugging and
 future tooling.
 
@@ -99,7 +99,7 @@ default watch budget unless the user explicitly adds them as watch roots.
 Path configuration uses this precedence:
 
 ```text
-CLI flags > config file > defaults
+CLI flags > settings file > defaults
 ```
 
 See `specs/config.md` for the config contract.

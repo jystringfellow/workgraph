@@ -27,7 +27,7 @@ capture is ready.
 It must:
 
 - refuse to start before `workgraph init`
-- read watch and ignore rules from `~/.workgraph/config.json`
+- read watch and ignore rules from `~/.workgraph/settings.json`
 - use configured watch roots when no `--watch` flag is provided
 - allow `--watch` flags to override configured watch roots for that run
 - write local capture state under the workgraph home

@@ -966,13 +966,13 @@ func TestSlackDisconnectRevokesTokenRemovesConfigAndRestartsDaemon(t *testing.T)
 	if err != nil {
 		t.Fatalf("init failed: %v", err)
 	}
-	writeInitConfig(t, initResult.ConfigPath, initConfigFile{
+	writeInitSettings(t, initResult.SettingsPath, initSettingsFile{
 		WatchDirs:   []string{watchDir},
 		IgnorePaths: []string{homeDir},
 		IgnoreNames: []string{".git", "node_modules"},
 	})
-	configPath := filepath.Join(homeDir, "slack.json")
-	if err := os.WriteFile(configPath, []byte(`{
+	settingsPath := filepath.Join(homeDir, "slack.json")
+	if err := os.WriteFile(settingsPath, []byte(`{
   "access_token": "xoxp-installed",
   "channels": [],
   "include_dms": true,
@@ -1006,7 +1006,7 @@ func TestSlackDisconnectRevokesTokenRemovesConfigAndRestartsDaemon(t *testing.T)
 	if !strings.Contains(output, "Slack token revoked") {
 		t.Fatalf("expected revoke confirmation, got:\n%s", output)
 	}
-	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+	if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
 		t.Fatalf("expected slack config removed, stat err: %v", err)
 	}
 	afterPID := readDaemonPID(t, homeDir)
@@ -1069,15 +1069,15 @@ func TestSlackConnectExchangesCodeAndStoresConnectorConfig(t *testing.T) {
 		t.Fatalf("expected connected message to describe explicit channel collection, got:\n%s", result.Message)
 	}
 
-	configPath := filepath.Join(homeDir, "slack.json")
-	info, err := os.Stat(configPath)
+	settingsPath := filepath.Join(homeDir, "slack.json")
+	info, err := os.Stat(settingsPath)
 	if err != nil {
 		t.Fatalf("expected slack config: %v", err)
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("expected user-only slack config permissions, got %v", info.Mode().Perm())
 	}
-	contents, err := os.ReadFile(configPath)
+	contents, err := os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("read slack config: %v", err)
 	}
@@ -1156,8 +1156,8 @@ func TestRunUsesStoredSlackConnectorConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init failed: %v", err)
 	}
-	configPath := filepath.Join(homeDir, "slack.json")
-	if err := os.WriteFile(configPath, []byte(`{
+	settingsPath := filepath.Join(homeDir, "slack.json")
+	if err := os.WriteFile(settingsPath, []byte(`{
   "access_token": "xoxb-stored",
   "channels": ["CSTORED"],
   "api_base_url": "https://slack.test/api"

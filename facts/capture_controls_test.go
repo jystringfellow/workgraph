@@ -26,7 +26,7 @@ func TestStartStartsBackgroundCaptureWithConfiguredWatchDirs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init failed: %v", err)
 	}
-	writeInitConfig(t, initResult.ConfigPath, initConfigFile{
+	writeInitSettings(t, initResult.SettingsPath, initSettingsFile{
 		WatchDirs:   []string{watchDir},
 		IgnorePaths: []string{homeDir},
 		IgnoreNames: []string{".git", "node_modules"},
@@ -85,7 +85,7 @@ func TestStatusReportsRunningCaptureState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init failed: %v", err)
 	}
-	writeInitConfig(t, initResult.ConfigPath, initConfigFile{
+	writeInitSettings(t, initResult.SettingsPath, initSettingsFile{
 		WatchDirs:   []string{watchDir},
 		IgnorePaths: []string{ignoredDir},
 		IgnoreNames: []string{"node_modules"},
@@ -116,7 +116,7 @@ func TestStopStopsBackgroundCapture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init failed: %v", err)
 	}
-	writeInitConfig(t, initResult.ConfigPath, initConfigFile{
+	writeInitSettings(t, initResult.SettingsPath, initSettingsFile{
 		WatchDirs:   []string{watchDir},
 		IgnorePaths: []string{homeDir},
 		IgnoreNames: []string{".git", "node_modules"},
@@ -179,7 +179,7 @@ func TestBackgroundCaptureDoesNotRecordIgnoredPaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init failed: %v", err)
 	}
-	writeInitConfig(t, initResult.ConfigPath, initConfigFile{
+	writeInitSettings(t, initResult.SettingsPath, initSettingsFile{
 		WatchDirs:   []string{watchDir},
 		IgnorePaths: []string{ignoredPath},
 		IgnoreNames: []string{"node_modules"},

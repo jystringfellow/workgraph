@@ -47,11 +47,11 @@ func TestInitCommandCreatesConfiguredPathsAndReportsThem(t *testing.T) {
 	}
 }
 
-func TestInitCommandCreatesAndReportsConfigPath(t *testing.T) {
+func TestInitCommandCreatesAndReportsSettingsPath(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
 	memoryDir := filepath.Join(tempDir, "workgraph-memory")
-	configPath := filepath.Join(homeDir, "config.json")
+	settingsPath := filepath.Join(homeDir, "settings.json")
 
 	repoRoot := repoRoot(t)
 	cmd := exec.Command(
@@ -71,13 +71,13 @@ func TestInitCommandCreatesAndReportsConfigPath(t *testing.T) {
 		t.Fatalf("workgraph init failed: %v\n%s", err, output)
 	}
 
-	if _, err := os.Stat(configPath); err != nil {
-		t.Fatalf("expected init to create config %q: %v", configPath, err)
+	if _, err := os.Stat(settingsPath); err != nil {
+		t.Fatalf("expected init to create settings %q: %v", settingsPath, err)
 	}
-	if !strings.Contains(string(output), configPath) {
-		t.Fatalf("expected init output to include config path %q, got:\n%s", configPath, output)
+	if !strings.Contains(string(output), settingsPath) {
+		t.Fatalf("expected init output to include config path %q, got:\n%s", settingsPath, output)
 	}
-	if !strings.Contains(string(output), "Config: "+configPath) {
+	if !strings.Contains(string(output), "Settings: "+settingsPath) {
 		t.Fatalf("expected init output to label config path, got:\n%s", output)
 	}
 }
@@ -87,7 +87,7 @@ func TestInitCommandForceRefreshesConfig(t *testing.T) {
 	userHome := fakeUserHomeWithDirs(t, "Desktop", "Documents", "Downloads")
 	homeDir := filepath.Join(tempDir, ".workgraph")
 	memoryDir := filepath.Join(tempDir, "workgraph-memory")
-	configPath := filepath.Join(homeDir, "config.json")
+	settingsPath := filepath.Join(homeDir, "settings.json")
 	oldConfig := cliInitConfigFile{
 		WatchDirs:   []string{filepath.Join(tempDir, "old-watch")},
 		IgnorePaths: []string{filepath.Join(tempDir, "old-ignore")},
@@ -97,7 +97,7 @@ func TestInitCommandForceRefreshesConfig(t *testing.T) {
 	if err := os.MkdirAll(homeDir, 0o755); err != nil {
 		t.Fatalf("create workgraph home: %v", err)
 	}
-	writeCLIInitConfig(t, configPath, oldConfig)
+	writeCLIInitSettings(t, settingsPath, oldConfig)
 
 	repoRoot := repoRoot(t)
 	cmd := exec.Command(
@@ -128,11 +128,11 @@ func TestInitCommandForceRefreshesConfig(t *testing.T) {
 		IgnorePaths: []string{workgraphHome},
 		IgnoreNames: []string{".git", "node_modules", "DerivedData", ".noindex", "xcuserdata", "bin", "obj", "dist", "build", "target", ".build", ".gradle"},
 	}
-	config := readCLIInitConfig(t, configPath)
+	config := readCLIInitSettings(t, settingsPath)
 	if !reflect.DeepEqual(config, expected) {
 		t.Fatalf("expected force init to refresh config to %#v, got %#v", expected, config)
 	}
-	if !strings.Contains(string(output), "Config: "+configPath) {
+	if !strings.Contains(string(output), "Settings: "+settingsPath) {
 		t.Fatalf("expected init output to label config path, got:\n%s", output)
 	}
 }
@@ -154,31 +154,31 @@ type cliInitConfigFile struct {
 	IgnoreNames []string `json:"ignore_names"`
 }
 
-func readCLIInitConfig(t *testing.T, path string) cliInitConfigFile {
+func readCLIInitSettings(t *testing.T, path string) cliInitConfigFile {
 	t.Helper()
 
 	contents, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read config: %v", err)
+		t.Fatalf("read settings: %v", err)
 	}
 
 	var config cliInitConfigFile
 	if err := json.Unmarshal(contents, &config); err != nil {
-		t.Fatalf("parse config: %v", err)
+		t.Fatalf("parse settings: %v", err)
 	}
 
 	return config
 }
 
-func writeCLIInitConfig(t *testing.T, path string, config cliInitConfigFile) {
+func writeCLIInitSettings(t *testing.T, path string, config cliInitConfigFile) {
 	t.Helper()
 
 	contents, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
-		t.Fatalf("encode config: %v", err)
+		t.Fatalf("encode settings: %v", err)
 	}
 
 	if err := os.WriteFile(path, append(contents, '\n'), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
+		t.Fatalf("write settings: %v", err)
 	}
 }

@@ -36,15 +36,15 @@ func TestLLMAddListAndUseProfiles(t *testing.T) {
 		t.Fatalf("expected add confirmation, got:\n%s", output)
 	}
 
-	configPath := filepath.Join(homeDir, "llm.json")
-	info, err := os.Stat(configPath)
+	settingsPath := filepath.Join(homeDir, "llm.json")
+	info, err := os.Stat(settingsPath)
 	if err != nil {
 		t.Fatalf("expected llm config: %v", err)
 	}
 	if got := info.Mode().Perm(); got != 0o600 {
 		t.Fatalf("expected llm config permissions 0600, got %v", got)
 	}
-	contents, err := os.ReadFile(configPath)
+	contents, err := os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("read llm config: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestLLMAddListAndUseProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("workgraph llm add bedrock failed: %v\n%s", err, output)
 	}
-	contents, err = os.ReadFile(configPath)
+	contents, err = os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("read llm config after bedrock add: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestLLMAddListAndUseProfiles(t *testing.T) {
 	if !strings.Contains(string(output), "LLM profile removed: bedrock-work") {
 		t.Fatalf("expected remove confirmation, got:\n%s", output)
 	}
-	contents, err = os.ReadFile(configPath)
+	contents, err = os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("read llm config after remove: %v", err)
 	}
@@ -249,6 +249,49 @@ func TestLLMTestUsesOpenAICompatibleProfile(t *testing.T) {
 		if !strings.Contains(string(output), expected) {
 			t.Fatalf("expected test output to include %q, got:\n%s", expected, output)
 		}
+	}
+}
+
+func TestManagedSettingsDisableHostedLLMProviders(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	managedPath := filepath.Join(tempDir, "managed-settings.json")
+	if err := os.WriteFile(managedPath, []byte(`{
+  "version": 1,
+  "llm": {
+    "hosted_enabled": {
+      "value": false,
+      "locked": true
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write managed settings: %v", err)
+	}
+
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	if output, err := runworkgraph(t, repoRoot, "llm", "add", "bedrock-hosted",
+		"--home", homeDir,
+		"--provider", "bedrock",
+		"--region", "us-east-1",
+		"--model-arn", "arn:aws:bedrock:us-east-1:123456789012:foundation-model/example",
+	); err != nil {
+		t.Fatalf("workgraph llm add bedrock failed: %v\n%s", err, output)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "llm", "test",
+		"--home", homeDir,
+		"--profile", "bedrock-hosted",
+		"--managed-settings", managedPath,
+	)
+	if err == nil {
+		t.Fatalf("expected managed settings to block hosted LLM test, got:\n%s", output)
+	}
+	if !strings.Contains(string(output), "hosted LLM providers are disabled by managed settings") {
+		t.Fatalf("expected managed settings error, got:\n%s", output)
 	}
 }
 

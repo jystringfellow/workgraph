@@ -1,9 +1,9 @@
-Feature: workgraph configuration
+Feature: workgraph settings
 
 Scenario: Initialize default capture config
   Given workgraph has not been initialized
   When I run "workgraph init"
-  Then workgraph creates a config file under the workgraph home
+  Then workgraph creates a settings file under the workgraph home
   And the config watches existing common user-facing folders
   And the default watch folders are marked for conservative traversal
   And the config does not watch the entire home directory when common folders exist
@@ -11,7 +11,7 @@ Scenario: Initialize default capture config
 
 Scenario: Store portable absolute paths
   Given workgraph has been initialized
-  When I inspect the config file
+  When I inspect the settings file
   Then watch and ignore paths are absolute paths for the current operating system
   And the paths do not rely on shell expansion of "$HOME"
 
@@ -29,7 +29,7 @@ Scenario: Ignore high-noise names
 
 Scenario: Ignore generated build output by default
   Given workgraph has been initialized
-  When I inspect the config file
+  When I inspect the settings file
   Then the config ignores common generated build directory names
   And the config ignores Xcode user state directories
 
@@ -49,14 +49,23 @@ Scenario: Let CLI watch flags override configured watch roots
 Scenario: Add the current directory as a watch root
   Given workgraph has been initialized
   And I am inside a project outside my home directory
-  When I run "workgraph config add-watch"
+  When I run "workgraph settings add-watch"
   Then the project directory is added to the front of watch_dirs
   And the config stores the project directory as an absolute path
   And running capture without "--watch" watches that project
 
 Scenario: Add a specific directory as a watch root
   Given workgraph has been initialized
-  When I run "workgraph config add-watch /path/to/project"
+  When I run "workgraph settings add-watch /path/to/project"
   Then "/path/to/project" is added to the front of watch_dirs
   And "/path/to/project" is treated as an explicit watch root
   And running the command again does not duplicate it
+
+Scenario: Respect admin-managed settings
+  Given workgraph has been initialized
+  And an admin-managed settings file disables hosted LLM providers
+  And the local user settings enable a hosted LLM profile
+  When I inspect the effective workgraph settings
+  Then hosted LLM providers are disabled
+  And the output explains that the value came from managed settings
+  And workgraph does not expose secrets while reporting effective config

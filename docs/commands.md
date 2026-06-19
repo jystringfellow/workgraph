@@ -44,7 +44,7 @@ This creates:
 
 - `~/.workgraph/`
 - `~/.workgraph/workgraph.db`
-- `~/.workgraph/config.json`
+- `~/.workgraph/settings.json`
 - `~/workgraph-memory/`
 - `~/workgraph-memory/projects/`
 
@@ -71,13 +71,13 @@ as resolved absolute paths.
 Add the current directory to the watched roots:
 
 ```sh
-workgraph config add-watch
+workgraph settings add-watch
 ```
 
 Add a specific folder:
 
 ```sh
-workgraph config add-watch /Volumes/Craig/Code
+workgraph settings add-watch /Volumes/Craig/Code
 ```
 
 Added roots are treated as explicit and are placed before existing roots, so a
