@@ -666,7 +666,7 @@ func TestRunReportsRegisteredAndUnwatchedDirectoriesAtResourceBudget(t *testing.
 	if !strings.Contains(capture.Status.Message, "Next unwatched directory: "+unwatchedChild) {
 		t.Fatalf("expected run message to include first unwatched directory, got %q", capture.Status.Message)
 	}
-	if !strings.Contains(capture.Status.Message, "Prioritize important directories with workgraph config add-watch.") {
+	if !strings.Contains(capture.Status.Message, "Prioritize important directories with workgraph settings add-watch.") {
 		t.Fatalf("expected run message to include priority directory guidance, got %q", capture.Status.Message)
 	}
 }
@@ -825,7 +825,7 @@ func TestRunConservativeRootStopsAtFolderOnlyChildren(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init failed: %v", err)
 	}
-	writeInitConfig(t, initResult.ConfigPath, initConfigFile{
+	writeInitSettings(t, initResult.SettingsPath, initSettingsFile{
 		WatchDirs:             []string{documentsDir},
 		ConservativeWatchDirs: []string{documentsDir},
 		IgnorePaths:           []string{homeDir},
@@ -871,7 +871,7 @@ func TestRunConservativeRootRecursesIntoWorkLikeChild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init failed: %v", err)
 	}
-	writeInitConfig(t, initResult.ConfigPath, initConfigFile{
+	writeInitSettings(t, initResult.SettingsPath, initSettingsFile{
 		WatchDirs:             []string{documentsDir},
 		ConservativeWatchDirs: []string{documentsDir},
 		IgnorePaths:           []string{homeDir},

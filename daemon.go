@@ -381,7 +381,7 @@ func appendDaemonWatchLimitLine(lines *[]string, status DaemonStatus) {
 		if status.WatchLimitPath != "" {
 			*lines = append(*lines, "Next unwatched directory: "+status.WatchLimitPath)
 		}
-		*lines = append(*lines, "Prioritize important directories with workgraph config add-watch.")
+		*lines = append(*lines, "Prioritize important directories with workgraph settings add-watch.")
 	}
 }
 

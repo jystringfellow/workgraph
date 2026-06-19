@@ -293,6 +293,9 @@ func TestLLMProfile(config LLMTestConfig) (LLMResult, error) {
 	if err != nil {
 		return LLMResult{}, err
 	}
+	if err := enforceLLMManagedSettings(profile); err != nil {
+		return LLMResult{}, err
+	}
 	responseText, err := callLLMProfile(config.HTTPClient, profile, []openAICompatibleMessage{
 		{Role: "system", Content: "You are testing a local language model connection."},
 		{Role: "user", Content: "Reply with a short confirmation that the model connection works."},
@@ -325,6 +328,11 @@ func SummarizeTodayWithLLM(config LLMSummarizeTodayConfig) (LLMResult, error) {
 	profileName, profile, err := resolveLLMProfile(stored, "", llmTaskSummarize)
 	if err != nil {
 		return LLMResult{}, err
+	}
+	if !config.DryRun {
+		if err := enforceLLMManagedSettings(profile); err != nil {
+			return LLMResult{}, err
+		}
 	}
 	context, prompt, err := llmTodayContextAndPrompt(homeDir)
 	if err != nil {

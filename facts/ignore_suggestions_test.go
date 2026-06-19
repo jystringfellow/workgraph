@@ -27,7 +27,7 @@ func TestSuggestsIgnorePathFromNoisyTrackedActivity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init failed: %v", err)
 	}
-	before := readInitConfig(t, filepath.Join(homeDir, "config.json"))
+	before := readInitSettings(t, filepath.Join(homeDir, "settings.json"))
 
 	_, done, stop := startIgnoreSuggestionCapture(t, homeDir, initResult.DatabasePath, watchDir)
 	defer stopIgnoreSuggestionCapture(t, stop, done)
@@ -48,7 +48,7 @@ func TestSuggestsIgnorePathFromNoisyTrackedActivity(t *testing.T) {
 		t.Fatalf("expected reason and evidence to explain noisy activity, got reason %q evidence %q", suggestion.Reason, suggestion.EvidenceJSON)
 	}
 
-	after := readInitConfig(t, filepath.Join(homeDir, "config.json"))
+	after := readInitSettings(t, filepath.Join(homeDir, "settings.json"))
 	if !reflect.DeepEqual(before.IgnorePaths, after.IgnorePaths) || !reflect.DeepEqual(before.IgnoreNames, after.IgnoreNames) {
 		t.Fatalf("expected suggestion not to mutate config, before %#v after %#v", before, after)
 	}
@@ -73,7 +73,7 @@ func TestSuggestsIgnoreNameFromRecurringGeneratedBasename(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init failed: %v", err)
 	}
-	before := readInitConfig(t, filepath.Join(homeDir, "config.json"))
+	before := readInitSettings(t, filepath.Join(homeDir, "settings.json"))
 
 	_, done, stop := startIgnoreSuggestionCapture(t, homeDir, initResult.DatabasePath, watchDir)
 	defer stopIgnoreSuggestionCapture(t, stop, done)
@@ -97,7 +97,7 @@ func TestSuggestsIgnoreNameFromRecurringGeneratedBasename(t *testing.T) {
 		t.Fatalf("expected reason and evidence to explain recurring basename, got reason %q evidence %q", suggestion.Reason, suggestion.EvidenceJSON)
 	}
 
-	after := readInitConfig(t, filepath.Join(homeDir, "config.json"))
+	after := readInitSettings(t, filepath.Join(homeDir, "settings.json"))
 	if !reflect.DeepEqual(before.IgnorePaths, after.IgnorePaths) || !reflect.DeepEqual(before.IgnoreNames, after.IgnoreNames) {
 		t.Fatalf("expected suggestion not to mutate config, before %#v after %#v", before, after)
 	}
@@ -139,7 +139,7 @@ func TestApprovingIgnorePathSuggestionAddsPathToConfig(t *testing.T) {
 		t.Fatalf("approve suggestion: %v", err)
 	}
 
-	config := readInitConfig(t, filepath.Join(homeDir, "config.json"))
+	config := readInitSettings(t, filepath.Join(homeDir, "settings.json"))
 	if !containsString(config.IgnorePaths, ignorePath) {
 		t.Fatalf("expected approved ignore path in config, got %#v", config.IgnorePaths)
 	}
@@ -178,7 +178,7 @@ func TestApprovingIgnoreNameSuggestionAddsNameToConfig(t *testing.T) {
 		t.Fatalf("expected approve output, got:\n%s", output)
 	}
 
-	config := readInitConfig(t, filepath.Join(homeDir, "config.json"))
+	config := readInitSettings(t, filepath.Join(homeDir, "settings.json"))
 	if !containsString(config.IgnoreNames, ignoreName) {
 		t.Fatalf("expected approved ignore name in config, got %#v", config.IgnoreNames)
 	}

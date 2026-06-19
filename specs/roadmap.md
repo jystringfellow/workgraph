@@ -101,6 +101,14 @@ Priority labels used below:
 
 ## Phase 3.5: Enterprise security and compliance
 - [ ] IT-readable Slack/compliance document
+- [ ] Admin-controlled managed settings file that overrides local user config for workgraph's own behavior. [spec: `specs/config.md` and `specs/enterprise-security.md`]
+  - [x] First managed settings reader with fixed platform-managed runtime paths and internal fact-only path injection.
+  - [x] `workgraph settings get` reports effective LLM managed settings without exposing secrets.
+  - [x] Managed LLM policy is enforced before provider calls.
+- [ ] Managed setting provenance in `workgraph doctor`, `workgraph settings get`, and machine-readable diagnostics.
+- [x] Admin controls for disabling hosted LLM providers or restricting OpenAI-compatible LLM endpoints to approved local/company URLs.
+- [ ] Admin controls for connector enablement and high-risk connector options such as Slack DM capture and mail body capture.
+- [ ] Machine-readable security/config report for endpoint verification.
 - [ ] SQLite encryption at rest
 - [ ] OS credential-store backed encryption keys
 - [ ] Connector credential hardening

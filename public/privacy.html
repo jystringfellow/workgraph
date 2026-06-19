@@ -85,7 +85,7 @@
       <div class="hero">
         <img class="lockup" src="/assets/workgraph-lockup.png" alt="workgraph">
         <h1>Privacy Policy</h1>
-        <p class="updated">Last updated: June 7, 2026</p>
+        <p class="updated">Last updated: June 19, 2026</p>
       </div>
     </header>
 
@@ -99,10 +99,13 @@
       <p>workgraph uses connected account data to create local work events, help restore context, and show activity through local commands such as today and resume. workgraph does not sell user data or use connected account data for advertising.</p>
 
       <h2>How information is stored</h2>
-      <p>Connector credentials and captured events are stored locally in the user's workgraph home directory, normally under <code>~/.workgraph</code>. Connector credential files are written with local-user-only file permissions when supported by the operating system.</p>
+      <p>Connector credentials, captured events, and user settings are stored locally in the user's workgraph home directory, normally under <code>~/.workgraph</code>. User settings are stored in <code>~/.workgraph/settings.json</code>. Connector credential files are written with local-user-only file permissions when supported by the operating system.</p>
 
       <h2>Data sharing</h2>
       <p>workgraph does not share connected service data with third parties. Captured data remains local unless the user explicitly exports it, commits it, shares it, or configures another tool to read it.</p>
+
+      <h2>Optional AI providers</h2>
+      <p>Core workgraph capture, storage, memory, today, and resume behavior does not require an LLM provider. If a user configures an LLM profile, workgraph may send selected task context to the configured model endpoint for that user-requested LLM command. Managed settings can disable hosted LLM providers or restrict approved model destinations for managed deployments.</p>
 
       <h2>Connected service data</h2>
       <p>workgraph uses connected service data only to create local work events, restore context, and support user-requested local workflows. Each connector should request the narrowest practical read-only access for the behavior the user enables.</p>

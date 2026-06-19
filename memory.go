@@ -643,8 +643,8 @@ func projectSlug(project string) string {
 }
 
 func requireMemoryInitHome(homeDir string) error {
-	configPath := filepath.Join(homeDir, "config.json")
-	if _, err := os.Stat(configPath); err != nil {
+	settingsPath := filepath.Join(homeDir, "settings.json")
+	if _, err := os.Stat(settingsPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("%w: run workgraph init", ErrNotInitialized)
 		}

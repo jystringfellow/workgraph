@@ -44,7 +44,7 @@ This creates:
 
 - `~/.workgraph/`
 - `~/.workgraph/workgraph.db`
-- `~/.workgraph/config.json`
+- `~/.workgraph/settings.json`
 - `~/workgraph-memory/`
 - `~/workgraph-memory/projects/`
 
@@ -62,22 +62,22 @@ tmpdir="$(mktemp -d /tmp/workgraph-run.XXXXXX)"
 workgraph init --home "$tmpdir/.workgraph" --memory "$tmpdir/memory"
 ```
 
-## Watch Configuration
+## Watch Settings
 
-The default config watches existing common folders such as Desktop, Documents,
+The default settings watch existing common folders such as Desktop, Documents,
 Downloads, Code, Projects, Developer, Work, source, and repos. Paths are stored
 as resolved absolute paths.
 
 Add the current directory to the watched roots:
 
 ```sh
-workgraph config add-watch
+workgraph settings add-watch
 ```
 
 Add a specific folder:
 
 ```sh
-workgraph config add-watch /Volumes/Craig/Code
+workgraph settings add-watch /Volumes/Craig/Code
 ```
 
 Added roots are treated as explicit and are placed before existing roots, so a
@@ -102,8 +102,8 @@ Start capture for a single explicit directory:
 workgraph start --watch .
 ```
 
-If no `--watch` flag is provided, background capture uses configured
-`watch_dirs`. Configured `ignore_paths` and `ignore_names` apply either way.
+If no `--watch` flag is provided, background capture uses settings
+`watch_dirs`. Settings `ignore_paths` and `ignore_names` apply either way.
 The command returns after capture is ready.
 
 Inspect or stop background capture:

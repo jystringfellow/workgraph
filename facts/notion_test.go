@@ -543,15 +543,15 @@ func TestNotionConnectOAuthStoresConnectorConfig(t *testing.T) {
 		t.Fatalf("expected connected message, got:\n%s", output)
 	}
 
-	configPath := filepath.Join(homeDir, "notion.json")
-	info, err := os.Stat(configPath)
+	settingsPath := filepath.Join(homeDir, "notion.json")
+	info, err := os.Stat(settingsPath)
 	if err != nil {
 		t.Fatalf("expected notion config: %v", err)
 	}
 	if got := info.Mode().Perm(); got != 0o600 {
 		t.Fatalf("expected notion config permissions 0600, got %v", got)
 	}
-	contents, err := os.ReadFile(configPath)
+	contents, err := os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("read notion config: %v", err)
 	}
@@ -628,7 +628,7 @@ func TestNotionConnectOAuthStoresConnectorConfig(t *testing.T) {
 	if !strings.Contains(string(output), "Notion disconnected") || !strings.Contains(string(output), "Notion workspace connection settings") {
 		t.Fatalf("expected Notion disconnect guidance, got:\n%s", output)
 	}
-	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+	if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
 		t.Fatalf("expected notion config removed after disconnect, stat err: %v", err)
 	}
 	statusOutput, statusErr = runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)

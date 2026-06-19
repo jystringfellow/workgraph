@@ -18,7 +18,7 @@ Suggestion behavior:
 - record the source that observed the activity
 - explain why the directory was suggested
 - do not add the directory to `watch_dirs` until the user approves
-- approving the suggestion uses the same behavior as `workgraph config add-watch`
+- approving the suggestion uses the same behavior as `workgraph settings add-watch`
 - duplicate suggestions for the same directory should be coalesced
 
 This preserves the workgraph rule: suggest -> draft -> approve -> act.

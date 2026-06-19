@@ -27,13 +27,13 @@ capture is ready.
 It must:
 
 - refuse to start before `workgraph init`
-- read watch and ignore rules from `~/.workgraph/config.json`
+- read watch and ignore rules from `~/.workgraph/settings.json`
 - use configured watch roots when no `--watch` flag is provided
 - allow `--watch` flags to override configured watch roots for that run
 - write local capture state under the workgraph home
 - avoid recording events from ignored paths or names
 
-The default initialized config watches existing common user-facing folders, so a newly initialized workgraph can start background capture without trying to recursively watch the entire home directory.
+The default initialized settings watch existing common user-facing folders, so a newly initialized workgraph can start background capture without trying to recursively watch the entire home directory.
 
 For debugging, `workgraph start --foreground` runs capture attached to the current
 terminal and prints captured events as they arrive.

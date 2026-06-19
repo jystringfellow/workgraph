@@ -20,7 +20,7 @@ func TestDoctorReportsLocalReadiness(t *testing.T) {
 	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
 		t.Fatalf("workgraph init failed: %v\n%s", err, output)
 	}
-	writeInitConfig(t, filepath.Join(homeDir, "config.json"), initConfigFile{
+	writeInitSettings(t, filepath.Join(homeDir, "settings.json"), initSettingsFile{
 		WatchDirs:   []string{watchDir, missingWatchDir},
 		IgnorePaths: []string{homeDir},
 		IgnoreNames: []string{".git"},

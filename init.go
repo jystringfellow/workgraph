@@ -25,18 +25,18 @@ type InitResult struct {
 	HomeDir      string
 	DatabasePath string
 	MemoryDir    string
-	ConfigPath   string
+	SettingsPath string
 	Message      string
 }
 
-type configFile struct {
+type settingsFile struct {
 	WatchDirs             []string `json:"watch_dirs"`
 	ConservativeWatchDirs []string `json:"conservative_watch_dirs,omitempty"`
 	IgnorePaths           []string `json:"ignore_paths"`
 	IgnoreNames           []string `json:"ignore_names"`
 }
 
-// Init creates the local workgraph home, config, SQLite database, and memory repo.
+// Init creates the local workgraph home, settings, SQLite database, and memory repo.
 func Init(config InitConfig) (InitResult, error) {
 	homeDir, err := resolveHomeDir(config.HomeDir)
 	if err != nil {
@@ -47,9 +47,9 @@ func Init(config InitConfig) (InitResult, error) {
 		return InitResult{}, fmt.Errorf("create workgraph home: %w", err)
 	}
 
-	configPath := filepath.Join(homeDir, "config.json")
-	if err := createDefaultConfig(configPath, homeDir, config.Force); err != nil {
-		return InitResult{}, fmt.Errorf("create config: %w", err)
+	settingsPath := filepath.Join(homeDir, "settings.json")
+	if err := createDefaultSettings(settingsPath, homeDir, config.Force); err != nil {
+		return InitResult{}, fmt.Errorf("create settings: %w", err)
 	}
 
 	dbPath := config.DatabasePath
@@ -90,7 +90,7 @@ func Init(config InitConfig) (InitResult, error) {
 		HomeDir:      homeDir,
 		DatabasePath: dbPath,
 		MemoryDir:    memoryDir,
-		ConfigPath:   configPath,
+		SettingsPath: settingsPath,
 	}
 	result.Message = initMessage(result)
 
@@ -123,7 +123,7 @@ func resolveMemoryDir(memoryDir string) (string, error) {
 	return filepath.Join(userHome, "workgraph-memory"), nil
 }
 
-func createDefaultConfig(configPath string, homeDir string, force bool) error {
+func createDefaultSettings(settingsPath string, homeDir string, force bool) error {
 	workgraphHome, err := filepath.Abs(homeDir)
 	if err != nil {
 		return fmt.Errorf("resolve workgraph home: %w", err)
@@ -143,7 +143,7 @@ func createDefaultConfig(configPath string, homeDir string, force bool) error {
 		return err
 	}
 
-	config := configFile{
+	config := settingsFile{
 		WatchDirs:             watchDirs,
 		ConservativeWatchDirs: append([]string(nil), watchDirs...),
 		IgnorePaths:           []string{workgraphHome},
@@ -152,7 +152,7 @@ func createDefaultConfig(configPath string, homeDir string, force bool) error {
 
 	contents, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
-		return fmt.Errorf("encode default config: %w", err)
+		return fmt.Errorf("encode default settings: %w", err)
 	}
 	contents = append(contents, '\n')
 
@@ -161,7 +161,7 @@ func createDefaultConfig(configPath string, homeDir string, force bool) error {
 		flags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 	}
 
-	file, err := os.OpenFile(configPath, flags, 0o644)
+	file, err := os.OpenFile(settingsPath, flags, 0o644)
 	if err != nil {
 		if os.IsExist(err) {
 			return nil
@@ -227,7 +227,7 @@ func initMessage(result InitResult) string {
 		"Database: " + result.DatabasePath,
 		"Memory: " + result.MemoryDir,
 		"Project memory: " + projectMemoryDir(result.MemoryDir),
-		"Config: " + result.ConfigPath,
+		"Settings: " + result.SettingsPath,
 	}
 	if runtime.GOOS == "darwin" {
 		lines = append(lines,

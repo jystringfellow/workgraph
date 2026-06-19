@@ -73,7 +73,7 @@ func doctorDaemonLine(homeDir string) string {
 }
 
 func doctorWatchLines(homeDir string) ([]string, error) {
-	config, err := readConfig(filepath.Join(homeDir, "config.json"))
+	config, err := readSettings(filepath.Join(homeDir, "settings.json"))
 	if err != nil {
 		return nil, err
 	}

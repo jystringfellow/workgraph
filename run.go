@@ -927,18 +927,18 @@ func looksGeneratedIgnoreCandidate(name string) bool {
 	return false
 }
 
-func readConfig(configPath string) (configFile, error) {
-	contents, err := os.ReadFile(configPath)
+func readSettings(settingsPath string) (settingsFile, error) {
+	contents, err := os.ReadFile(settingsPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return configFile{}, nil
+			return settingsFile{}, nil
 		}
-		return configFile{}, fmt.Errorf("read config: %w", err)
+		return settingsFile{}, fmt.Errorf("read settings: %w", err)
 	}
 
-	var config configFile
+	var config settingsFile
 	if err := json.Unmarshal(contents, &config); err != nil {
-		return configFile{}, fmt.Errorf("parse config: %w", err)
+		return settingsFile{}, fmt.Errorf("parse settings: %w", err)
 	}
 
 	return config, nil
@@ -970,16 +970,16 @@ func prepareRunStatus(config RunConfig) (RunStatus, error) {
 		return RunStatus{}, fmt.Errorf("check database: %w", err)
 	}
 
-	localConfig, err := readConfig(filepath.Join(homeDir, "config.json"))
+	localSettings, err := readSettings(filepath.Join(homeDir, "settings.json"))
 	if err != nil {
 		return RunStatus{}, err
 	}
 
 	watchDirsConfig := config.WatchDirs
 	conservativeWatchDirsConfig := config.ConservativeWatchDirs
-	if len(watchDirsConfig) == 0 && len(localConfig.WatchDirs) > 0 {
-		watchDirsConfig = localConfig.WatchDirs
-		conservativeWatchDirsConfig = localConfig.ConservativeWatchDirs
+	if len(watchDirsConfig) == 0 && len(localSettings.WatchDirs) > 0 {
+		watchDirsConfig = localSettings.WatchDirs
+		conservativeWatchDirsConfig = localSettings.ConservativeWatchDirs
 	}
 	watchDirs, err := resolveWatchDirs(watchDirsConfig)
 	if err != nil {
@@ -989,7 +989,7 @@ func prepareRunStatus(config RunConfig) (RunStatus, error) {
 	if err != nil {
 		return RunStatus{}, err
 	}
-	ignorePaths, err := resolveIgnorePaths(localConfig.IgnorePaths)
+	ignorePaths, err := resolveIgnorePaths(localSettings.IgnorePaths)
 	if err != nil {
 		return RunStatus{}, err
 	}
@@ -1000,7 +1000,7 @@ func prepareRunStatus(config RunConfig) (RunStatus, error) {
 		WatchDirs:             watchDirs,
 		ConservativeWatchDirs: conservativeWatchDirs,
 		IgnorePaths:           ignorePaths,
-		IgnoreNames:           append([]string(nil), localConfig.IgnoreNames...),
+		IgnoreNames:           append([]string(nil), localSettings.IgnoreNames...),
 	}, nil
 }
 
@@ -1421,7 +1421,7 @@ func runMessage(status RunStatus) string {
 		if status.WatchLimitPath != "" {
 			lines = append(lines, "Next unwatched directory: "+status.WatchLimitPath)
 		}
-		lines = append(lines, "Prioritize important directories with workgraph config add-watch.")
+		lines = append(lines, "Prioritize important directories with workgraph settings add-watch.")
 	}
 
 	return strings.Join(lines, "\n")

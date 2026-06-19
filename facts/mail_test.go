@@ -123,15 +123,15 @@ func TestGoogleMailConnectOAuthUsesPKCEAndStoresConnectorConfig(t *testing.T) {
 		t.Fatalf("expected connected message, got:\n%s", output)
 	}
 
-	configPath := filepath.Join(homeDir, "mail.json")
-	info, err := os.Stat(configPath)
+	settingsPath := filepath.Join(homeDir, "mail.json")
+	info, err := os.Stat(settingsPath)
 	if err != nil {
 		t.Fatalf("expected mail config: %v", err)
 	}
 	if got := info.Mode().Perm(); got != 0o600 {
 		t.Fatalf("expected mail config permissions 0600, got %v", got)
 	}
-	contents, err := os.ReadFile(configPath)
+	contents, err := os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("read mail config: %v", err)
 	}
@@ -390,15 +390,15 @@ func TestMicrosoftMailConnectOAuthUsesPKCEAndStoresConnectorConfig(t *testing.T)
 		t.Fatalf("expected connected message, got:\n%s", output)
 	}
 
-	configPath := filepath.Join(homeDir, "mail.json")
-	info, err := os.Stat(configPath)
+	settingsPath := filepath.Join(homeDir, "mail.json")
+	info, err := os.Stat(settingsPath)
 	if err != nil {
 		t.Fatalf("expected mail config: %v", err)
 	}
 	if got := info.Mode().Perm(); got != 0o600 {
 		t.Fatalf("expected mail config permissions 0600, got %v", got)
 	}
-	contents, err := os.ReadFile(configPath)
+	contents, err := os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("read mail config: %v", err)
 	}
@@ -521,8 +521,8 @@ func TestGoogleMailDisconnectRevokesAndPreservesMicrosoftSettings(t *testing.T) 
 		t.Fatalf("workgraph init failed: %v\n%s", err, output)
 	}
 
-	configPath := filepath.Join(homeDir, "mail.json")
-	if err := os.WriteFile(configPath, []byte(`{
+	settingsPath := filepath.Join(homeDir, "mail.json")
+	if err := os.WriteFile(settingsPath, []byte(`{
   "google": {
     "access_token": "google-access-token",
     "refresh_token": "google-refresh-token",
@@ -589,7 +589,7 @@ func TestGoogleMailDisconnectRevokesAndPreservesMicrosoftSettings(t *testing.T) 
 		t.Fatalf("expected Google Mail disconnect to clear stale errors, got:\n%s", statusOutput)
 	}
 
-	contents, err := os.ReadFile(configPath)
+	contents, err := os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("read mail config: %v", err)
 	}
@@ -737,8 +737,8 @@ func TestMicrosoftMailDisconnectPreservesGoogleSettings(t *testing.T) {
 		t.Fatalf("workgraph init failed: %v\n%s", err, output)
 	}
 
-	configPath := filepath.Join(homeDir, "mail.json")
-	if err := os.WriteFile(configPath, []byte(`{
+	settingsPath := filepath.Join(homeDir, "mail.json")
+	if err := os.WriteFile(settingsPath, []byte(`{
   "google": {
     "access_token": "google-access-token",
     "refresh_token": "google-refresh-token",
@@ -766,7 +766,7 @@ func TestMicrosoftMailDisconnectPreservesGoogleSettings(t *testing.T) {
 		t.Fatalf("expected Microsoft local disconnect guidance, got:\n%s", output)
 	}
 
-	contents, err := os.ReadFile(configPath)
+	contents, err := os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("read mail config: %v", err)
 	}

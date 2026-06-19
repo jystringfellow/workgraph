@@ -19,13 +19,13 @@ Scenario: Ignore workgraph internal files
 
 Scenario: Ignore configured paths
   Given workgraph is running
-  And the config ignores a local directory
+  And the settings ignore a local directory
   When a file changes inside that ignored directory
   Then workgraph does not record a user work event
 
 Scenario: Ignore configured names
   Given workgraph is running
-  And the config ignores the name ".git"
+  And the settings ignore the name ".git"
   When a file changes under a path segment named ".git"
   Then workgraph does not record a user work event
 

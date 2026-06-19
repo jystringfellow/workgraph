@@ -101,7 +101,7 @@ func TestInitCreatesMemoryRepo(t *testing.T) {
 	}
 }
 
-func TestInitCreatesDefaultConfig(t *testing.T) {
+func TestInitCreatesDefaultSettings(t *testing.T) {
 	tempDir := t.TempDir()
 	userHome := fakeUserHomeWithDirs(t, "Desktop", "Documents", "Downloads", "Code")
 	homeDir := filepath.Join(tempDir, ".workgraph")
@@ -113,8 +113,8 @@ func TestInitCreatesDefaultConfig(t *testing.T) {
 		t.Fatalf("init failed: %v", err)
 	}
 
-	configPath := filepath.Join(homeDir, "config.json")
-	config := readInitConfig(t, configPath)
+	settingsPath := filepath.Join(homeDir, "settings.json")
+	config := readInitSettings(t, settingsPath)
 
 	workgraphHome, err := filepath.Abs(homeDir)
 	if err != nil {
@@ -145,7 +145,7 @@ func TestInitCreatesDefaultConfig(t *testing.T) {
 	}
 }
 
-func TestInitDefaultConfigWatchesCommonUserFolders(t *testing.T) {
+func TestInitDefaultSettingsWatchesCommonUserFolders(t *testing.T) {
 	userHome := fakeUserHomeWithDirs(t, "Desktop", "Documents", "Downloads", "Projects")
 	homeDir := filepath.Join(t.TempDir(), ".workgraph")
 
@@ -156,7 +156,7 @@ func TestInitDefaultConfigWatchesCommonUserFolders(t *testing.T) {
 		t.Fatalf("init failed: %v", err)
 	}
 
-	config := readInitConfig(t, filepath.Join(homeDir, "config.json"))
+	config := readInitSettings(t, filepath.Join(homeDir, "settings.json"))
 	expectedWatchDirs := []string{
 		filepath.Join(userHome, "Desktop"),
 		filepath.Join(userHome, "Documents"),
@@ -177,7 +177,7 @@ func TestInitDefaultConfigWatchesCommonUserFolders(t *testing.T) {
 	}
 }
 
-func TestInitDefaultConfigIgnoresworkgraphHome(t *testing.T) {
+func TestInitDefaultSettingsIgnoresworkgraphHome(t *testing.T) {
 	homeDir := filepath.Join(t.TempDir(), ".workgraph")
 
 	_, err := workgraph.Init(workgraph.InitConfig{
@@ -187,7 +187,7 @@ func TestInitDefaultConfigIgnoresworkgraphHome(t *testing.T) {
 		t.Fatalf("init failed: %v", err)
 	}
 
-	config := readInitConfig(t, filepath.Join(homeDir, "config.json"))
+	config := readInitSettings(t, filepath.Join(homeDir, "settings.json"))
 	workgraphHome, err := filepath.Abs(homeDir)
 	if err != nil {
 		t.Fatalf("resolve workgraph home: %v", err)
@@ -266,8 +266,8 @@ func TestInitIsIdempotent(t *testing.T) {
 func TestInitPreservesExistingConfig(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
-	configPath := filepath.Join(homeDir, "config.json")
-	existing := initConfigFile{
+	settingsPath := filepath.Join(homeDir, "settings.json")
+	existing := initSettingsFile{
 		WatchDirs:   []string{filepath.Join(tempDir, "watched")},
 		IgnorePaths: []string{filepath.Join(tempDir, "private")},
 		IgnoreNames: []string{".git", "node_modules", "dist"},
@@ -276,7 +276,7 @@ func TestInitPreservesExistingConfig(t *testing.T) {
 	if err := os.MkdirAll(homeDir, 0o755); err != nil {
 		t.Fatalf("create workgraph home: %v", err)
 	}
-	writeInitConfig(t, configPath, existing)
+	writeInitSettings(t, settingsPath, existing)
 
 	_, err := workgraph.Init(workgraph.InitConfig{
 		HomeDir: homeDir,
@@ -285,7 +285,7 @@ func TestInitPreservesExistingConfig(t *testing.T) {
 		t.Fatalf("init failed: %v", err)
 	}
 
-	config := readInitConfig(t, configPath)
+	config := readInitSettings(t, settingsPath)
 	if !reflect.DeepEqual(config, existing) {
 		t.Fatalf("expected existing config to be preserved, got %#v", config)
 	}
@@ -295,8 +295,8 @@ func TestInitForceOverwritesExistingConfigWithDefaults(t *testing.T) {
 	tempDir := t.TempDir()
 	userHome := fakeUserHomeWithDirs(t, "Desktop", "Documents")
 	homeDir := filepath.Join(tempDir, ".workgraph")
-	configPath := filepath.Join(homeDir, "config.json")
-	oldConfig := initConfigFile{
+	settingsPath := filepath.Join(homeDir, "settings.json")
+	oldConfig := initSettingsFile{
 		WatchDirs:   []string{filepath.Join(tempDir, "old-watch")},
 		IgnorePaths: []string{filepath.Join(tempDir, "old-ignore")},
 		IgnoreNames: []string{".git", "node_modules"},
@@ -305,7 +305,7 @@ func TestInitForceOverwritesExistingConfigWithDefaults(t *testing.T) {
 	if err := os.MkdirAll(homeDir, 0o755); err != nil {
 		t.Fatalf("create workgraph home: %v", err)
 	}
-	writeInitConfig(t, configPath, oldConfig)
+	writeInitSettings(t, settingsPath, oldConfig)
 
 	_, err := workgraph.Init(workgraph.InitConfig{
 		HomeDir: homeDir,
@@ -315,14 +315,14 @@ func TestInitForceOverwritesExistingConfigWithDefaults(t *testing.T) {
 		t.Fatalf("init failed: %v", err)
 	}
 
-	config := readInitConfig(t, configPath)
+	config := readInitSettings(t, settingsPath)
 	workgraphHome, err := filepath.Abs(homeDir)
 	if err != nil {
 		t.Fatalf("resolve workgraph home: %v", err)
 	}
 
 	expectedWatchDirs := []string{filepath.Join(userHome, "Desktop"), filepath.Join(userHome, "Documents")}
-	expected := initConfigFile{
+	expected := initSettingsFile{
 		WatchDirs:             expectedWatchDirs,
 		ConservativeWatchDirs: expectedWatchDirs,
 		IgnorePaths:           []string{workgraphHome},
@@ -369,9 +369,9 @@ func TestInitReportsInitializedPaths(t *testing.T) {
 	}
 }
 
-func TestInitReportsConfigPath(t *testing.T) {
+func TestInitReportsSettingsPath(t *testing.T) {
 	homeDir := filepath.Join(t.TempDir(), ".workgraph")
-	configPath := filepath.Join(homeDir, "config.json")
+	settingsPath := filepath.Join(homeDir, "settings.json")
 
 	result, err := workgraph.Init(workgraph.InitConfig{
 		HomeDir: homeDir,
@@ -380,13 +380,13 @@ func TestInitReportsConfigPath(t *testing.T) {
 		t.Fatalf("init failed: %v", err)
 	}
 
-	if result.ConfigPath != configPath {
-		t.Fatalf("expected config path %q, got %q", configPath, result.ConfigPath)
+	if result.SettingsPath != settingsPath {
+		t.Fatalf("expected settings path %q, got %q", settingsPath, result.SettingsPath)
 	}
-	if !strings.Contains(result.Message, configPath) {
-		t.Fatalf("expected result message to include config path %q, got %q", configPath, result.Message)
+	if !strings.Contains(result.Message, settingsPath) {
+		t.Fatalf("expected result message to include config path %q, got %q", settingsPath, result.Message)
 	}
-	if !strings.Contains(result.Message, "Config: "+configPath) {
+	if !strings.Contains(result.Message, "Settings: "+settingsPath) {
 		t.Fatalf("expected result message to label config path, got %q", result.Message)
 	}
 }
@@ -410,39 +410,39 @@ func TestInitOnMacOSSuggestsFullDiskAccess(t *testing.T) {
 	}
 }
 
-type initConfigFile struct {
+type initSettingsFile struct {
 	WatchDirs             []string `json:"watch_dirs"`
 	ConservativeWatchDirs []string `json:"conservative_watch_dirs,omitempty"`
 	IgnorePaths           []string `json:"ignore_paths"`
 	IgnoreNames           []string `json:"ignore_names"`
 }
 
-func readInitConfig(t *testing.T, path string) initConfigFile {
+func readInitSettings(t *testing.T, path string) initSettingsFile {
 	t.Helper()
 
 	contents, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read config: %v", err)
+		t.Fatalf("read settings: %v", err)
 	}
 
-	var config initConfigFile
+	var config initSettingsFile
 	if err := json.Unmarshal(contents, &config); err != nil {
-		t.Fatalf("parse config: %v", err)
+		t.Fatalf("parse settings: %v", err)
 	}
 
 	return config
 }
 
-func writeInitConfig(t *testing.T, path string, config initConfigFile) {
+func writeInitSettings(t *testing.T, path string, config initSettingsFile) {
 	t.Helper()
 
 	contents, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
-		t.Fatalf("encode config: %v", err)
+		t.Fatalf("encode settings: %v", err)
 	}
 
 	if err := os.WriteFile(path, append(contents, '\n'), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
+		t.Fatalf("write settings: %v", err)
 	}
 }
 

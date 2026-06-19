@@ -27,8 +27,8 @@ func TestGitCaptureStoresLocalCommitEvent(t *testing.T) {
 	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
 		t.Fatalf("workgraph init failed: %v\n%s", err, output)
 	}
-	if _, err := runworkgraph(t, repoRoot, "config", "add-watch", "--home", homeDir, codeDir); err != nil {
-		t.Fatalf("workgraph config add-watch failed: %v", err)
+	if _, err := runworkgraph(t, repoRoot, "settings", "add-watch", "--home", homeDir, codeDir); err != nil {
+		t.Fatalf("workgraph settings add-watch failed: %v", err)
 	}
 
 	output, err := runworkgraph(t, repoRoot, "git", "capture", "--home", homeDir)
@@ -109,8 +109,8 @@ func TestGitCaptureDoesNotDuplicateCommitEvents(t *testing.T) {
 	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
 		t.Fatalf("workgraph init failed: %v\n%s", err, output)
 	}
-	if _, err := runworkgraph(t, repoRoot, "config", "add-watch", "--home", homeDir, codeDir); err != nil {
-		t.Fatalf("workgraph config add-watch failed: %v", err)
+	if _, err := runworkgraph(t, repoRoot, "settings", "add-watch", "--home", homeDir, codeDir); err != nil {
+		t.Fatalf("workgraph settings add-watch failed: %v", err)
 	}
 
 	if output, err := runworkgraph(t, repoRoot, "git", "capture", "--home", homeDir); err != nil {

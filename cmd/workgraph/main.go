@@ -26,8 +26,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	switch args[0] {
 	case "init":
 		return runInit(args[1:], stdout, stderr)
-	case "config":
-		return runConfig(args[1:], stdout, stderr)
+	case "settings":
+		return runSettings(args[1:], stdout, stderr)
 	case "connectors":
 		return runConnectors(args[1:], stdout, stderr)
 	case "doctor":
@@ -1062,7 +1062,7 @@ func runInit(args []string, stdout io.Writer, stderr io.Writer) int {
 	homeDir := flags.String("home", "", "workgraph home directory")
 	memoryDir := flags.String("memory", "", "workgraph memory directory")
 	databasePath := flags.String("database", "", "workgraph SQLite database path")
-	force := flags.Bool("force", false, "Refresh init-owned defaults such as config.json")
+	force := flags.Bool("force", false, "Refresh init-owned defaults such as settings.json")
 
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -1888,23 +1888,77 @@ func runGitCapture(args []string, stdout io.Writer, stderr io.Writer) int {
 	return 0
 }
 
-func runConfig(args []string, stdout io.Writer, stderr io.Writer) int {
+func runSettings(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: workgraph config <command>")
+		fmt.Fprintln(stderr, "usage: workgraph settings <command>")
 		return 2
 	}
 
 	switch args[0] {
 	case "add-watch":
-		return runConfigAddWatch(args[1:], stdout, stderr)
+		return runSettingsAddWatch(args[1:], stdout, stderr)
+	case "get":
+		return runSettingsGet(args[1:], stdout, stderr)
+	case "doctor":
+		return runSettingsDoctor(args[1:], stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "unknown config command: %s\n", args[0])
+		fmt.Fprintf(stderr, "unknown settings command: %s\n", args[0])
 		return 2
 	}
 }
 
-func runConfigAddWatch(args []string, stdout io.Writer, stderr io.Writer) int {
-	flags := flag.NewFlagSet("config add-watch", flag.ContinueOnError)
+func runSettingsGet(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("settings get", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph settings get")
+		return 2
+	}
+
+	result, err := workgraph.GetSettings(workgraph.SettingsGetConfig{
+		HomeDir: *homeDir,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph settings get: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runSettingsDoctor(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("settings doctor", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph settings doctor")
+		return 2
+	}
+
+	result, err := workgraph.DoctorSettings(workgraph.SettingsDoctorConfig{
+		HomeDir: *homeDir,
+	})
+	fmt.Fprintln(stdout, result.Message)
+	if err != nil {
+		return 1
+	}
+	return 0
+}
+
+func runSettingsAddWatch(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("settings add-watch", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
 	homeDir := flags.String("home", "", "workgraph home directory")
@@ -1918,16 +1972,16 @@ func runConfigAddWatch(args []string, stdout io.Writer, stderr io.Writer) int {
 		path = flags.Arg(0)
 	}
 	if flags.NArg() > 1 {
-		fmt.Fprintln(stderr, "usage: workgraph config add-watch [path]")
+		fmt.Fprintln(stderr, "usage: workgraph settings add-watch [path]")
 		return 2
 	}
 
-	result, err := workgraph.AddWatchDir(workgraph.ConfigWatchConfig{
+	result, err := workgraph.AddWatchDir(workgraph.SettingsWatchConfig{
 		HomeDir: *homeDir,
 		Path:    path,
 	})
 	if err != nil {
-		fmt.Fprintf(stderr, "workgraph config add-watch: %v\n", err)
+		fmt.Fprintf(stderr, "workgraph settings add-watch: %v\n", err)
 		return 1
 	}
 

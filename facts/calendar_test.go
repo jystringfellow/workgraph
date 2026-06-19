@@ -332,8 +332,8 @@ func TestGoogleCalendarCaptureRefreshesExpiredStoredToken(t *testing.T) {
 	}))
 	defer server.Close()
 
-	configPath := filepath.Join(homeDir, "calendar.json")
-	if err := os.WriteFile(configPath, []byte(fmt.Sprintf(`{
+	settingsPath := filepath.Join(homeDir, "calendar.json")
+	if err := os.WriteFile(settingsPath, []byte(fmt.Sprintf(`{
   "google": {
     "access_token": "expired-access-token",
     "refresh_token": "stored-refresh-token",
@@ -373,7 +373,7 @@ func TestGoogleCalendarCaptureRefreshesExpiredStoredToken(t *testing.T) {
 		t.Fatalf("expected capture to use refreshed access token, got %q", captureAuth)
 	}
 
-	contents, err := os.ReadFile(configPath)
+	contents, err := os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("read refreshed calendar config: %v", err)
 	}
@@ -431,8 +431,8 @@ func TestMicrosoftCalendarCaptureRefreshesExpiredStoredToken(t *testing.T) {
 	defer server.Close()
 
 	expired := time.Now().UTC().Add(-1 * time.Hour).Format(time.RFC3339Nano)
-	configPath := filepath.Join(homeDir, "calendar.json")
-	if err := os.WriteFile(configPath, []byte(fmt.Sprintf(`{
+	settingsPath := filepath.Join(homeDir, "calendar.json")
+	if err := os.WriteFile(settingsPath, []byte(fmt.Sprintf(`{
   "microsoft": {
     "access_token": "expired-microsoft-access-token",
     "refresh_token": "microsoft-refresh-token",
@@ -468,7 +468,7 @@ func TestMicrosoftCalendarCaptureRefreshesExpiredStoredToken(t *testing.T) {
 		t.Fatalf("expected capture to use refreshed Microsoft access token, got %q", captureAuth)
 	}
 
-	contents, err := os.ReadFile(configPath)
+	contents, err := os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("read refreshed calendar config: %v", err)
 	}
@@ -608,15 +608,15 @@ func TestGoogleCalendarConnectOAuthStoresConnectorConfigAfterCodeExchange(t *tes
 		t.Fatalf("expected connected message, got:\n%s", output)
 	}
 
-	configPath := filepath.Join(homeDir, "calendar.json")
-	info, err := os.Stat(configPath)
+	settingsPath := filepath.Join(homeDir, "calendar.json")
+	info, err := os.Stat(settingsPath)
 	if err != nil {
 		t.Fatalf("expected calendar config: %v", err)
 	}
 	if got := info.Mode().Perm(); got != 0o600 {
 		t.Fatalf("expected calendar config permissions 0600, got %v", got)
 	}
-	contents, err := os.ReadFile(configPath)
+	contents, err := os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("read calendar config: %v", err)
 	}
@@ -1009,8 +1009,8 @@ func TestCalendarConnectSkipsOAuthWhenProviderAlreadyConnected(t *testing.T) {
 		t.Fatalf("workgraph init failed: %v\n%s", err, output)
 	}
 
-	configPath := filepath.Join(homeDir, "calendar.json")
-	if err := os.WriteFile(configPath, []byte(`{
+	settingsPath := filepath.Join(homeDir, "calendar.json")
+	if err := os.WriteFile(settingsPath, []byte(`{
   "google": {
     "access_token": "google-access-token",
     "calendar_ids": ["primary"]
@@ -1100,8 +1100,8 @@ func TestCalendarConnectPreservesExistingProviderSettings(t *testing.T) {
 		t.Fatalf("workgraph init failed: %v\n%s", err, output)
 	}
 
-	configPath := filepath.Join(homeDir, "calendar.json")
-	if err := os.WriteFile(configPath, []byte(`{
+	settingsPath := filepath.Join(homeDir, "calendar.json")
+	if err := os.WriteFile(settingsPath, []byte(`{
   "google": {
     "access_token": "google-access-token",
     "refresh_token": "google-refresh-token",
@@ -1142,7 +1142,7 @@ func TestCalendarConnectPreservesExistingProviderSettings(t *testing.T) {
 		t.Fatalf("workgraph calendar connect exchange failed: %v\n%s", err, output)
 	}
 
-	contents, err := os.ReadFile(configPath)
+	contents, err := os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("read calendar config: %v", err)
 	}
@@ -1285,8 +1285,8 @@ func TestGoogleCalendarDisconnectRevokesTokenAndRemovesConnectorConfig(t *testin
 		t.Fatalf("workgraph init failed: %v\n%s", err, output)
 	}
 
-	configPath := filepath.Join(homeDir, "calendar.json")
-	if err := os.WriteFile(configPath, []byte(`{
+	settingsPath := filepath.Join(homeDir, "calendar.json")
+	if err := os.WriteFile(settingsPath, []byte(`{
   "google": {
     "access_token": "google-access-token",
     "refresh_token": "google-refresh-token",
@@ -1343,7 +1343,7 @@ func TestGoogleCalendarDisconnectRevokesTokenAndRemovesConnectorConfig(t *testin
 	if !strings.Contains(string(output), "Google Calendar token revoked") {
 		t.Fatalf("expected revoke confirmation, got:\n%s", output)
 	}
-	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+	if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
 		t.Fatalf("expected calendar config removed, stat err: %v", err)
 	}
 }
@@ -1356,8 +1356,8 @@ func TestGoogleCalendarDisconnectRemovesConnectorConfigAndPreservesMicrosoft(t *
 		t.Fatalf("workgraph init failed: %v\n%s", err, output)
 	}
 
-	configPath := filepath.Join(homeDir, "calendar.json")
-	if err := os.WriteFile(configPath, []byte(`{
+	settingsPath := filepath.Join(homeDir, "calendar.json")
+	if err := os.WriteFile(settingsPath, []byte(`{
   "google": {
     "access_token": "google-access-token",
     "refresh_token": "google-refresh-token",
@@ -1412,7 +1412,7 @@ func TestGoogleCalendarDisconnectRemovesConnectorConfigAndPreservesMicrosoft(t *
 		t.Fatalf("expected Google Calendar disconnect to clear stale errors, got:\n%s", statusOutput)
 	}
 
-	contents, err := os.ReadFile(configPath)
+	contents, err := os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("expected calendar config to remain for Microsoft settings: %v", err)
 	}
@@ -1439,8 +1439,8 @@ func TestMicrosoftCalendarDisconnectRemovesConnectorConfigAndPreservesGoogle(t *
 		t.Fatalf("workgraph init failed: %v\n%s", err, output)
 	}
 
-	configPath := filepath.Join(homeDir, "calendar.json")
-	if err := os.WriteFile(configPath, []byte(`{
+	settingsPath := filepath.Join(homeDir, "calendar.json")
+	if err := os.WriteFile(settingsPath, []byte(`{
   "google": {
     "access_token": "google-access-token",
     "refresh_token": "google-refresh-token",
@@ -1497,7 +1497,7 @@ func TestMicrosoftCalendarDisconnectRemovesConnectorConfigAndPreservesGoogle(t *
 		t.Fatalf("expected Microsoft Calendar disconnect to clear stale errors, got:\n%s", statusOutput)
 	}
 
-	contents, err := os.ReadFile(configPath)
+	contents, err := os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("expected calendar config to remain for Google settings: %v", err)
 	}
