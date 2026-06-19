@@ -431,6 +431,8 @@ func connectRuntimeConnector(homeDir string, id string, interval string) (Connec
 	entry.SetupState = "ready"
 	entry.LastValidated = time.Now().UTC().Format(time.RFC3339)
 	entry.LastValidationError = ""
+	entry.LastPoll = ""
+	entry.LastError = ""
 	if interval != "" {
 		entry.Interval = interval
 	}
@@ -443,6 +445,25 @@ func connectRuntimeConnector(homeDir string, id string, interval string) (Connec
 		ID:      id,
 		Message: connectorConnectMessage(homeDir, id),
 	}, nil
+}
+
+func clearRuntimeConnector(homeDir string, id string) error {
+	homeDir, err := connectorHomeDir(homeDir)
+	if err != nil {
+		return err
+	}
+	state, err := readConnectorRuntimeFile(homeDir)
+	if err != nil {
+		return err
+	}
+	entry := state.entry(id)
+	entry.SetupState = ""
+	entry.LastValidated = ""
+	entry.LastValidationError = ""
+	entry.LastPoll = ""
+	entry.LastError = ""
+	state.Connectors[id] = entry
+	return writeConnectorRuntimeFile(homeDir, state)
 }
 
 func pollConnectorIDs(homeDir string, state connectorRuntimeFile, requested string) ([]string, error) {

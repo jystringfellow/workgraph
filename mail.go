@@ -306,6 +306,9 @@ func ConnectMailWithBrowser(ctx context.Context, config MailConnectConfig) (Mail
 	if connected, err := mailProviderConnected(homeDir, provider); err != nil {
 		return MailConnectResult{}, err
 	} else if connected {
+		if err := connectMailRuntimeProvider(homeDir, provider); err != nil {
+			return MailConnectResult{}, err
+		}
 		return mailAlreadyConnectedResult(homeDir, provider), nil
 	}
 
@@ -430,6 +433,9 @@ func connectGoogleMail(config MailConnectConfig) (MailConnectResult, error) {
 		if connected, err := mailProviderConnected(homeDir, "google"); err != nil {
 			return MailConnectResult{}, err
 		} else if connected {
+			if err := connectMailRuntimeProvider(homeDir, "google"); err != nil {
+				return MailConnectResult{}, err
+			}
 			return mailAlreadyConnectedResult(homeDir, "google"), nil
 		}
 	}
@@ -492,6 +498,9 @@ func connectMicrosoftMail(config MailConnectConfig) (MailConnectResult, error) {
 		if connected, err := mailProviderConnected(homeDir, "microsoft"); err != nil {
 			return MailConnectResult{}, err
 		} else if connected {
+			if err := connectMailRuntimeProvider(homeDir, "microsoft"); err != nil {
+				return MailConnectResult{}, err
+			}
 			return mailAlreadyConnectedResult(homeDir, "microsoft"), nil
 		}
 	}
@@ -574,6 +583,9 @@ func disconnectGoogleMail(config MailDisconnectConfig) (MailDisconnectResult, er
 	if err := writeOrRemoveMailConnectorConfig(configPath, stored); err != nil {
 		return MailDisconnectResult{}, err
 	}
+	if err := clearRuntimeConnector(homeDir, "mail.google"); err != nil {
+		return MailDisconnectResult{}, err
+	}
 
 	lines := []string{
 		"Google Mail disconnected",
@@ -616,6 +628,9 @@ func disconnectMicrosoftMail(config MailDisconnectConfig) (MailDisconnectResult,
 	configPath := mailConfigPath(homeDir)
 	stored.Microsoft = nil
 	if err := writeOrRemoveMailConnectorConfig(configPath, stored); err != nil {
+		return MailDisconnectResult{}, err
+	}
+	if err := clearRuntimeConnector(homeDir, "mail.microsoft"); err != nil {
 		return MailDisconnectResult{}, err
 	}
 
@@ -812,6 +827,9 @@ func storeGoogleMailConnection(homeDir string, config MailConnectConfig, token g
 	if err := writeMailConnectorConfig(configPath, stored); err != nil {
 		return MailConnectResult{}, err
 	}
+	if _, err := connectRuntimeConnector(homeDir, "mail.google", ""); err != nil {
+		return MailConnectResult{}, err
+	}
 	return MailConnectResult{
 		ConfigPath: configPath,
 		Configured: true,
@@ -842,6 +860,9 @@ func storeMicrosoftMailConnection(homeDir string, config MailConnectConfig, toke
 		TokenURL:     resolveMicrosoftMailTokenURL(config.TokenURL),
 	}
 	if err := writeMailConnectorConfig(configPath, stored); err != nil {
+		return MailConnectResult{}, err
+	}
+	if _, err := connectRuntimeConnector(homeDir, "mail.microsoft", ""); err != nil {
 		return MailConnectResult{}, err
 	}
 	return MailConnectResult{
@@ -1407,6 +1428,19 @@ func mailAlreadyConnectedResult(homeDir string, provider string) MailConnectResu
 			mailProviderDisplayName(provider) + " is already connected",
 			"Config: " + configPath,
 		}, "\n"),
+	}
+}
+
+func connectMailRuntimeProvider(homeDir string, provider string) error {
+	switch strings.ToLower(provider) {
+	case "google":
+		_, err := connectRuntimeConnector(homeDir, "mail.google", "")
+		return err
+	case "microsoft":
+		_, err := connectRuntimeConnector(homeDir, "mail.microsoft", "")
+		return err
+	default:
+		return fmt.Errorf("unsupported mail provider %q", provider)
 	}
 }
 
