@@ -45,6 +45,8 @@ Requirements:
 - report managed setting provenance in human-readable and machine-readable
   diagnostics
 - never print secrets while reporting effective config
+- include an admin-facing deployment guide and recommended managed settings
+  example that can be distributed through endpoint management
 
 Initial managed controls should cover:
 

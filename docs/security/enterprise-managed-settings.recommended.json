@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "llm": {
+    "hosted_enabled": {
+      "value": false,
+      "locked": true
+    },
+    "allowed_base_urls": {
+      "value": ["http://localhost:11434/v1"],
+      "locked": true
+    }
+  },
+  "connectors": {
+    "slack": {
+      "include_dms": {
+        "value": false,
+        "locked": true
+      }
+    }
+  }
+}
