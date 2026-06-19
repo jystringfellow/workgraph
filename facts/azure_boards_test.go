@@ -139,6 +139,56 @@ func TestAzureBoardsConnectOAuthUsesMicrosoftPKCEAndStoresConnectorConfig(t *tes
 			t.Fatalf("expected stored %s=%q, got %q in %s", key, expected, got, contents)
 		}
 	}
+	statusOutput, statusErr := runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)
+	if statusErr != nil {
+		t.Fatalf("workgraph connectors status failed: %v\n%s", statusErr, statusOutput)
+	}
+	if !strings.Contains(string(statusOutput), "- azure.boards: setup ready, polling enabled") {
+		t.Fatalf("expected Azure Boards connect to mark runtime setup ready, got:\n%s", statusOutput)
+	}
+
+	if err := os.WriteFile(filepath.Join(homeDir, "connectors.json"), []byte(`{
+  "connectors": {
+    "azure.boards": {
+      "setup_state": "error",
+      "last_validation_error": "last poll failed with invalid credentials; reconnect azure.boards",
+      "last_poll_at": "2026-06-17T11:33:50Z",
+      "last_error": "request Azure Boards WIQL: status 401: InvalidAuthenticationToken"
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write connector runtime config: %v", err)
+	}
+	output, err = runworkgraph(t, repoRoot, "azure", "boards", "connect", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("expected already connected Azure Boards connect to succeed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Azure Boards is already connected") {
+		t.Fatalf("expected already connected Azure Boards message, got:\n%s", output)
+	}
+	statusOutput, statusErr = runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)
+	if statusErr != nil {
+		t.Fatalf("workgraph connectors status failed: %v\n%s", statusErr, statusOutput)
+	}
+	if !strings.Contains(string(statusOutput), "- azure.boards: setup ready, polling enabled") {
+		t.Fatalf("expected already connected Azure Boards to repair runtime setup state, got:\n%s", statusOutput)
+	}
+	if strings.Contains(string(statusOutput), "InvalidAuthenticationToken") || strings.Contains(string(statusOutput), "validation error") {
+		t.Fatalf("expected already connected Azure Boards to clear stale errors, got:\n%s", statusOutput)
+	}
+
+	output, err = runworkgraph(t, repoRoot, "azure", "boards", "disconnect", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("workgraph azure boards disconnect failed: %v\n%s", err, output)
+	}
+	statusOutput, statusErr = runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)
+	if statusErr != nil {
+		t.Fatalf("workgraph connectors status failed: %v\n%s", statusErr, statusOutput)
+	}
+	if !strings.Contains(string(statusOutput), "- azure.boards: setup not connected, polling not ready") {
+		t.Fatalf("expected Azure Boards disconnect to clear runtime setup state, got:\n%s", statusOutput)
+	}
 }
 
 func TestAzureBoardsCaptureStoresWorkItems(t *testing.T) {

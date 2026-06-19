@@ -585,6 +585,19 @@ func TestNotionConnectOAuthStoresConnectorConfig(t *testing.T) {
 	if stored.ClientID != "378d872b-594c-8110-b4c0-0037422697b3" || stored.TokenURL != server.URL+"/notion/token" {
 		t.Fatalf("expected stored OAuth metadata, got %#v", stored)
 	}
+	if err := os.WriteFile(filepath.Join(homeDir, "connectors.json"), []byte(`{
+  "connectors": {
+    "notion": {
+      "setup_state": "error",
+      "last_validation_error": "search Notion: status 401: invalid token",
+      "last_poll_at": "2026-06-17T11:33:50Z",
+      "last_error": "search Notion: status 401: invalid token"
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write connector runtime config: %v", err)
+	}
 
 	output, err = runworkgraph(t, repoRoot, "notion", "connect",
 		"--home", homeDir,
@@ -594,6 +607,16 @@ func TestNotionConnectOAuthStoresConnectorConfig(t *testing.T) {
 	}
 	if !strings.Contains(string(output), "Notion is already connected") {
 		t.Fatalf("expected already connected message, got:\n%s", output)
+	}
+	statusOutput, statusErr := runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)
+	if statusErr != nil {
+		t.Fatalf("workgraph connectors status failed: %v\n%s", statusErr, statusOutput)
+	}
+	if !strings.Contains(string(statusOutput), "- notion: setup ready, polling enabled") {
+		t.Fatalf("expected already connected Notion to repair runtime setup state, got:\n%s", statusOutput)
+	}
+	if strings.Contains(string(statusOutput), "invalid token") || strings.Contains(string(statusOutput), "validation error") {
+		t.Fatalf("expected already connected Notion to clear stale errors, got:\n%s", statusOutput)
 	}
 
 	output, err = runworkgraph(t, repoRoot, "notion", "disconnect",
@@ -607,6 +630,13 @@ func TestNotionConnectOAuthStoresConnectorConfig(t *testing.T) {
 	}
 	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
 		t.Fatalf("expected notion config removed after disconnect, stat err: %v", err)
+	}
+	statusOutput, statusErr = runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)
+	if statusErr != nil {
+		t.Fatalf("workgraph connectors status failed: %v\n%s", statusErr, statusOutput)
+	}
+	if !strings.Contains(string(statusOutput), "- notion: setup not connected, polling not ready") {
+		t.Fatalf("expected Notion disconnect to clear runtime setup state, got:\n%s", statusOutput)
 	}
 
 	output, err = runworkgraph(t, repoRoot, "notion", "disconnect",

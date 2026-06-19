@@ -322,6 +322,9 @@ func ConnectNotion(config NotionConnectConfig) (NotionConnectResult, error) {
 		if connected, err := notionConnected(homeDir); err != nil {
 			return NotionConnectResult{}, err
 		} else if connected {
+			if _, err := connectRuntimeConnector(homeDir, "notion", ""); err != nil {
+				return NotionConnectResult{}, err
+			}
 			return notionAlreadyConnectedResult(homeDir), nil
 		}
 	}
@@ -415,6 +418,9 @@ func ConnectNotionWithBrowser(ctx context.Context, config NotionConnectConfig) (
 	if connected, err := notionConnected(homeDir); err != nil {
 		return NotionConnectResult{}, err
 	} else if connected {
+		if _, err := connectRuntimeConnector(homeDir, "notion", ""); err != nil {
+			return NotionConnectResult{}, err
+		}
 		return notionAlreadyConnectedResult(homeDir), nil
 	}
 	config.ClientID = resolveNotionClientID(config.ClientID)
@@ -510,6 +516,9 @@ func DisconnectNotion(config NotionDisconnectConfig) (NotionDisconnectResult, er
 	}
 	if err := os.Remove(configPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return NotionDisconnectResult{}, fmt.Errorf("remove notion config: %w", err)
+	}
+	if err := clearRuntimeConnector(homeDir, "notion"); err != nil {
+		return NotionDisconnectResult{}, err
 	}
 	return NotionDisconnectResult{
 		ConfigPath: configPath,
@@ -1191,6 +1200,9 @@ func storeNotionConnection(homeDir string, config NotionConnectConfig, token not
 		TokenURL:             resolveNotionTokenURL(config.TokenURL),
 	}
 	if err := writeNotionConnectorConfig(configPath, stored); err != nil {
+		return NotionConnectResult{}, err
+	}
+	if _, err := connectRuntimeConnector(homeDir, "notion", ""); err != nil {
 		return NotionConnectResult{}, err
 	}
 	return NotionConnectResult{

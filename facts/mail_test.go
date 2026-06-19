@@ -163,6 +163,121 @@ func TestGoogleMailConnectOAuthUsesPKCEAndStoresConnectorConfig(t *testing.T) {
 	}
 }
 
+func TestGoogleMailReconnectClearsRuntimeError(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, "connectors.json"), []byte(`{
+  "connectors": {
+    "mail.google": {
+      "setup_state": "error",
+      "last_validated_at": "2026-06-17T12:26:44Z",
+      "last_validation_error": "last poll failed with invalid credentials; reconnect mail.google",
+      "last_poll_at": "2026-06-17T11:33:50Z",
+      "last_error": "request Gmail messages: status 401: Invalid Credentials"
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write connector runtime config: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/token" {
+			t.Fatalf("unexpected token server path %s", request.URL.Path)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{
+  "access_token": "mail-access-token",
+  "refresh_token": "mail-refresh-token",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "scope": "https://www.googleapis.com/auth/gmail.readonly"
+}`))
+	}))
+	defer server.Close()
+
+	output, err := runworkgraph(t, repoRoot, "mail", "connect", "google",
+		"--home", homeDir,
+		"--client-id", "client-id",
+		"--redirect-uri", "http://127.0.0.1:2727/mail/google/callback",
+		"--code", "oauth-code",
+		"--code-verifier", "manual-code-verifier",
+		"--state", "fixed-state",
+		"--expected-state", "fixed-state",
+		"--mail-token-url", server.URL+"/token",
+	)
+	if err != nil {
+		t.Fatalf("workgraph mail connect exchange failed: %v\n%s", err, output)
+	}
+
+	statusOutput, statusErr := runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)
+	if statusErr != nil {
+		t.Fatalf("workgraph connectors status failed: %v\n%s", statusErr, statusOutput)
+	}
+	if !strings.Contains(string(statusOutput), "- mail.google: setup ready, polling enabled") {
+		t.Fatalf("expected Google Mail reconnect to mark ready, got:\n%s", statusOutput)
+	}
+	if strings.Contains(string(statusOutput), "Invalid Credentials") || strings.Contains(string(statusOutput), "validation error") {
+		t.Fatalf("expected Google Mail reconnect to clear stale errors, got:\n%s", statusOutput)
+	}
+}
+
+func TestGoogleMailAlreadyConnectedRepairsRuntimeError(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, "mail.json"), []byte(`{
+  "google": {
+    "access_token": "mail-access-token",
+    "refresh_token": "mail-refresh-token",
+    "token_type": "Bearer",
+    "scopes": ["https://www.googleapis.com/auth/gmail.readonly"]
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write mail config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, "connectors.json"), []byte(`{
+  "connectors": {
+    "mail.google": {
+      "setup_state": "error",
+      "last_validation_error": "last poll failed with invalid credentials; reconnect mail.google",
+      "last_poll_at": "2026-06-17T11:33:50Z",
+      "last_error": "request Gmail messages: status 401: Invalid Credentials"
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write connector runtime config: %v", err)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "mail", "connect", "google", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("workgraph mail connect already-connected repair failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Google Mail is already connected") {
+		t.Fatalf("expected already connected message, got:\n%s", output)
+	}
+
+	statusOutput, statusErr := runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)
+	if statusErr != nil {
+		t.Fatalf("workgraph connectors status failed: %v\n%s", statusErr, statusOutput)
+	}
+	if !strings.Contains(string(statusOutput), "- mail.google: setup ready, polling enabled") {
+		t.Fatalf("expected already connected Google Mail to repair runtime setup state, got:\n%s", statusOutput)
+	}
+	if strings.Contains(string(statusOutput), "Invalid Credentials") || strings.Contains(string(statusOutput), "validation error") {
+		t.Fatalf("expected already connected Google Mail to clear stale errors, got:\n%s", statusOutput)
+	}
+}
+
 func TestMicrosoftMailConnectOAuthUsesPKCEAndStoresConnectorConfig(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
@@ -424,6 +539,21 @@ func TestGoogleMailDisconnectRevokesAndPreservesMicrosoftSettings(t *testing.T) 
 `), 0o600); err != nil {
 		t.Fatalf("write mail config: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(homeDir, "connectors.json"), []byte(`{
+  "connectors": {
+    "mail.google": {
+      "enabled": true,
+      "setup_state": "error",
+      "last_validated_at": "2026-06-17T12:26:44Z",
+      "last_validation_error": "last poll failed with invalid credentials; reconnect mail.google",
+      "last_poll_at": "2026-06-17T11:33:50Z",
+      "last_error": "request Gmail messages: status 401: Invalid Credentials"
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write connector runtime config: %v", err)
+	}
 
 	var revokeForm url.Values
 	revokeServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
@@ -447,6 +577,16 @@ func TestGoogleMailDisconnectRevokesAndPreservesMicrosoftSettings(t *testing.T) 
 	}
 	if !strings.Contains(string(output), "Google Mail disconnected") || !strings.Contains(string(output), "Google Mail token revoked") {
 		t.Fatalf("expected disconnect and revoke output, got:\n%s", output)
+	}
+	statusOutput, statusErr := runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)
+	if statusErr != nil {
+		t.Fatalf("workgraph connectors status failed: %v\n%s", statusErr, statusOutput)
+	}
+	if !strings.Contains(string(statusOutput), "- mail.google: setup not connected, polling not ready") {
+		t.Fatalf("expected Google Mail disconnect to clear runtime setup state, got:\n%s", statusOutput)
+	}
+	if strings.Contains(string(statusOutput), "Invalid Credentials") || strings.Contains(string(statusOutput), "validation error") {
+		t.Fatalf("expected Google Mail disconnect to clear stale errors, got:\n%s", statusOutput)
 	}
 
 	contents, err := os.ReadFile(configPath)
