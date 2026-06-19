@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>workgraph Slack and Enterprise Compliance</title>
+    <link rel="icon" type="image/png" href="/assets/workgraph-logo.png">
+    <style>
+      body {
+        background: #f7f5f9;
+        color: #1d1d1f;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        line-height: 1.55;
+        margin: 0;
+      }
+
+      header {
+        background: #590088;
+        color: #ffffff;
+      }
+
+      .hero {
+        margin: 0 auto;
+        max-width: 860px;
+        padding: 48px 24px 36px;
+      }
+
+      .lockup {
+        display: block;
+        height: auto;
+        margin: 0 0 28px;
+        max-width: 360px;
+        width: 58vw;
+      }
+
+      main {
+        background: #ffffff;
+        margin: 0 auto;
+        max-width: 860px;
+        padding: 40px 24px 80px;
+      }
+
+      h1 {
+        font-size: 36px;
+        letter-spacing: 0;
+        line-height: 1.15;
+        margin: 0 0 8px;
+      }
+
+      h2 {
+        font-size: 20px;
+        letter-spacing: 0;
+        margin: 32px 0 8px;
+      }
+
+      h3 {
+        font-size: 16px;
+        letter-spacing: 0;
+        margin: 22px 0 8px;
+      }
+
+      p, li, th, td {
+        font-size: 16px;
+      }
+
+      p {
+        margin: 0 0 14px;
+      }
+
+      ul {
+        margin: 0 0 14px;
+        padding-left: 22px;
+      }
+
+      table {
+        border-collapse: collapse;
+        margin: 12px 0 20px;
+        width: 100%;
+      }
+
+      th, td {
+        border-bottom: 1px solid #ded8e6;
+        padding: 10px 8px;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        background: #f7f5f9;
+        font-weight: 650;
+      }
+
+      code {
+        background: #f1edf5;
+        border-radius: 4px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.95em;
+        padding: 2px 5px;
+      }
+
+      a {
+        color: #590088;
+      }
+
+      .updated {
+        color: #5f6368;
+        margin-bottom: 28px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="hero">
+        <img class="lockup" src="/assets/workgraph-lockup.png" alt="workgraph">
+        <h1>Slack and Enterprise Compliance</h1>
+        <p class="updated">Last updated: June 19, 2026</p>
+      </div>
+    </header>
+
+    <main>
+      <p>This page is written for IT, security, and compliance reviewers evaluating workgraph for use with workplace Slack and local work context. workgraph is local-first software: captured events, connector credentials, settings, and memory files are stored on the user's device by default.</p>
+      <p>workgraph does not provide a trust center, third-party audit report, SOC 2 report, ISO 27001 certificate, or enterprise DPA. This page documents the implemented technical controls and the remaining boundaries so reviewers can decide whether workgraph is appropriate for their environment.</p>
+
+      <h2>Architecture summary</h2>
+      <ul>
+        <li>workgraph runs as a local CLI and optional local daemon on the user's device.</li>
+        <li>Captured event data is stored in a local SQLite database at <code>~/.workgraph/workgraph.db</code>.</li>
+        <li>Slack connector credentials and selected connector options are stored locally at <code>~/.workgraph/slack.json</code>.</li>
+        <li>User settings are stored locally at <code>~/.workgraph/settings.json</code>.</li>
+        <li>Admin-managed settings, when deployed, are read from a fixed platform path named <code>managed-settings.json</code> and override locked local options.</li>
+        <li>LLM features are optional. Core capture, storage, today, and resume workflows do not require an LLM.</li>
+      </ul>
+
+      <h2>Slack access model</h2>
+      <p>workgraph uses Slack OAuth and requests read-oriented user scopes so it can capture messages visible to the approved Slack user and store local work context. It does not request Slack write scopes, and it does not post messages, add reactions, update Slack content, or perform Slack actions automatically.</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Scope</th>
+            <th>Purpose</th>
+            <th>Default</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>channels:history</code>, <code>channels:read</code></td>
+            <td>Read messages and metadata from public channels visible to the authorized user.</td>
+            <td>Requested</td>
+          </tr>
+          <tr>
+            <td><code>groups:history</code>, <code>groups:read</code></td>
+            <td>Read messages and metadata from private channels visible to the authorized user.</td>
+            <td>Requested</td>
+          </tr>
+          <tr>
+            <td><code>users:read</code></td>
+            <td>Resolve Slack user ids to display names for local event context.</td>
+            <td>Requested</td>
+          </tr>
+          <tr>
+            <td><code>team:read</code></td>
+            <td>Resolve workspace metadata for local connector status and event context.</td>
+            <td>Requested</td>
+          </tr>
+          <tr>
+            <td><code>lists:read</code></td>
+            <td>Read Slack Lists when the user configures a List id as a work-planning source.</td>
+            <td>Requested</td>
+          </tr>
+          <tr>
+            <td><code>im:history</code>, <code>im:read</code></td>
+            <td>Read direct messages visible to the authorized user.</td>
+            <td>Optional; only requested with <code>--include-dms</code></td>
+          </tr>
+          <tr>
+            <td><code>mpim:history</code>, <code>mpim:read</code></td>
+            <td>Read group direct messages visible to the authorized user.</td>
+            <td>Optional; only requested with <code>--include-dms</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Slack direct-message control</h2>
+      <p>Direct-message and group-direct-message capture is off by default. Users must explicitly opt in with <code>workgraph slack connect --include-dms</code>. Slack OAuth scopes are additive, so removing DM access requires disconnecting workgraph from Slack and reconnecting without DM scopes.</p>
+      <p>On managed devices, administrators can lock Slack DM capture off with managed settings:</p>
+      <pre><code>{
+  "connectors": {
+    "slack": {
+      "include_dms": {
+        "value": false,
+        "locked": true
+      }
+    }
+  }
+}</code></pre>
+      <p>When <code>connectors.slack.include_dms</code> is locked to <code>false</code>, workgraph refuses Slack DM opt-in before generating an OAuth URL and refuses capture startup if stored Slack settings would poll direct messages.</p>
+
+      <h2>Managed settings</h2>
+      <p>Managed settings are intended for company-managed devices where an administrator can write a local policy file. At runtime, workgraph reads managed settings from fixed platform-managed paths only; users cannot override the managed settings path with CLI flags or environment variables.</p>
+      <ul>
+        <li>macOS: <code>/Library/Application Support/workgraph/managed-settings.json</code></li>
+        <li>Windows: <code>%ProgramData%\workgraph\managed-settings.json</code></li>
+        <li>Linux and other Unix-like systems: <code>/etc/workgraph/managed-settings.json</code></li>
+      </ul>
+      <p>Managed settings can disable hosted LLM providers, restrict OpenAI-compatible model base URLs to approved local or company endpoints, and lock high-risk connector options such as Slack DM capture.</p>
+
+      <h2>LLM and external AI use</h2>
+      <p>workgraph does not require an LLM for local capture or storage. If a user configures an LLM provider, workgraph may send selected local context to that configured model endpoint for user-requested LLM commands. Organizations should decide which model endpoints are approved for workplace data.</p>
+      <p>Managed settings can disable hosted LLM providers or restrict model destinations. A common policy is to disable hosted providers and allow only a local OpenAI-compatible endpoint such as <code>http://localhost:11434/v1</code>.</p>
+
+      <h2>Network destinations</h2>
+      <p>workgraph contacts network services only for connectors and optional features the user enables. Depending on configuration, destinations may include:</p>
+      <ul>
+        <li>Slack Web API over TLS when Slack is connected.</li>
+        <li>Cloudflare Pages for the Slack OAuth redirect helper at <code>workgraph.pages.dev/slack/callback</code>.</li>
+        <li>Cloudflare Workers OAuth token relays for providers such as Google or Notion when those connectors are connected.</li>
+        <li>Provider APIs for explicitly connected services such as Google, Microsoft, Notion, GitHub, Azure DevOps, and Jira.</li>
+        <li>Optional LLM endpoints configured by the user or controlled through managed settings.</li>
+      </ul>
+
+      <h2>Local data and credential storage</h2>
+      <p>workgraph stores local state under <code>~/.workgraph</code> by default. Important files include:</p>
+      <ul>
+        <li><code>~/.workgraph/workgraph.db</code>: SQLite event store for captured work events.</li>
+        <li><code>~/.workgraph/settings.json</code>: user settings such as watch roots and ignore rules.</li>
+        <li><code>~/.workgraph/slack.json</code>: local Slack connector credentials and Slack connector options.</li>
+        <li><code>~/.workgraph/connectors.json</code>: local connector runtime status, enabled state, and polling intervals.</li>
+        <li><code>~/.workgraph/memory</code> or configured memory files: local user-owned work memory.</li>
+      </ul>
+      <p>Connector credential files are written with local-user-only file permissions when supported by the operating system. SQLite encryption at rest and operating-system credential-store backed encryption keys are planned but not yet implemented.</p>
+
+      <h2>Automation and write behavior</h2>
+      <p>workgraph's current connector posture is read-oriented. Slack capture does not create, update, archive, reorder, post, react, or delete Slack content. Future features that draft responses or actions should follow the workgraph rule: suggest, draft, approve, then act. No silent automation should perform external writes without explicit user approval.</p>
+
+      <h2>Review boundaries</h2>
+      <ul>
+        <li>workgraph is local software, not a hosted SaaS control plane.</li>
+        <li>There is no centralized admin dashboard for fleet-wide enforcement.</li>
+        <li>Managed settings depend on the organization's endpoint management system to deploy and protect the managed settings file.</li>
+        <li>Local users with sufficient device privileges may still access local files outside workgraph's control.</li>
+        <li>Optional LLM usage must be governed by the organization's approved endpoint and data-use policy.</li>
+      </ul>
+
+      <h2>Related documents</h2>
+      <p>See the <a href="/privacy.html">workgraph Privacy Policy</a> and <a href="/terms.html">workgraph Terms of Service</a>.</p>
+      <p><a href="/">Return to workgraph</a></p>
+    </main>
+  </body>
+</html>

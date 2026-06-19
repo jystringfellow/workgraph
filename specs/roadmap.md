@@ -100,7 +100,7 @@ Priority labels used below:
    - [ ] Connector setup validation flow (test connection before save, draft-and-resume support). [P0a, spec: `specs/connector-setup.md`]
 
 ## Phase 3.5: Enterprise security and compliance
-- [ ] IT-readable Slack/compliance document
+- [x] IT-readable Slack/compliance document
 - [ ] Admin-controlled managed settings file that overrides local user config for workgraph's own behavior. [spec: `specs/config.md` and `specs/enterprise-security.md`]
   - [x] First managed settings reader with fixed platform-managed runtime paths and internal fact-only path injection.
   - [x] `workgraph settings get` reports effective LLM managed settings without exposing secrets.
