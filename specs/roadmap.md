@@ -105,9 +105,11 @@ Priority labels used below:
   - [x] First managed settings reader with fixed platform-managed runtime paths and internal fact-only path injection.
   - [x] `workgraph settings get` reports effective LLM managed settings without exposing secrets.
   - [x] Managed LLM policy is enforced before provider calls.
+  - [x] Locked managed Slack DM policy is enforced before OAuth scope requests and capture startup.
 - [ ] Managed setting provenance in `workgraph doctor`, `workgraph settings get`, and machine-readable diagnostics.
 - [x] Admin controls for disabling hosted LLM providers or restricting OpenAI-compatible LLM endpoints to approved local/company URLs.
 - [ ] Admin controls for connector enablement and high-risk connector options such as Slack DM capture and mail body capture.
+  - [x] Slack direct-message and group-direct-message capture can be locked off with managed settings.
 - [ ] Machine-readable security/config report for endpoint verification.
 - [ ] SQLite encryption at rest
 - [ ] OS credential-store backed encryption keys

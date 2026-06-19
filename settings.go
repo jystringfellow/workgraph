@@ -99,6 +99,13 @@ func GetSettings(config SettingsGetConfig) (SettingsGetResult, error) {
 	if len(managed.LLM.AllowedBaseURL.Value) > 0 {
 		lines = append(lines, "LLM allowed base URLs: "+strings.Join(managed.LLM.AllowedBaseURL.Value, ", ")+" ("+managedSettingSource(managed.LLM.AllowedBaseURL.Locked)+")")
 	}
+	if managed.Connectors.Slack.IncludeDMs.Value != nil {
+		state := "enabled"
+		if !*managed.Connectors.Slack.IncludeDMs.Value {
+			state = "disabled"
+		}
+		lines = append(lines, "Slack DM capture: "+state+" ("+managedSettingSource(managed.Connectors.Slack.IncludeDMs.Locked)+")")
+	}
 
 	return SettingsGetResult{
 		SettingsPath:        settingsPath,

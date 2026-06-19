@@ -15,13 +15,22 @@ import (
 var managedSettingsPathOverrideForTest string
 
 type managedSettingsFile struct {
-	Version int                `json:"version"`
-	LLM     managedLLMSettings `json:"llm"`
+	Version    int                      `json:"version"`
+	LLM        managedLLMSettings       `json:"llm"`
+	Connectors managedConnectorSettings `json:"connectors"`
 }
 
 type managedLLMSettings struct {
 	HostedEnabled  managedBoolSetting        `json:"hosted_enabled"`
 	AllowedBaseURL managedStringSliceSetting `json:"allowed_base_urls"`
+}
+
+type managedConnectorSettings struct {
+	Slack managedSlackSettings `json:"slack"`
+}
+
+type managedSlackSettings struct {
+	IncludeDMs managedBoolSetting `json:"include_dms"`
 }
 
 type managedBoolSetting struct {
@@ -102,6 +111,27 @@ func enforceLLMManagedSettings(profile llmProfile) error {
 		}
 	}
 	return nil
+}
+
+func enforceSlackDMManagedSettings(includeDMs bool) error {
+	if !includeDMs {
+		return nil
+	}
+	settings, _, present, err := readManagedSettings()
+	if err != nil {
+		return err
+	}
+	if !present {
+		return nil
+	}
+	if managedBoolLockedFalse(settings.Connectors.Slack.IncludeDMs) {
+		return errors.New("Slack DM capture is disabled by managed settings")
+	}
+	return nil
+}
+
+func managedBoolLockedFalse(setting managedBoolSetting) bool {
+	return setting.Value != nil && setting.Locked && !*setting.Value
 }
 
 func baseURLAllowed(baseURL string, allowed []string) bool {

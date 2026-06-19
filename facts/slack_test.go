@@ -890,6 +890,92 @@ func TestSlackConnectRequestsDMScopeOnlyWhenOptedIn(t *testing.T) {
 	}
 }
 
+func TestManagedSettingsDisableSlackDMConnect(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	managedPath := filepath.Join(tempDir, "managed-settings.json")
+	if err := os.WriteFile(managedPath, []byte(`{
+  "version": 1,
+  "connectors": {
+    "slack": {
+      "include_dms": {
+        "value": false,
+        "locked": true
+      }
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write managed settings: %v", err)
+	}
+	restoreManagedSettings := workgraph.SetManagedSettingsPathForTest(managedPath)
+	defer restoreManagedSettings()
+
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	result, err := workgraph.ConnectSlack(workgraph.SlackConnectConfig{
+		HomeDir:      homeDir,
+		ClientID:     "client-id",
+		ClientSecret: "client-secret",
+		RedirectURI:  workgraph.DefaultSlackRedirectURI,
+		State:        "fixed-state",
+		IncludeDMs:   true,
+	})
+	if err == nil {
+		t.Fatalf("expected managed settings to block Slack DM connect, got result: %+v", result)
+	}
+	if !strings.Contains(err.Error(), "Slack DM capture is disabled by managed settings") {
+		t.Fatalf("expected managed settings error, got %v", err)
+	}
+	if result.AuthorizationURL != "" {
+		t.Fatalf("expected no Slack OAuth URL when DM capture is managed off, got %q", result.AuthorizationURL)
+	}
+}
+
+func TestManagedSettingsDisableSlackDMStart(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	managedPath := filepath.Join(tempDir, "managed-settings.json")
+	if err := os.WriteFile(managedPath, []byte(`{
+  "version": 1,
+  "connectors": {
+    "slack": {
+      "include_dms": {
+        "value": false,
+        "locked": true
+      }
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write managed settings: %v", err)
+	}
+	restoreManagedSettings := workgraph.SetManagedSettingsPathForTest(managedPath)
+	defer restoreManagedSettings()
+
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:         homeDir,
+		DatabasePath:    initResult.DatabasePath,
+		SlackToken:      "xoxp-test",
+		SlackChannels:   []string{"C123"},
+		SlackIncludeDMs: true,
+	})
+	if err == nil {
+		capture.Close()
+		t.Fatalf("expected managed settings to block Slack DM start")
+	}
+	if !strings.Contains(err.Error(), "Slack DM capture is disabled by managed settings") {
+		t.Fatalf("expected managed settings error, got %v", err)
+	}
+}
+
 func TestSlackConnectDMEnabledMessageExplainsDisconnectBeforeRemovingDMScopes(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")

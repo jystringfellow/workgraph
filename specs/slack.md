@@ -46,6 +46,11 @@ must explicitly opt in with `--include-dms` during connect or
 `im:*` and `mpim:*` read/history scopes and includes `im` and `mpim`
 conversations in discovery.
 
+If admin-managed settings lock `connectors.slack.include_dms` to `false`,
+workgraph must refuse Slack DM opt-in before generating an OAuth URL and must
+refuse capture startup when the effective Slack connector settings would poll
+direct messages.
+
 Slack OAuth scopes are additive. To remove Slack-granted DM access, the user
 must disconnect, which revokes the stored Slack token, and then reconnect
 without `--include-dms`:
