@@ -104,6 +104,7 @@ Priority labels used below:
 - [ ] Admin-controlled managed settings file that overrides local user config for workgraph's own behavior. [spec: `specs/config.md` and `specs/enterprise-security.md`]
   - [x] First managed settings reader with fixed platform-managed runtime paths and internal fact-only path injection.
   - [x] `workgraph settings get` reports effective LLM managed settings without exposing secrets.
+  - [x] `workgraph settings get --format json` reports effective managed controls, provenance, and non-secret local settings counts.
   - [x] Managed LLM policy is enforced before provider calls.
   - [x] Locked managed Slack DM policy is enforced before OAuth scope requests and capture startup.
 - [ ] Managed setting provenance in `workgraph doctor`, `workgraph settings get`, and machine-readable diagnostics.

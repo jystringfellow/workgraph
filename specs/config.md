@@ -191,6 +191,17 @@ such as `workgraph settings get`, `workgraph settings doctor`, and `workgraph
 doctor` should report the managed settings file path when one is active and
 should not expose secrets.
 
+`workgraph settings get --format json` should return the same effective
+settings in a machine-readable form for endpoint verification and admin review.
+The JSON output should include:
+
+- whether managed settings are active and which fixed platform path was checked
+- effective managed controls, their locked state, and their provenance
+- local settings path and non-secret counts for watch and ignore rules
+
+The JSON output must not include connector tokens, OAuth client secrets, raw
+captured data, memory contents, or unknown fields from managed settings files.
+
 ## Portability
 
 Configuration should store normalized absolute paths using Go's `filepath` behavior for the current operating system. Friendly tokens such as `~` may be accepted later, but they are not required for Phase 0.

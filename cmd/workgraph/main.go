@@ -1912,17 +1912,19 @@ func runSettingsGet(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 
 	homeDir := flags.String("home", "", "workgraph home directory")
+	format := flags.String("format", "text", "output format: text or json")
 
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
 	if flags.NArg() != 0 {
-		fmt.Fprintln(stderr, "usage: workgraph settings get")
+		fmt.Fprintln(stderr, "usage: workgraph settings get [--format text|json]")
 		return 2
 	}
 
 	result, err := workgraph.GetSettings(workgraph.SettingsGetConfig{
 		HomeDir: *homeDir,
+		Format:  *format,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph settings get: %v\n", err)
