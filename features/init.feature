@@ -17,28 +17,28 @@ Scenario: Create the local memory repo
   Then the local memory repo exists at "~/workgraph-memory"
   And the project memory directory exists at "~/workgraph-memory/projects"
 
-Scenario: Create default config
+Scenario: Create default settings
   Given workgraph has not been initialized
   When I run "workgraph init"
   Then the settings file exists at "~/.workgraph/settings.json"
-  And the config watches existing common user-facing folders
-  And the config does not watch the entire home directory when common folders exist
-  And the config ignores the workgraph home directory
-  And the config stores resolved absolute paths
+  And the settings watch existing common user-facing folders
+  And the settings do not watch the entire home directory when common folders exist
+  And the settings ignore the workgraph home directory
+  And the settings store resolved absolute paths
 
 Scenario: Initialize safely more than once
   Given workgraph has already been initialized
   When I run "workgraph init"
   Then existing events are preserved
   And existing memory files are preserved
-  And existing config edits are preserved
+  And existing settings edits are preserved
   And the command exits successfully
 
-Scenario: Force refresh default config
+Scenario: Force refresh default settings
   Given workgraph has already been initialized
-  And the config contains old or custom defaults
+  And the settings contain old or custom defaults
   When I run "workgraph init --force"
-  Then the config is replaced with the current default config
+  Then the settings are replaced with the current defaults
   And existing events are preserved
   And existing memory files are preserved
 
@@ -49,7 +49,7 @@ Scenario: Report initialized paths
   And the output includes the database path
   And the output includes the memory repo path
   And the output explains where project memory lives
-  And the output includes the config path
+  And the output includes the settings path
 
 Scenario: Explain macOS folder access setup
   Given workgraph has not been initialized on macOS

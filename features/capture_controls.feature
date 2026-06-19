@@ -2,13 +2,13 @@ Feature: Background capture controls
 
 Scenario: Start background capture
   Given workgraph has been initialized
-  And the config contains watch directories
+  And the settings contain watch directories
   When I run "workgraph start"
   Then workgraph starts capture without an attached terminal
   And capture state is written under the workgraph home
 
 Scenario: Use default sane watch roots
-  Given workgraph has been initialized with default config
+  Given workgraph has been initialized with default settings
   When I run "workgraph start"
   Then workgraph watches existing common user-facing folders
   And ignored paths and names are still excluded
@@ -40,7 +40,7 @@ Scenario: Report stopped status
 
 Scenario: Run foreground capture for debugging
   Given workgraph has been initialized
-  And the config contains watch directories
+  And the settings contain watch directories
   When I run "workgraph start --foreground"
   Then workgraph keeps capture attached to the current terminal
   And captured events are printed as they arrive

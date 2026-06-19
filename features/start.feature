@@ -119,6 +119,6 @@ Scenario: Stop gracefully
 
 Scenario: Use configured watch roots by default
   Given workgraph has been initialized
-  And the config watches existing common user-facing folders
+  And the settings watch existing common user-facing folders
   When I run "workgraph start"
   Then workgraph watches the configured directories

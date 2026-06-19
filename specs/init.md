@@ -23,11 +23,11 @@ The home, database, and memory paths may be overridden by CLI flags.
 
 Init creates the active Phase 0 SQLite schema and leaves tables empty. Existing events, sessions, and memory docs are preserved when init runs again.
 
-## Config
+## Settings
 
 Init creates `settings.json` when it does not already exist.
 
-The default config:
+The default settings:
 
 - watches existing common user-facing folders such as Desktop, Documents, Downloads, Code, Projects, Developer, Work, source, and repos
 - avoids recursively watching the entire home directory when common folders exist
@@ -39,7 +39,7 @@ Init must not overwrite an existing settings file by default. User edits to watc
 roots or ignore rules are preserved.
 
 When `--force` is provided, init overwrites `settings.json` with the current
-default config. This is the supported way to pick up newer default ignore rules
+default settings. This is the supported way to pick up newer default ignore rules
 after workgraph changes.
 
 See `specs/config.md` for the settings file contract.
