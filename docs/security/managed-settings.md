@@ -17,7 +17,20 @@ docs/security/enterprise-managed-settings.recommended.json
 ```
 
 It locks hosted LLM providers off, restricts OpenAI-compatible LLM traffic to a
-local endpoint, and locks Slack DM capture off.
+local endpoint, restricts OpenAI-compatible model names to an approved local
+model, and locks Slack DM capture off.
+
+For organizations that approve AWS Bedrock inference profiles instead of local
+models, use this as the starting point:
+
+```text
+docs/security/bedrock-inference-profiles.managed-settings.example.json
+```
+
+It locks LLM use to the `bedrock` provider and restricts Bedrock calls to
+inference profile ARNs in the listed AWS account and region scopes. Replace the
+example account id and region with the organization's approved Bedrock account
+and region before deployment.
 
 ## Deployment Paths
 
@@ -38,8 +51,18 @@ The current managed policy schema supports these controls:
 
 - `llm.hosted_enabled`: disables hosted LLM providers when set to `false` and
   locked.
+- `llm.allowed_providers`: restricts LLM use to listed providers such as
+  `openai-compatible` or `bedrock`.
 - `llm.allowed_base_urls`: restricts OpenAI-compatible LLM destinations to the
   listed base URLs when locked.
+- `llm.openai_compatible.allowed_models`: restricts OpenAI-compatible LLM calls
+  to listed model names when locked.
+- `llm.bedrock.allowed_model_arns`: restricts Bedrock Runtime calls to listed
+  model, provisioned throughput, or inference profile ARNs.
+- `llm.bedrock.allowed_inference_profile_scopes`: allows Bedrock Runtime calls
+  to any inference profile ARN in the listed AWS account and region scopes,
+  while still blocking foundation-model ARNs and inference profiles from other
+  accounts or regions.
 - `connectors.slack.include_dms`: disables Slack direct-message and
   group-direct-message capture when set to `false` and locked.
 
@@ -62,6 +85,13 @@ The JSON output should show:
 - `llm.hosted_enabled.value` is `false`
 - `llm.hosted_enabled.locked` is `true`
 - `llm.allowed_base_urls.locked` is `true`
+- `llm.openai_compatible.allowed_models.locked` is `true` when
+  OpenAI-compatible model allowlisting is used
+- `llm.allowed_providers.locked` is `true` when provider allowlisting is used
+- `llm.bedrock.allowed_model_arns.locked` is `true` when Bedrock ARN
+  allowlisting is used
+- `llm.bedrock.allowed_inference_profile_scopes.locked` is `true` when Bedrock
+  account/region inference profile scope allowlisting is used
 - `connectors.slack.include_dms.value` is `false`
 - `connectors.slack.include_dms.locked` is `true`
 

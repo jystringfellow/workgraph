@@ -297,6 +297,339 @@ func TestManagedSettingsDisableHostedLLMProviders(t *testing.T) {
 	}
 }
 
+func TestManagedSettingsAllowOnlyApprovedOpenAICompatibleModels(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	managedPath := filepath.Join(tempDir, "managed-settings.json")
+	if err := os.WriteFile(managedPath, []byte(`{
+  "version": 1,
+  "llm": {
+    "allowed_providers": {
+      "value": ["openai-compatible"],
+      "locked": true
+    },
+    "allowed_base_urls": {
+      "value": ["http://localhost:11434/v1"],
+      "locked": true
+    },
+    "openai_compatible": {
+      "allowed_models": {
+        "value": ["llama3.1:8b-instruct-q4_K_M"],
+        "locked": true
+      }
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write managed settings: %v", err)
+	}
+	restoreManagedSettings := workgraph.SetManagedSettingsPathForTest(managedPath)
+	defer restoreManagedSettings()
+
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("workgraph init failed: %v", err)
+	}
+	if _, err := workgraph.AddLLMProfile(workgraph.LLMAddProfileConfig{
+		HomeDir:  homeDir,
+		Name:     "blocked-local",
+		Provider: "openai-compatible",
+		BaseURL:  "http://localhost:11434/v1",
+		Model:    "unapproved-model",
+	}); err != nil {
+		t.Fatalf("workgraph llm add blocked local failed: %v", err)
+	}
+	_, err := workgraph.TestLLMProfile(workgraph.LLMTestConfig{
+		HomeDir: homeDir,
+		Profile: "blocked-local",
+	})
+	if err == nil {
+		t.Fatalf("expected managed settings to block unapproved OpenAI-compatible model")
+	}
+	if !strings.Contains(err.Error(), `OpenAI-compatible model "unapproved-model" is not allowed by managed settings`) {
+		t.Fatalf("expected model allowlist error, got: %v", err)
+	}
+
+	var gotModel string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var body struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatalf("decode OpenAI-compatible request: %v", err)
+		}
+		gotModel = body.Model
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "approved local model ok"
+      }
+    }
+  ]
+}`))
+	}))
+	defer server.Close()
+	allowedBaseURL := server.URL + "/v1"
+	if err := os.WriteFile(managedPath, []byte(`{
+  "version": 1,
+  "llm": {
+    "allowed_providers": {
+      "value": ["openai-compatible"],
+      "locked": true
+    },
+    "allowed_base_urls": {
+      "value": ["`+allowedBaseURL+`"],
+      "locked": true
+    },
+    "openai_compatible": {
+      "allowed_models": {
+        "value": ["llama3.1:8b-instruct-q4_K_M"],
+        "locked": true
+      }
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("rewrite managed settings: %v", err)
+	}
+	if _, err := workgraph.AddLLMProfile(workgraph.LLMAddProfileConfig{
+		HomeDir:  homeDir,
+		Name:     "approved-local",
+		Provider: "openai-compatible",
+		BaseURL:  allowedBaseURL,
+		Model:    "llama3.1:8b-instruct-q4_K_M",
+	}); err != nil {
+		t.Fatalf("workgraph llm add approved local failed: %v", err)
+	}
+	result, err := workgraph.TestLLMProfile(workgraph.LLMTestConfig{
+		HomeDir: homeDir,
+		Profile: "approved-local",
+	})
+	if err != nil {
+		t.Fatalf("expected approved OpenAI-compatible model to pass managed settings: %v", err)
+	}
+	if gotModel != "llama3.1:8b-instruct-q4_K_M" {
+		t.Fatalf("expected approved model in request, got %q", gotModel)
+	}
+	if !strings.Contains(result.Message, "approved local model ok") {
+		t.Fatalf("expected approved local model response, got:\n%s", result.Message)
+	}
+}
+
+func TestManagedSettingsAllowOnlyApprovedBedrockInferenceProfiles(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	managedPath := filepath.Join(tempDir, "managed-settings.json")
+	allowedARN := "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+	blockedARN := "arn:aws:bedrock:us-east-1:123456789012:foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0"
+	if err := os.WriteFile(managedPath, []byte(`{
+  "version": 1,
+  "llm": {
+    "allowed_providers": {
+      "value": ["bedrock"],
+      "locked": true
+    },
+    "bedrock": {
+      "allowed_model_arns": {
+        "value": ["`+allowedARN+`"],
+        "locked": true
+      }
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write managed settings: %v", err)
+	}
+	restoreManagedSettings := workgraph.SetManagedSettingsPathForTest(managedPath)
+	defer restoreManagedSettings()
+
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("workgraph init failed: %v", err)
+	}
+	if _, err := workgraph.AddLLMProfile(workgraph.LLMAddProfileConfig{
+		HomeDir:  homeDir,
+		Name:     "local",
+		Provider: "openai-compatible",
+		BaseURL:  "http://localhost:11434/v1",
+		Model:    "local-model",
+	}); err != nil {
+		t.Fatalf("workgraph llm add local failed: %v", err)
+	}
+	if _, err := workgraph.AddLLMProfile(workgraph.LLMAddProfileConfig{
+		HomeDir:  homeDir,
+		Name:     "blocked-bedrock",
+		Provider: "bedrock",
+		Region:   "us-east-1",
+		ModelARN: blockedARN,
+	}); err != nil {
+		t.Fatalf("workgraph llm add blocked bedrock failed: %v", err)
+	}
+
+	_, err := workgraph.TestLLMProfile(workgraph.LLMTestConfig{
+		HomeDir: homeDir,
+		Profile: "local",
+	})
+	if err == nil {
+		t.Fatalf("expected managed settings to block non-Bedrock provider")
+	}
+	if !strings.Contains(err.Error(), `llm provider "openai-compatible" is not allowed by managed settings`) {
+		t.Fatalf("expected provider allowlist error, got: %v", err)
+	}
+
+	_, err = workgraph.TestLLMProfile(workgraph.LLMTestConfig{
+		HomeDir: homeDir,
+		Profile: "blocked-bedrock",
+	})
+	if err == nil {
+		t.Fatalf("expected managed settings to block unapproved Bedrock model ARN")
+	}
+	if !strings.Contains(err.Error(), "Bedrock model ARN is not allowed by managed settings") {
+		t.Fatalf("expected Bedrock allowlist error, got: %v", err)
+	}
+
+	t.Setenv("AWS_ACCESS_KEY_ID", "test-access-key")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret-key")
+	t.Setenv("AWS_SESSION_TOKEN", "test-session-token")
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{
+  "output": {
+    "message": {
+      "role": "assistant",
+      "content": [{"text": "approved bedrock ok"}]
+    }
+  },
+  "stopReason": "end_turn"
+}`))
+	}))
+	defer server.Close()
+
+	if _, err := workgraph.AddLLMProfile(workgraph.LLMAddProfileConfig{
+		HomeDir:  homeDir,
+		Name:     "approved-bedrock",
+		Provider: "bedrock",
+		Region:   "us-east-1",
+		ModelARN: allowedARN,
+		BaseURL:  server.URL,
+	}); err != nil {
+		t.Fatalf("workgraph llm add approved bedrock failed: %v", err)
+	}
+	result, err := workgraph.TestLLMProfile(workgraph.LLMTestConfig{
+		HomeDir: homeDir,
+		Profile: "approved-bedrock",
+	})
+	if err != nil {
+		t.Fatalf("expected approved Bedrock inference profile to pass managed settings: %v", err)
+	}
+	if !strings.Contains(result.Message, "approved bedrock ok") {
+		t.Fatalf("expected approved Bedrock response, got:\n%s", result.Message)
+	}
+}
+
+func TestManagedSettingsAllowBedrockInferenceProfileScope(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	managedPath := filepath.Join(tempDir, "managed-settings.json")
+	allowedARN := "arn:aws:bedrock:us-west-2:123456789012:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+	wrongRegionARN := "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+	wrongAccountARN := "arn:aws:bedrock:us-west-2:999999999999:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+	foundationModelARN := "arn:aws:bedrock:us-west-2:123456789012:foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0"
+	if err := os.WriteFile(managedPath, []byte(`{
+  "version": 1,
+  "llm": {
+    "allowed_providers": {
+      "value": ["bedrock"],
+      "locked": true
+    },
+    "bedrock": {
+      "allowed_inference_profile_scopes": {
+        "value": [
+          {
+            "account_id": "123456789012",
+            "region": "us-west-2"
+          }
+        ],
+        "locked": true
+      }
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write managed settings: %v", err)
+	}
+	restoreManagedSettings := workgraph.SetManagedSettingsPathForTest(managedPath)
+	defer restoreManagedSettings()
+
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("workgraph init failed: %v", err)
+	}
+	for name, modelARN := range map[string]string{
+		"wrong-region":     wrongRegionARN,
+		"wrong-account":    wrongAccountARN,
+		"foundation-model": foundationModelARN,
+	} {
+		if _, err := workgraph.AddLLMProfile(workgraph.LLMAddProfileConfig{
+			HomeDir:  homeDir,
+			Name:     name,
+			Provider: "bedrock",
+			Region:   "us-west-2",
+			ModelARN: modelARN,
+		}); err != nil {
+			t.Fatalf("workgraph llm add %s failed: %v", name, err)
+		}
+		_, err := workgraph.TestLLMProfile(workgraph.LLMTestConfig{
+			HomeDir: homeDir,
+			Profile: name,
+		})
+		if err == nil {
+			t.Fatalf("expected managed settings to block %s", name)
+		}
+		if !strings.Contains(err.Error(), "Bedrock model ARN is not allowed by managed settings") {
+			t.Fatalf("expected Bedrock scope allowlist error for %s, got: %v", name, err)
+		}
+	}
+
+	t.Setenv("AWS_ACCESS_KEY_ID", "test-access-key")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret-key")
+	t.Setenv("AWS_SESSION_TOKEN", "test-session-token")
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{
+  "output": {
+    "message": {
+      "role": "assistant",
+      "content": [{"text": "scoped bedrock ok"}]
+    }
+  },
+  "stopReason": "end_turn"
+}`))
+	}))
+	defer server.Close()
+
+	if _, err := workgraph.AddLLMProfile(workgraph.LLMAddProfileConfig{
+		HomeDir:  homeDir,
+		Name:     "scoped-bedrock",
+		Provider: "bedrock",
+		Region:   "us-west-2",
+		ModelARN: allowedARN,
+		BaseURL:  server.URL,
+	}); err != nil {
+		t.Fatalf("workgraph llm add scoped bedrock failed: %v", err)
+	}
+	result, err := workgraph.TestLLMProfile(workgraph.LLMTestConfig{
+		HomeDir: homeDir,
+		Profile: "scoped-bedrock",
+	})
+	if err != nil {
+		t.Fatalf("expected scoped Bedrock inference profile to pass managed settings: %v", err)
+	}
+	if !strings.Contains(result.Message, "scoped bedrock ok") {
+		t.Fatalf("expected scoped Bedrock response, got:\n%s", result.Message)
+	}
+}
+
 func TestLLMTestUsesBedrockInferenceProfileARN(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")

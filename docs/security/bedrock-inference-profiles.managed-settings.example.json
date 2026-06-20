@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "llm": {
+    "allowed_providers": {
+      "value": ["bedrock"],
+      "locked": true
+    },
+    "bedrock": {
+      "allowed_inference_profile_scopes": {
+        "value": [
+          {
+            "account_id": "123456789012",
+            "region": "us-west-2"
+          }
+        ],
+        "locked": true
+      }
+    }
+  },
+  "connectors": {
+    "slack": {
+      "include_dms": {
+        "value": false,
+        "locked": true
+      }
+    }
+  }
+}

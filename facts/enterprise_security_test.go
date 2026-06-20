@@ -55,8 +55,14 @@ func TestManagedSettingsDeploymentGuideAndPolicyExample(t *testing.T) {
 		"%ProgramData%\\workgraph\\managed-settings.json",
 		"/etc/workgraph/managed-settings.json",
 		"enterprise-managed-settings.recommended.json",
+		"bedrock-inference-profiles.managed-settings.example.json",
 		"workgraph settings get --format json",
 		"hosted LLM providers",
+		"Bedrock inference profiles",
+		"llm.allowed_providers",
+		"llm.openai_compatible.allowed_models",
+		"llm.bedrock.allowed_model_arns",
+		"llm.bedrock.allowed_inference_profile_scopes",
 		"Slack DM capture",
 		"endpoint management",
 		"does not prevent a user from running unrelated software",
@@ -86,6 +92,16 @@ func TestManagedSettingsDeploymentGuideAndPolicyExample(t *testing.T) {
 				Value  []string `json:"value"`
 				Locked bool     `json:"locked"`
 			} `json:"allowed_base_urls"`
+			AllowedProviders struct {
+				Value  []string `json:"value"`
+				Locked bool     `json:"locked"`
+			} `json:"allowed_providers"`
+			OpenAICompatible struct {
+				AllowedModels struct {
+					Value  []string `json:"value"`
+					Locked bool     `json:"locked"`
+				} `json:"allowed_models"`
+			} `json:"openai_compatible"`
 		} `json:"llm"`
 		Connectors struct {
 			Slack struct {
@@ -108,7 +124,52 @@ func TestManagedSettingsDeploymentGuideAndPolicyExample(t *testing.T) {
 	if len(policy.LLM.AllowedBaseURLs.Value) != 1 || policy.LLM.AllowedBaseURLs.Value[0] != "http://localhost:11434/v1" || !policy.LLM.AllowedBaseURLs.Locked {
 		t.Fatalf("expected recommended policy to lock LLM base URLs to local endpoint, got %+v", policy.LLM.AllowedBaseURLs)
 	}
+	if len(policy.LLM.AllowedProviders.Value) != 1 || policy.LLM.AllowedProviders.Value[0] != "openai-compatible" || !policy.LLM.AllowedProviders.Locked {
+		t.Fatalf("expected recommended policy to lock allowed providers to openai-compatible, got %+v", policy.LLM.AllowedProviders)
+	}
+	if len(policy.LLM.OpenAICompatible.AllowedModels.Value) != 1 || policy.LLM.OpenAICompatible.AllowedModels.Value[0] != "llama3.1:8b-instruct-q4_K_M" || !policy.LLM.OpenAICompatible.AllowedModels.Locked {
+		t.Fatalf("expected recommended policy to lock OpenAI-compatible allowed models, got %+v", policy.LLM.OpenAICompatible.AllowedModels)
+	}
 	if policy.Connectors.Slack.IncludeDMs.Value || !policy.Connectors.Slack.IncludeDMs.Locked {
 		t.Fatalf("expected recommended policy to lock Slack DM capture off")
+	}
+
+	bedrockPolicyPath := filepath.Join(root, "docs", "security", "bedrock-inference-profiles.managed-settings.example.json")
+	bedrockPolicyContents, err := os.ReadFile(bedrockPolicyPath)
+	if err != nil {
+		t.Fatalf("read Bedrock managed settings policy: %v", err)
+	}
+	var bedrockPolicy struct {
+		Version int `json:"version"`
+		LLM     struct {
+			AllowedProviders struct {
+				Value  []string `json:"value"`
+				Locked bool     `json:"locked"`
+			} `json:"allowed_providers"`
+			Bedrock struct {
+				AllowedInferenceProfileScopes struct {
+					Value []struct {
+						AccountID string `json:"account_id"`
+						Region    string `json:"region"`
+					} `json:"value"`
+					Locked bool `json:"locked"`
+				} `json:"allowed_inference_profile_scopes"`
+			} `json:"bedrock"`
+		} `json:"llm"`
+	}
+	if err := json.Unmarshal(bedrockPolicyContents, &bedrockPolicy); err != nil {
+		t.Fatalf("Bedrock managed settings policy must be valid JSON: %v", err)
+	}
+	if bedrockPolicy.Version != 1 {
+		t.Fatalf("expected Bedrock managed settings policy version 1, got %d", bedrockPolicy.Version)
+	}
+	if len(bedrockPolicy.LLM.AllowedProviders.Value) != 1 || bedrockPolicy.LLM.AllowedProviders.Value[0] != "bedrock" || !bedrockPolicy.LLM.AllowedProviders.Locked {
+		t.Fatalf("expected Bedrock policy to lock allowed providers to bedrock, got %+v", bedrockPolicy.LLM.AllowedProviders)
+	}
+	if len(bedrockPolicy.LLM.Bedrock.AllowedInferenceProfileScopes.Value) != 1 ||
+		bedrockPolicy.LLM.Bedrock.AllowedInferenceProfileScopes.Value[0].AccountID != "123456789012" ||
+		bedrockPolicy.LLM.Bedrock.AllowedInferenceProfileScopes.Value[0].Region != "us-west-2" ||
+		!bedrockPolicy.LLM.Bedrock.AllowedInferenceProfileScopes.Locked {
+		t.Fatalf("expected Bedrock policy to lock inference profile scopes, got %+v", bedrockPolicy.LLM.Bedrock.AllowedInferenceProfileScopes)
 	}
 }

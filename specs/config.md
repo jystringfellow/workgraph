@@ -166,6 +166,33 @@ Example:
     "allowed_base_urls": {
       "value": ["http://localhost:11434/v1"],
       "locked": true
+    },
+    "allowed_providers": {
+      "value": ["openai-compatible", "bedrock"],
+      "locked": true
+    },
+    "openai_compatible": {
+      "allowed_models": {
+        "value": ["llama3.1:8b-instruct-q4_K_M"],
+        "locked": true
+      }
+    },
+    "bedrock": {
+      "allowed_model_arns": {
+        "value": [
+          "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+        ],
+        "locked": true
+      },
+      "allowed_inference_profile_scopes": {
+        "value": [
+          {
+            "account_id": "123456789012",
+            "region": "us-west-2"
+          }
+        ],
+        "locked": true
+      }
     }
   },
   "connectors": {

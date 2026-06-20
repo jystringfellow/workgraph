@@ -68,6 +68,31 @@ func TestSettingsGetReportsManagedSettingsWithoutSecrets(t *testing.T) {
     "allowed_base_urls": {
       "value": ["http://localhost:11434/v1"],
       "locked": true
+    },
+    "allowed_providers": {
+      "value": ["bedrock"],
+      "locked": true
+    },
+    "openai_compatible": {
+      "allowed_models": {
+        "value": ["llama3.1:8b-instruct-q4_K_M"],
+        "locked": true
+      }
+    },
+    "bedrock": {
+      "allowed_model_arns": {
+        "value": ["arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0"],
+        "locked": true
+      },
+      "allowed_inference_profile_scopes": {
+        "value": [
+          {
+            "account_id": "123456789012",
+            "region": "us-west-2"
+          }
+        ],
+        "locked": true
+      }
     }
   },
   "connectors": {
@@ -123,6 +148,31 @@ func TestSettingsGetJSONReportsManagedSettingsWithoutSecrets(t *testing.T) {
     "allowed_base_urls": {
       "value": ["http://localhost:11434/v1"],
       "locked": true
+    },
+    "allowed_providers": {
+      "value": ["bedrock"],
+      "locked": true
+    },
+    "openai_compatible": {
+      "allowed_models": {
+        "value": ["llama3.1:8b-instruct-q4_K_M"],
+        "locked": true
+      }
+    },
+    "bedrock": {
+      "allowed_model_arns": {
+        "value": ["arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0"],
+        "locked": true
+      },
+      "allowed_inference_profile_scopes": {
+        "value": [
+          {
+            "account_id": "123456789012",
+            "region": "us-west-2"
+          }
+        ],
+        "locked": true
+      }
     }
   },
   "connectors": {
@@ -173,6 +223,33 @@ func TestSettingsGetJSONReportsManagedSettingsWithoutSecrets(t *testing.T) {
 				Locked bool     `json:"locked"`
 				Source string   `json:"source"`
 			} `json:"allowed_base_urls"`
+			AllowedProviders struct {
+				Value  []string `json:"value"`
+				Locked bool     `json:"locked"`
+				Source string   `json:"source"`
+			} `json:"allowed_providers"`
+			OpenAICompatible struct {
+				AllowedModels struct {
+					Value  []string `json:"value"`
+					Locked bool     `json:"locked"`
+					Source string   `json:"source"`
+				} `json:"allowed_models"`
+			} `json:"openai_compatible"`
+			Bedrock struct {
+				AllowedModelARNs struct {
+					Value  []string `json:"value"`
+					Locked bool     `json:"locked"`
+					Source string   `json:"source"`
+				} `json:"allowed_model_arns"`
+				AllowedInferenceProfileScopes struct {
+					Value []struct {
+						AccountID string `json:"account_id"`
+						Region    string `json:"region"`
+					} `json:"value"`
+					Locked bool   `json:"locked"`
+					Source string `json:"source"`
+				} `json:"allowed_inference_profile_scopes"`
+			} `json:"bedrock"`
 		} `json:"llm"`
 		Connectors struct {
 			Slack struct {
@@ -198,6 +275,22 @@ func TestSettingsGetJSONReportsManagedSettingsWithoutSecrets(t *testing.T) {
 	}
 	if len(payload.LLM.AllowedBaseURLs.Value) != 1 || payload.LLM.AllowedBaseURLs.Value[0] != "http://localhost:11434/v1" || !payload.LLM.AllowedBaseURLs.Locked || payload.LLM.AllowedBaseURLs.Source != "managed" {
 		t.Fatalf("expected managed allowed LLM base URLs, got %+v", payload.LLM.AllowedBaseURLs)
+	}
+	if len(payload.LLM.AllowedProviders.Value) != 1 || payload.LLM.AllowedProviders.Value[0] != "bedrock" || !payload.LLM.AllowedProviders.Locked || payload.LLM.AllowedProviders.Source != "managed" {
+		t.Fatalf("expected managed allowed LLM providers, got %+v", payload.LLM.AllowedProviders)
+	}
+	if len(payload.LLM.OpenAICompatible.AllowedModels.Value) != 1 || payload.LLM.OpenAICompatible.AllowedModels.Value[0] != "llama3.1:8b-instruct-q4_K_M" || !payload.LLM.OpenAICompatible.AllowedModels.Locked || payload.LLM.OpenAICompatible.AllowedModels.Source != "managed" {
+		t.Fatalf("expected managed OpenAI-compatible allowed models, got %+v", payload.LLM.OpenAICompatible.AllowedModels)
+	}
+	if len(payload.LLM.Bedrock.AllowedModelARNs.Value) != 1 || !strings.Contains(payload.LLM.Bedrock.AllowedModelARNs.Value[0], ":inference-profile/") || !payload.LLM.Bedrock.AllowedModelARNs.Locked || payload.LLM.Bedrock.AllowedModelARNs.Source != "managed" {
+		t.Fatalf("expected managed Bedrock allowed model ARNs, got %+v", payload.LLM.Bedrock.AllowedModelARNs)
+	}
+	if len(payload.LLM.Bedrock.AllowedInferenceProfileScopes.Value) != 1 ||
+		payload.LLM.Bedrock.AllowedInferenceProfileScopes.Value[0].AccountID != "123456789012" ||
+		payload.LLM.Bedrock.AllowedInferenceProfileScopes.Value[0].Region != "us-west-2" ||
+		!payload.LLM.Bedrock.AllowedInferenceProfileScopes.Locked ||
+		payload.LLM.Bedrock.AllowedInferenceProfileScopes.Source != "managed" {
+		t.Fatalf("expected managed Bedrock inference profile scopes, got %+v", payload.LLM.Bedrock.AllowedInferenceProfileScopes)
 	}
 	if payload.Connectors.Slack.IncludeDMs.Value || !payload.Connectors.Slack.IncludeDMs.Locked || payload.Connectors.Slack.IncludeDMs.Source != "managed" {
 		t.Fatalf("expected Slack DM capture disabled from managed settings, got %+v", payload.Connectors.Slack.IncludeDMs)

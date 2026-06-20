@@ -107,6 +107,18 @@ func GetSettings(config SettingsGetConfig) (SettingsGetResult, error) {
 	if len(managed.LLM.AllowedBaseURL.Value) > 0 {
 		lines = append(lines, "LLM allowed base URLs: "+strings.Join(managed.LLM.AllowedBaseURL.Value, ", ")+" ("+managedSettingSource(managed.LLM.AllowedBaseURL.Locked)+")")
 	}
+	if len(managed.LLM.AllowedProvider.Value) > 0 {
+		lines = append(lines, "LLM allowed providers: "+strings.Join(managed.LLM.AllowedProvider.Value, ", ")+" ("+managedSettingSource(managed.LLM.AllowedProvider.Locked)+")")
+	}
+	if len(managed.LLM.OpenAICompatible.AllowedModels.Value) > 0 {
+		lines = append(lines, "OpenAI-compatible allowed models: "+strings.Join(managed.LLM.OpenAICompatible.AllowedModels.Value, ", ")+" ("+managedSettingSource(managed.LLM.OpenAICompatible.AllowedModels.Locked)+")")
+	}
+	if len(managed.LLM.Bedrock.AllowedModelARNs.Value) > 0 {
+		lines = append(lines, "Bedrock allowed model ARNs: "+strings.Join(managed.LLM.Bedrock.AllowedModelARNs.Value, ", ")+" ("+managedSettingSource(managed.LLM.Bedrock.AllowedModelARNs.Locked)+")")
+	}
+	if len(managed.LLM.Bedrock.AllowedInferenceProfileScopes.Value) > 0 {
+		lines = append(lines, "Bedrock allowed inference profile scopes: "+bedrockInferenceProfileScopeText(managed.LLM.Bedrock.AllowedInferenceProfileScopes.Value)+" ("+managedSettingSource(managed.LLM.Bedrock.AllowedInferenceProfileScopes.Locked)+")")
+	}
 	if managed.Connectors.Slack.IncludeDMs.Value != nil {
 		state := "enabled"
 		if !*managed.Connectors.Slack.IncludeDMs.Value {
@@ -143,8 +155,26 @@ type managedSettingsJSONInfo struct {
 }
 
 type llmSettingsJSONInfo struct {
-	HostedEnabled  managedBoolJSONInfo        `json:"hosted_enabled"`
-	AllowedBaseURL managedStringSliceJSONInfo `json:"allowed_base_urls"`
+	HostedEnabled    managedBoolJSONInfo              `json:"hosted_enabled"`
+	AllowedBaseURL   managedStringSliceJSONInfo       `json:"allowed_base_urls"`
+	AllowedProvider  managedStringSliceJSONInfo       `json:"allowed_providers"`
+	OpenAICompatible openAICompatibleSettingsJSONInfo `json:"openai_compatible"`
+	Bedrock          bedrockSettingsJSONInfo          `json:"bedrock"`
+}
+
+type openAICompatibleSettingsJSONInfo struct {
+	AllowedModels managedStringSliceJSONInfo `json:"allowed_models"`
+}
+
+type bedrockSettingsJSONInfo struct {
+	AllowedModelARNs              managedStringSliceJSONInfo                  `json:"allowed_model_arns"`
+	AllowedInferenceProfileScopes managedBedrockInferenceProfileScopeJSONInfo `json:"allowed_inference_profile_scopes"`
+}
+
+type managedBedrockInferenceProfileScopeJSONInfo struct {
+	Value  []managedBedrockInferenceProfileScope `json:"value"`
+	Locked bool                                  `json:"locked"`
+	Source string                                `json:"source"`
 }
 
 type connectorSettingsJSONInfo struct {
@@ -181,8 +211,16 @@ func settingsGetJSON(settingsPath, managedPath string, managedPresent bool, loca
 			Path:   managedPath,
 		},
 		LLM: llmSettingsJSONInfo{
-			HostedEnabled:  boolManagedJSON(managed.LLM.HostedEnabled),
-			AllowedBaseURL: stringSliceManagedJSON(managed.LLM.AllowedBaseURL),
+			HostedEnabled:   boolManagedJSON(managed.LLM.HostedEnabled),
+			AllowedBaseURL:  stringSliceManagedJSON(managed.LLM.AllowedBaseURL),
+			AllowedProvider: stringSliceManagedJSON(managed.LLM.AllowedProvider),
+			OpenAICompatible: openAICompatibleSettingsJSONInfo{
+				AllowedModels: stringSliceManagedJSON(managed.LLM.OpenAICompatible.AllowedModels),
+			},
+			Bedrock: bedrockSettingsJSONInfo{
+				AllowedModelARNs:              stringSliceManagedJSON(managed.LLM.Bedrock.AllowedModelARNs),
+				AllowedInferenceProfileScopes: bedrockInferenceProfileScopesManagedJSON(managed.LLM.Bedrock.AllowedInferenceProfileScopes),
+			},
 		},
 		Connectors: connectorSettingsJSONInfo{
 			Slack: slackSettingsJSONInfo{
@@ -224,6 +262,27 @@ func stringSliceManagedJSON(setting managedStringSliceSetting) managedStringSlic
 		Locked: setting.Locked,
 		Source: source,
 	}
+}
+
+func bedrockInferenceProfileScopesManagedJSON(setting managedBedrockInferenceProfileScopeSetting) managedBedrockInferenceProfileScopeJSONInfo {
+	source := "user_config"
+	if len(setting.Value) > 0 {
+		source = "managed"
+	}
+	value := append([]managedBedrockInferenceProfileScope(nil), setting.Value...)
+	return managedBedrockInferenceProfileScopeJSONInfo{
+		Value:  value,
+		Locked: setting.Locked,
+		Source: source,
+	}
+}
+
+func bedrockInferenceProfileScopeText(scopes []managedBedrockInferenceProfileScope) string {
+	labels := make([]string, 0, len(scopes))
+	for _, scope := range scopes {
+		labels = append(labels, strings.TrimSpace(scope.AccountID)+" "+strings.TrimSpace(scope.Region))
+	}
+	return strings.Join(labels, ", ")
 }
 
 // DoctorSettings validates local and managed settings without printing secrets.

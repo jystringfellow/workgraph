@@ -21,8 +21,30 @@ type managedSettingsFile struct {
 }
 
 type managedLLMSettings struct {
-	HostedEnabled  managedBoolSetting        `json:"hosted_enabled"`
-	AllowedBaseURL managedStringSliceSetting `json:"allowed_base_urls"`
+	HostedEnabled    managedBoolSetting              `json:"hosted_enabled"`
+	AllowedBaseURL   managedStringSliceSetting       `json:"allowed_base_urls"`
+	AllowedProvider  managedStringSliceSetting       `json:"allowed_providers"`
+	OpenAICompatible managedOpenAICompatibleSettings `json:"openai_compatible"`
+	Bedrock          managedBedrockSettings          `json:"bedrock"`
+}
+
+type managedOpenAICompatibleSettings struct {
+	AllowedModels managedStringSliceSetting `json:"allowed_models"`
+}
+
+type managedBedrockSettings struct {
+	AllowedModelARNs              managedStringSliceSetting                  `json:"allowed_model_arns"`
+	AllowedInferenceProfileScopes managedBedrockInferenceProfileScopeSetting `json:"allowed_inference_profile_scopes"`
+}
+
+type managedBedrockInferenceProfileScopeSetting struct {
+	Value  []managedBedrockInferenceProfileScope `json:"value"`
+	Locked bool                                  `json:"locked"`
+}
+
+type managedBedrockInferenceProfileScope struct {
+	AccountID string `json:"account_id"`
+	Region    string `json:"region"`
 }
 
 type managedConnectorSettings struct {
@@ -96,11 +118,23 @@ func enforceLLMManagedSettings(profile llmProfile) error {
 	if !present {
 		return nil
 	}
+	if len(settings.LLM.AllowedProvider.Value) > 0 && !stringAllowedFold(profile.Provider, settings.LLM.AllowedProvider.Value) {
+		return fmt.Errorf("llm provider %q is not allowed by managed settings", profile.Provider)
+	}
 	if len(settings.LLM.AllowedBaseURL.Value) > 0 && profile.Provider == "openai-compatible" {
 		if !baseURLAllowed(profile.BaseURL, settings.LLM.AllowedBaseURL.Value) {
 			return fmt.Errorf("llm destination %q is not allowed by managed settings", profile.BaseURL)
 		}
-		return nil
+	}
+	if len(settings.LLM.OpenAICompatible.AllowedModels.Value) > 0 && profile.Provider == "openai-compatible" {
+		if !stringAllowed(profile.Model, settings.LLM.OpenAICompatible.AllowedModels.Value) {
+			return fmt.Errorf("OpenAI-compatible model %q is not allowed by managed settings", profile.Model)
+		}
+	}
+	if bedrockModelARNRestricted(settings.LLM.Bedrock) && profile.Provider == "bedrock" {
+		if !bedrockModelARNAllowed(profile.ModelARN, settings.LLM.Bedrock) {
+			return fmt.Errorf("Bedrock model ARN is not allowed by managed settings: %s", profile.ModelARN)
+		}
 	}
 	if settings.LLM.HostedEnabled.Value != nil && !*settings.LLM.HostedEnabled.Value {
 		if profile.Provider != "openai-compatible" {
@@ -142,6 +176,75 @@ func baseURLAllowed(baseURL string, allowed []string) bool {
 		}
 	}
 	return false
+}
+
+func stringAllowed(value string, allowed []string) bool {
+	normalized := strings.TrimSpace(value)
+	for _, candidate := range allowed {
+		if normalized == strings.TrimSpace(candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func stringAllowedFold(value string, allowed []string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	for _, candidate := range allowed {
+		if normalized == strings.ToLower(strings.TrimSpace(candidate)) {
+			return true
+		}
+	}
+	return false
+}
+
+func bedrockModelARNRestricted(settings managedBedrockSettings) bool {
+	return len(settings.AllowedModelARNs.Value) > 0 || len(settings.AllowedInferenceProfileScopes.Value) > 0
+}
+
+func bedrockModelARNAllowed(modelARN string, settings managedBedrockSettings) bool {
+	if stringAllowed(modelARN, settings.AllowedModelARNs.Value) {
+		return true
+	}
+	for _, scope := range settings.AllowedInferenceProfileScopes.Value {
+		if bedrockInferenceProfileARNInScope(modelARN, scope) {
+			return true
+		}
+	}
+	return false
+}
+
+func bedrockInferenceProfileARNInScope(modelARN string, scope managedBedrockInferenceProfileScope) bool {
+	parsed := parseAWSARN(modelARN)
+	if parsed.Service != "bedrock" {
+		return false
+	}
+	if parsed.Region != strings.TrimSpace(scope.Region) || parsed.AccountID != strings.TrimSpace(scope.AccountID) {
+		return false
+	}
+	return strings.HasPrefix(parsed.Resource, "inference-profile/")
+}
+
+type awsARNParts struct {
+	Partition string
+	Service   string
+	Region    string
+	AccountID string
+	Resource  string
+}
+
+func parseAWSARN(value string) awsARNParts {
+	parts := strings.SplitN(strings.TrimSpace(value), ":", 6)
+	if len(parts) != 6 || parts[0] != "arn" {
+		return awsARNParts{}
+	}
+	return awsARNParts{
+		Partition: parts[1],
+		Service:   parts[2],
+		Region:    parts[3],
+		AccountID: parts[4],
+		Resource:  parts[5],
+	}
 }
 
 func isLocalLLMBaseURL(baseURL string) bool {
