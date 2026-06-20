@@ -51,8 +51,15 @@ Requirements:
 Initial managed controls should cover:
 
 - disabling hosted LLM providers entirely
+- restricting LLM providers to an approved allowlist such as
+  `openai-compatible` or `bedrock`
 - restricting LLM base URLs or provider destinations to approved local/company
   endpoints
+- restricting OpenAI-compatible LLM model names to an approved allowlist
+- restricting Bedrock model ARNs to approved foundation model, provisioned
+  throughput, or inference profile ARNs
+- restricting Bedrock inference profile use to approved AWS account and region
+  scopes when exact ARN enumeration is too brittle
 - disabling or enabling connector families
 - disabling Slack direct-message and group-direct-message capture
 - disabling full mail body capture when metadata-only capture exists
