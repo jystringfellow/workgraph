@@ -117,7 +117,8 @@ Priority labels used below:
 - [ ] SQLite encryption at rest
 - [ ] OS credential-store backed SQLite encryption keys
 - [x] POSIX connector credential file permission hardening
-- [ ] Windows connector credential ACL hardening
+- [ ] Windows connector credential ACL design and CI readiness
+- [ ] Windows connector credential ACL implementation verified by Windows CI
 - [ ] OS credential-store backed connector secrets
 - [x] Manual-token connector setup pattern: OAuth remains the default, while `connect-token` style commands support local-only PAT/internal-token use with clear warnings.
 - [ ] Hosted LLM opt-in controls [P1, spec: `specs/enterprise-security.md`]
