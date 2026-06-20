@@ -87,9 +87,11 @@ Requirements:
   where POSIX file modes are supported
 - create and repair the workgraph home directory with local-user-only POSIX
   traversal permissions where POSIX file modes are supported
-- add Windows ACL hardening for connector credential and credential-adjacent
-  runtime files because POSIX mode bits are not an equivalent Windows security
-  control
+- define Windows ACL hardening for connector credential and
+  credential-adjacent runtime files because POSIX mode bits are not an
+  equivalent Windows security control
+- verify Windows ACL behavior in Windows CI before marking Windows credential
+  file hardening complete
 - move raw connector secrets into the operating system credential store while
   keeping non-secret connector metadata inspectable in JSON
 - document connector credential paths, credential contents, diagnostics

@@ -31,7 +31,8 @@ This protects against accidental local multi-user exposure on POSIX-style
 platforms such as macOS and Linux, but it is not a replacement for disk
 encryption, endpoint controls, or an OS credential store. Windows needs
 equivalent ACL hardening because POSIX mode bits are not a Windows security
-boundary.
+boundary. Windows ACL implementation should be verified by Windows CI before it
+is considered complete.
 
 ## Diagnostics
 
@@ -63,6 +64,9 @@ The completed file-permission slice is POSIX connector credential file permissio
 Remaining work is split into separate platform and storage layers:
 
 - Windows connector credential ACL hardening for credential and runtime files.
+- Windows connector credential ACL design and CI readiness before implementation
+  is claimed complete.
+- Windows connector credential ACL implementation verified by Windows CI.
 - OS credential-store backed connector secrets for raw access tokens and refresh
   tokens.
 - OS credential-store backed SQLite encryption keys for encrypted local event
