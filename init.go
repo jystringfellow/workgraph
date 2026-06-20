@@ -43,7 +43,7 @@ func Init(config InitConfig) (InitResult, error) {
 		return InitResult{}, err
 	}
 
-	if err := os.MkdirAll(homeDir, 0o755); err != nil {
+	if err := ensureWorkgraphHomeDir(homeDir); err != nil {
 		return InitResult{}, fmt.Errorf("create workgraph home: %w", err)
 	}
 
@@ -95,6 +95,13 @@ func Init(config InitConfig) (InitResult, error) {
 	result.Message = initMessage(result)
 
 	return result, nil
+}
+
+func ensureWorkgraphHomeDir(homeDir string) error {
+	if err := os.MkdirAll(homeDir, 0o700); err != nil {
+		return err
+	}
+	return os.Chmod(homeDir, 0o700)
 }
 
 func resolveHomeDir(homeDir string) (string, error) {
