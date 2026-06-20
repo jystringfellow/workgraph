@@ -35,6 +35,34 @@ func TestInitCreatesworkgraphHome(t *testing.T) {
 	if !info.IsDir() {
 		t.Fatalf("expected workgraph home to be a directory")
 	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("expected workgraph home permissions 0700, got %v", got)
+	}
+}
+
+func TestInitRepairsworkgraphHomePermissions(t *testing.T) {
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	if err := os.MkdirAll(homeDir, 0o700); err != nil {
+		t.Fatalf("create workgraph home: %v", err)
+	}
+	if err := os.Chmod(homeDir, 0o600); err != nil {
+		t.Fatalf("set broken workgraph home permissions: %v", err)
+	}
+
+	_, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir: homeDir,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	info, err := os.Stat(homeDir)
+	if err != nil {
+		t.Fatalf("expected workgraph home to exist: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("expected workgraph home permissions repaired to 0700, got %v", got)
+	}
 }
 
 func TestInitCreatesSQLiteDatabase(t *testing.T) {

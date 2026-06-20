@@ -190,6 +190,7 @@ func TestConnectorCredentialHardeningGuideInventoriesLocalSecrets(t *testing.T) 
 		"~/.workgraph/azure-boards.json",
 		"~/.workgraph/llm.json",
 		"~/.workgraph/connectors.json",
+		"0700",
 		"0600",
 		"POSIX connector credential file permission hardening",
 		"Windows connector credential ACL hardening",

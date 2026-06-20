@@ -19,6 +19,10 @@ integration tokens, or credential-adjacent runtime state.
 
 ## File Permissions
 
+The workgraph home directory itself should be `0700` on POSIX-style platforms so
+the local user can traverse it and other local users cannot list or enter it.
+`workgraph init` creates and repairs the directory with that mode.
+
 Connector credential and runtime files are written with `0600` permissions where
 the operating system supports POSIX-style file modes. Writers also repair
 existing files back to `0600` when they rewrite connector state.

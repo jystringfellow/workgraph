@@ -85,6 +85,8 @@ Requirements:
 - write connector credential and credential-adjacent runtime files with
   local-user-only POSIX permissions and repair broader permissions on rewrite
   where POSIX file modes are supported
+- create and repair the workgraph home directory with local-user-only POSIX
+  traversal permissions where POSIX file modes are supported
 - add Windows ACL hardening for connector credential and credential-adjacent
   runtime files because POSIX mode bits are not an equivalent Windows security
   control
