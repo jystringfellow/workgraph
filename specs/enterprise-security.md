@@ -79,9 +79,19 @@ connector data.
 Requirements:
 
 - encrypt the SQLite event store at rest
-- store encryption keys in the operating system credential store, such as macOS
-  Keychain or Windows Credential Manager
+- store SQLite encryption keys in the operating system credential store, such
+  as macOS Keychain or Windows Credential Manager
 - avoid storing raw connector tokens in world-readable files
+- write connector credential and credential-adjacent runtime files with
+  local-user-only POSIX permissions and repair broader permissions on rewrite
+  where POSIX file modes are supported
+- add Windows ACL hardening for connector credential and credential-adjacent
+  runtime files because POSIX mode bits are not an equivalent Windows security
+  control
+- move raw connector secrets into the operating system credential store while
+  keeping non-secret connector metadata inspectable in JSON
+- document connector credential paths, credential contents, diagnostics
+  boundaries, and provider revocation behavior
 - preserve local-first operation without a workgraph cloud service
 - document backup and recovery implications for encrypted local state
 

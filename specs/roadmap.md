@@ -115,8 +115,10 @@ Priority labels used below:
   - [x] Slack direct-message and group-direct-message capture can be locked off with managed settings.
 - [ ] Machine-readable security/config report for endpoint verification.
 - [ ] SQLite encryption at rest
-- [ ] OS credential-store backed encryption keys
-- [ ] Connector credential hardening
+- [ ] OS credential-store backed SQLite encryption keys
+- [x] POSIX connector credential file permission hardening
+- [ ] Windows connector credential ACL hardening
+- [ ] OS credential-store backed connector secrets
 - [x] Manual-token connector setup pattern: OAuth remains the default, while `connect-token` style commands support local-only PAT/internal-token use with clear warnings.
 - [ ] Hosted LLM opt-in controls [P1, spec: `specs/enterprise-security.md`]
 - [ ] Local outbound LLM filtering for secrets and configured sensitive patterns

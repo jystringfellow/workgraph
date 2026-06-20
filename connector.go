@@ -709,6 +709,9 @@ func writeConnectorRuntimeFile(homeDir string, state connectorRuntimeFile) error
 	if err := os.WriteFile(connectorRuntimePath(homeDir), append(contents, '\n'), 0o600); err != nil {
 		return fmt.Errorf("write connector settings: %w", err)
 	}
+	if err := os.Chmod(connectorRuntimePath(homeDir), 0o600); err != nil {
+		return fmt.Errorf("secure connector settings: %w", err)
+	}
 	return nil
 }
 

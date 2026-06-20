@@ -652,3 +652,34 @@ func eventWithSummaryExists(t *testing.T, dbPath, eventType, summary string) boo
 	}
 	return count > 0
 }
+
+func TestConnectorRuntimeSettingsAreRepairedToUserOnlyPermissions(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	runtimePath := filepath.Join(homeDir, "connectors.json")
+	if err := os.WriteFile(runtimePath, []byte(`{"connectors":{}}`), 0o644); err != nil {
+		t.Fatalf("write broad connector runtime settings: %v", err)
+	}
+	if err := os.Chmod(runtimePath, 0o644); err != nil {
+		t.Fatalf("set broad connector runtime permissions: %v", err)
+	}
+
+	if _, err := workgraph.SetConnectorEnabled(workgraph.ConnectorUpdateConfig{
+		HomeDir: homeDir,
+		ID:      "slack",
+		Enabled: true,
+	}); err != nil {
+		t.Fatalf("enable connector: %v", err)
+	}
+
+	info, err := os.Stat(runtimePath)
+	if err != nil {
+		t.Fatalf("stat connector runtime settings: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("expected connector runtime settings permissions 0600, got %v", got)
+	}
+}

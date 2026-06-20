@@ -173,3 +173,38 @@ func TestManagedSettingsDeploymentGuideAndPolicyExample(t *testing.T) {
 		t.Fatalf("expected Bedrock policy to lock inference profile scopes, got %+v", bedrockPolicy.LLM.Bedrock.AllowedInferenceProfileScopes)
 	}
 }
+
+func TestConnectorCredentialHardeningGuideInventoriesLocalSecrets(t *testing.T) {
+	path := filepath.Join(repoRoot(t), "docs", "security", "connector-credentials.md")
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read connector credential hardening guide: %v", err)
+	}
+	guide := string(contents)
+	for _, expected := range []string{
+		"# Connector Credential Hardening",
+		"~/.workgraph/slack.json",
+		"~/.workgraph/calendar.json",
+		"~/.workgraph/mail.json",
+		"~/.workgraph/notion.json",
+		"~/.workgraph/azure-boards.json",
+		"~/.workgraph/llm.json",
+		"~/.workgraph/connectors.json",
+		"0600",
+		"POSIX connector credential file permission hardening",
+		"Windows connector credential ACL hardening",
+		"access tokens",
+		"refresh tokens",
+		"workgraph settings get --format json",
+		"workgraph connectors doctor",
+		"disconnect",
+		"does not print connector credentials",
+		"OS credential store",
+		"Windows Credential Manager",
+		"SQLite encryption keys",
+	} {
+		if !strings.Contains(guide, expected) {
+			t.Fatalf("expected connector credential guide to include %q", expected)
+		}
+	}
+}
