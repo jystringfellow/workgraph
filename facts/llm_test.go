@@ -1392,7 +1392,7 @@ func TestHostedLLMSummarizeFiltersSecretsBeforeProviderCall(t *testing.T) {
 	if _, err := workgraph.EnableHostedLLM(workgraph.LLMHostedConfig{HomeDir: homeDir}); err != nil {
 		t.Fatalf("workgraph llm hosted enable failed: %v", err)
 	}
-	insertLLMEvent(t, filepath.Join(homeDir, "workgraph.db"), "secret-1", "notion.page_updated", time.Now().UTC().Format(time.RFC3339Nano), "workgraph", "Updated incident notes", `{"title":"Updated incident notes","content_preview":"Token ghp_abcdefghijklmnopqrstuvwxyz1234567890ABCD and AWS key AKIAIOSFODNN7EXAMPLE plus PROJECT-1234-SECRET"}`)
+	insertLLMEvent(t, filepath.Join(homeDir, "workgraph.db"), "secret-1", "notion.page_updated", time.Now().UTC().Format(time.RFC3339Nano), "workgraph", "Updated incident notes", `{"title":"Updated incident notes","content_preview":"Token ghp_abcdefghijklmnopqrstuvwxyz1234567890ABCD and AWS key AKIAIOSFODNN7EXAMPLE plus PROJECT-1234-SECRET and Notion secret_a1b2c3d4e5f6g7h8i9j0 plus ntn_abcdefghijklmnopqrstuvwxyz123456"}`)
 
 	result, err := workgraph.SummarizeTodayWithLLM(workgraph.LLMSummarizeTodayConfig{
 		HomeDir:    homeDir,
@@ -1405,6 +1405,8 @@ func TestHostedLLMSummarizeFiltersSecretsBeforeProviderCall(t *testing.T) {
 		"ghp_abcdefghijklmnopqrstuvwxyz1234567890ABCD",
 		"AKIAIOSFODNN7EXAMPLE",
 		"PROJECT-1234-SECRET",
+		"secret_a1b2c3d4e5f6g7h8i9j0",
+		"ntn_abcdefghijklmnopqrstuvwxyz123456",
 	} {
 		if strings.Contains(gotBody, forbidden) {
 			t.Fatalf("expected hosted request body to redact %q, got %s", forbidden, gotBody)
@@ -1414,12 +1416,13 @@ func TestHostedLLMSummarizeFiltersSecretsBeforeProviderCall(t *testing.T) {
 		"[REDACTED:github-token]",
 		"[REDACTED:aws-access-key]",
 		"[REDACTED:managed-pattern]",
+		"[REDACTED:notion-token]",
 	} {
 		if !strings.Contains(gotBody, expected) {
 			t.Fatalf("expected hosted request body to include %q, got %s", expected, gotBody)
 		}
 	}
-	if !strings.Contains(result.Message, "Outbound filter: 3 redactions applied") {
+	if !strings.Contains(result.Message, "Outbound filter: 5 redactions applied") {
 		t.Fatalf("expected outbound filter redaction count in output, got:\n%s", result.Message)
 	}
 }

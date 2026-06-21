@@ -116,9 +116,9 @@ memory contents.
 
 Before hosted LLM calls, workgraph applies a deterministic local outbound
 filter for common token patterns, including GitHub tokens, Slack tokens, AWS
-access keys, bearer tokens, and private keys. Managed sensitive patterns extend
-that scrubber for organization-specific identifiers. Filtering is a
-risk-reduction layer, not a DLP guarantee.
+access keys, Notion tokens, bearer tokens, and private keys. Managed sensitive
+patterns extend that scrubber for organization-specific identifiers. Filtering
+is a risk-reduction layer, not a DLP guarantee.
 
 To verify user-level hosted LLM consent:
 
