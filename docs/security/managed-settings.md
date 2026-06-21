@@ -19,7 +19,8 @@ docs/security/enterprise-managed-settings.recommended.json
 It locks hosted LLM providers off, restricts OpenAI-compatible LLM traffic to a
 local endpoint, restricts OpenAI-compatible model names to an approved local
 model, requires the local endpoint to advertise the configured model through
-`/v1/models`, and locks Slack DM capture off.
+`/v1/models`, restricts connector setup and polling to approved connector IDs,
+and locks Slack DM capture off.
 
 When hosted LLMs are allowed by managed policy, users must still explicitly
 enable hosted LLM use with `workgraph llm hosted enable` before workgraph sends
@@ -74,12 +75,16 @@ The current managed policy schema supports these controls:
   to any inference profile ARN in the listed AWS account and region scopes,
   while still blocking foundation-model ARNs and inference profiles from other
   accounts or regions.
+- `connectors.allowed_ids`: restricts connector setup, enablement, and polling
+  to the listed connector IDs.
+- `connectors.disabled_ids`: blocks connector setup, enablement, and polling
+  for the listed connector IDs. This takes precedence over `allowed_ids`.
 - `connectors.slack.include_dms`: disables Slack direct-message and
   group-direct-message capture when set to `false` and locked.
 
 The recommended policy is intentionally narrow. It addresses the highest-risk
-controls implemented today without claiming broader connector governance than
-the current binary enforces.
+controls implemented today while keeping connector governance explicit and
+inspectable.
 
 ## Verification
 
@@ -107,6 +112,8 @@ The JSON output should show:
   allowlisting is used
 - `llm.bedrock.allowed_inference_profile_scopes.locked` is `true` when Bedrock
   account/region inference profile scope allowlisting is used
+- `connectors.allowed_ids.locked` is `true` when connector allowlisting is used
+- `connectors.disabled_ids.locked` is `true` when connector denylisting is used
 - `connectors.slack.include_dms.value` is `false`
 - `connectors.slack.include_dms.locked` is `true`
 

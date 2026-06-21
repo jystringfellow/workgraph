@@ -62,7 +62,10 @@ Initial managed controls should cover:
   throughput, or inference profile ARNs
 - restricting Bedrock inference profile use to approved AWS account and region
   scopes when exact ARN enumeration is too brittle
-- disabling or enabling connector families
+- restricting connector setup, enablement, and polling to approved connector
+  IDs through `connectors.allowed_ids`
+- disabling connector setup, enablement, and polling for specific connector IDs
+  through `connectors.disabled_ids`
 - disabling Slack direct-message and group-direct-message capture
 - disabling full mail body capture when metadata-only capture exists
 - setting connector scope defaults such as Slack channels, mailbox ids,

@@ -226,6 +226,11 @@ func SetConnectorEnabled(config ConnectorUpdateConfig) (ConnectorUpdateResult, e
 	if err != nil {
 		return ConnectorUpdateResult{}, err
 	}
+	if config.Enabled {
+		if err := enforceConnectorManagedSettings(id); err != nil {
+			return ConnectorUpdateResult{}, err
+		}
+	}
 	state, err := readConnectorRuntimeFile(homeDir)
 	if err != nil {
 		return ConnectorUpdateResult{}, err
@@ -307,6 +312,9 @@ func ValidateConnector(config ConnectorValidateConfig) (ConnectorValidateResult,
 	}
 	id, err := normalizeConnectorID(config.ID)
 	if err != nil {
+		return ConnectorValidateResult{}, err
+	}
+	if err := enforceConnectorManagedSettings(id); err != nil {
 		return ConnectorValidateResult{}, err
 	}
 	switch id {
@@ -421,6 +429,13 @@ func connectRuntimeConnector(homeDir string, id string, interval string) (Connec
 	if err != nil {
 		return ConnectorConnectResult{}, err
 	}
+	id, err = normalizeConnectorID(id)
+	if err != nil {
+		return ConnectorConnectResult{}, err
+	}
+	if err := enforceConnectorManagedSettings(id); err != nil {
+		return ConnectorConnectResult{}, err
+	}
 	state, err := readConnectorRuntimeFile(homeDir)
 	if err != nil {
 		return ConnectorConnectResult{}, err
@@ -472,6 +487,9 @@ func pollConnectorIDs(homeDir string, state connectorRuntimeFile, requested stri
 		if err != nil {
 			return nil, err
 		}
+		if err := enforceConnectorManagedSettings(id); err != nil {
+			return nil, err
+		}
 		if !connectorConnected(homeDir, id) {
 			return nil, fmt.Errorf("connector %s is not connected", id)
 		}
@@ -483,7 +501,7 @@ func pollConnectorIDs(homeDir string, state connectorRuntimeFile, requested stri
 		}
 		return []string{id}, nil
 	}
-	return monitoredConnectorIDs(homeDir, state), nil
+	return monitoredConnectorIDs(homeDir, state)
 }
 
 func pollConnectorOnce(homeDir string, databasePath string, id string) error {

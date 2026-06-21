@@ -627,6 +627,136 @@ func TestConnectorsPollOnceCapturesReadyConnector(t *testing.T) {
 	}
 }
 
+func TestManagedSettingsControlConnectorEnablementAndSetup(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	managedPath := filepath.Join(tempDir, "managed-settings.json")
+	if err := os.WriteFile(managedPath, []byte(`{
+  "version": 1,
+  "connectors": {
+    "allowed_ids": {
+      "value": ["git"],
+      "locked": true
+    },
+    "disabled_ids": {
+      "value": ["github"],
+      "locked": true
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write managed settings: %v", err)
+	}
+	restoreManagedSettings := workgraph.SetManagedSettingsPathForTest(managedPath)
+	defer restoreManagedSettings()
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	if _, err := workgraph.ConnectGit(workgraph.ConnectorConnectConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("expected allowed git connector setup to pass: %v", err)
+	}
+	if _, err := workgraph.SetConnectorEnabled(workgraph.ConnectorUpdateConfig{
+		HomeDir: homeDir,
+		ID:      "notion",
+		Enabled: true,
+	}); err == nil || !strings.Contains(err.Error(), "connector notion is not allowed by managed settings") {
+		t.Fatalf("expected managed allowlist to block Notion enablement, got %v", err)
+	}
+	var notionRequests int
+	notionServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		notionRequests++
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"object":"list","results":[],"has_more":false}`))
+	}))
+	defer notionServer.Close()
+	if _, err := workgraph.ConnectNotionWithToken(workgraph.NotionConnectTokenConfig{
+		HomeDir:    homeDir,
+		Token:      "notion-token",
+		APIBaseURL: notionServer.URL,
+	}); err == nil || !strings.Contains(err.Error(), "connector notion is not allowed by managed settings") {
+		t.Fatalf("expected managed allowlist to block Notion token setup, got %v", err)
+	}
+	if notionRequests != 0 {
+		t.Fatalf("expected managed-blocked Notion setup not to contact Notion, got %d requests", notionRequests)
+	}
+	if _, err := os.Stat(filepath.Join(homeDir, "notion.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected managed-blocked Notion setup not to write config, stat err: %v", err)
+	}
+	if _, err := workgraph.ConnectGitHub(workgraph.ConnectorConnectConfig{
+		HomeDir:       homeDir,
+		GitHubCommand: "gh",
+	}); err == nil || !strings.Contains(err.Error(), "connector github is disabled by managed settings") {
+		t.Fatalf("expected managed denylist to block GitHub setup before validation, got %v", err)
+	}
+}
+
+func TestManagedSettingsControlConnectorPolling(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	managedPath := filepath.Join(tempDir, "managed-settings.json")
+	if err := os.WriteFile(managedPath, []byte(`{
+  "version": 1,
+  "connectors": {
+    "disabled_ids": {
+      "value": ["notion"],
+      "locked": true
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write managed settings: %v", err)
+	}
+	restoreManagedSettings := workgraph.SetManagedSettingsPathForTest(managedPath)
+	defer restoreManagedSettings()
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	var notionRequests int
+	notionServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		notionRequests++
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"object":"list","results":[],"has_more":false}`))
+	}))
+	defer notionServer.Close()
+	if err := os.WriteFile(filepath.Join(homeDir, "notion.json"), []byte(fmt.Sprintf(`{
+  "access_token": "notion-token",
+  "api_base_url": %q
+}
+`, notionServer.URL)), 0o600); err != nil {
+		t.Fatalf("write notion config: %v", err)
+	}
+
+	result, err := workgraph.PollConnectors(workgraph.ConnectorPollConfig{
+		HomeDir:      homeDir,
+		DatabasePath: initResult.DatabasePath,
+		Once:         true,
+	})
+	if err != nil {
+		t.Fatalf("expected unrequested managed-disabled connector to be skipped: %v", err)
+	}
+	for _, item := range result.Results {
+		if item.ID == "notion" {
+			t.Fatalf("expected unrequested managed-disabled Notion connector to be skipped, got %+v", result.Results)
+		}
+	}
+	if notionRequests != 0 {
+		t.Fatalf("expected managed-disabled Notion connector not to be polled, got %d requests", notionRequests)
+	}
+
+	_, err = workgraph.PollConnectors(workgraph.ConnectorPollConfig{
+		HomeDir:      homeDir,
+		DatabasePath: initResult.DatabasePath,
+		ID:           "notion",
+		Once:         true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "connector notion is disabled by managed settings") {
+		t.Fatalf("expected requested managed-disabled connector to fail, got %v", err)
+	}
+}
+
 func waitForEventTypeSummary(t *testing.T, dbPath, eventType, summary string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)

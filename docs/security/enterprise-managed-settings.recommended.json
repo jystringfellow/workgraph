@@ -31,6 +31,18 @@
     }
   },
   "connectors": {
+    "allowed_ids": {
+      "value": [
+        "git",
+        "github",
+        "slack",
+        "slack.lists",
+        "calendar.google",
+        "calendar.microsoft",
+        "notion"
+      ],
+      "locked": true
+    },
     "slack": {
       "include_dms": {
         "value": false,
