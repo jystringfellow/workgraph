@@ -318,6 +318,8 @@ func runLLM(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runLLMRemove(args[1:], stdout, stderr)
 	case "use":
 		return runLLMUse(args[1:], stdout, stderr)
+	case "hosted":
+		return runLLMHosted(args[1:], stdout, stderr)
 	case "test":
 		return runLLMTest(args[1:], stdout, stderr)
 	case "doctor":
@@ -443,6 +445,84 @@ func runLLMUse(args []string, stdout io.Writer, stderr io.Writer) int {
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph llm use: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runLLMHosted(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph llm hosted <status|enable|disable>")
+		return 2
+	}
+	switch args[0] {
+	case "status":
+		return runLLMHostedStatus(args[1:], stdout, stderr)
+	case "enable":
+		return runLLMHostedEnable(args[1:], stdout, stderr)
+	case "disable":
+		return runLLMHostedDisable(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "unknown llm hosted command: %s\n", args[0])
+		return 2
+	}
+}
+
+func runLLMHostedStatus(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("llm hosted status", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph llm hosted status")
+		return 2
+	}
+	result, err := workgraph.HostedLLMStatus(workgraph.LLMHostedConfig{HomeDir: *homeDir})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph llm hosted status: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runLLMHostedEnable(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("llm hosted enable", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph llm hosted enable")
+		return 2
+	}
+	result, err := workgraph.EnableHostedLLM(workgraph.LLMHostedConfig{HomeDir: *homeDir})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph llm hosted enable: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runLLMHostedDisable(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("llm hosted disable", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph llm hosted disable")
+		return 2
+	}
+	result, err := workgraph.DisableHostedLLM(workgraph.LLMHostedConfig{HomeDir: *homeDir})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph llm hosted disable: %v\n", err)
 		return 1
 	}
 	fmt.Fprintln(stdout, result.Message)

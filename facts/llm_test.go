@@ -400,6 +400,11 @@ func TestManagedSettingsDisableHostedLLMProviders(t *testing.T) {
 	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
 		t.Fatalf("workgraph init failed: %v", err)
 	}
+	if _, err := workgraph.EnableHostedLLM(workgraph.LLMHostedConfig{HomeDir: homeDir}); err == nil {
+		t.Fatalf("expected managed settings to block hosted LLM enable")
+	} else if !strings.Contains(err.Error(), "hosted LLM providers are disabled by managed settings") {
+		t.Fatalf("expected managed hosted disable error, got: %v", err)
+	}
 	if _, err := workgraph.AddLLMProfile(workgraph.LLMAddProfileConfig{
 		HomeDir:  homeDir,
 		Name:     "bedrock-hosted",
@@ -419,6 +424,152 @@ func TestManagedSettingsDisableHostedLLMProviders(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "hosted LLM providers are disabled by managed settings") {
 		t.Fatalf("expected managed settings error, got: %v", err)
+	}
+}
+
+func TestHostedLLMRequiresExplicitUserOptIn(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	t.Setenv("AWS_ACCESS_KEY_ID", "test-access-key")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret-key")
+
+	chatCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		chatCalled = true
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{
+  "output": {
+    "message": {
+      "role": "assistant",
+      "content": [{"text": "hosted bedrock ok"}]
+    }
+  },
+  "stopReason": "end_turn"
+}`))
+	}))
+	defer server.Close()
+
+	if output, err := runworkgraph(t, repoRoot, "llm", "add", "hosted-bedrock",
+		"--home", homeDir,
+		"--provider", "bedrock",
+		"--region", "us-east-1",
+		"--model-arn", "arn:aws:bedrock:us-east-1:123456789012:inference-profile/example",
+		"--base-url", server.URL,
+	); err != nil {
+		t.Fatalf("workgraph llm add hosted bedrock failed: %v\n%s", err, output)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "llm", "test",
+		"--home", homeDir,
+		"--profile", "hosted-bedrock",
+	)
+	if err == nil {
+		t.Fatalf("expected hosted LLM test to require explicit opt-in, got:\n%s", output)
+	}
+	if !strings.Contains(string(output), "hosted LLM use is not enabled") || !strings.Contains(string(output), "workgraph llm hosted enable") {
+		t.Fatalf("expected hosted opt-in error, got:\n%s", output)
+	}
+	if chatCalled {
+		t.Fatalf("expected hosted opt-in to block before provider call")
+	}
+
+	output, err = runworkgraph(t, repoRoot, "llm", "hosted", "status", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("workgraph llm hosted status failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Hosted LLM use: disabled") {
+		t.Fatalf("expected disabled hosted status, got:\n%s", output)
+	}
+
+	output, err = runworkgraph(t, repoRoot, "llm", "hosted", "enable", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("workgraph llm hosted enable failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Hosted LLM use enabled") || !strings.Contains(string(output), "captured work context") {
+		t.Fatalf("expected hosted enable warning, got:\n%s", output)
+	}
+
+	output, err = runworkgraph(t, repoRoot, "llm", "test",
+		"--home", homeDir,
+		"--profile", "hosted-bedrock",
+	)
+	if err != nil {
+		t.Fatalf("expected explicit hosted opt-in to allow approved Bedrock call: %v\n%s", err, output)
+	}
+	if !chatCalled {
+		t.Fatalf("expected provider call after hosted opt-in")
+	}
+	if !strings.Contains(string(output), "hosted bedrock ok") {
+		t.Fatalf("expected hosted provider response, got:\n%s", output)
+	}
+
+	contents, err := os.ReadFile(filepath.Join(homeDir, "llm.json"))
+	if err != nil {
+		t.Fatalf("read llm config: %v", err)
+	}
+	var stored struct {
+		HostedLLM struct {
+			Enabled        bool   `json:"enabled"`
+			AcknowledgedAt string `json:"acknowledged_at"`
+		} `json:"hosted_llm"`
+	}
+	if err := json.Unmarshal(contents, &stored); err != nil {
+		t.Fatalf("parse llm config: %v", err)
+	}
+	if !stored.HostedLLM.Enabled || stored.HostedLLM.AcknowledgedAt == "" {
+		t.Fatalf("expected hosted opt-in state to be stored, got %+v", stored.HostedLLM)
+	}
+}
+
+func TestLocalLLMDoesNotRequireHostedOptIn(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		called = true
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "local ok"
+      }
+    }
+  ]
+}`))
+	}))
+	defer server.Close()
+
+	if output, err := runworkgraph(t, repoRoot, "llm", "add", "local-test",
+		"--home", homeDir,
+		"--provider", "openai-compatible",
+		"--base-url", server.URL+"/v1",
+		"--model", "local-model",
+	); err != nil {
+		t.Fatalf("workgraph llm add local failed: %v\n%s", err, output)
+	}
+	output, err := runworkgraph(t, repoRoot, "llm", "test",
+		"--home", homeDir,
+		"--profile", "local-test",
+	)
+	if err != nil {
+		t.Fatalf("expected local OpenAI-compatible profile not to require hosted opt-in: %v\n%s", err, output)
+	}
+	if !called {
+		t.Fatalf("expected local provider call")
+	}
+	if !strings.Contains(string(output), "local ok") {
+		t.Fatalf("expected local response, got:\n%s", output)
 	}
 }
 
@@ -641,6 +792,9 @@ func TestManagedSettingsAllowOnlyApprovedBedrockInferenceProfiles(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("workgraph llm add approved bedrock failed: %v", err)
 	}
+	if _, err := workgraph.EnableHostedLLM(workgraph.LLMHostedConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("workgraph llm hosted enable failed: %v", err)
+	}
 	result, err := workgraph.TestLLMProfile(workgraph.LLMTestConfig{
 		HomeDir: homeDir,
 		Profile: "approved-bedrock",
@@ -743,6 +897,9 @@ func TestManagedSettingsAllowBedrockInferenceProfileScope(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("workgraph llm add scoped bedrock failed: %v", err)
 	}
+	if _, err := workgraph.EnableHostedLLM(workgraph.LLMHostedConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("workgraph llm hosted enable failed: %v", err)
+	}
 	result, err := workgraph.TestLLMProfile(workgraph.LLMTestConfig{
 		HomeDir: homeDir,
 		Profile: "scoped-bedrock",
@@ -799,6 +956,9 @@ func TestLLMTestUsesBedrockInferenceProfileARN(t *testing.T) {
 		"--base-url", server.URL,
 	); err != nil {
 		t.Fatalf("workgraph llm add bedrock failed: %v\n%s", err, output)
+	}
+	if output, err := runworkgraph(t, repoRoot, "llm", "hosted", "enable", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph llm hosted enable failed: %v\n%s", err, output)
 	}
 
 	output, err := runworkgraph(t, repoRoot, "llm", "test",
@@ -1132,6 +1292,9 @@ func TestLLMSummarizeTodayCallsBedrockProfile(t *testing.T) {
 		"--for", "summarize",
 	); err != nil {
 		t.Fatalf("workgraph llm use bedrock summarize failed: %v\n%s", err, output)
+	}
+	if output, err := runworkgraph(t, repoRoot, "llm", "hosted", "enable", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph llm hosted enable failed: %v\n%s", err, output)
 	}
 	insertLLMEvent(t, filepath.Join(homeDir, "workgraph.db"), "notion-1", "notion.page_updated", time.Now().UTC().Format(time.RFC3339Nano), "workgraph", "Updated launch plan", `{"title":"Updated launch plan","content_preview":"## Launch checklist\nAdded beta rollout notes."}`)
 

@@ -113,6 +113,10 @@ locally before sending requests.
 Requirements:
 
 - hosted LLM use is opt-in
+- hosted LLM profiles such as Bedrock and non-local OpenAI-compatible endpoints
+  require explicit local acknowledgement before prompt content is sent
+- managed settings can block hosted LLM opt-in or restrict it to approved
+  providers, destinations, and models
 - raw captured connector data is not sent to hosted AI providers by default
 - managed settings can disable hosted LLM use or restrict LLM destinations for
   approved workgraph deployments
