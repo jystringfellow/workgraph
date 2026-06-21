@@ -129,9 +129,25 @@ workgraph should document and expose the network destinations it contacts.
 Initial expected destinations:
 
 - Slack Web API over TLS when Slack is connected
-- GitHub API or `gh` CLI network traffic when GitHub polling is enabled
+- Google Calendar, Gmail, Microsoft Graph, Notion, and Azure DevOps endpoints
+  when their connectors are configured
+- OAuth token endpoints or workgraph-operated OAuth relays used by configured
+  connectors
 - user-selected LLM provider endpoints only when AI features are explicitly
   configured
+
+The CLI should expose this inventory with:
+
+```sh
+workgraph network destinations
+workgraph network destinations --format json
+```
+
+This command reads local configuration only. It must not contact provider APIs,
+refresh tokens, print access tokens, print refresh tokens, print API key
+environment variable names, or include captured work data. The JSON output is
+intended for admin endpoint verification and future machine-readable security
+reports.
 
 workgraph should not send raw captured work context to a workgraph-operated
 cloud service as a requirement for core local functionality.
