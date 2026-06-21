@@ -113,6 +113,13 @@ func GetSettings(config SettingsGetConfig) (SettingsGetResult, error) {
 	if len(managed.LLM.OpenAICompatible.AllowedModels.Value) > 0 {
 		lines = append(lines, "OpenAI-compatible allowed models: "+strings.Join(managed.LLM.OpenAICompatible.AllowedModels.Value, ", ")+" ("+managedSettingSource(managed.LLM.OpenAICompatible.AllowedModels.Locked)+")")
 	}
+	if managed.LLM.OpenAICompatible.RequireModelProbe.Value != nil {
+		state := "disabled"
+		if *managed.LLM.OpenAICompatible.RequireModelProbe.Value {
+			state = "enabled"
+		}
+		lines = append(lines, "OpenAI-compatible model probe required: "+state+" ("+managedSettingSource(managed.LLM.OpenAICompatible.RequireModelProbe.Locked)+")")
+	}
 	if len(managed.LLM.Bedrock.AllowedModelARNs.Value) > 0 {
 		lines = append(lines, "Bedrock allowed model ARNs: "+strings.Join(managed.LLM.Bedrock.AllowedModelARNs.Value, ", ")+" ("+managedSettingSource(managed.LLM.Bedrock.AllowedModelARNs.Locked)+")")
 	}
@@ -163,7 +170,8 @@ type llmSettingsJSONInfo struct {
 }
 
 type openAICompatibleSettingsJSONInfo struct {
-	AllowedModels managedStringSliceJSONInfo `json:"allowed_models"`
+	AllowedModels     managedStringSliceJSONInfo `json:"allowed_models"`
+	RequireModelProbe managedBoolJSONInfo        `json:"require_model_probe"`
 }
 
 type bedrockSettingsJSONInfo struct {
@@ -215,7 +223,8 @@ func settingsGetJSON(settingsPath, managedPath string, managedPresent bool, loca
 			AllowedBaseURL:  stringSliceManagedJSON(managed.LLM.AllowedBaseURL),
 			AllowedProvider: stringSliceManagedJSON(managed.LLM.AllowedProvider),
 			OpenAICompatible: openAICompatibleSettingsJSONInfo{
-				AllowedModels: stringSliceManagedJSON(managed.LLM.OpenAICompatible.AllowedModels),
+				AllowedModels:     stringSliceManagedJSON(managed.LLM.OpenAICompatible.AllowedModels),
+				RequireModelProbe: boolManagedJSON(managed.LLM.OpenAICompatible.RequireModelProbe),
 			},
 			Bedrock: bedrockSettingsJSONInfo{
 				AllowedModelARNs:              stringSliceManagedJSON(managed.LLM.Bedrock.AllowedModelARNs),

@@ -291,6 +291,22 @@ sqlite3 ~/.workgraph/workgraph.db ".schema"
 
 ## LLM Summaries
 
+For an OpenAI-compatible local endpoint, add the exact model name workgraph
+should request and verify the endpoint advertises it:
+
+```sh
+workgraph llm add local-gemma \
+  --provider openai-compatible \
+  --base-url http://localhost:11434/v1 \
+  --model gemma4-64k:latest
+
+workgraph llm doctor --profile local-gemma
+```
+
+`llm doctor` checks `/v1/models` for OpenAI-compatible profiles and reports
+whether the configured model is advertised. It does not print API key
+environment variable names or connector data.
+
 To use an AWS Bedrock inference profile for summaries, make sure normal AWS
 credentials work first:
 

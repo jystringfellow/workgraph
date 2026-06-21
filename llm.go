@@ -56,6 +56,12 @@ type LLMTestConfig struct {
 	HTTPClient *http.Client
 }
 
+type LLMDoctorConfig struct {
+	HomeDir    string
+	Profile    string
+	HTTPClient *http.Client
+}
+
 type LLMSummarizeTodayConfig struct {
 	HomeDir    string
 	DryRun     bool
@@ -96,9 +102,16 @@ type openAICompatibleMessage struct {
 }
 
 type openAICompatibleResponse struct {
+	Model   string `json:"model,omitempty"`
 	Choices []struct {
 		Message openAICompatibleMessage `json:"message"`
 	} `json:"choices"`
+}
+
+type openAICompatibleModelsResponse struct {
+	Data []struct {
+		ID string `json:"id"`
+	} `json:"data"`
 }
 
 type openAICompatibleStreamResponse struct {
@@ -293,7 +306,7 @@ func TestLLMProfile(config LLMTestConfig) (LLMResult, error) {
 	if err != nil {
 		return LLMResult{}, err
 	}
-	if err := enforceLLMManagedSettings(profile); err != nil {
+	if err := enforceLLMManagedSettings(profile, config.HTTPClient); err != nil {
 		return LLMResult{}, err
 	}
 	responseText, err := callLLMProfile(config.HTTPClient, profile, []openAICompatibleMessage{
@@ -316,6 +329,66 @@ func TestLLMProfile(config LLMTestConfig) (LLMResult, error) {
 	}, nil
 }
 
+func DoctorLLMProfiles(config LLMDoctorConfig) (LLMResult, error) {
+	homeDir, err := resolveLLMHomeDir(config.HomeDir)
+	if err != nil {
+		return LLMResult{}, err
+	}
+	stored, err := readLLMConnectorConfig(homeDir)
+	if err != nil {
+		return LLMResult{}, err
+	}
+	names := make([]string, 0, len(stored.Profiles))
+	if strings.TrimSpace(config.Profile) != "" {
+		if _, ok := stored.Profiles[config.Profile]; !ok {
+			return LLMResult{}, fmt.Errorf("llm profile %q is not configured", config.Profile)
+		}
+		names = append(names, config.Profile)
+	} else {
+		for name := range stored.Profiles {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+	}
+	lines := []string{"LLM doctor"}
+	if len(names) == 0 {
+		lines = append(lines, "No LLM profiles configured.", "Config: "+llmConfigPath(homeDir))
+		return LLMResult{ConfigPath: llmConfigPath(homeDir), Message: strings.Join(lines, "\n")}, nil
+	}
+	ok := true
+	for _, name := range names {
+		profile := stored.Profiles[name]
+		lines = append(lines, fmt.Sprintf("- %s: %s %s", name, profile.Provider, llmProfileModelLabel(profile)))
+		lines = append(lines, "  destination: "+llmProfileDestination(profile))
+		if err := enforceLLMManagedSettings(profile, config.HTTPClient); err != nil {
+			ok = false
+			lines = append(lines, "  managed policy: blocked - "+err.Error())
+			continue
+		}
+		lines = append(lines, "  managed policy: ok")
+		if profile.Provider == "openai-compatible" {
+			probe, err := probeOpenAICompatibleModel(config.HTTPClient, profile)
+			if err != nil {
+				ok = false
+				lines = append(lines, "  model probe: failed - "+err.Error())
+			} else if probe.Advertised {
+				lines = append(lines, "  model probe: ok - model "+profile.Model+" is advertised")
+			} else {
+				ok = false
+				lines = append(lines, "  model probe: failed - model "+profile.Model+" is not advertised")
+			}
+		} else {
+			lines = append(lines, "  model probe: skipped - provider does not expose OpenAI-compatible /models")
+		}
+	}
+	lines = append(lines, "Config: "+llmConfigPath(homeDir))
+	result := LLMResult{ConfigPath: llmConfigPath(homeDir), Message: strings.Join(lines, "\n")}
+	if !ok {
+		return result, errors.New("llm doctor found issues")
+	}
+	return result, nil
+}
+
 func SummarizeTodayWithLLM(config LLMSummarizeTodayConfig) (LLMResult, error) {
 	homeDir, err := resolveLLMHomeDir(config.HomeDir)
 	if err != nil {
@@ -330,7 +403,7 @@ func SummarizeTodayWithLLM(config LLMSummarizeTodayConfig) (LLMResult, error) {
 		return LLMResult{}, err
 	}
 	if !config.DryRun {
-		if err := enforceLLMManagedSettings(profile); err != nil {
+		if err := enforceLLMManagedSettings(profile, config.HTTPClient); err != nil {
 			return LLMResult{}, err
 		}
 	}
@@ -438,6 +511,70 @@ func callLLMProfileStream(client *http.Client, profile llmProfile, messages []op
 		}
 		return response, nil
 	}
+}
+
+type openAICompatibleModelProbe struct {
+	Models     []string
+	Advertised bool
+}
+
+func requireOpenAICompatibleModelProbe(client *http.Client, profile llmProfile) error {
+	probe, err := probeOpenAICompatibleModel(client, profile)
+	if err != nil {
+		return err
+	}
+	if !probe.Advertised {
+		return fmt.Errorf("OpenAI-compatible model %q is not advertised by %s", profile.Model, openAICompatibleModelsURL(profile))
+	}
+	return nil
+}
+
+func probeOpenAICompatibleModel(client *http.Client, profile llmProfile) (openAICompatibleModelProbe, error) {
+	if client == nil {
+		client = &http.Client{Timeout: 10 * time.Second}
+	}
+	request, err := http.NewRequest(http.MethodGet, openAICompatibleModelsURL(profile), nil)
+	if err != nil {
+		return openAICompatibleModelProbe{}, fmt.Errorf("build OpenAI-compatible models probe: %w", err)
+	}
+	request.Header.Set("Accept", "application/json")
+	if profile.APIKeyEnv != "" {
+		if key := os.Getenv(profile.APIKeyEnv); key != "" {
+			request.Header.Set("Authorization", "Bearer "+key)
+		}
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return openAICompatibleModelProbe{}, fmt.Errorf("probe OpenAI-compatible models: %w", err)
+	}
+	defer response.Body.Close()
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		return openAICompatibleModelProbe{}, fmt.Errorf("read OpenAI-compatible models response: %w", err)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return openAICompatibleModelProbe{}, fmt.Errorf("probe OpenAI-compatible models: status %d: %s", response.StatusCode, strings.TrimSpace(string(responseBody)))
+	}
+	var parsed openAICompatibleModelsResponse
+	if err := json.Unmarshal(responseBody, &parsed); err != nil {
+		return openAICompatibleModelProbe{}, fmt.Errorf("parse OpenAI-compatible models response: %w", err)
+	}
+	models := make([]string, 0, len(parsed.Data))
+	for _, model := range parsed.Data {
+		id := strings.TrimSpace(model.ID)
+		if id != "" {
+			models = append(models, id)
+		}
+	}
+	sort.Strings(models)
+	return openAICompatibleModelProbe{
+		Models:     models,
+		Advertised: stringAllowed(profile.Model, models),
+	}, nil
+}
+
+func openAICompatibleModelsURL(profile llmProfile) string {
+	return strings.TrimRight(profile.BaseURL, "/") + "/models"
 }
 
 func callOpenAICompatible(client *http.Client, profile llmProfile, messages []openAICompatibleMessage) (string, error) {

@@ -108,6 +108,7 @@ Priority labels used below:
   - [x] `workgraph settings get --format json` reports effective managed controls, provenance, and non-secret local settings counts.
   - [x] Managed LLM policy is enforced before provider calls.
   - [x] Managed LLM provider/model allowlists plus Bedrock exact ARN and account/region inference profile scope allowlists are enforced before provider calls.
+  - [x] OpenAI-compatible LLM profiles can be verified against `/v1/models`, and managed settings can require model advertisement before prompt content is sent.
   - [x] Locked managed Slack DM policy is enforced before OAuth scope requests and capture startup.
 - [ ] Managed setting provenance in `workgraph doctor`, `workgraph settings get`, and machine-readable diagnostics.
 - [x] Admin controls for disabling hosted LLM providers or restricting OpenAI-compatible LLM endpoints to approved local/company URLs.

@@ -253,6 +253,131 @@ func TestLLMTestUsesOpenAICompatibleProfile(t *testing.T) {
 	}
 }
 
+func TestLLMDoctorVerifiesOpenAICompatibleModelList(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		gotPath = request.URL.Path
+		if request.URL.Path != "/v1/models" {
+			http.Error(response, "unexpected path", http.StatusNotFound)
+			return
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"data":[{"id":"approved-local-model"},{"id":"other-model"}]}`))
+	}))
+	defer server.Close()
+
+	if output, err := runworkgraph(t, repoRoot, "llm", "add", "local-approved",
+		"--home", homeDir,
+		"--provider", "openai-compatible",
+		"--base-url", server.URL+"/v1",
+		"--model", "approved-local-model",
+		"--api-key-env", "WORKGRAPH_LLM_KEY",
+	); err != nil {
+		t.Fatalf("workgraph llm add failed: %v\n%s", err, output)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "llm", "doctor", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("workgraph llm doctor failed: %v\n%s", err, output)
+	}
+	if gotPath != "/v1/models" {
+		t.Fatalf("expected OpenAI-compatible models probe, got %q", gotPath)
+	}
+	for _, expected := range []string{
+		"LLM doctor",
+		"local-approved: openai-compatible approved-local-model",
+		"destination: " + server.URL + "/v1",
+		"managed policy: ok",
+		"model probe: ok - model approved-local-model is advertised",
+	} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected llm doctor output to include %q, got:\n%s", expected, output)
+		}
+	}
+	if strings.Contains(string(output), "WORKGRAPH_LLM_KEY") {
+		t.Fatalf("expected llm doctor not to expose API key env names, got:\n%s", output)
+	}
+}
+
+func TestManagedSettingsRequireOpenAICompatibleModelProbe(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	managedPath := filepath.Join(tempDir, "managed-settings.json")
+	if err := os.WriteFile(managedPath, []byte(`{
+  "version": 1,
+  "llm": {
+    "allowed_providers": {
+      "value": ["openai-compatible"],
+      "locked": true
+    },
+    "openai_compatible": {
+      "allowed_models": {
+        "value": ["approved-local-model"],
+        "locked": true
+      },
+      "require_model_probe": {
+        "value": true,
+        "locked": true
+      }
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write managed settings: %v", err)
+	}
+	restoreManagedSettings := workgraph.SetManagedSettingsPathForTest(managedPath)
+	defer restoreManagedSettings()
+
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("workgraph init failed: %v", err)
+	}
+	chatCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/v1/models":
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = response.Write([]byte(`{"data":[{"id":"different-model"}]}`))
+		case "/v1/chat/completions":
+			chatCalled = true
+			http.Error(response, "chat should be blocked before provider call", http.StatusInternalServerError)
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+
+	if _, err := workgraph.AddLLMProfile(workgraph.LLMAddProfileConfig{
+		HomeDir:  homeDir,
+		Name:     "blocked-local",
+		Provider: "openai-compatible",
+		BaseURL:  server.URL + "/v1",
+		Model:    "approved-local-model",
+	}); err != nil {
+		t.Fatalf("workgraph llm add failed: %v", err)
+	}
+	_, err := workgraph.TestLLMProfile(workgraph.LLMTestConfig{
+		HomeDir:    homeDir,
+		Profile:    "blocked-local",
+		HTTPClient: server.Client(),
+	})
+	if err == nil {
+		t.Fatalf("expected strict model probe to block unadvertised model")
+	}
+	if !strings.Contains(err.Error(), `OpenAI-compatible model "approved-local-model" is not advertised`) {
+		t.Fatalf("expected strict model probe error, got: %v", err)
+	}
+	if chatCalled {
+		t.Fatalf("expected strict model probe to block before chat completion call")
+	}
+}
+
 func TestManagedSettingsDisableHostedLLMProviders(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
