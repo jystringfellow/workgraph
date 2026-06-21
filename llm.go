@@ -401,24 +401,28 @@ func TestLLMProfile(config LLMTestConfig) (LLMResult, error) {
 	if err := enforceHostedLLMOptIn(stored, profile); err != nil {
 		return LLMResult{}, err
 	}
-	responseText, err := callLLMProfile(config.HTTPClient, profile, []openAICompatibleMessage{
+	messages := []openAICompatibleMessage{
 		{Role: "system", Content: "You are testing a local language model connection."},
 		{Role: "user", Content: "Reply with a short confirmation that the model connection works."},
-	})
+	}
+	filterResult, err := filterMessagesForProfile(profile, messages)
 	if err != nil {
 		return LLMResult{}, err
 	}
-	return LLMResult{
-		ConfigPath: llmConfigPath(homeDir),
-		Message: strings.Join([]string{
-			"LLM test complete",
-			"Profile: " + profileName,
-			"Provider: " + profile.Provider,
-			"Model: " + llmProfileModelLabel(profile),
-			"Destination: " + llmProfileDestination(profile),
-			"Response: " + responseText,
-		}, "\n"),
-	}, nil
+	responseText, err := callLLMProfile(config.HTTPClient, profile, filterResult.Messages)
+	if err != nil {
+		return LLMResult{}, err
+	}
+	lines := []string{
+		"LLM test complete",
+		"Profile: " + profileName,
+		"Provider: " + profile.Provider,
+		"Model: " + llmProfileModelLabel(profile),
+		"Destination: " + llmProfileDestination(profile),
+	}
+	lines = append(lines, outboundFilterMessage(filterResult))
+	lines = append(lines, "Response: "+responseText)
+	return LLMResult{ConfigPath: llmConfigPath(homeDir), Message: strings.Join(lines, "\n")}, nil
 }
 
 func DoctorLLMProfiles(config LLMDoctorConfig) (LLMResult, error) {
@@ -534,9 +538,14 @@ func SummarizeTodayWithLLM(config LLMSummarizeTodayConfig) (LLMResult, error) {
 			context,
 		}, "\n")},
 	}
+	filterResult, err := filterMessagesForProfile(profile, messages)
+	if err != nil {
+		return LLMResult{}, err
+	}
+	messages = filterResult.Messages
 	var responseText string
 	if config.Stream != nil {
-		if err := config.Stream(strings.Join([]string{
+		headerLines := []string{
 			"LLM summarize today streaming",
 			"Profile: " + profileName,
 			"Provider: " + profile.Provider,
@@ -546,7 +555,9 @@ func SummarizeTodayWithLLM(config LLMSummarizeTodayConfig) (LLMResult, error) {
 			"Thinking...",
 			"",
 			"Summary:",
-		}, "\n") + "\n"); err != nil {
+		}
+		headerLines = append(headerLines[:5], append([]string{outboundFilterMessage(filterResult)}, headerLines[5:]...)...)
+		if err := config.Stream(strings.Join(headerLines, "\n") + "\n"); err != nil {
 			return LLMResult{}, err
 		}
 		responseText, err = callLLMProfileStream(config.HTTPClient, profile, messages, config.Stream)
@@ -570,6 +581,7 @@ func SummarizeTodayWithLLM(config LLMSummarizeTodayConfig) (LLMResult, error) {
 			"Provider: " + profile.Provider,
 			"Model: " + llmProfileModelLabel(profile),
 			"Destination: " + llmProfileDestination(profile),
+			outboundFilterMessage(filterResult),
 			"",
 			"Summary:",
 			responseText,
@@ -586,6 +598,20 @@ func callLLMProfile(client *http.Client, profile llmProfile, messages []openAICo
 	default:
 		return "", fmt.Errorf("llm calls do not support provider %q yet", profile.Provider)
 	}
+}
+
+func filterMessagesForProfile(profile llmProfile, messages []openAICompatibleMessage) (llmOutboundFilterResult, error) {
+	if !isHostedLLMProfile(profile) {
+		return llmOutboundFilterResult{Messages: append([]openAICompatibleMessage(nil), messages...)}, nil
+	}
+	return filterHostedLLMMessages(messages)
+}
+
+func outboundFilterMessage(result llmOutboundFilterResult) string {
+	if result.RedactionCount == 1 {
+		return "Outbound filter: 1 redaction applied"
+	}
+	return fmt.Sprintf("Outbound filter: %d redactions applied", result.RedactionCount)
 }
 
 func callLLMProfileStream(client *http.Client, profile llmProfile, messages []openAICompatibleMessage, stream func(string) error) (string, error) {

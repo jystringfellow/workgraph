@@ -123,7 +123,7 @@ Priority labels used below:
 - [ ] OS credential-store backed connector secrets
 - [x] Manual-token connector setup pattern: OAuth remains the default, while `connect-token` style commands support local-only PAT/internal-token use with clear warnings.
 - [x] Hosted LLM opt-in controls [P1, spec: `specs/enterprise-security.md`]
-- [ ] Local outbound LLM filtering for secrets and configured sensitive patterns
+- [x] Local outbound LLM filtering for secrets and configured sensitive patterns
 - [x] Network destination transparency [P1, spec: `specs/enterprise-security.md`]
 
 ## Phase 4: Suggestions and intelligence

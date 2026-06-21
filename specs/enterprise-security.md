@@ -122,6 +122,8 @@ Requirements:
   approved workgraph deployments
 - local filters scrub high-risk patterns such as credentials, secrets, credit
   card numbers, access tokens, and configured internal string patterns
+- managed settings can add organization-specific outbound LLM sensitive-pattern
+  regular expressions
 - outbound LLM requests are inspectable in logs or dry-run mode before enablement
 - users can choose a provider or disable hosted AI entirely
 

@@ -61,6 +61,8 @@ The current managed policy schema supports these controls:
   `openai-compatible` or `bedrock`.
 - `llm.allowed_base_urls`: restricts OpenAI-compatible LLM destinations to the
   listed base URLs when locked.
+- `llm.outbound_filter.sensitive_patterns`: adds organization-specific regular
+  expressions to the local outbound LLM scrubber before hosted LLM calls.
 - `llm.openai_compatible.allowed_models`: restricts OpenAI-compatible LLM calls
   to listed model names when locked.
 - `llm.openai_compatible.require_model_probe`: requires OpenAI-compatible LLM
@@ -94,6 +96,8 @@ The JSON output should show:
 - `llm.hosted_enabled.value` is `false`
 - `llm.hosted_enabled.locked` is `true`
 - `llm.allowed_base_urls.locked` is `true`
+- `llm.outbound_filter.sensitive_patterns.locked` is `true` when
+  organization-specific outbound redaction patterns are deployed
 - `llm.openai_compatible.allowed_models.locked` is `true` when
   OpenAI-compatible model allowlisting is used
 - `llm.openai_compatible.require_model_probe.value` is `true` when local model
@@ -109,6 +113,12 @@ The JSON output should show:
 The command reports effective policy and non-secret local settings counts. It
 does not print connector credentials, OAuth client secrets, captured data, or
 memory contents.
+
+Before hosted LLM calls, workgraph applies a deterministic local outbound
+filter for common token patterns, including GitHub tokens, Slack tokens, AWS
+access keys, Notion tokens, bearer tokens, and private keys. Managed sensitive
+patterns extend that scrubber for organization-specific identifiers. Filtering
+is a risk-reduction layer, not a DLP guarantee.
 
 To verify user-level hosted LLM consent:
 
