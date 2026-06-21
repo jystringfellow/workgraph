@@ -116,6 +116,9 @@ func ConnectAzureBoards(config AzureBoardsConnectConfig) (AzureBoardsResult, err
 		}
 		return AzureBoardsResult{}, fmt.Errorf("check database: %w", err)
 	}
+	if err := enforceConnectorManagedSettings("azure.boards"); err != nil {
+		return AzureBoardsResult{}, err
+	}
 	if config.Code == "" {
 		if connected, err := azureBoardsConnected(homeDir); err != nil {
 			return AzureBoardsResult{}, err
@@ -181,6 +184,9 @@ func ConnectAzureBoardsWithBrowser(ctx context.Context, config AzureBoardsConnec
 	homeDir, err = filepath.Abs(homeDir)
 	if err != nil {
 		return AzureBoardsResult{}, fmt.Errorf("resolve workgraph home: %w", err)
+	}
+	if err := enforceConnectorManagedSettings("azure.boards"); err != nil {
+		return AzureBoardsResult{}, err
 	}
 	if connected, err := azureBoardsConnected(homeDir); err != nil {
 		return AzureBoardsResult{}, err
@@ -389,6 +395,9 @@ func exchangeAzureBoardsOAuthCode(config AzureBoardsConnectConfig, verifier stri
 func storeAzureBoardsConnection(homeDir string, config AzureBoardsConnectConfig, token googleOAuthTokenResponse) (AzureBoardsResult, error) {
 	if token.AccessToken == "" {
 		return AzureBoardsResult{}, errors.New("azure boards oauth response did not include an access token")
+	}
+	if err := enforceConnectorManagedSettings("azure.boards"); err != nil {
+		return AzureBoardsResult{}, err
 	}
 	stored := azureBoardsConnectorConfig{AccessToken: token.AccessToken, RefreshToken: token.RefreshToken, TokenType: token.TokenType, ExpiresAt: googleCalendarTokenExpiresAt(token), Scopes: strings.Fields(token.Scope), Organization: config.Organization, Project: config.Project, Team: config.Team, AreaPaths: config.AreaPaths, WIQL: config.WIQL, APIBaseURL: config.APIBaseURL, ClientID: config.ClientID, TokenURL: resolveAzureBoardsTokenURL(config.TokenURL)}
 	path := azureBoardsConfigPath(homeDir)

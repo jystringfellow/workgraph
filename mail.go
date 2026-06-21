@@ -228,8 +228,14 @@ type microsoftMailMessageBody struct {
 func ConnectMail(config MailConnectConfig) (MailConnectResult, error) {
 	switch strings.ToLower(config.Provider) {
 	case "google":
+		if err := enforceConnectorManagedSettings("mail.google"); err != nil {
+			return MailConnectResult{}, err
+		}
 		return connectGoogleMail(config)
 	case "microsoft":
+		if err := enforceConnectorManagedSettings("mail.microsoft"); err != nil {
+			return MailConnectResult{}, err
+		}
 		return connectMicrosoftMail(config)
 	default:
 		return MailConnectResult{}, fmt.Errorf("unsupported mail provider %q", config.Provider)
@@ -298,6 +304,9 @@ func ConnectMailWithBrowser(ctx context.Context, config MailConnectConfig) (Mail
 	provider := strings.ToLower(config.Provider)
 	if provider != "google" && provider != "microsoft" {
 		return MailConnectResult{}, fmt.Errorf("unsupported mail provider %q", config.Provider)
+	}
+	if err := enforceConnectorManagedSettings("mail." + provider); err != nil {
+		return MailConnectResult{}, err
 	}
 	homeDir, err := mailHomeDir(config.HomeDir)
 	if err != nil {
@@ -809,6 +818,9 @@ func storeGoogleMailConnection(homeDir string, config MailConnectConfig, token g
 	if token.AccessToken == "" {
 		return MailConnectResult{}, errors.New("google mail oauth response did not include an access token")
 	}
+	if err := enforceConnectorManagedSettings("mail.google"); err != nil {
+		return MailConnectResult{}, err
+	}
 	configPath := mailConfigPath(homeDir)
 	stored, err := readOrEmptyMailConnectorConfig(homeDir)
 	if err != nil {
@@ -843,6 +855,9 @@ func storeGoogleMailConnection(homeDir string, config MailConnectConfig, token g
 func storeMicrosoftMailConnection(homeDir string, config MailConnectConfig, token googleOAuthTokenResponse) (MailConnectResult, error) {
 	if token.AccessToken == "" {
 		return MailConnectResult{}, errors.New("microsoft mail oauth response did not include an access token")
+	}
+	if err := enforceConnectorManagedSettings("mail.microsoft"); err != nil {
+		return MailConnectResult{}, err
 	}
 	configPath := mailConfigPath(homeDir)
 	stored, err := readOrEmptyMailConnectorConfig(homeDir)

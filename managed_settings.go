@@ -55,7 +55,9 @@ type managedBedrockInferenceProfileScope struct {
 }
 
 type managedConnectorSettings struct {
-	Slack managedSlackSettings `json:"slack"`
+	AllowedIDs  managedStringSliceSetting `json:"allowed_ids"`
+	DisabledIDs managedStringSliceSetting `json:"disabled_ids"`
+	Slack       managedSlackSettings      `json:"slack"`
 }
 
 type managedSlackSettings struct {
@@ -174,6 +176,39 @@ func enforceSlackDMManagedSettings(includeDMs bool) error {
 		return errors.New("Slack DM capture is disabled by managed settings")
 	}
 	return nil
+}
+
+func enforceConnectorManagedSettings(id string) error {
+	id, err := normalizeConnectorID(id)
+	if err != nil {
+		return err
+	}
+	settings, _, present, err := readManagedSettings()
+	if err != nil {
+		return err
+	}
+	return connectorManagedPolicyError(settings, present, id)
+}
+
+func connectorManagedPolicyError(settings managedSettingsFile, present bool, id string) error {
+	allowed, reason := connectorAllowedByManagedPolicy(settings, present, id)
+	if allowed {
+		return nil
+	}
+	return fmt.Errorf("connector %s %s by managed settings", id, reason)
+}
+
+func connectorAllowedByManagedPolicy(settings managedSettingsFile, present bool, id string) (bool, string) {
+	if !present {
+		return true, ""
+	}
+	if stringAllowedFold(id, settings.Connectors.DisabledIDs.Value) {
+		return false, "is disabled"
+	}
+	if len(settings.Connectors.AllowedIDs.Value) > 0 && !stringAllowedFold(id, settings.Connectors.AllowedIDs.Value) {
+		return false, "is not allowed"
+	}
+	return true, ""
 }
 
 func managedBoolLockedFalse(setting managedBoolSetting) bool {

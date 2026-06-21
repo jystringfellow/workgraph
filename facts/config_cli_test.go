@@ -102,6 +102,14 @@ func TestSettingsGetReportsManagedSettingsWithoutSecrets(t *testing.T) {
     }
   },
   "connectors": {
+    "allowed_ids": {
+      "value": ["slack", "notion"],
+      "locked": true
+    },
+    "disabled_ids": {
+      "value": ["mail.google", "mail.microsoft"],
+      "locked": true
+    },
     "slack": {
       "include_dms": {
         "value": false,
@@ -129,6 +137,8 @@ func TestSettingsGetReportsManagedSettingsWithoutSecrets(t *testing.T) {
 		"LLM hosted providers: disabled (managed settings locked)",
 		"LLM allowed base URLs: http://localhost:11434/v1 (managed settings locked)",
 		"Outbound LLM sensitive patterns: 1 (managed settings locked)",
+		"Connector allowed IDs: slack, notion (managed settings locked)",
+		"Connector disabled IDs: mail.google, mail.microsoft (managed settings locked)",
 		"Slack DM capture: disabled (managed settings locked)",
 	} {
 		if !strings.Contains(result.Message, expected) {
@@ -189,6 +199,14 @@ func TestSettingsGetJSONReportsManagedSettingsWithoutSecrets(t *testing.T) {
     }
   },
   "connectors": {
+    "allowed_ids": {
+      "value": ["slack", "notion"],
+      "locked": true
+    },
+    "disabled_ids": {
+      "value": ["mail.google", "mail.microsoft"],
+      "locked": true
+    },
     "slack": {
       "include_dms": {
         "value": false,
@@ -272,6 +290,16 @@ func TestSettingsGetJSONReportsManagedSettingsWithoutSecrets(t *testing.T) {
 			} `json:"bedrock"`
 		} `json:"llm"`
 		Connectors struct {
+			AllowedIDs struct {
+				Value  []string `json:"value"`
+				Locked bool     `json:"locked"`
+				Source string   `json:"source"`
+			} `json:"allowed_ids"`
+			DisabledIDs struct {
+				Value  []string `json:"value"`
+				Locked bool     `json:"locked"`
+				Source string   `json:"source"`
+			} `json:"disabled_ids"`
 			Slack struct {
 				IncludeDMs struct {
 					Value  bool   `json:"value"`
@@ -314,6 +342,12 @@ func TestSettingsGetJSONReportsManagedSettingsWithoutSecrets(t *testing.T) {
 		!payload.LLM.Bedrock.AllowedInferenceProfileScopes.Locked ||
 		payload.LLM.Bedrock.AllowedInferenceProfileScopes.Source != "managed" {
 		t.Fatalf("expected managed Bedrock inference profile scopes, got %+v", payload.LLM.Bedrock.AllowedInferenceProfileScopes)
+	}
+	if len(payload.Connectors.AllowedIDs.Value) != 2 || payload.Connectors.AllowedIDs.Value[0] != "slack" || payload.Connectors.AllowedIDs.Value[1] != "notion" || !payload.Connectors.AllowedIDs.Locked || payload.Connectors.AllowedIDs.Source != "managed" {
+		t.Fatalf("expected managed connector allowed IDs, got %+v", payload.Connectors.AllowedIDs)
+	}
+	if len(payload.Connectors.DisabledIDs.Value) != 2 || payload.Connectors.DisabledIDs.Value[0] != "mail.google" || payload.Connectors.DisabledIDs.Value[1] != "mail.microsoft" || !payload.Connectors.DisabledIDs.Locked || payload.Connectors.DisabledIDs.Source != "managed" {
+		t.Fatalf("expected managed connector disabled IDs, got %+v", payload.Connectors.DisabledIDs)
 	}
 	if payload.Connectors.Slack.IncludeDMs.Value || !payload.Connectors.Slack.IncludeDMs.Locked || payload.Connectors.Slack.IncludeDMs.Source != "managed" {
 		t.Fatalf("expected Slack DM capture disabled from managed settings, got %+v", payload.Connectors.Slack.IncludeDMs)

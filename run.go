@@ -253,11 +253,22 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 		db.Close()
 		return nil, err
 	}
-	calendarProviders := connectedCalendarProviders(status.HomeDir, connectorState)
-	mailProviders := connectedMailProviders(status.HomeDir, connectorState)
-	notionEnabled := notionConnectorConnected(status.HomeDir) && connectorEnabled(connectorState, "notion") && connectorReadyForPolling(connectorState, "notion")
-	azureBoardsEnabled := azureBoardsConnectorConnected(status.HomeDir) && connectorEnabled(connectorState, "azure.boards") && connectorReadyForPolling(connectorState, "azure.boards")
-	status.MonitoredConnectors = monitoredConnectorIDs(status.HomeDir, connectorState)
+	managedSettings, _, managedSettingsPresent, err := readManagedSettings()
+	if err != nil {
+		watcher.Close()
+		db.Close()
+		return nil, err
+	}
+	calendarProviders := connectedCalendarProviders(status.HomeDir, connectorState, managedSettings, managedSettingsPresent)
+	mailProviders := connectedMailProviders(status.HomeDir, connectorState, managedSettings, managedSettingsPresent)
+	notionEnabled := notionConnectorConnected(status.HomeDir) && connectorReadyForRuntime(connectorState, "notion", managedSettings, managedSettingsPresent)
+	azureBoardsEnabled := azureBoardsConnectorConnected(status.HomeDir) && connectorReadyForRuntime(connectorState, "azure.boards", managedSettings, managedSettingsPresent)
+	status.MonitoredConnectors, err = monitoredConnectorIDs(status.HomeDir, connectorState)
+	if err != nil {
+		watcher.Close()
+		db.Close()
+		return nil, err
+	}
 
 	status.Message = runMessage(status)
 	events := make(chan CapturedEvent, 128)
@@ -273,13 +284,13 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 		ignorePaths:             status.IgnorePaths,
 		ignoreNames:             status.IgnoreNames,
 		watchBudget:             budget,
-		gitEnabled:              connectorEnabled(connectorState, "git"),
+		gitEnabled:              connectorEnabledForRuntime(connectorState, "git", managedSettings, managedSettingsPresent),
 		gitPollInterval:         connectorInterval(connectorState, "git", gitPollInterval(config.GitPollInterval)),
-		githubEnabled:           connectorEnabled(connectorState, "github") && connectorReadyForPolling(connectorState, "github"),
+		githubEnabled:           connectorReadyForRuntime(connectorState, "github", managedSettings, managedSettingsPresent),
 		githubPollInterval:      connectorInterval(connectorState, "github", githubPollInterval(config.GitHubPollInterval)),
 		githubCommand:           config.GitHubCommand,
-		slackEnabled:            connectorEnabled(connectorState, "slack") && connectorReadyForPolling(connectorState, "slack"),
-		slackListsEnabled:       connectorEnabled(connectorState, "slack.lists") && connectorReadyForPolling(connectorState, "slack.lists"),
+		slackEnabled:            connectorReadyForRuntime(connectorState, "slack", managedSettings, managedSettingsPresent),
+		slackListsEnabled:       connectorReadyForRuntime(connectorState, "slack.lists", managedSettings, managedSettingsPresent),
 		slackPollInterval:       connectorInterval(connectorState, "slack", slackPollInterval(config.SlackPollInterval)),
 		slackListPollInterval:   connectorInterval(connectorState, "slack.lists", slackListPollInterval(config.SlackListPollInterval)),
 		slackToken:              slackToken,
@@ -384,34 +395,43 @@ func (capture *RunCapture) Run(ctx context.Context) error {
 	}
 }
 
-func connectedCalendarProviders(homeDir string, state connectorRuntimeFile) []string {
+func connectedCalendarProviders(homeDir string, state connectorRuntimeFile, managed managedSettingsFile, managedPresent bool) []string {
 	config, err := readCalendarConnectorConfig(homeDir)
 	if err != nil {
 		return nil
 	}
 	var providers []string
-	if config.Google != nil && strings.TrimSpace(config.Google.AccessToken) != "" && connectorEnabled(state, "calendar.google") && connectorReadyForPolling(state, "calendar.google") {
+	if config.Google != nil && strings.TrimSpace(config.Google.AccessToken) != "" && connectorReadyForRuntime(state, "calendar.google", managed, managedPresent) {
 		providers = append(providers, "google")
 	}
-	if config.Microsoft != nil && strings.TrimSpace(config.Microsoft.AccessToken) != "" && connectorEnabled(state, "calendar.microsoft") && connectorReadyForPolling(state, "calendar.microsoft") {
+	if config.Microsoft != nil && strings.TrimSpace(config.Microsoft.AccessToken) != "" && connectorReadyForRuntime(state, "calendar.microsoft", managed, managedPresent) {
 		providers = append(providers, "microsoft")
 	}
 	return providers
 }
 
-func connectedMailProviders(homeDir string, state connectorRuntimeFile) []string {
+func connectedMailProviders(homeDir string, state connectorRuntimeFile, managed managedSettingsFile, managedPresent bool) []string {
 	config, err := readMailConnectorConfig(homeDir)
 	if err != nil {
 		return nil
 	}
 	var providers []string
-	if config.Google != nil && strings.TrimSpace(config.Google.AccessToken) != "" && connectorEnabled(state, "mail.google") && connectorReadyForPolling(state, "mail.google") {
+	if config.Google != nil && strings.TrimSpace(config.Google.AccessToken) != "" && connectorReadyForRuntime(state, "mail.google", managed, managedPresent) {
 		providers = append(providers, "google")
 	}
-	if config.Microsoft != nil && strings.TrimSpace(config.Microsoft.AccessToken) != "" && connectorEnabled(state, "mail.microsoft") && connectorReadyForPolling(state, "mail.microsoft") {
+	if config.Microsoft != nil && strings.TrimSpace(config.Microsoft.AccessToken) != "" && connectorReadyForRuntime(state, "mail.microsoft", managed, managedPresent) {
 		providers = append(providers, "microsoft")
 	}
 	return providers
+}
+
+func connectorEnabledForRuntime(state connectorRuntimeFile, id string, managed managedSettingsFile, managedPresent bool) bool {
+	allowed, _ := connectorAllowedByManagedPolicy(managed, managedPresent, id)
+	return allowed && connectorEnabled(state, id)
+}
+
+func connectorReadyForRuntime(state connectorRuntimeFile, id string, managed managedSettingsFile, managedPresent bool) bool {
+	return connectorEnabledForRuntime(state, id, managed, managedPresent) && connectorReadyForPolling(state, id)
 }
 
 func notionConnectorConnected(homeDir string) bool {
@@ -424,15 +444,23 @@ func azureBoardsConnectorConnected(homeDir string) bool {
 	return err == nil && strings.TrimSpace(config.AccessToken) != "" && strings.TrimSpace(config.Organization) != "" && strings.TrimSpace(config.Project) != ""
 }
 
-func monitoredConnectorIDs(homeDir string, state connectorRuntimeFile) []string {
+func monitoredConnectorIDs(homeDir string, state connectorRuntimeFile) ([]string, error) {
+	managed, _, managedPresent, err := readManagedSettings()
+	if err != nil {
+		return nil, err
+	}
 	statuses := connectorStatuses(homeDir, state)
 	ids := make([]string, 0, len(statuses))
 	for _, status := range statuses {
+		allowed, _ := connectorAllowedByManagedPolicy(managed, managedPresent, status.ID)
+		if !allowed {
+			continue
+		}
 		if status.Connected && status.Enabled && connectorReadyForPolling(state, status.ID) {
 			ids = append(ids, status.ID)
 		}
 	}
-	return ids
+	return ids, nil
 }
 
 func (capture *RunCapture) captureGitCommits() error {

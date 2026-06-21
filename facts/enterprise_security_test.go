@@ -65,6 +65,8 @@ func TestManagedSettingsDeploymentGuideAndPolicyExample(t *testing.T) {
 		"llm.openai_compatible.require_model_probe",
 		"llm.bedrock.allowed_model_arns",
 		"llm.bedrock.allowed_inference_profile_scopes",
+		"connectors.allowed_ids",
+		"connectors.disabled_ids",
 		"Slack DM capture",
 		"endpoint management",
 		"does not prevent a user from running unrelated software",
@@ -116,6 +118,10 @@ func TestManagedSettingsDeploymentGuideAndPolicyExample(t *testing.T) {
 			} `json:"openai_compatible"`
 		} `json:"llm"`
 		Connectors struct {
+			AllowedIDs struct {
+				Value  []string `json:"value"`
+				Locked bool     `json:"locked"`
+			} `json:"allowed_ids"`
 			Slack struct {
 				IncludeDMs struct {
 					Value  bool `json:"value"`
@@ -147,6 +153,9 @@ func TestManagedSettingsDeploymentGuideAndPolicyExample(t *testing.T) {
 	}
 	if !policy.LLM.OpenAICompatible.RequireModelProbe.Value || !policy.LLM.OpenAICompatible.RequireModelProbe.Locked {
 		t.Fatalf("expected recommended policy to require OpenAI-compatible model probing, got %+v", policy.LLM.OpenAICompatible.RequireModelProbe)
+	}
+	if len(policy.Connectors.AllowedIDs.Value) == 0 || !policy.Connectors.AllowedIDs.Locked {
+		t.Fatalf("expected recommended policy to lock connector allowed IDs, got %+v", policy.Connectors.AllowedIDs)
 	}
 	if policy.Connectors.Slack.IncludeDMs.Value || !policy.Connectors.Slack.IncludeDMs.Locked {
 		t.Fatalf("expected recommended policy to lock Slack DM capture off")

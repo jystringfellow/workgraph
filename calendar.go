@@ -295,8 +295,14 @@ func CaptureCalendarEvents(config CalendarCaptureConfig) (CalendarCaptureResult,
 func ConnectCalendar(config CalendarConnectConfig) (CalendarConnectResult, error) {
 	switch strings.ToLower(config.Provider) {
 	case "google":
+		if err := enforceConnectorManagedSettings("calendar.google"); err != nil {
+			return CalendarConnectResult{}, err
+		}
 		return connectGoogleCalendar(config)
 	case "microsoft":
+		if err := enforceConnectorManagedSettings("calendar.microsoft"); err != nil {
+			return CalendarConnectResult{}, err
+		}
 		return connectMicrosoftCalendar(config)
 	default:
 		return CalendarConnectResult{}, fmt.Errorf("unsupported calendar provider %q", config.Provider)
@@ -320,6 +326,9 @@ func ConnectCalendarWithBrowser(ctx context.Context, config CalendarConnectConfi
 	provider := strings.ToLower(config.Provider)
 	if provider != "google" && provider != "microsoft" {
 		return CalendarConnectResult{}, fmt.Errorf("unsupported calendar provider %q", config.Provider)
+	}
+	if err := enforceConnectorManagedSettings("calendar." + provider); err != nil {
+		return CalendarConnectResult{}, err
 	}
 	homeDir, err := resolveHomeDir(config.HomeDir)
 	if err != nil {
@@ -1001,6 +1010,9 @@ func storeGoogleCalendarConnection(homeDir string, config CalendarConnectConfig,
 	if token.AccessToken == "" {
 		return CalendarConnectResult{}, errors.New("google calendar oauth response did not include an access token")
 	}
+	if err := enforceConnectorManagedSettings("calendar.google"); err != nil {
+		return CalendarConnectResult{}, err
+	}
 	configPath := calendarConfigPath(homeDir)
 	stored, err := readOrEmptyCalendarConnectorConfig(homeDir)
 	if err != nil {
@@ -1033,6 +1045,9 @@ func storeGoogleCalendarConnection(homeDir string, config CalendarConnectConfig,
 func storeMicrosoftCalendarConnection(homeDir string, config CalendarConnectConfig, token googleOAuthTokenResponse) (CalendarConnectResult, error) {
 	if token.AccessToken == "" {
 		return CalendarConnectResult{}, errors.New("microsoft calendar oauth response did not include an access token")
+	}
+	if err := enforceConnectorManagedSettings("calendar.microsoft"); err != nil {
+		return CalendarConnectResult{}, err
 	}
 	configPath := calendarConfigPath(homeDir)
 	stored, err := readOrEmptyCalendarConnectorConfig(homeDir)

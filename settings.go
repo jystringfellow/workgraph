@@ -129,6 +129,12 @@ func GetSettings(config SettingsGetConfig) (SettingsGetResult, error) {
 	if len(managed.LLM.Bedrock.AllowedInferenceProfileScopes.Value) > 0 {
 		lines = append(lines, "Bedrock allowed inference profile scopes: "+bedrockInferenceProfileScopeText(managed.LLM.Bedrock.AllowedInferenceProfileScopes.Value)+" ("+managedSettingSource(managed.LLM.Bedrock.AllowedInferenceProfileScopes.Locked)+")")
 	}
+	if len(managed.Connectors.AllowedIDs.Value) > 0 {
+		lines = append(lines, "Connector allowed IDs: "+strings.Join(managed.Connectors.AllowedIDs.Value, ", ")+" ("+managedSettingSource(managed.Connectors.AllowedIDs.Locked)+")")
+	}
+	if len(managed.Connectors.DisabledIDs.Value) > 0 {
+		lines = append(lines, "Connector disabled IDs: "+strings.Join(managed.Connectors.DisabledIDs.Value, ", ")+" ("+managedSettingSource(managed.Connectors.DisabledIDs.Locked)+")")
+	}
 	if managed.Connectors.Slack.IncludeDMs.Value != nil {
 		state := "enabled"
 		if !*managed.Connectors.Slack.IncludeDMs.Value {
@@ -194,7 +200,9 @@ type managedBedrockInferenceProfileScopeJSONInfo struct {
 }
 
 type connectorSettingsJSONInfo struct {
-	Slack slackSettingsJSONInfo `json:"slack"`
+	AllowedIDs  managedStringSliceJSONInfo `json:"allowed_ids"`
+	DisabledIDs managedStringSliceJSONInfo `json:"disabled_ids"`
+	Slack       slackSettingsJSONInfo      `json:"slack"`
 }
 
 type slackSettingsJSONInfo struct {
@@ -243,6 +251,8 @@ func settingsGetJSON(settingsPath, managedPath string, managedPresent bool, loca
 			},
 		},
 		Connectors: connectorSettingsJSONInfo{
+			AllowedIDs:  stringSliceManagedJSON(managed.Connectors.AllowedIDs),
+			DisabledIDs: stringSliceManagedJSON(managed.Connectors.DisabledIDs),
 			Slack: slackSettingsJSONInfo{
 				IncludeDMs: boolManagedJSON(managed.Connectors.Slack.IncludeDMs),
 			},

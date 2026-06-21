@@ -318,6 +318,9 @@ func ConnectNotion(config NotionConnectConfig) (NotionConnectResult, error) {
 	if err != nil {
 		return NotionConnectResult{}, err
 	}
+	if err := enforceConnectorManagedSettings("notion"); err != nil {
+		return NotionConnectResult{}, err
+	}
 	if config.Code == "" {
 		if connected, err := notionConnected(homeDir); err != nil {
 			return NotionConnectResult{}, err
@@ -375,6 +378,9 @@ func ConnectNotionWithToken(config NotionConnectTokenConfig) (NotionConnectResul
 	if err != nil {
 		return NotionConnectResult{}, err
 	}
+	if err := enforceConnectorManagedSettings("notion"); err != nil {
+		return NotionConnectResult{}, err
+	}
 	token := strings.TrimSpace(config.Token)
 	if token == "" {
 		_ = recordConnectorValidationError(homeDir, "notion", time.Now(), "notion token is required")
@@ -413,6 +419,9 @@ func ConnectNotionWithToken(config NotionConnectTokenConfig) (NotionConnectResul
 func ConnectNotionWithBrowser(ctx context.Context, config NotionConnectConfig) (NotionConnectResult, error) {
 	homeDir, err := resolveNotionHomeDir(config.HomeDir)
 	if err != nil {
+		return NotionConnectResult{}, err
+	}
+	if err := enforceConnectorManagedSettings("notion"); err != nil {
 		return NotionConnectResult{}, err
 	}
 	if connected, err := notionConnected(homeDir); err != nil {
@@ -1182,6 +1191,9 @@ func exchangeNotionOAuthCode(config NotionConnectConfig) (notionOAuthTokenRespon
 func storeNotionConnection(homeDir string, config NotionConnectConfig, token notionOAuthTokenResponse) (NotionConnectResult, error) {
 	if token.AccessToken == "" {
 		return NotionConnectResult{}, errors.New("notion oauth response did not include an access token")
+	}
+	if err := enforceConnectorManagedSettings("notion"); err != nil {
+		return NotionConnectResult{}, err
 	}
 	configPath := notionConfigPath(homeDir)
 	stored := notionConnectorConfig{

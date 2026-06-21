@@ -556,6 +556,14 @@ func ConnectSlack(config SlackConnectConfig) (SlackConnectResult, error) {
 		}
 		return SlackConnectResult{}, fmt.Errorf("check database: %w", err)
 	}
+	if err := enforceConnectorManagedSettings("slack"); err != nil {
+		return SlackConnectResult{}, err
+	}
+	if len(config.ListIDs) > 0 {
+		if err := enforceConnectorManagedSettings("slack.lists"); err != nil {
+			return SlackConnectResult{}, err
+		}
+	}
 	config.ClientID = resolveSlackClientID(config.ClientID)
 	if config.ClientID == "" {
 		return SlackConnectResult{}, errors.New("slack client id is required")
@@ -646,6 +654,14 @@ func ConnectSlackWithBrowser(ctx context.Context, config SlackConnectConfig) (Sl
 			return SlackConnectResult{}, fmt.Errorf("%w: run workgraph init", ErrNotInitialized)
 		}
 		return SlackConnectResult{}, fmt.Errorf("check database: %w", err)
+	}
+	if err := enforceConnectorManagedSettings("slack"); err != nil {
+		return SlackConnectResult{}, err
+	}
+	if len(config.ListIDs) > 0 {
+		if err := enforceConnectorManagedSettings("slack.lists"); err != nil {
+			return SlackConnectResult{}, err
+		}
 	}
 	config.ClientID = resolveSlackClientID(config.ClientID)
 	if config.ClientID == "" {

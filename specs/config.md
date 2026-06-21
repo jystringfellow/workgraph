@@ -200,6 +200,14 @@ Example:
     }
   },
   "connectors": {
+    "allowed_ids": {
+      "value": ["git", "github", "slack", "calendar.google", "calendar.microsoft", "notion"],
+      "locked": true
+    },
+    "disabled_ids": {
+      "value": ["mail.google", "mail.microsoft", "azure.boards"],
+      "locked": true
+    },
     "slack": {
       "include_dms": {
         "value": false,
