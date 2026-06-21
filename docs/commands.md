@@ -307,6 +307,20 @@ workgraph llm doctor --profile local-gemma
 whether the configured model is advertised. It does not print API key
 environment variable names or connector data.
 
+Hosted LLM profiles, such as Bedrock or non-local OpenAI-compatible endpoints,
+require explicit hosted LLM opt-in before workgraph sends prompt content:
+
+```sh
+workgraph llm hosted status
+workgraph llm hosted enable
+workgraph llm hosted disable
+```
+
+`llm hosted enable` records a local acknowledgement that hosted LLMs may receive
+prompt text derived from captured work context, connector data, and memory
+context. Managed settings can still disable hosted LLMs or restrict them to
+approved providers, destinations, and models.
+
 To use an AWS Bedrock inference profile for summaries, make sure normal AWS
 credentials work first:
 
@@ -324,6 +338,7 @@ workgraph llm add bedrock-work \
   --model-arn arn:aws:bedrock:us-east-1:123456789012:inference-profile/example
 
 workgraph llm test --profile bedrock-work
+workgraph llm hosted enable
 workgraph llm use bedrock-work --for summarize
 workgraph llm summarize today --dry-run
 workgraph llm summarize today

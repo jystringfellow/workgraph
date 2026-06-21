@@ -50,6 +50,10 @@ type LLMUseProfileConfig struct {
 	Task    string
 }
 
+type LLMHostedConfig struct {
+	HomeDir string
+}
+
 type LLMTestConfig struct {
 	HomeDir    string
 	Profile    string
@@ -78,6 +82,7 @@ type llmConnectorConfig struct {
 	DefaultProfile string                `json:"default_profile,omitempty"`
 	TaskProfiles   map[string]string     `json:"task_profiles,omitempty"`
 	Profiles       map[string]llmProfile `json:"profiles"`
+	HostedLLM      *llmHostedConfig      `json:"hosted_llm,omitempty"`
 }
 
 type llmProfile struct {
@@ -88,6 +93,11 @@ type llmProfile struct {
 	AWSProfile string `json:"aws_profile,omitempty"`
 	Region     string `json:"region,omitempty"`
 	ModelARN   string `json:"model_arn,omitempty"`
+}
+
+type llmHostedConfig struct {
+	Enabled        bool   `json:"enabled"`
+	AcknowledgedAt string `json:"acknowledged_at,omitempty"`
 }
 
 type openAICompatibleRequest struct {
@@ -293,6 +303,85 @@ func UseLLMProfile(config LLMUseProfileConfig) (LLMResult, error) {
 	}, nil
 }
 
+func EnableHostedLLM(config LLMHostedConfig) (LLMResult, error) {
+	homeDir, err := resolveLLMHomeDir(config.HomeDir)
+	if err != nil {
+		return LLMResult{}, err
+	}
+	if managedHostedLLMDisabled() {
+		return LLMResult{}, errors.New("hosted LLM providers are disabled by managed settings")
+	}
+	stored, err := readOrEmptyLLMConnectorConfig(homeDir)
+	if err != nil {
+		return LLMResult{}, err
+	}
+	stored.HostedLLM = &llmHostedConfig{
+		Enabled:        true,
+		AcknowledgedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	configPath := llmConfigPath(homeDir)
+	if err := writeLLMConnectorConfig(configPath, stored); err != nil {
+		return LLMResult{}, err
+	}
+	return LLMResult{
+		ConfigPath: configPath,
+		Message: strings.Join([]string{
+			"Hosted LLM use enabled",
+			"Hosted LLMs may receive prompt text derived from captured work context, connector data, and memory context.",
+			"Managed settings can still restrict or disable hosted LLM providers.",
+			"Config: " + configPath,
+		}, "\n"),
+	}, nil
+}
+
+func DisableHostedLLM(config LLMHostedConfig) (LLMResult, error) {
+	homeDir, err := resolveLLMHomeDir(config.HomeDir)
+	if err != nil {
+		return LLMResult{}, err
+	}
+	stored, err := readOrEmptyLLMConnectorConfig(homeDir)
+	if err != nil {
+		return LLMResult{}, err
+	}
+	stored.HostedLLM = &llmHostedConfig{Enabled: false}
+	configPath := llmConfigPath(homeDir)
+	if err := writeLLMConnectorConfig(configPath, stored); err != nil {
+		return LLMResult{}, err
+	}
+	return LLMResult{
+		ConfigPath: configPath,
+		Message: strings.Join([]string{
+			"Hosted LLM use disabled",
+			"Config: " + configPath,
+		}, "\n"),
+	}, nil
+}
+
+func HostedLLMStatus(config LLMHostedConfig) (LLMResult, error) {
+	homeDir, err := resolveLLMHomeDir(config.HomeDir)
+	if err != nil {
+		return LLMResult{}, err
+	}
+	stored, err := readOrEmptyLLMConnectorConfig(homeDir)
+	if err != nil {
+		return LLMResult{}, err
+	}
+	state := "disabled"
+	acknowledged := ""
+	if stored.HostedLLM != nil && stored.HostedLLM.Enabled {
+		state = "enabled"
+		acknowledged = stored.HostedLLM.AcknowledgedAt
+	}
+	lines := []string{
+		"Hosted LLM use: " + state,
+	}
+	if acknowledged != "" {
+		lines = append(lines, "Acknowledged at: "+acknowledged)
+	}
+	lines = append(lines, "Config: "+llmConfigPath(homeDir))
+	return LLMResult{ConfigPath: llmConfigPath(homeDir), Message: strings.Join(lines, "\n")}, nil
+}
+
 func TestLLMProfile(config LLMTestConfig) (LLMResult, error) {
 	homeDir, err := resolveLLMHomeDir(config.HomeDir)
 	if err != nil {
@@ -307,6 +396,9 @@ func TestLLMProfile(config LLMTestConfig) (LLMResult, error) {
 		return LLMResult{}, err
 	}
 	if err := enforceLLMManagedSettings(profile, config.HTTPClient); err != nil {
+		return LLMResult{}, err
+	}
+	if err := enforceHostedLLMOptIn(stored, profile); err != nil {
 		return LLMResult{}, err
 	}
 	responseText, err := callLLMProfile(config.HTTPClient, profile, []openAICompatibleMessage{
@@ -404,6 +496,9 @@ func SummarizeTodayWithLLM(config LLMSummarizeTodayConfig) (LLMResult, error) {
 	}
 	if !config.DryRun {
 		if err := enforceLLMManagedSettings(profile, config.HTTPClient); err != nil {
+			return LLMResult{}, err
+		}
+		if err := enforceHostedLLMOptIn(stored, profile); err != nil {
 			return LLMResult{}, err
 		}
 	}
@@ -511,6 +606,42 @@ func callLLMProfileStream(client *http.Client, profile llmProfile, messages []op
 		}
 		return response, nil
 	}
+}
+
+func enforceHostedLLMOptIn(config llmConnectorConfig, profile llmProfile) error {
+	if !isHostedLLMProfile(profile) {
+		return nil
+	}
+	if config.HostedLLM != nil && config.HostedLLM.Enabled {
+		return nil
+	}
+	if managedHostedLLMEnabled() {
+		return nil
+	}
+	return errors.New("hosted LLM use is not enabled; run workgraph llm hosted enable before sending prompt content to a hosted provider")
+}
+
+func managedHostedLLMEnabled() bool {
+	settings, _, present, err := readManagedSettings()
+	if err != nil || !present {
+		return false
+	}
+	return settings.LLM.HostedEnabled.Value != nil && *settings.LLM.HostedEnabled.Value
+}
+
+func managedHostedLLMDisabled() bool {
+	settings, _, present, err := readManagedSettings()
+	if err != nil || !present {
+		return false
+	}
+	return settings.LLM.HostedEnabled.Value != nil && !*settings.LLM.HostedEnabled.Value
+}
+
+func isHostedLLMProfile(profile llmProfile) bool {
+	if profile.Provider != "openai-compatible" {
+		return true
+	}
+	return !isLocalLLMBaseURL(profile.BaseURL)
 }
 
 type openAICompatibleModelProbe struct {

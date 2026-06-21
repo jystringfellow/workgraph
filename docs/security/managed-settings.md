@@ -21,6 +21,11 @@ local endpoint, restricts OpenAI-compatible model names to an approved local
 model, requires the local endpoint to advertise the configured model through
 `/v1/models`, and locks Slack DM capture off.
 
+When hosted LLMs are allowed by managed policy, users must still explicitly
+enable hosted LLM use with `workgraph llm hosted enable` before workgraph sends
+prompt content to Bedrock or any non-local OpenAI-compatible endpoint. If
+managed settings lock `llm.hosted_enabled` to `false`, that command is blocked.
+
 For organizations that approve AWS Bedrock inference profiles instead of local
 models, use this as the starting point:
 
@@ -104,6 +109,17 @@ The JSON output should show:
 The command reports effective policy and non-secret local settings counts. It
 does not print connector credentials, OAuth client secrets, captured data, or
 memory contents.
+
+To verify user-level hosted LLM consent:
+
+```sh
+workgraph llm hosted status
+```
+
+Hosted LLM consent is stored locally in `llm.json` and does not contain
+provider credentials. It records whether hosted LLM use has been acknowledged on
+that device; managed settings still determine whether the resulting hosted
+profile is allowed.
 
 To verify the configured local LLM endpoint advertises the expected model:
 
