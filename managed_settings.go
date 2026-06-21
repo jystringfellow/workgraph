@@ -25,8 +25,13 @@ type managedLLMSettings struct {
 	HostedEnabled    managedBoolSetting              `json:"hosted_enabled"`
 	AllowedBaseURL   managedStringSliceSetting       `json:"allowed_base_urls"`
 	AllowedProvider  managedStringSliceSetting       `json:"allowed_providers"`
+	OutboundFilter   managedOutboundFilterSettings   `json:"outbound_filter"`
 	OpenAICompatible managedOpenAICompatibleSettings `json:"openai_compatible"`
 	Bedrock          managedBedrockSettings          `json:"bedrock"`
+}
+
+type managedOutboundFilterSettings struct {
+	SensitivePatterns managedStringSliceSetting `json:"sensitive_patterns"`
 }
 
 type managedOpenAICompatibleSettings struct {

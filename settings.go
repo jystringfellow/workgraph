@@ -113,6 +113,9 @@ func GetSettings(config SettingsGetConfig) (SettingsGetResult, error) {
 	if len(managed.LLM.OpenAICompatible.AllowedModels.Value) > 0 {
 		lines = append(lines, "OpenAI-compatible allowed models: "+strings.Join(managed.LLM.OpenAICompatible.AllowedModels.Value, ", ")+" ("+managedSettingSource(managed.LLM.OpenAICompatible.AllowedModels.Locked)+")")
 	}
+	if len(managed.LLM.OutboundFilter.SensitivePatterns.Value) > 0 {
+		lines = append(lines, fmt.Sprintf("Outbound LLM sensitive patterns: %d (%s)", len(managed.LLM.OutboundFilter.SensitivePatterns.Value), managedSettingSource(managed.LLM.OutboundFilter.SensitivePatterns.Locked)))
+	}
 	if managed.LLM.OpenAICompatible.RequireModelProbe.Value != nil {
 		state := "disabled"
 		if *managed.LLM.OpenAICompatible.RequireModelProbe.Value {
@@ -165,8 +168,13 @@ type llmSettingsJSONInfo struct {
 	HostedEnabled    managedBoolJSONInfo              `json:"hosted_enabled"`
 	AllowedBaseURL   managedStringSliceJSONInfo       `json:"allowed_base_urls"`
 	AllowedProvider  managedStringSliceJSONInfo       `json:"allowed_providers"`
+	OutboundFilter   outboundFilterSettingsJSONInfo   `json:"outbound_filter"`
 	OpenAICompatible openAICompatibleSettingsJSONInfo `json:"openai_compatible"`
 	Bedrock          bedrockSettingsJSONInfo          `json:"bedrock"`
+}
+
+type outboundFilterSettingsJSONInfo struct {
+	SensitivePatterns managedStringSliceJSONInfo `json:"sensitive_patterns"`
 }
 
 type openAICompatibleSettingsJSONInfo struct {
@@ -222,6 +230,9 @@ func settingsGetJSON(settingsPath, managedPath string, managedPresent bool, loca
 			HostedEnabled:   boolManagedJSON(managed.LLM.HostedEnabled),
 			AllowedBaseURL:  stringSliceManagedJSON(managed.LLM.AllowedBaseURL),
 			AllowedProvider: stringSliceManagedJSON(managed.LLM.AllowedProvider),
+			OutboundFilter: outboundFilterSettingsJSONInfo{
+				SensitivePatterns: stringSliceManagedJSON(managed.LLM.OutboundFilter.SensitivePatterns),
+			},
 			OpenAICompatible: openAICompatibleSettingsJSONInfo{
 				AllowedModels:     stringSliceManagedJSON(managed.LLM.OpenAICompatible.AllowedModels),
 				RequireModelProbe: boolManagedJSON(managed.LLM.OpenAICompatible.RequireModelProbe),

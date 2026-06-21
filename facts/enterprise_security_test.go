@@ -60,6 +60,7 @@ func TestManagedSettingsDeploymentGuideAndPolicyExample(t *testing.T) {
 		"hosted LLM providers",
 		"Bedrock inference profiles",
 		"llm.allowed_providers",
+		"llm.outbound_filter.sensitive_patterns",
 		"llm.openai_compatible.allowed_models",
 		"llm.openai_compatible.require_model_probe",
 		"llm.bedrock.allowed_model_arns",
@@ -97,6 +98,12 @@ func TestManagedSettingsDeploymentGuideAndPolicyExample(t *testing.T) {
 				Value  []string `json:"value"`
 				Locked bool     `json:"locked"`
 			} `json:"allowed_providers"`
+			OutboundFilter struct {
+				SensitivePatterns struct {
+					Value  []string `json:"value"`
+					Locked bool     `json:"locked"`
+				} `json:"sensitive_patterns"`
+			} `json:"outbound_filter"`
 			OpenAICompatible struct {
 				AllowedModels struct {
 					Value  []string `json:"value"`
@@ -131,6 +138,9 @@ func TestManagedSettingsDeploymentGuideAndPolicyExample(t *testing.T) {
 	}
 	if len(policy.LLM.AllowedProviders.Value) != 1 || policy.LLM.AllowedProviders.Value[0] != "openai-compatible" || !policy.LLM.AllowedProviders.Locked {
 		t.Fatalf("expected recommended policy to lock allowed providers to openai-compatible, got %+v", policy.LLM.AllowedProviders)
+	}
+	if len(policy.LLM.OutboundFilter.SensitivePatterns.Value) != 1 || policy.LLM.OutboundFilter.SensitivePatterns.Value[0] != "PROJECT-[0-9]{4}-SECRET" || !policy.LLM.OutboundFilter.SensitivePatterns.Locked {
+		t.Fatalf("expected recommended policy to lock outbound LLM sensitive patterns, got %+v", policy.LLM.OutboundFilter.SensitivePatterns)
 	}
 	if len(policy.LLM.OpenAICompatible.AllowedModels.Value) != 1 || policy.LLM.OpenAICompatible.AllowedModels.Value[0] != "llama3.1:8b-instruct-q4_K_M" || !policy.LLM.OpenAICompatible.AllowedModels.Locked {
 		t.Fatalf("expected recommended policy to lock OpenAI-compatible allowed models, got %+v", policy.LLM.OpenAICompatible.AllowedModels)

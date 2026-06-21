@@ -13,6 +13,12 @@
       "value": ["openai-compatible"],
       "locked": true
     },
+    "outbound_filter": {
+      "sensitive_patterns": {
+        "value": ["PROJECT-[0-9]{4}-SECRET"],
+        "locked": true
+      }
+    },
     "openai_compatible": {
       "allowed_models": {
         "value": ["llama3.1:8b-instruct-q4_K_M"],

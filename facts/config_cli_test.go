@@ -73,6 +73,12 @@ func TestSettingsGetReportsManagedSettingsWithoutSecrets(t *testing.T) {
       "value": ["bedrock"],
       "locked": true
     },
+    "outbound_filter": {
+      "sensitive_patterns": {
+        "value": ["PROJECT-[0-9]{4}-SECRET"],
+        "locked": true
+      }
+    },
     "openai_compatible": {
       "allowed_models": {
         "value": ["llama3.1:8b-instruct-q4_K_M"],
@@ -122,6 +128,7 @@ func TestSettingsGetReportsManagedSettingsWithoutSecrets(t *testing.T) {
 		"Managed settings: " + managedPath,
 		"LLM hosted providers: disabled (managed settings locked)",
 		"LLM allowed base URLs: http://localhost:11434/v1 (managed settings locked)",
+		"Outbound LLM sensitive patterns: 1 (managed settings locked)",
 		"Slack DM capture: disabled (managed settings locked)",
 	} {
 		if !strings.Contains(result.Message, expected) {
@@ -152,6 +159,12 @@ func TestSettingsGetJSONReportsManagedSettingsWithoutSecrets(t *testing.T) {
     "allowed_providers": {
       "value": ["bedrock"],
       "locked": true
+    },
+    "outbound_filter": {
+      "sensitive_patterns": {
+        "value": ["PROJECT-[0-9]{4}-SECRET"],
+        "locked": true
+      }
     },
     "openai_compatible": {
       "allowed_models": {
@@ -228,6 +241,13 @@ func TestSettingsGetJSONReportsManagedSettingsWithoutSecrets(t *testing.T) {
 				Locked bool     `json:"locked"`
 				Source string   `json:"source"`
 			} `json:"allowed_providers"`
+			OutboundFilter struct {
+				SensitivePatterns struct {
+					Value  []string `json:"value"`
+					Locked bool     `json:"locked"`
+					Source string   `json:"source"`
+				} `json:"sensitive_patterns"`
+			} `json:"outbound_filter"`
 			OpenAICompatible struct {
 				AllowedModels struct {
 					Value  []string `json:"value"`
@@ -278,6 +298,9 @@ func TestSettingsGetJSONReportsManagedSettingsWithoutSecrets(t *testing.T) {
 	}
 	if len(payload.LLM.AllowedProviders.Value) != 1 || payload.LLM.AllowedProviders.Value[0] != "bedrock" || !payload.LLM.AllowedProviders.Locked || payload.LLM.AllowedProviders.Source != "managed" {
 		t.Fatalf("expected managed allowed LLM providers, got %+v", payload.LLM.AllowedProviders)
+	}
+	if len(payload.LLM.OutboundFilter.SensitivePatterns.Value) != 1 || payload.LLM.OutboundFilter.SensitivePatterns.Value[0] != "PROJECT-[0-9]{4}-SECRET" || !payload.LLM.OutboundFilter.SensitivePatterns.Locked || payload.LLM.OutboundFilter.SensitivePatterns.Source != "managed" {
+		t.Fatalf("expected managed outbound LLM sensitive patterns, got %+v", payload.LLM.OutboundFilter.SensitivePatterns)
 	}
 	if len(payload.LLM.OpenAICompatible.AllowedModels.Value) != 1 || payload.LLM.OpenAICompatible.AllowedModels.Value[0] != "llama3.1:8b-instruct-q4_K_M" || !payload.LLM.OpenAICompatible.AllowedModels.Locked || payload.LLM.OpenAICompatible.AllowedModels.Source != "managed" {
 		t.Fatalf("expected managed OpenAI-compatible allowed models, got %+v", payload.LLM.OpenAICompatible.AllowedModels)

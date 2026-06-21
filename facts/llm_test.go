@@ -1323,6 +1323,107 @@ func TestLLMSummarizeTodayCallsBedrockProfile(t *testing.T) {
 	}
 }
 
+func TestHostedLLMSummarizeFiltersSecretsBeforeProviderCall(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	managedPath := filepath.Join(tempDir, "managed-settings.json")
+	if err := os.WriteFile(managedPath, []byte(`{
+  "version": 1,
+  "llm": {
+    "outbound_filter": {
+      "sensitive_patterns": {
+        "value": ["PROJECT-[0-9]{4}-SECRET"],
+        "locked": true
+      }
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write managed settings: %v", err)
+	}
+	restoreManagedSettings := workgraph.SetManagedSettingsPathForTest(managedPath)
+	defer restoreManagedSettings()
+
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	t.Setenv("AWS_ACCESS_KEY_ID", "test-access-key")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret-key")
+
+	var gotBody string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatalf("read bedrock request: %v", err)
+		}
+		gotBody = string(body)
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{
+  "output": {
+    "message": {
+      "role": "assistant",
+      "content": [{"text": "filtered summary ok"}]
+    }
+  },
+  "stopReason": "end_turn"
+}`))
+	}))
+	defer server.Close()
+
+	modelARN := "arn:aws:bedrock:us-east-1:123456789012:inference-profile/example"
+	if _, err := workgraph.AddLLMProfile(workgraph.LLMAddProfileConfig{
+		HomeDir:  homeDir,
+		Name:     "hosted-summary",
+		Provider: "bedrock",
+		Region:   "us-east-1",
+		ModelARN: modelARN,
+		BaseURL:  server.URL,
+	}); err != nil {
+		t.Fatalf("workgraph llm add bedrock failed: %v", err)
+	}
+	if _, err := workgraph.UseLLMProfile(workgraph.LLMUseProfileConfig{
+		HomeDir: homeDir,
+		Name:    "hosted-summary",
+		Task:    "summarize",
+	}); err != nil {
+		t.Fatalf("workgraph llm use hosted summarize failed: %v", err)
+	}
+	if _, err := workgraph.EnableHostedLLM(workgraph.LLMHostedConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("workgraph llm hosted enable failed: %v", err)
+	}
+	insertLLMEvent(t, filepath.Join(homeDir, "workgraph.db"), "secret-1", "notion.page_updated", time.Now().UTC().Format(time.RFC3339Nano), "workgraph", "Updated incident notes", `{"title":"Updated incident notes","content_preview":"Token ghp_abcdefghijklmnopqrstuvwxyz1234567890ABCD and AWS key AKIAIOSFODNN7EXAMPLE plus PROJECT-1234-SECRET"}`)
+
+	result, err := workgraph.SummarizeTodayWithLLM(workgraph.LLMSummarizeTodayConfig{
+		HomeDir:    homeDir,
+		HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatalf("workgraph llm summarize today failed: %v", err)
+	}
+	for _, forbidden := range []string{
+		"ghp_abcdefghijklmnopqrstuvwxyz1234567890ABCD",
+		"AKIAIOSFODNN7EXAMPLE",
+		"PROJECT-1234-SECRET",
+	} {
+		if strings.Contains(gotBody, forbidden) {
+			t.Fatalf("expected hosted request body to redact %q, got %s", forbidden, gotBody)
+		}
+	}
+	for _, expected := range []string{
+		"[REDACTED:github-token]",
+		"[REDACTED:aws-access-key]",
+		"[REDACTED:managed-pattern]",
+	} {
+		if !strings.Contains(gotBody, expected) {
+			t.Fatalf("expected hosted request body to include %q, got %s", expected, gotBody)
+		}
+	}
+	if !strings.Contains(result.Message, "Outbound filter: 3 redactions applied") {
+		t.Fatalf("expected outbound filter redaction count in output, got:\n%s", result.Message)
+	}
+}
+
 func insertLLMEvent(t *testing.T, dbPath, id, eventType, timestamp, project, summary, payload string) {
 	t.Helper()
 	db, err := sql.Open("sqlite3", dbPath)
