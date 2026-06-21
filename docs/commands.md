@@ -133,6 +133,19 @@ workgraph doctor
 Doctor reports initialization, daemon state, configured watch roots, OAuth
 connector token presence, and LLM profile readiness.
 
+Inspect configured network destinations without contacting provider APIs or
+exposing secrets:
+
+```sh
+workgraph network destinations
+workgraph network destinations --format json
+```
+
+The command reports connector API endpoints, OAuth token endpoints or relays,
+and configured LLM profile destinations. It reads local configuration only and
+does not print access tokens, refresh tokens, API key environment variable
+names, or captured work data.
+
 For debugging, keep capture attached to the current terminal and print captured
 events:
 
