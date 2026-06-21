@@ -56,6 +56,8 @@ Initial managed controls should cover:
 - restricting LLM base URLs or provider destinations to approved local/company
   endpoints
 - restricting OpenAI-compatible LLM model names to an approved allowlist
+- requiring OpenAI-compatible endpoints to advertise the configured model from
+  `/v1/models` before prompt content is sent
 - restricting Bedrock model ARNs to approved foundation model, provisioned
   throughput, or inference profile ARNs
 - restricting Bedrock inference profile use to approved AWS account and region

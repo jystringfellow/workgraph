@@ -175,6 +175,10 @@ Example:
       "allowed_models": {
         "value": ["llama3.1:8b-instruct-q4_K_M"],
         "locked": true
+      },
+      "require_model_probe": {
+        "value": true,
+        "locked": true
       }
     },
     "bedrock": {

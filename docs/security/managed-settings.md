@@ -18,7 +18,8 @@ docs/security/enterprise-managed-settings.recommended.json
 
 It locks hosted LLM providers off, restricts OpenAI-compatible LLM traffic to a
 local endpoint, restricts OpenAI-compatible model names to an approved local
-model, and locks Slack DM capture off.
+model, requires the local endpoint to advertise the configured model through
+`/v1/models`, and locks Slack DM capture off.
 
 For organizations that approve AWS Bedrock inference profiles instead of local
 models, use this as the starting point:
@@ -57,6 +58,9 @@ The current managed policy schema supports these controls:
   listed base URLs when locked.
 - `llm.openai_compatible.allowed_models`: restricts OpenAI-compatible LLM calls
   to listed model names when locked.
+- `llm.openai_compatible.require_model_probe`: requires OpenAI-compatible LLM
+  profiles to advertise the configured model from their `/v1/models` endpoint
+  before workgraph sends prompt content.
 - `llm.bedrock.allowed_model_arns`: restricts Bedrock Runtime calls to listed
   model, provisioned throughput, or inference profile ARNs.
 - `llm.bedrock.allowed_inference_profile_scopes`: allows Bedrock Runtime calls
@@ -87,6 +91,8 @@ The JSON output should show:
 - `llm.allowed_base_urls.locked` is `true`
 - `llm.openai_compatible.allowed_models.locked` is `true` when
   OpenAI-compatible model allowlisting is used
+- `llm.openai_compatible.require_model_probe.value` is `true` when local model
+  probing is required before OpenAI-compatible calls
 - `llm.allowed_providers.locked` is `true` when provider allowlisting is used
 - `llm.bedrock.allowed_model_arns.locked` is `true` when Bedrock ARN
   allowlisting is used
@@ -98,6 +104,18 @@ The JSON output should show:
 The command reports effective policy and non-secret local settings counts. It
 does not print connector credentials, OAuth client secrets, captured data, or
 memory contents.
+
+To verify the configured local LLM endpoint advertises the expected model:
+
+```sh
+workgraph llm doctor
+```
+
+For OpenAI-compatible profiles, this command checks the configured
+`<base_url>/models` endpoint and reports whether the configured model name is
+advertised. This verifies what workgraph will request and what the local server
+claims to serve. It does not cryptographically prove the actual model weights
+behind a local server.
 
 ## Admin Notes
 

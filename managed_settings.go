@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -29,7 +30,8 @@ type managedLLMSettings struct {
 }
 
 type managedOpenAICompatibleSettings struct {
-	AllowedModels managedStringSliceSetting `json:"allowed_models"`
+	AllowedModels     managedStringSliceSetting `json:"allowed_models"`
+	RequireModelProbe managedBoolSetting        `json:"require_model_probe"`
 }
 
 type managedBedrockSettings struct {
@@ -110,7 +112,7 @@ func defaultManagedSettingsPath() string {
 	}
 }
 
-func enforceLLMManagedSettings(profile llmProfile) error {
+func enforceLLMManagedSettings(profile llmProfile, client *http.Client) error {
 	settings, _, present, err := readManagedSettings()
 	if err != nil {
 		return err
@@ -129,6 +131,11 @@ func enforceLLMManagedSettings(profile llmProfile) error {
 	if len(settings.LLM.OpenAICompatible.AllowedModels.Value) > 0 && profile.Provider == "openai-compatible" {
 		if !stringAllowed(profile.Model, settings.LLM.OpenAICompatible.AllowedModels.Value) {
 			return fmt.Errorf("OpenAI-compatible model %q is not allowed by managed settings", profile.Model)
+		}
+	}
+	if managedBoolLockedTrue(settings.LLM.OpenAICompatible.RequireModelProbe) && profile.Provider == "openai-compatible" {
+		if err := requireOpenAICompatibleModelProbe(client, profile); err != nil {
+			return err
 		}
 	}
 	if bedrockModelARNRestricted(settings.LLM.Bedrock) && profile.Provider == "bedrock" {
@@ -166,6 +173,10 @@ func enforceSlackDMManagedSettings(includeDMs bool) error {
 
 func managedBoolLockedFalse(setting managedBoolSetting) bool {
 	return setting.Value != nil && setting.Locked && !*setting.Value
+}
+
+func managedBoolLockedTrue(setting managedBoolSetting) bool {
+	return setting.Value != nil && setting.Locked && *setting.Value
 }
 
 func baseURLAllowed(baseURL string, allowed []string) bool {

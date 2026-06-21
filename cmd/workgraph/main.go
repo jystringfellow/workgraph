@@ -320,6 +320,8 @@ func runLLM(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runLLMUse(args[1:], stdout, stderr)
 	case "test":
 		return runLLMTest(args[1:], stdout, stderr)
+	case "doctor":
+		return runLLMDoctor(args[1:], stdout, stderr)
 	case "summarize":
 		return runLLMSummarize(args[1:], stdout, stderr)
 	default:
@@ -467,6 +469,32 @@ func runLLMTest(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 1
 	}
 	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runLLMDoctor(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("llm doctor", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	profile := flags.String("profile", "", "LLM profile to inspect")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph llm doctor [--profile name]")
+		return 2
+	}
+
+	result, err := workgraph.DoctorLLMProfiles(workgraph.LLMDoctorConfig{
+		HomeDir: *homeDir,
+		Profile: *profile,
+	})
+	fmt.Fprintln(stdout, result.Message)
+	if err != nil {
+		return 1
+	}
 	return 0
 }
 
