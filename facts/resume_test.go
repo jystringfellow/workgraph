@@ -269,6 +269,148 @@ func TestResumeCanonicalizesOlderSlackChannelIDsWhenResolvedNamesExist(t *testin
 	}
 }
 
+func TestResumeProjectListHidesUnresolvedRawSlackIDs(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	result, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	now := time.Date(2026, 6, 22, 11, 45, 0, 0, time.Local)
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "unresolved-slack-id",
+		Source:    "slack",
+		Type:      "slack.message",
+		Timestamp: now.Add(-5 * time.Minute),
+		Project:   "D999",
+		Payload:   `{"channel_id":"D999","user_name":"unknown","text":"Raw id only","ts":"1782126000.000000"}`,
+		Summary:   "Raw id only",
+	})
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "resolved-slack",
+		Source:    "slack",
+		Type:      "slack.message",
+		Timestamp: now.Add(-10 * time.Minute),
+		Project:   "DM: Lila",
+		Payload:   `{"channel_id":"D123","channel_name":"DM: Lila","user_name":"lila","text":"Resolved","ts":"1782126010.000000"}`,
+		Summary:   "Resolved",
+	})
+
+	resume, err := workgraph.Resume(workgraph.ResumeConfig{
+		HomeDir:      homeDir,
+		DatabasePath: result.DatabasePath,
+		Now:          now,
+	})
+	if err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+	if strings.Contains(resume.Message, "D999") {
+		t.Fatalf("expected unresolved raw Slack id hidden from default resume, got:\n%s", resume.Message)
+	}
+	if !strings.Contains(resume.Message, "DM: Lila") {
+		t.Fatalf("expected resolved Slack conversation to remain visible, got:\n%s", resume.Message)
+	}
+}
+
+func TestResumeProjectListDemotesCurrentHomeFolderProject(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("resolve user home: %v", err)
+	}
+	homeProject := filepath.Base(home)
+	if homeProject == "" {
+		t.Fatal("expected user home basename")
+	}
+
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	result, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	now := time.Date(2026, 6, 22, 11, 50, 0, 0, time.Local)
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "home-folder-file",
+		Source:    "file",
+		Type:      "file.modified",
+		Timestamp: now.Add(-5 * time.Minute),
+		Project:   homeProject,
+		Payload:   `{"path":"/Users/example/Notes.txt","operation":"modified"}`,
+	})
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "real-project-file",
+		Source:    "file",
+		Type:      "file.modified",
+		Timestamp: now.Add(-10 * time.Minute),
+		Project:   "workgraph",
+		Payload:   `{"path":"/tmp/workgraph/resume.go","operation":"modified"}`,
+	})
+
+	resume, err := workgraph.Resume(workgraph.ResumeConfig{
+		HomeDir:      homeDir,
+		DatabasePath: result.DatabasePath,
+		Now:          now,
+	})
+	if err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+	if strings.Contains(resume.Message, homeProject) {
+		t.Fatalf("expected current home folder project hidden from default resume, got:\n%s", resume.Message)
+	}
+	if !strings.Contains(resume.Message, "workgraph") {
+		t.Fatalf("expected real project file activity to remain visible, got:\n%s", resume.Message)
+	}
+}
+
+func TestResumeDebugRelevanceExplainsShownAndHiddenProjects(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	result, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	now := time.Date(2026, 6, 22, 12, 0, 0, 0, time.Local)
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "shown-slack",
+		Source:    "slack",
+		Type:      "slack.message",
+		Timestamp: now.Add(-5 * time.Minute),
+		Project:   "DM: Lila",
+		Payload:   `{"channel_id":"D123","channel_name":"DM: Lila","text":"Resolved","ts":"1782126010.000000"}`,
+		Summary:   "Resolved",
+	})
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "hidden-download",
+		Source:    "file",
+		Type:      "file.created",
+		Timestamp: now.Add(-10 * time.Minute),
+		Project:   "Downloads",
+		Payload:   `{"path":"/Users/example/Downloads/file.zip","operation":"created"}`,
+	})
+
+	resume, err := workgraph.Resume(workgraph.ResumeConfig{
+		HomeDir:        homeDir,
+		DatabasePath:   result.DatabasePath,
+		Now:            now,
+		DebugRelevance: true,
+	})
+	if err != nil {
+		t.Fatalf("resume debug relevance failed: %v", err)
+	}
+	for _, expected := range []string{
+		"Resume relevance",
+		"- shown DM: Lila: slack conversation",
+		"- hidden Downloads: broad folder file churn",
+	} {
+		if !strings.Contains(resume.Message, expected) {
+			t.Fatalf("expected debug relevance output to include %q, got:\n%s", expected, resume.Message)
+		}
+	}
+}
+
 func TestResumeProjectListHidesStaleUserAuthoredGitWorkUnlessAllIsRequested(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
