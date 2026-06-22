@@ -63,6 +63,271 @@ func TestResumeListsRecentProjectsWhenProjectIsOmitted(t *testing.T) {
 	}
 }
 
+func TestResumeProjectListHidesClonedRepoHistoryUnlessAllIsRequested(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	result, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir: homeDir,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	now := time.Date(2026, 6, 22, 9, 0, 0, 0, time.Local)
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "cloned-history",
+		Source:    "git",
+		Type:      "git.commit",
+		Timestamp: now.Add(-5 * time.Minute),
+		Project:   "PlaidQuickstartBlazor",
+		Payload:   `{"repo_path":"/tmp/Code/PlaidQuickstartBlazor","commit":"1111111111111111","branch":"main","subject":"Initial commit","author_name":"Other Dev","author_email":"other@example.test"}`,
+		Summary:   "Initial commit",
+	})
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "my-work",
+		Source:    "git",
+		Type:      "git.commit",
+		Timestamp: now.Add(-10 * time.Minute),
+		Project:   "workgraph",
+		Payload:   `{"repo_path":"/tmp/Code/workgraph","commit":"2222222222222222","branch":"main","subject":"Improve resume relevance","author_name":"Stringfellow","author_email":"me@example.test"}`,
+		Summary:   "Improve resume relevance",
+	})
+
+	resume, err := workgraph.Resume(workgraph.ResumeConfig{
+		HomeDir:      homeDir,
+		DatabasePath: result.DatabasePath,
+		Now:          now,
+		GitEmails:    []string{"me@example.test"},
+	})
+	if err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+	if strings.Contains(resume.Message, "PlaidQuickstartBlazor") {
+		t.Fatalf("expected cloned third-party git history to be hidden from default resume, got:\n%s", resume.Message)
+	}
+	if !strings.Contains(resume.Message, "workgraph") {
+		t.Fatalf("expected user-authored git work to remain resumable, got:\n%s", resume.Message)
+	}
+
+	all, err := workgraph.Resume(workgraph.ResumeConfig{
+		HomeDir:      homeDir,
+		DatabasePath: result.DatabasePath,
+		Now:          now,
+		GitEmails:    []string{"me@example.test"},
+		AllProjects:  true,
+	})
+	if err != nil {
+		t.Fatalf("resume --all failed: %v", err)
+	}
+	if !strings.Contains(all.Message, "PlaidQuickstartBlazor") || !strings.Contains(all.Message, "workgraph") {
+		t.Fatalf("expected resume --all to include weak and strong projects, got:\n%s", all.Message)
+	}
+}
+
+func TestResumeProjectListRequiresGitHubUserEvidenceWhenLoginIsKnown(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	result, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	now := time.Date(2026, 6, 22, 10, 0, 0, 0, time.Local)
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "third-party-issue",
+		Source:    "github",
+		Type:      "github.issue",
+		Timestamp: now.Add(-5 * time.Minute),
+		Project:   "Sparkle",
+		Payload:   `{"repository":"sparkle-project/Sparkle","number":1,"state":"open","actor":"someone-else","title":"External issue"}`,
+		Summary:   "External issue",
+	})
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "my-issue",
+		Source:    "github",
+		Type:      "github.issue",
+		Timestamp: now.Add(-10 * time.Minute),
+		Project:   "workgraph",
+		Payload:   `{"repository":"jystringfellow/workgraph","number":2,"state":"open","actor":"jystringfellow","title":"My issue"}`,
+		Summary:   "My issue",
+	})
+
+	resume, err := workgraph.Resume(workgraph.ResumeConfig{
+		HomeDir:      homeDir,
+		DatabasePath: result.DatabasePath,
+		Now:          now,
+		GitHubLogins: []string{"jystringfellow"},
+	})
+	if err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+	if strings.Contains(resume.Message, "Sparkle") {
+		t.Fatalf("expected third-party GitHub issue project to be hidden, got:\n%s", resume.Message)
+	}
+	if !strings.Contains(resume.Message, "workgraph") {
+		t.Fatalf("expected user-authored GitHub issue project to remain resumable, got:\n%s", resume.Message)
+	}
+}
+
+func TestResumeProjectListKeepsSlackConversationsAndDemotesBroadFolders(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	result, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	now := time.Date(2026, 6, 22, 11, 0, 0, 0, time.Local)
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "download-churn",
+		Source:    "file",
+		Type:      "file.created",
+		Timestamp: now.Add(-5 * time.Minute),
+		Project:   "Downloads",
+		Payload:   `{"path":"/Users/stringfellow/Downloads/Unconfirmed.crdownload","operation":"created"}`,
+	})
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "slack-dm",
+		Source:    "slack",
+		Type:      "slack.message",
+		Timestamp: now.Add(-10 * time.Minute),
+		Project:   "DM: Lila",
+		Payload:   `{"channel_id":"D123","user_name":"lila","text":"Can you pick this up?","ts":"1782126000.000000"}`,
+		Summary:   "Can you pick this up?",
+	})
+
+	resume, err := workgraph.Resume(workgraph.ResumeConfig{
+		HomeDir:      homeDir,
+		DatabasePath: result.DatabasePath,
+		Now:          now,
+	})
+	if err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+	if strings.Contains(resume.Message, "Downloads") {
+		t.Fatalf("expected broad Downloads file churn to be hidden, got:\n%s", resume.Message)
+	}
+	if !strings.Contains(resume.Message, "DM: Lila") {
+		t.Fatalf("expected Slack conversation to remain resumable, got:\n%s", resume.Message)
+	}
+}
+
+func TestResumeCanonicalizesOlderSlackChannelIDsWhenResolvedNamesExist(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	result, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	now := time.Date(2026, 6, 22, 11, 30, 0, 0, time.Local)
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "old-raw-slack-message",
+		Source:    "slack",
+		Type:      "slack.message",
+		Timestamp: now.Add(-5 * time.Minute),
+		Project:   "D123",
+		Payload:   `{"channel_id":"D123","user_name":"lila","text":"Earlier raw id message","ts":"1782126000.000000"}`,
+		Summary:   "Earlier raw id message",
+	})
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "new-resolved-slack-message",
+		Source:    "slack",
+		Type:      "slack.message",
+		Timestamp: now.Add(-10 * time.Minute),
+		Project:   "DM: Lila",
+		Payload:   `{"channel_id":"D123","channel_name":"DM: Lila","user_name":"lila","text":"Resolved message","ts":"1782126010.000000"}`,
+		Summary:   "Resolved message",
+	})
+
+	resume, err := workgraph.Resume(workgraph.ResumeConfig{
+		HomeDir:      homeDir,
+		DatabasePath: result.DatabasePath,
+		Now:          now,
+	})
+	if err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+	if strings.Contains(resume.Message, "D123") {
+		t.Fatalf("expected raw Slack channel id to be hidden when resolved name exists, got:\n%s", resume.Message)
+	}
+	if !strings.Contains(resume.Message, "- DM: Lila: 2 events") {
+		t.Fatalf("expected Slack events to be merged under resolved conversation name, got:\n%s", resume.Message)
+	}
+
+	rawResume, err := workgraph.Resume(workgraph.ResumeConfig{
+		HomeDir:      homeDir,
+		DatabasePath: result.DatabasePath,
+		Project:      "D123",
+		Now:          now,
+	})
+	if err != nil {
+		t.Fatalf("resume raw Slack id failed: %v", err)
+	}
+	if !strings.Contains(rawResume.Message, "Resume DM: Lila") || !strings.Contains(rawResume.Message, "Earlier raw id message") {
+		t.Fatalf("expected exact raw Slack id resume to resolve to named conversation, got:\n%s", rawResume.Message)
+	}
+}
+
+func TestResumeProjectListHidesStaleUserAuthoredGitWorkUnlessAllIsRequested(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	result, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	now := time.Date(2026, 6, 22, 12, 0, 0, 0, time.Local)
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "stale-user-work",
+		Source:    "git",
+		Type:      "git.commit",
+		Timestamp: now.AddDate(-2, 0, 0),
+		Project:   "HelloWorld",
+		Payload:   `{"repo_path":"/tmp/Code/HelloWorld","commit":"3333333333333333","branch":"main","subject":"Hello world","author_name":"Stringfellow","author_email":"me@example.test"}`,
+		Summary:   "Hello world",
+	})
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "recent-user-work",
+		Source:    "git",
+		Type:      "git.commit",
+		Timestamp: now.Add(-time.Hour),
+		Project:   "workgraph",
+		Payload:   `{"repo_path":"/tmp/Code/workgraph","commit":"4444444444444444","branch":"main","subject":"Recent work","author_name":"Stringfellow","author_email":"me@example.test"}`,
+		Summary:   "Recent work",
+	})
+
+	resume, err := workgraph.Resume(workgraph.ResumeConfig{
+		HomeDir:      homeDir,
+		DatabasePath: result.DatabasePath,
+		Now:          now,
+		GitEmails:    []string{"me@example.test"},
+	})
+	if err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+	if strings.Contains(resume.Message, "HelloWorld") {
+		t.Fatalf("expected stale user-authored git work to be hidden from default resume, got:\n%s", resume.Message)
+	}
+	if !strings.Contains(resume.Message, "workgraph") {
+		t.Fatalf("expected recent user-authored git work to remain resumable, got:\n%s", resume.Message)
+	}
+
+	all, err := workgraph.Resume(workgraph.ResumeConfig{
+		HomeDir:      homeDir,
+		DatabasePath: result.DatabasePath,
+		Now:          now,
+		GitEmails:    []string{"me@example.test"},
+		AllProjects:  true,
+	})
+	if err != nil {
+		t.Fatalf("resume --all failed: %v", err)
+	}
+	if !strings.Contains(all.Message, "HelloWorld") || !strings.Contains(all.Message, "workgraph") {
+		t.Fatalf("expected resume --all to include stale and recent projects, got:\n%s", all.Message)
+	}
+}
+
 func TestResumeReturnsRecentEventsForProject(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")

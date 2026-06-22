@@ -134,10 +134,11 @@ Priority labels used below:
 - [ ] Task extraction
 - [ ] “What next?” suggestions [P1, spec: `specs/today.md`]
 - [ ] Resume improvements
+- [x] Resume relevance gate for bare `workgraph resume`, preserving exact `resume <project>` and adding an `--all` escape hatch. [P1, spec: `specs/resume.md` and `specs/architecture-improvements.md`]
 - [x] Shared suggestion storage: ids, type, reason, evidence, confidence, lane, lifecycle state, feedback, and suppression. [P0b, spec: `specs/suggestion-explainability.md` and `specs/db-contracts.md`]
 - [ ] Explainable suggestion evidence trails with per-suggestion suppression controls. [P0b, spec: `specs/suggestion-explainability.md`]
 - [x] First deterministic suggestion producer: ignore-rule or watch-root suggestions. [P0c, spec: `specs/ignore-suggestions.md` and `specs/watch-suggestions.md`]
-- [ ] Cross-source event association baseline (deterministic IDs + local fuzzy heuristics) without LLM dependency. [P1, spec: `specs/event-associations.md`]
+- [ ] Cross-source event association baseline (deterministic IDs + local fuzzy heuristics) without LLM dependency. [P1, spec: `specs/event-associations.md` and `specs/architecture-improvements.md`]
 - [ ] Optional semantic association lane (LLM/embeddings) behind explicit opt-in and confidence gates. [P1, spec: `specs/event-associations.md` and `specs/llm-integration.md`]
 - [ ] Local personal effectiveness review (no telemetry): acceptance rate, dismissal reasons, freshness, time-to-useful-suggestion. [P0d, spec: `specs/effectiveness-review.md`]
 

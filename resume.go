@@ -14,7 +14,10 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const defaultResumeActivityLimit = 10
+const (
+	defaultResumeActivityLimit = 10
+	defaultResumeFreshness     = 180 * 24 * time.Hour
+)
 
 // ResumeConfig controls the resumable work view.
 type ResumeConfig struct {
@@ -24,6 +27,9 @@ type ResumeConfig struct {
 	Project      string
 	Now          time.Time
 	MaxEvents    int
+	AllProjects  bool
+	GitEmails    []string
+	GitHubLogins []string
 }
 
 // ResumeResult describes resumable work in deterministic plain text.
@@ -85,14 +91,21 @@ func Resume(config ResumeConfig) (ResumeResult, error) {
 		return ResumeResult{}, err
 	}
 
-	result := ResumeResult{Project: config.Project}
-	if config.Project == "" {
-		result.Projects = resumableProjects(events)
+	project := strings.TrimSpace(config.Project)
+	result := ResumeResult{Project: project}
+	if project == "" {
+		if config.AllProjects {
+			result.Projects = resumableProjects(events)
+		} else {
+			result.Projects = resumableRelevantProjects(events, config.GitEmails, config.GitHubLogins, now)
+		}
 		result.Message = resumeProjectsMessage(result.Projects, location)
 		return result, nil
 	}
+	project = canonicalResumeProjectName(project, events)
+	result.Project = project
 
-	projectEvents := resumeProjectEvents(events, config.Project)
+	projectEvents := resumeProjectEvents(events, project)
 	result.GitHub = resumeOpenGitHubWork(projectEvents)
 	result.Events, result.Omitted = limitResumeEvents(projectEvents, resumeActivityLimit(config.MaxEvents))
 	result.Files = resumeRelevantFiles(result.Events)
@@ -106,6 +119,23 @@ func Resume(config ResumeConfig) (ResumeResult, error) {
 	}
 	result.Message = resumeProjectMessage(result, location)
 	return result, nil
+}
+
+func canonicalResumeProjectName(project string, events []ResumeEvent) string {
+	project = strings.TrimSpace(project)
+	for _, event := range events {
+		if event.Project == project {
+			return project
+		}
+		if !strings.HasPrefix(event.Type, "slack.") {
+			continue
+		}
+		channelID, _ := slackResumeChannelIdentity(event.Payload)
+		if channelID == project && event.Project != "" {
+			return event.Project
+		}
+	}
+	return project
 }
 
 func resumeDatabasePath(config ResumeConfig) (string, error) {
@@ -173,6 +203,7 @@ func loadResumeEvents(db *sql.DB, location *time.Location) ([]ResumeEvent, error
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("query events: %w", err)
 	}
+	canonicalizeSlackResumeProjects(events)
 
 	sort.Slice(events, func(i, j int) bool {
 		if events[i].Timestamp.Equal(events[j].Timestamp) {
@@ -183,7 +214,76 @@ func loadResumeEvents(db *sql.DB, location *time.Location) ([]ResumeEvent, error
 	return events, nil
 }
 
+func canonicalizeSlackResumeProjects(events []ResumeEvent) {
+	aliases := slackResumeProjectAliases(events)
+	if len(aliases) == 0 {
+		return
+	}
+	for i := range events {
+		if resolved := slackResumeCanonicalProject(events[i], aliases); resolved != "" {
+			events[i].Project = resolved
+		}
+	}
+}
+
+func slackResumeProjectAliases(events []ResumeEvent) map[string]string {
+	aliases := map[string]string{}
+	for _, event := range events {
+		if !strings.HasPrefix(event.Type, "slack.") {
+			continue
+		}
+		channelID, channelName := slackResumeChannelIdentity(event.Payload)
+		if channelID == "" || channelName == "" || channelName == channelID {
+			continue
+		}
+		aliases[channelID] = channelName
+	}
+	return aliases
+}
+
+func slackResumeCanonicalProject(event ResumeEvent, aliases map[string]string) string {
+	if !strings.HasPrefix(event.Type, "slack.") {
+		return ""
+	}
+	channelID, channelName := slackResumeChannelIdentity(event.Payload)
+	if channelName != "" && channelName != channelID {
+		return channelName
+	}
+	if channelID != "" {
+		return aliases[channelID]
+	}
+	return ""
+}
+
+func slackResumeChannelIdentity(payload string) (string, string) {
+	var parsed struct {
+		ChannelID   string `json:"channel_id"`
+		ChannelName string `json:"channel_name"`
+	}
+	if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
+		return "", ""
+	}
+	return strings.TrimSpace(parsed.ChannelID), strings.TrimSpace(parsed.ChannelName)
+}
+
 func resumableProjects(events []ResumeEvent) []ResumeProject {
+	return resumableProjectsFromEvents(events)
+}
+
+func resumableRelevantProjects(events []ResumeEvent, gitEmails []string, githubLogins []string, now time.Time) []ResumeProject {
+	var relevant []ResumeEvent
+	for _, event := range events {
+		if resumeEventIsStale(event, now) {
+			continue
+		}
+		if resumeEventHasUserWorkEvidence(event, gitEmails, githubLogins) {
+			relevant = append(relevant, event)
+		}
+	}
+	return resumableProjectsFromEvents(relevant)
+}
+
+func resumableProjectsFromEvents(events []ResumeEvent) []ResumeProject {
 	projectsByName := map[string]ResumeProject{}
 	for _, event := range events {
 		if event.Project == "" {
@@ -212,6 +312,84 @@ func resumableProjects(events []ResumeEvent) []ResumeProject {
 		return projects[i].LastActive.After(projects[j].LastActive)
 	})
 	return projects
+}
+
+func resumeEventIsStale(event ResumeEvent, now time.Time) bool {
+	if now.IsZero() {
+		return false
+	}
+	return event.Timestamp.Before(now.Add(-defaultResumeFreshness))
+}
+
+func resumeEventHasUserWorkEvidence(event ResumeEvent, gitEmails []string, githubLogins []string) bool {
+	if event.Project == "" {
+		return false
+	}
+	switch event.Type {
+	case "git.commit":
+		authorEmail := gitCommitAuthorEmail(event.Payload)
+		if authorEmail == "" {
+			return len(normalizedEmailSet(gitEmails)) == 0
+		}
+		emails := normalizedEmailSet(gitEmails)
+		return len(emails) == 0 || emails[strings.ToLower(strings.TrimSpace(authorEmail))]
+	case "github.pull_request", "github.issue":
+		actor := githubEventActor(event.Payload)
+		logins := normalizedStringSet(githubLogins)
+		return len(logins) == 0 || logins[strings.ToLower(strings.TrimSpace(actor))]
+	default:
+		if strings.HasPrefix(event.Type, "slack.") {
+			return true
+		}
+		if broadResumeProjectName(event.Project) {
+			return false
+		}
+		return event.Path != ""
+	}
+}
+
+func gitCommitAuthorEmail(payload string) string {
+	var parsed struct {
+		AuthorEmail string `json:"author_email"`
+	}
+	if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(parsed.AuthorEmail)
+}
+
+func normalizedEmailSet(emails []string) map[string]bool {
+	return normalizedStringSet(emails)
+}
+
+func normalizedStringSet(values []string) map[string]bool {
+	set := map[string]bool{}
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value != "" {
+			set[value] = true
+		}
+	}
+	return set
+}
+
+func githubEventActor(payload string) string {
+	var parsed struct {
+		Actor string `json:"actor"`
+	}
+	if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(parsed.Actor)
+}
+
+func broadResumeProjectName(project string) bool {
+	switch strings.ToLower(strings.TrimSpace(project)) {
+	case "desktop", "documents", "downloads", "projects", "code", "developer", "work", "repos", "source":
+		return true
+	default:
+		return false
+	}
 }
 
 func resumeProjectEvents(events []ResumeEvent, project string) []ResumeEvent {
