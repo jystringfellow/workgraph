@@ -2307,6 +2307,7 @@ func runResume(args []string, stdout io.Writer, stderr io.Writer) int {
 	databasePath := flags.String("database", "", "workgraph SQLite database path")
 	memoryDir := flags.String("memory", "", "workgraph memory directory")
 	allProjects := flags.Bool("all", false, "Show all projects with captured events, including weak evidence")
+	debugRelevance := flags.Bool("debug-relevance", false, "Explain why projects are shown or hidden in resume")
 
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -2322,13 +2323,14 @@ func runResume(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	result, err := workgraph.Resume(workgraph.ResumeConfig{
-		HomeDir:      *homeDir,
-		DatabasePath: *databasePath,
-		MemoryDir:    *memoryDir,
-		Project:      project,
-		AllProjects:  *allProjects,
-		GitEmails:    localGitEmails(),
-		GitHubLogins: localGitHubLogins(),
+		HomeDir:        *homeDir,
+		DatabasePath:   *databasePath,
+		MemoryDir:      *memoryDir,
+		Project:        project,
+		AllProjects:    *allProjects,
+		GitEmails:      localGitEmails(),
+		GitHubLogins:   localGitHubLogins(),
+		DebugRelevance: *debugRelevance,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph resume: %v\n", err)

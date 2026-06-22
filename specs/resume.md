@@ -34,6 +34,11 @@ By default, stale evidence older than the resume freshness window is also
 omitted from the project list. `workgraph resume --all` still shows older
 projects.
 
+By default, raw Slack channel ids are omitted from the project list when no
+resolved human-readable conversation name is known. Exact
+`workgraph resume <raw-slack-id>` calls should still work for investigation or
+recovery.
+
 Examples of user-work evidence include:
 
 - file events under the project
@@ -44,6 +49,8 @@ Examples of user-work evidence include:
 
 Broad watch-root projects such as `Downloads`, `Code`, `Desktop`, and
 `Documents` should not appear in the default project list from file churn alone.
+The current user's home-folder basename should be treated the same way, because
+home-folder file churn is usually too broad to represent resumable project work.
 
 Older Slack events may have stored raw channel ids as their project before
 conversation-name resolution was available. At read time, resume should merge
@@ -54,6 +61,12 @@ should remain in event payloads for traceability.
 `workgraph resume --all` preserves the older broad behavior and lists every
 project with captured events. This is useful for debugging, audits, and checking
 project names before exact `workgraph resume <project>` calls.
+
+`workgraph resume --debug-relevance` renders the default relevance decision for
+each captured project instead of the normal project list. Each line says whether
+the project would be shown or hidden, includes the reason, and preserves event
+count plus last-active timestamp. This is intended for local debugging of
+unexpected resume results, not as an admin audit surface.
 
 ## Project Resume
 

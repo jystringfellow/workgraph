@@ -21,15 +21,16 @@ const (
 
 // ResumeConfig controls the resumable work view.
 type ResumeConfig struct {
-	HomeDir      string
-	DatabasePath string
-	MemoryDir    string
-	Project      string
-	Now          time.Time
-	MaxEvents    int
-	AllProjects  bool
-	GitEmails    []string
-	GitHubLogins []string
+	HomeDir        string
+	DatabasePath   string
+	MemoryDir      string
+	Project        string
+	Now            time.Time
+	MaxEvents      int
+	AllProjects    bool
+	GitEmails      []string
+	GitHubLogins   []string
+	DebugRelevance bool
 }
 
 // ResumeResult describes resumable work in deterministic plain text.
@@ -98,6 +99,10 @@ func Resume(config ResumeConfig) (ResumeResult, error) {
 			result.Projects = resumableProjects(events)
 		} else {
 			result.Projects = resumableRelevantProjects(events, config.GitEmails, config.GitHubLogins, now)
+		}
+		if config.DebugRelevance {
+			result.Message = resumeRelevanceMessage(resumeRelevanceDecisions(events, config.GitEmails, config.GitHubLogins, now), location)
+			return result, nil
 		}
 		result.Message = resumeProjectsMessage(result.Projects, location)
 		return result, nil
@@ -266,6 +271,17 @@ func slackResumeChannelIdentity(payload string) (string, string) {
 	return strings.TrimSpace(parsed.ChannelID), strings.TrimSpace(parsed.ChannelName)
 }
 
+func unresolvedRawSlackProject(event ResumeEvent) bool {
+	channelID, channelName := slackResumeChannelIdentity(event.Payload)
+	if channelID == "" {
+		return false
+	}
+	if channelName != "" && channelName != channelID {
+		return false
+	}
+	return strings.TrimSpace(event.Project) == channelID
+}
+
 func resumableProjects(events []ResumeEvent) []ResumeProject {
 	return resumableProjectsFromEvents(events)
 }
@@ -273,14 +289,55 @@ func resumableProjects(events []ResumeEvent) []ResumeProject {
 func resumableRelevantProjects(events []ResumeEvent, gitEmails []string, githubLogins []string, now time.Time) []ResumeProject {
 	var relevant []ResumeEvent
 	for _, event := range events {
-		if resumeEventIsStale(event, now) {
-			continue
-		}
-		if resumeEventHasUserWorkEvidence(event, gitEmails, githubLogins) {
+		if shown, _ := resumeEventRelevance(event, gitEmails, githubLogins, now); shown {
 			relevant = append(relevant, event)
 		}
 	}
 	return resumableProjectsFromEvents(relevant)
+}
+
+type resumeRelevanceDecision struct {
+	Project    string
+	Shown      bool
+	EventCount int
+	LastActive time.Time
+	Reason     string
+}
+
+func resumeRelevanceDecisions(events []ResumeEvent, gitEmails []string, githubLogins []string, now time.Time) []resumeRelevanceDecision {
+	decisionsByProject := map[string]resumeRelevanceDecision{}
+	for _, event := range events {
+		if event.Project == "" {
+			continue
+		}
+		shown, reason := resumeEventRelevance(event, gitEmails, githubLogins, now)
+		decision := decisionsByProject[event.Project]
+		if decision.Project == "" {
+			decision.Project = event.Project
+			decision.LastActive = event.Timestamp
+			decision.Reason = reason
+		}
+		decision.EventCount++
+		if event.Timestamp.After(decision.LastActive) {
+			decision.LastActive = event.Timestamp
+		}
+		if shown && !decision.Shown {
+			decision.Shown = true
+			decision.Reason = reason
+		}
+		decisionsByProject[event.Project] = decision
+	}
+	decisions := make([]resumeRelevanceDecision, 0, len(decisionsByProject))
+	for _, decision := range decisionsByProject {
+		decisions = append(decisions, decision)
+	}
+	sort.Slice(decisions, func(i, j int) bool {
+		if decisions[i].LastActive.Equal(decisions[j].LastActive) {
+			return decisions[i].Project < decisions[j].Project
+		}
+		return decisions[i].LastActive.After(decisions[j].LastActive)
+	})
+	return decisions
 }
 
 func resumableProjectsFromEvents(events []ResumeEvent) []ResumeProject {
@@ -322,29 +379,55 @@ func resumeEventIsStale(event ResumeEvent, now time.Time) bool {
 }
 
 func resumeEventHasUserWorkEvidence(event ResumeEvent, gitEmails []string, githubLogins []string) bool {
+	shown, _ := resumeEventRelevance(event, gitEmails, githubLogins, time.Time{})
+	return shown
+}
+
+func resumeEventRelevance(event ResumeEvent, gitEmails []string, githubLogins []string, now time.Time) (bool, string) {
 	if event.Project == "" {
-		return false
+		return false, "missing project"
+	}
+	if resumeEventIsStale(event, now) {
+		return false, "stale evidence"
 	}
 	switch event.Type {
 	case "git.commit":
 		authorEmail := gitCommitAuthorEmail(event.Payload)
 		if authorEmail == "" {
-			return len(normalizedEmailSet(gitEmails)) == 0
+			if len(normalizedEmailSet(gitEmails)) == 0 {
+				return true, "git commit with unknown local identity"
+			}
+			return false, "git commit missing author email"
 		}
 		emails := normalizedEmailSet(gitEmails)
-		return len(emails) == 0 || emails[strings.ToLower(strings.TrimSpace(authorEmail))]
+		if len(emails) == 0 || emails[strings.ToLower(strings.TrimSpace(authorEmail))] {
+			return true, "git commit authored by local identity"
+		}
+		return false, "git commit authored by another identity"
 	case "github.pull_request", "github.issue":
 		actor := githubEventActor(event.Payload)
 		logins := normalizedStringSet(githubLogins)
-		return len(logins) == 0 || logins[strings.ToLower(strings.TrimSpace(actor))]
+		if len(logins) == 0 || logins[strings.ToLower(strings.TrimSpace(actor))] {
+			return true, "GitHub actor matches local identity"
+		}
+		return false, "GitHub actor does not match local identity"
 	default:
 		if strings.HasPrefix(event.Type, "slack.") {
-			return true
+			if unresolvedRawSlackProject(event) {
+				return false, "raw Slack id without resolved name"
+			}
+			return true, "slack conversation"
 		}
 		if broadResumeProjectName(event.Project) {
-			return false
+			return false, "broad folder file churn"
 		}
-		return event.Path != ""
+		if personalResumeProjectName(event.Project) {
+			return false, "home folder file churn"
+		}
+		if event.Path != "" {
+			return true, "file activity"
+		}
+		return false, "no user-work evidence"
 	}
 }
 
@@ -390,6 +473,14 @@ func broadResumeProjectName(project string) bool {
 	default:
 		return false
 	}
+}
+
+func personalResumeProjectName(project string) bool {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(project), filepath.Base(homeDir))
 }
 
 func resumeProjectEvents(events []ResumeEvent, project string) []ResumeEvent {
@@ -475,6 +566,22 @@ func resumeProjectsMessage(projects []ResumeProject, location *time.Location) st
 		lines = append(lines, fmt.Sprintf("- %s: %s, last active %s", project.Name, pluralize(project.EventCount, "event"), project.LastActive.In(location).Format("2006-01-02 15:04")))
 	}
 	lines = append(lines, "", "Run: workgraph resume <project>")
+	return strings.Join(lines, "\n")
+}
+
+func resumeRelevanceMessage(decisions []resumeRelevanceDecision, location *time.Location) string {
+	lines := []string{"Resume relevance"}
+	if len(decisions) == 0 {
+		lines = append(lines, "No projects with captured events found.")
+		return strings.Join(lines, "\n")
+	}
+	for _, decision := range decisions {
+		state := "hidden"
+		if decision.Shown {
+			state = "shown"
+		}
+		lines = append(lines, fmt.Sprintf("- %s %s: %s (%s, last active %s)", state, decision.Project, decision.Reason, pluralize(decision.EventCount, "event"), decision.LastActive.In(location).Format("2006-01-02 15:04")))
+	}
 	return strings.Join(lines, "\n")
 }
 
