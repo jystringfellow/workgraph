@@ -5,13 +5,16 @@
 The command is deterministic and local-first:
 
 - reads from the SQLite event store
-- uses captured event project names as resumable projects
+- uses captured event project names and local relevance evidence as resumable
+  projects
 - renders plain text without an LLM
 - avoids unsupported claims or invented next steps
 
 ## Project List
 
-When no project is provided, `workgraph resume` lists known projects ordered by most recent captured activity.
+When no project is provided, `workgraph resume` lists projects with user-work
+evidence ordered by most recent captured activity. This avoids treating every
+cloned repository or weakly inferred GitHub repository as resumable work.
 
 The output includes:
 
@@ -23,9 +26,41 @@ The output includes:
 
 Events without a project are omitted from the project list.
 
+By default, weak evidence is omitted from the project list. Examples of weak
+evidence include git commits authored by someone else in a cloned repository and
+repository activity inferred only because a local clone exists.
+
+By default, stale evidence older than the resume freshness window is also
+omitted from the project list. `workgraph resume --all` still shows older
+projects.
+
+Examples of user-work evidence include:
+
+- file events under the project
+- git commits authored by a configured local git identity
+- GitHub pull requests or issues authored by a configured local GitHub identity
+- Slack conversations that have not yet been associated with another project
+- explicit project memory
+
+Broad watch-root projects such as `Downloads`, `Code`, `Desktop`, and
+`Documents` should not appear in the default project list from file churn alone.
+
+Older Slack events may have stored raw channel ids as their project before
+conversation-name resolution was available. At read time, resume should merge
+those older events under a resolved `channel_name` when another stored event has
+the same Slack `channel_id` and a human-readable name. The raw `channel_id`
+should remain in event payloads for traceability.
+
+`workgraph resume --all` preserves the older broad behavior and lists every
+project with captured events. This is useful for debugging, audits, and checking
+project names before exact `workgraph resume <project>` calls.
+
 ## Project Resume
 
 When a project is provided, `workgraph resume <project>` shows recent evidence for that exact project.
+
+Project-specific resume is exact. It does not apply the project-list relevance
+gate because the user has already named the project they want to inspect.
 
 The output includes:
 

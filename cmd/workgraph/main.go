@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -2304,6 +2306,7 @@ func runResume(args []string, stdout io.Writer, stderr io.Writer) int {
 	homeDir := flags.String("home", "", "workgraph home directory")
 	databasePath := flags.String("database", "", "workgraph SQLite database path")
 	memoryDir := flags.String("memory", "", "workgraph memory directory")
+	allProjects := flags.Bool("all", false, "Show all projects with captured events, including weak evidence")
 
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -2323,6 +2326,9 @@ func runResume(args []string, stdout io.Writer, stderr io.Writer) int {
 		DatabasePath: *databasePath,
 		MemoryDir:    *memoryDir,
 		Project:      project,
+		AllProjects:  *allProjects,
+		GitEmails:    localGitEmails(),
+		GitHubLogins: localGitHubLogins(),
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph resume: %v\n", err)
@@ -2331,6 +2337,61 @@ func runResume(args []string, stdout io.Writer, stderr io.Writer) int {
 
 	fmt.Fprintln(stdout, result.Message)
 	return 0
+}
+
+func localGitEmails() []string {
+	output, err := exec.Command("git", "config", "--global", "--get-all", "user.email").Output()
+	if err != nil {
+		return nil
+	}
+	var emails []string
+	for _, line := range strings.Split(string(output), "\n") {
+		email := strings.TrimSpace(line)
+		if email != "" {
+			emails = append(emails, email)
+		}
+	}
+	return emails
+}
+
+func localGitHubLogins() []string {
+	output, err := exec.Command("gh", "auth", "status", "--hostname", "github.com").CombinedOutput()
+	if err != nil && len(output) == 0 {
+		return nil
+	}
+	return githubLoginsFromAuthStatus(string(output))
+}
+
+func githubLoginsFromAuthStatus(output string) []string {
+	seen := map[string]bool{}
+	var logins []string
+	for _, line := range strings.Split(output, "\n") {
+		login := githubLoginFromAuthStatusLine(line)
+		if login == "" || seen[login] {
+			continue
+		}
+		seen[login] = true
+		logins = append(logins, login)
+	}
+	return logins
+}
+
+func githubLoginFromAuthStatusLine(line string) string {
+	const marker = " account "
+	index := strings.Index(line, marker)
+	if index == -1 {
+		return ""
+	}
+	rest := strings.TrimSpace(line[index+len(marker):])
+	if rest == "" {
+		return ""
+	}
+	for i, char := range rest {
+		if char == ' ' || char == '(' || char == '\t' {
+			return strings.TrimSpace(rest[:i])
+		}
+	}
+	return rest
 }
 
 func runCaptureWorker(args []string, stderr io.Writer) int {
