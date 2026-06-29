@@ -145,6 +145,88 @@ Useful split boundaries are:
 Avoid introducing broad interfaces before multiple providers genuinely share a
 stable shape.
 
+## Database Indices And Query Performance
+
+The `events` table has no secondary indices. As captured event volume grows,
+queries against `timestamp`, `project`, `source`, and `type` columns degrade
+to full table scans. `today.go` already filters events in Go after loading a
+broad time window, which compounds this.
+
+Add indices when landing the first behavior slice that exposes latency:
+
+```sql
+CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events (timestamp);
+CREATE INDEX IF NOT EXISTS idx_events_project   ON events (project);
+CREATE INDEX IF NOT EXISTS idx_events_source    ON events (source);
+CREATE INDEX IF NOT EXISTS idx_events_type      ON events (type);
+```
+
+Drive the index addition through `createSchema` so it runs on `init` for new
+installs and through `ensureIndex` (parallel to `ensureColumn`) for upgrades.
+Write a fact that verifies the indices exist after `init`.
+
+## Schema Evolution Strategy
+
+The current `ensureColumn()` shim works for additive column changes but has no
+version tracking and no story for destructive or reordering changes. Before
+adding a third call to `ensureColumn`, consider:
+
+- Store a `user_version` integer in the SQLite pragma (`PRAGMA user_version`).
+- Apply numbered migrations in order, gated on the current version number.
+- Keep migrations in a `[]migration` slice in `init.go` so they are easy to
+  audit and facts can assert that schema versions advance correctly.
+
+This does not need to land before the next feature slice, but each new
+`ensureColumn` call adds future migration debt.
+
+## HTTP Client Timeouts In Connector Polling
+
+Connector `*http.Client` fields in `RunCapture` carry no documented timeout
+guarantee. When callers pass `nil` (the default in daemon mode), the underlying
+transport is `http.DefaultClient` which has no timeout. A slow or unresponsive
+upstream API could hang a polling goroutine indefinitely, blocking the next
+poll cycle and leaking a goroutine for the life of the daemon.
+
+LLM clients already set explicit timeouts (10 s for model advertisement, 60 s
+for completions). Apply the same discipline to connector clients:
+
+- Set a reasonable read timeout (e.g., 30 s) when constructing the default
+  connector client.
+- Add a `context.WithTimeout` wrapping the outermost polling call so the
+  whole round trip is bounded, not just the TCP dial.
+- Write a fact that verifies a connector does not hang when the mock server
+  stops responding.
+
+## Suggestion Pattern Key Stability
+
+Suggestion IDs are derived from `(type, pattern_key)`. The `UNIQUE` constraint
+enforces one live suggestion per `(type, pattern_key)` pair, which is correct.
+However, if a pattern key changes (for example, a path normalisation rule
+changes its output), the old row becomes an orphan. Future suggestion producers
+should treat `pattern_key` as immutable once a row exists, or implement an
+explicit rename/merge path before changing the key format.
+
+## RunCapture Struct Growth
+
+The `RunCapture` struct has grown to 30+ fields, mixing file-watching state
+(watcher, budget, suppress maps) with per-connector polling state (token,
+channels, cursors, HTTP clients, intervals). Adding a new connector currently
+requires editing the struct, `StartRun`, and the polling loop together.
+
+Split connectors into a small value type when a new connector warrants it:
+
+```go
+type connectorPoller struct {
+    id       string
+    interval time.Duration
+    poll     func(ctx context.Context) error
+}
+```
+
+`StartRun` then builds a `[]connectorPoller` slice and the poll loop iterates
+it uniformly. This is not a refactor mandate — prefer landing it when a new
+connector or the connector policy layer needs it.
+
 ## Non-Goals
 
 - no repository-wide package split before behavior requires it

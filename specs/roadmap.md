@@ -28,6 +28,7 @@ Priority labels used below:
 - [x] Sane default watch roots
 - [x] Configurable ignored paths and names
 - [x] SQLite event store
+- [x] Database indices on events (timestamp, project, source, type) to prevent full-table-scan degradation as event volume grows. [spec: `specs/architecture-improvements.md`]
 - [x] File system watcher
 - [x] Basic project inference (repo/folder name)
 - [x] Git-root project inference
@@ -98,6 +99,7 @@ Priority labels used below:
    - [x] Connector setup handoff state: `draft`, `ready`, `error`, validation timestamps, validation errors, and `connectors status`. [P0a, spec: `specs/connector-runtime.md` and `specs/connector-setup.md`]
    - [ ] Interactive connector setup wizard for required/optional params with inline help. [P0a, spec: `specs/connector-setup.md`]
    - [ ] Connector setup validation flow (test connection before save, draft-and-resume support). [P0a, spec: `specs/connector-setup.md`]
+   - [ ] Connector validation implemented for calendar, mail, and azure.boards (currently only github and notion implement `connectors validate`). [P0a]
 
 ## Phase 3.5: Enterprise security and compliance
 - [x] IT-readable Slack/compliance document
@@ -136,7 +138,8 @@ Priority labels used below:
 - [ ] Resume improvements
 - [x] Resume relevance gate for bare `workgraph resume`, preserving exact `resume <project>` and adding an `--all` escape hatch. [P1, spec: `specs/resume.md` and `specs/architecture-improvements.md`]
 - [x] Shared suggestion storage: ids, type, reason, evidence, confidence, lane, lifecycle state, feedback, and suppression. [P0b, spec: `specs/suggestion-explainability.md` and `specs/db-contracts.md`]
-- [ ] Explainable suggestion evidence trails with per-suggestion suppression controls. [P0b, spec: `specs/suggestion-explainability.md`]
+- [x] Explainable suggestion evidence trails with per-suggestion suppression controls. [P0b, spec: `specs/suggestion-explainability.md`]
+- [x] Suggestion snooze expiration: resurface snoozed suggestions when their scheduled `until_at` time passes. [P0b]
 - [x] First deterministic suggestion producer: ignore-rule or watch-root suggestions. [P0c, spec: `specs/ignore-suggestions.md` and `specs/watch-suggestions.md`]
 - [ ] Cross-source event association baseline (deterministic IDs + local fuzzy heuristics) without LLM dependency. [P1, spec: `specs/event-associations.md` and `specs/architecture-improvements.md`]
 - [ ] Optional semantic association lane (LLM/embeddings) behind explicit opt-in and confidence gates. [P1, spec: `specs/event-associations.md` and `specs/llm-integration.md`]

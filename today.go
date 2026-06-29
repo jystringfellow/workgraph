@@ -122,7 +122,11 @@ func loadTodayEvents(db *sql.DB, now time.Time) ([]TodayEvent, error) {
 	dayStart := time.Date(now.In(location).Year(), now.In(location).Month(), now.In(location).Day(), 0, 0, 0, 0, location)
 	dayEnd := dayStart.AddDate(0, 0, 1)
 
-	rows, err := db.Query(`SELECT id, type, timestamp, project, summary, payload_json FROM events`)
+	rows, err := db.Query(
+		`SELECT id, type, timestamp, project, summary, payload_json FROM events WHERE timestamp >= ? AND timestamp < ? ORDER BY timestamp ASC, id ASC`,
+		dayStart.UTC().Format(time.RFC3339),
+		dayEnd.UTC().Format(time.RFC3339),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("query events: %w", err)
 	}
@@ -139,15 +143,11 @@ func loadTodayEvents(db *sql.DB, now time.Time) ([]TodayEvent, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse event timestamp %q: %w", stored.ID, err)
 		}
-		localTimestamp := timestamp.In(location)
-		if localTimestamp.Before(dayStart) || !localTimestamp.Before(dayEnd) {
-			continue
-		}
 
 		event := TodayEvent{
 			ID:        stored.ID,
 			Type:      stored.Type,
-			Timestamp: localTimestamp,
+			Timestamp: timestamp.In(location),
 			Path:      eventPath(stored.PayloadJSON),
 			Payload:   stored.PayloadJSON,
 		}
@@ -162,13 +162,6 @@ func loadTodayEvents(db *sql.DB, now time.Time) ([]TodayEvent, error) {
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("query events: %w", err)
 	}
-
-	sort.Slice(events, func(i, j int) bool {
-		if events[i].Timestamp.Equal(events[j].Timestamp) {
-			return events[i].ID < events[j].ID
-		}
-		return events[i].Timestamp.Before(events[j].Timestamp)
-	})
 
 	return events, nil
 }

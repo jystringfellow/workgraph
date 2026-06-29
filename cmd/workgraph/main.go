@@ -120,12 +120,14 @@ func runNetworkDestinations(args []string, stdout io.Writer, stderr io.Writer) i
 
 func runSuggestions(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: workgraph suggestions <list|dismiss>")
+		fmt.Fprintln(stderr, "usage: workgraph suggestions <list|show|approve|dismiss>")
 		return 2
 	}
 	switch args[0] {
 	case "list":
 		return runSuggestionsList(args[1:], stdout, stderr)
+	case "show":
+		return runSuggestionsShow(args[1:], stdout, stderr)
 	case "approve":
 		return runSuggestionsApprove(args[1:], stdout, stderr)
 	case "dismiss":
@@ -134,6 +136,39 @@ func runSuggestions(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unknown suggestions command: %s\n", args[0])
 		return 2
 	}
+}
+
+func runSuggestionsShow(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph suggestions show <id>")
+		return 2
+	}
+	id := args[0]
+	flags := flag.NewFlagSet("suggestions show "+id, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
+
+	if err := flags.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph suggestions show <id>")
+		return 2
+	}
+
+	result, err := workgraph.ShowSuggestion(workgraph.SuggestionShowConfig{
+		HomeDir:      *homeDir,
+		DatabasePath: *databasePath,
+		ID:           id,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph suggestions show: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
 }
 
 func runSuggestionsList(args []string, stdout io.Writer, stderr io.Writer) int {

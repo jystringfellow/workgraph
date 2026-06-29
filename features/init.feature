@@ -10,6 +10,7 @@ Scenario: Create the SQLite event database
   When I run "workgraph init"
   Then the SQLite database exists at "~/.workgraph/workgraph.db"
   And the database contains the active Phase 0 tables
+  And the database has performance indices on events (timestamp, project, source, type)
 
 Scenario: Create the local memory repo
   Given workgraph has not been initialized

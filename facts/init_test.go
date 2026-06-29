@@ -438,6 +438,91 @@ func TestInitOnMacOSSuggestsFullDiskAccess(t *testing.T) {
 	}
 }
 
+func TestInitCreatesDatabaseIndices(t *testing.T) {
+	result, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir: filepath.Join(t.TempDir(), ".workgraph"),
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	db, err := sql.Open("sqlite3", result.DatabasePath)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+
+	for _, name := range []string{
+		"idx_events_timestamp",
+		"idx_events_project",
+		"idx_events_source",
+		"idx_events_type",
+	} {
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?`, name).Scan(&count); err != nil {
+			t.Fatalf("check index %s: %v", name, err)
+		}
+		if count != 1 {
+			t.Fatalf("expected index %s to exist after init, got count %d", name, count)
+		}
+	}
+}
+
+func TestInitAppliesIndicesToExistingDatabase(t *testing.T) {
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+
+	// Create the database manually without indices to simulate a pre-index install.
+	if err := os.MkdirAll(homeDir, 0o700); err != nil {
+		t.Fatalf("create home dir: %v", err)
+	}
+	dbPath := filepath.Join(homeDir, "workgraph.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS events (
+		id TEXT PRIMARY KEY,
+		source TEXT NOT NULL,
+		type TEXT NOT NULL,
+		timestamp TEXT NOT NULL,
+		payload_json TEXT NOT NULL,
+		project TEXT,
+		actor TEXT,
+		summary TEXT,
+		created_at TEXT NOT NULL
+	)`)
+	db.Close()
+	if err != nil {
+		t.Fatalf("create events table: %v", err)
+	}
+
+	_, err = workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	db2, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open database after init: %v", err)
+	}
+	defer db2.Close()
+
+	for _, name := range []string{
+		"idx_events_timestamp",
+		"idx_events_project",
+		"idx_events_source",
+		"idx_events_type",
+	} {
+		var count int
+		if err := db2.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?`, name).Scan(&count); err != nil {
+			t.Fatalf("check index %s: %v", name, err)
+		}
+		if count != 1 {
+			t.Fatalf("expected index %s to be applied to existing database, got count %d", name, count)
+		}
+	}
+}
+
 type initSettingsFile struct {
 	WatchDirs             []string `json:"watch_dirs"`
 	ConservativeWatchDirs []string `json:"conservative_watch_dirs,omitempty"`

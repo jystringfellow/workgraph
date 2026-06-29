@@ -406,11 +406,11 @@ func insertEvent(t *testing.T, dbPath string, event storedEvent) {
 		event.ID,
 		source,
 		event.Type,
-		event.Timestamp.Format(time.RFC3339Nano),
+		event.Timestamp.UTC().Format(time.RFC3339Nano),
 		event.Payload,
 		event.Project,
 		event.Summary,
-		event.Timestamp.Format(time.RFC3339Nano),
+		event.Timestamp.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
 		t.Fatalf("insert event %q: %v", event.ID, err)

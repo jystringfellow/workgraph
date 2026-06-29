@@ -348,7 +348,24 @@ func createSchema(db *sql.DB) error {
 		return err
 	}
 
+	indices := []struct{ name, table, column string }{
+		{"idx_events_timestamp", "events", "timestamp"},
+		{"idx_events_project", "events", "project"},
+		{"idx_events_source", "events", "source"},
+		{"idx_events_type", "events", "type"},
+	}
+	for _, idx := range indices {
+		if err := ensureIndex(db, idx.name, idx.table, idx.column); err != nil {
+			return err
+		}
+	}
+
 	return nil
+}
+
+func ensureIndex(db *sql.DB, name, table, column string) error {
+	_, err := db.Exec("CREATE INDEX IF NOT EXISTS " + name + " ON " + table + " (" + column + ")")
+	return err
 }
 
 func ensureColumn(db *sql.DB, table string, column string, definition string) error {
