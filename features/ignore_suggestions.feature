@@ -31,3 +31,24 @@ Scenario: Coalesce duplicate ignore suggestions
   When more matching noisy activity occurs
   Then workgraph updates the existing suggestion
   And workgraph does not create a duplicate suggestion
+
+Scenario: Snoozed suggestion resurfaces after snooze window expires
+  Given workgraph has a snoozed ignore suggestion with a past until_at suppression
+  When I list suggestions
+  Then the suggestion appears as proposed
+
+Scenario: Snoozed suggestion stays hidden before its snooze window expires
+  Given workgraph has a snoozed ignore suggestion with a future until_at suppression
+  When I list suggestions
+  Then the suggestion remains snoozed
+
+Scenario: Suggestion list includes an evidence summary
+  Given workgraph has a pending ignore suggestion with event and path evidence
+  When I list suggestions
+  Then the output includes the event count and path count from the evidence
+
+Scenario: Suggestion show includes full evidence detail
+  Given workgraph has a pending suggestion with evidence
+  When I run "workgraph suggestions show <id>"
+  Then the output includes all cited event ids
+  And the output includes all cited paths

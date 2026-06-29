@@ -253,6 +253,22 @@ func ListSuggestions(config SuggestionListConfig) (SuggestionListResult, error) 
 	}
 	defer db.Close()
 
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err = db.Exec(`UPDATE suggestions
+		SET status = 'proposed', updated_at = ?
+		WHERE status = 'snoozed'
+		AND id IN (
+			SELECT s.id FROM suggestions s
+			JOIN suggestion_suppressions ss
+				ON ss.type = s.type AND ss.pattern_key = s.pattern_key
+			WHERE s.status = 'snoozed'
+			AND ss.until_at IS NOT NULL
+			AND ss.until_at <= ?
+		)`, now, now)
+	if err != nil {
+		return SuggestionListResult{}, fmt.Errorf("expire snoozed suggestions: %w", err)
+	}
+
 	status := strings.TrimSpace(config.Status)
 	limit := config.Limit
 	if limit <= 0 {
@@ -483,8 +499,120 @@ func suggestionsListMessage(result SuggestionListResult) string {
 			lines = append(lines, "  pattern: "+suggestion.PatternKey)
 		}
 		lines = append(lines, "  reason: "+suggestion.Reason)
+		if summary := evidenceSummary(suggestion.EvidenceJSON); summary != "" {
+			lines = append(lines, "  evidence: "+summary)
+		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// SuggestionShowConfig controls retrieving a single suggestion with full evidence detail.
+type SuggestionShowConfig struct {
+	HomeDir      string
+	DatabasePath string
+	ID           string
+}
+
+// SuggestionShowResult describes a single suggestion with full evidence detail.
+type SuggestionShowResult struct {
+	Suggestion Suggestion
+	Message    string
+}
+
+// ShowSuggestion returns full detail for one suggestion, including rendered evidence.
+func ShowSuggestion(config SuggestionShowConfig) (SuggestionShowResult, error) {
+	if strings.TrimSpace(config.ID) == "" {
+		return SuggestionShowResult{}, errors.New("suggestion id is required")
+	}
+	db, err := openSuggestionDatabase(config.HomeDir, config.DatabasePath)
+	if err != nil {
+		return SuggestionShowResult{}, err
+	}
+	defer db.Close()
+
+	suggestion, err := readSuggestionByID(db, config.ID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return SuggestionShowResult{}, fmt.Errorf("suggestion %q not found", config.ID)
+		}
+		return SuggestionShowResult{}, err
+	}
+
+	result := SuggestionShowResult{Suggestion: suggestion}
+	result.Message = suggestionShowMessage(suggestion)
+	return result, nil
+}
+
+func suggestionShowMessage(s Suggestion) string {
+	lines := []string{
+		"Suggestion: " + s.ID,
+		"type:       " + s.Type,
+	}
+	if s.PatternKey != "" {
+		lines = append(lines, "pattern:    "+s.PatternKey)
+	}
+	lines = append(lines,
+		"status:     "+s.Status,
+		"confidence: "+s.Confidence,
+		"lane:       "+s.Lane,
+		"title:      "+s.Title,
+		"reason:     "+s.Reason,
+	)
+	if detail := evidenceDetail(s.EvidenceJSON); len(detail) > 0 {
+		lines = append(lines, "evidence:")
+		for _, line := range detail {
+			lines = append(lines, "  "+line)
+		}
+	}
+	if s.ResolvedAt != "" {
+		lines = append(lines, "resolved:   "+s.ResolvedAt)
+	}
+	lines = append(lines, "updated:    "+s.UpdatedAt)
+	return strings.Join(lines, "\n")
+}
+
+// evidenceSummary returns a compact one-line description of evidence_json for list output.
+func evidenceSummary(evidenceJSON string) string {
+	var ev struct {
+		EventIDs []string `json:"event_ids"`
+		Paths    []string `json:"paths"`
+	}
+	if err := json.Unmarshal([]byte(evidenceJSON), &ev); err != nil {
+		return ""
+	}
+	var parts []string
+	if n := len(ev.EventIDs); n > 0 {
+		parts = append(parts, fmt.Sprintf("%s", pluralize(n, "event")))
+	}
+	if n := len(ev.Paths); n > 0 {
+		parts = append(parts, fmt.Sprintf("%s", pluralize(n, "path")))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, ", ")
+}
+
+// evidenceDetail returns human-readable lines for the full evidence display in show output.
+func evidenceDetail(evidenceJSON string) []string {
+	var ev struct {
+		EventIDs []string `json:"event_ids"`
+		Paths    []string `json:"paths"`
+	}
+	if err := json.Unmarshal([]byte(evidenceJSON), &ev); err != nil {
+		return []string{evidenceJSON}
+	}
+	var lines []string
+	if len(ev.EventIDs) > 0 {
+		lines = append(lines, fmt.Sprintf("events (%d): %s", len(ev.EventIDs), strings.Join(ev.EventIDs, ", ")))
+	}
+	if len(ev.Paths) > 0 {
+		lines = append(lines, fmt.Sprintf("paths (%d):", len(ev.Paths)))
+		for _, p := range ev.Paths {
+			lines = append(lines, "  "+p)
+		}
+	}
+	return lines
 }
 
 func stableSuggestionID(suggestionType string, patternKey string) string {

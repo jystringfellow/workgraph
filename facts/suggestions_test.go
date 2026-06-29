@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	workgraph "github.com/jystringfellow/workgraph"
 )
@@ -166,6 +167,242 @@ func TestSuggestionsCLIListsAndDismissesSuggestions(t *testing.T) {
 	output = runWorkgraphCommand(t, nil, "suggestions", "list", "--home", homeDir, "--database", result.DatabasePath)
 	if !strings.Contains(output, "dismissed") {
 		t.Fatalf("expected dismissed suggestion in list output, got:\n%s", output)
+	}
+}
+
+func TestSnoozedSuggestionResurfacesAfterExpiryWindow(t *testing.T) {
+	result, err := workgraph.Init(workgraph.InitConfig{HomeDir: filepath.Join(t.TempDir(), ".workgraph")})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	suggestion, err := workgraph.UpsertSuggestion(workgraph.SuggestionUpsert{
+		DatabasePath: result.DatabasePath,
+		Type:         "ignore_path",
+		PatternKey:   "/repo/dist",
+		Title:        "Ignore dist output",
+		Reason:       "Many build events under /repo/dist.",
+		Confidence:   "high",
+		Lane:         "baseline",
+		EvidenceJSON: `{"event_ids":["e1"],"paths":["/repo/dist/main.js"]}`,
+	})
+	if err != nil {
+		t.Fatalf("create suggestion: %v", err)
+	}
+
+	// Snooze the suggestion.
+	if err := workgraph.UpdateSuggestionStatus(workgraph.SuggestionStatusUpdate{
+		DatabasePath: result.DatabasePath,
+		ID:           suggestion.ID,
+		Status:       "snoozed",
+	}); err != nil {
+		t.Fatalf("snooze suggestion: %v", err)
+	}
+
+	// Add a suppression with an until_at already in the past.
+	pastTime := time.Now().UTC().Add(-1 * time.Hour).Format(time.RFC3339)
+	if _, err := workgraph.AddSuggestionSuppression(workgraph.SuggestionSuppressionChange{
+		DatabasePath: result.DatabasePath,
+		Type:         "ignore_path",
+		PatternKey:   "/repo/dist",
+		Reason:       "snoozed",
+		UntilAt:      pastTime,
+	}); err != nil {
+		t.Fatalf("add suppression: %v", err)
+	}
+
+	// Listing should expire the snooze and return the suggestion as proposed.
+	listed, err := workgraph.ListSuggestions(workgraph.SuggestionListConfig{
+		DatabasePath: result.DatabasePath,
+	})
+	if err != nil {
+		t.Fatalf("list suggestions: %v", err)
+	}
+
+	var found *workgraph.Suggestion
+	for i := range listed.Suggestions {
+		if listed.Suggestions[i].ID == suggestion.ID {
+			found = &listed.Suggestions[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected suggestion to reappear after snooze expiry, not found in list")
+	}
+	if found.Status != "proposed" {
+		t.Fatalf("expected suggestion status to be proposed after snooze expiry, got %q", found.Status)
+	}
+}
+
+func TestSnoozedSuggestionStaysHiddenBeforeExpiryWindow(t *testing.T) {
+	result, err := workgraph.Init(workgraph.InitConfig{HomeDir: filepath.Join(t.TempDir(), ".workgraph")})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	suggestion, err := workgraph.UpsertSuggestion(workgraph.SuggestionUpsert{
+		DatabasePath: result.DatabasePath,
+		Type:         "ignore_path",
+		PatternKey:   "/repo/.cache",
+		Title:        "Ignore cache",
+		Reason:       "Many cache events.",
+		Confidence:   "medium",
+		Lane:         "baseline",
+		EvidenceJSON: `{"event_ids":["e2"],"paths":["/repo/.cache/v1"]}`,
+	})
+	if err != nil {
+		t.Fatalf("create suggestion: %v", err)
+	}
+
+	if err := workgraph.UpdateSuggestionStatus(workgraph.SuggestionStatusUpdate{
+		DatabasePath: result.DatabasePath,
+		ID:           suggestion.ID,
+		Status:       "snoozed",
+	}); err != nil {
+		t.Fatalf("snooze suggestion: %v", err)
+	}
+
+	// Add a suppression with an until_at in the future.
+	futureTime := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
+	if _, err := workgraph.AddSuggestionSuppression(workgraph.SuggestionSuppressionChange{
+		DatabasePath: result.DatabasePath,
+		Type:         "ignore_path",
+		PatternKey:   "/repo/.cache",
+		Reason:       "snoozed",
+		UntilAt:      futureTime,
+	}); err != nil {
+		t.Fatalf("add suppression: %v", err)
+	}
+
+	listed, err := workgraph.ListSuggestions(workgraph.SuggestionListConfig{
+		DatabasePath: result.DatabasePath,
+	})
+	if err != nil {
+		t.Fatalf("list suggestions: %v", err)
+	}
+
+	for _, s := range listed.Suggestions {
+		if s.ID == suggestion.ID && s.Status == "proposed" {
+			t.Fatalf("expected snoozed suggestion to remain snoozed before expiry, got proposed")
+		}
+	}
+}
+
+func TestSuggestionsListShowsEvidenceSummary(t *testing.T) {
+	result, err := workgraph.Init(workgraph.InitConfig{HomeDir: filepath.Join(t.TempDir(), ".workgraph")})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	suggestion, err := workgraph.UpsertSuggestion(workgraph.SuggestionUpsert{
+		DatabasePath: result.DatabasePath,
+		Type:         "ignore_path",
+		PatternKey:   "/repo/build",
+		Title:        "Ignore noisy build output",
+		Reason:       "Many build events.",
+		Confidence:   "high",
+		Lane:         "baseline",
+		EvidenceJSON: `{"event_ids":["e1","e2","e3"],"paths":["/repo/build/a.o","/repo/build/b.o"]}`,
+	})
+	if err != nil {
+		t.Fatalf("create suggestion: %v", err)
+	}
+
+	listed, err := workgraph.ListSuggestions(workgraph.SuggestionListConfig{DatabasePath: result.DatabasePath})
+	if err != nil {
+		t.Fatalf("list suggestions: %v", err)
+	}
+
+	if !strings.Contains(listed.Message, "3 events") {
+		t.Fatalf("expected list output to include event count in evidence, got:\n%s", listed.Message)
+	}
+	if !strings.Contains(listed.Message, "2 paths") {
+		t.Fatalf("expected list output to include path count in evidence, got:\n%s", listed.Message)
+	}
+	_ = suggestion
+}
+
+func TestSuggestionsShowIncludesFullEvidence(t *testing.T) {
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	result, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	suggestion, err := workgraph.UpsertSuggestion(workgraph.SuggestionUpsert{
+		DatabasePath: result.DatabasePath,
+		Type:         "ignore_path",
+		PatternKey:   "/repo/dist",
+		Title:        "Ignore dist output",
+		Reason:       "Many dist events.",
+		Confidence:   "high",
+		Lane:         "baseline",
+		EvidenceJSON: `{"event_ids":["evt-abc","evt-def"],"paths":["/repo/dist/main.js","/repo/dist/vendor.js"]}`,
+	})
+	if err != nil {
+		t.Fatalf("create suggestion: %v", err)
+	}
+
+	shown, err := workgraph.ShowSuggestion(workgraph.SuggestionShowConfig{
+		DatabasePath: result.DatabasePath,
+		ID:           suggestion.ID,
+	})
+	if err != nil {
+		t.Fatalf("show suggestion: %v", err)
+	}
+
+	for _, expected := range []string{
+		suggestion.ID, "ignore_path", "/repo/dist", "proposed", "high",
+		"evt-abc", "evt-def",
+		"/repo/dist/main.js", "/repo/dist/vendor.js",
+	} {
+		if !strings.Contains(shown.Message, expected) {
+			t.Fatalf("expected show output to contain %q, got:\n%s", expected, shown.Message)
+		}
+	}
+}
+
+func TestSuggestionsShowCLIRendersEvidence(t *testing.T) {
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	result, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	suggestion, err := workgraph.UpsertSuggestion(workgraph.SuggestionUpsert{
+		DatabasePath: result.DatabasePath,
+		Type:         "watch_root",
+		PatternKey:   "/repo",
+		Title:        "Watch new repo",
+		Reason:       "Git activity outside watch roots.",
+		Confidence:   "medium",
+		Lane:         "baseline",
+		EvidenceJSON: `{"event_ids":["git-1"],"paths":["/repo/.git/HEAD"]}`,
+	})
+	if err != nil {
+		t.Fatalf("create suggestion: %v", err)
+	}
+
+	output := runWorkgraphCommand(t, nil, "suggestions", "show", suggestion.ID, "--home", homeDir, "--database", result.DatabasePath)
+	for _, expected := range []string{suggestion.ID, "watch_root", "/repo", "git-1", "/repo/.git/HEAD"} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("expected CLI show output to contain %q, got:\n%s", expected, output)
+		}
+	}
+}
+
+func TestSuggestionsShowReturnsErrorForUnknownID(t *testing.T) {
+	result, err := workgraph.Init(workgraph.InitConfig{HomeDir: filepath.Join(t.TempDir(), ".workgraph")})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	_, err = workgraph.ShowSuggestion(workgraph.SuggestionShowConfig{
+		DatabasePath: result.DatabasePath,
+		ID:           "sug_doesnotexist",
+	})
+	if err == nil {
+		t.Fatalf("expected error for unknown suggestion id, got nil")
 	}
 }
 
