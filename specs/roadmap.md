@@ -120,10 +120,11 @@ Priority labels used below:
 - [ ] Admin controls for connector enablement and high-risk connector options such as Slack DM capture and mail body capture.
   - [x] Managed connector allowlists and denylists are enforced before setup, enablement, and polling.
   - [x] Slack direct-message and group-direct-message capture can be locked off with managed settings.
-- [ ] Machine-readable security/config report for endpoint verification.
+- [x] Machine-readable, secret-free `workgraph security report` for endpoint verification, with stable findings and an administrator review guide. [spec: `specs/enterprise-security.md`]
 - [ ] SQLite encryption at rest
 - [ ] OS credential-store backed SQLite encryption keys
 - [x] POSIX connector credential file permission hardening
+- [x] POSIX SQLite, settings, and daemon runtime file permission hardening and repair.
 - [ ] Windows connector credential ACL design and CI readiness
 - [ ] Windows connector credential ACL implementation verified by Windows CI
 - [ ] OS credential-store backed connector secrets

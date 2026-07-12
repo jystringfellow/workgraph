@@ -157,6 +157,20 @@ and configured LLM profile destinations. It reads local configuration only and
 does not print access tokens, refresh tokens, API key environment variable
 names, or captured work data.
 
+Collect a versioned endpoint security report without contacting providers or
+printing local secrets and captured content:
+
+```sh
+workgraph security report
+workgraph security report --format json
+```
+
+The report inventories effective local file permissions, managed-settings
+presence, credential storage, SQLite encryption state, configured network
+destination count, and stable remediation findings. See
+`docs/security/endpoint-security.md` for deployment guidance and current known
+gaps.
+
 For debugging, keep capture attached to the current terminal and print captured
 events:
 

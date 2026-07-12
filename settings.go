@@ -515,8 +515,11 @@ func writeSettings(settingsPath string, config settingsFile) error {
 	}
 	contents = append(contents, '\n')
 
-	if err := os.WriteFile(settingsPath, contents, 0o644); err != nil {
+	if err := os.WriteFile(settingsPath, contents, 0o600); err != nil {
 		return fmt.Errorf("write settings: %w", err)
+	}
+	if err := ensureUserOnlyFile(settingsPath); err != nil {
+		return fmt.Errorf("secure settings: %w", err)
 	}
 	return nil
 }

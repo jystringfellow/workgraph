@@ -49,6 +49,17 @@ func TestStartStartsBackgroundCaptureWithConfiguredWatchDirs(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(homeDir, "daemon.log")); err != nil {
 		t.Fatalf("expected capture log under workgraph home: %v", err)
 	}
+	if runtime.GOOS != "windows" {
+		for _, name := range []string{"daemon.json", "daemon.pid", "daemon.log"} {
+			info, err := os.Stat(filepath.Join(homeDir, name))
+			if err != nil {
+				t.Fatalf("stat %s: %v", name, err)
+			}
+			if got := info.Mode().Perm(); got != 0o600 {
+				t.Fatalf("expected %s permissions 0600, got %v", name, got)
+			}
+		}
+	}
 }
 
 func TestMacOSBackgroundCaptureWorkerRetainsSupervisorParent(t *testing.T) {

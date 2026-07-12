@@ -71,15 +71,18 @@ func StartDaemon(config DaemonConfig) (DaemonStatus, error) {
 		return existing, nil
 	}
 
-	if err := os.MkdirAll(runStatus.HomeDir, 0o755); err != nil {
+	if err := ensureWorkgraphHomeDir(runStatus.HomeDir); err != nil {
 		return DaemonStatus{}, fmt.Errorf("create daemon state directory: %w", err)
 	}
 
-	logFile, err := os.OpenFile(daemonLogPath(runStatus.HomeDir), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	logFile, err := os.OpenFile(daemonLogPath(runStatus.HomeDir), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return DaemonStatus{}, fmt.Errorf("open daemon log: %w", err)
 	}
 	defer logFile.Close()
+	if err := ensureUserOnlyFile(daemonLogPath(runStatus.HomeDir)); err != nil {
+		return DaemonStatus{}, fmt.Errorf("secure daemon log: %w", err)
+	}
 
 	devNull, err := os.Open(os.DevNull)
 	if err != nil {
@@ -302,12 +305,18 @@ func writeDaemonState(status DaemonStatus) error {
 	}
 	contents = append(contents, '\n')
 
-	if err := os.WriteFile(daemonStatePath(status.HomeDir), contents, 0o644); err != nil {
+	if err := os.WriteFile(daemonStatePath(status.HomeDir), contents, 0o600); err != nil {
 		return fmt.Errorf("write daemon state: %w", err)
 	}
+	if err := ensureUserOnlyFile(daemonStatePath(status.HomeDir)); err != nil {
+		return fmt.Errorf("secure daemon state: %w", err)
+	}
 	if status.Running {
-		if err := os.WriteFile(daemonPIDPath(status.HomeDir), []byte(strconv.Itoa(status.PID)+"\n"), 0o644); err != nil {
+		if err := os.WriteFile(daemonPIDPath(status.HomeDir), []byte(strconv.Itoa(status.PID)+"\n"), 0o600); err != nil {
 			return fmt.Errorf("write daemon pid: %w", err)
+		}
+		if err := ensureUserOnlyFile(daemonPIDPath(status.HomeDir)); err != nil {
+			return fmt.Errorf("secure daemon pid: %w", err)
 		}
 	} else if err := removeDaemonPID(status.HomeDir); err != nil {
 		return err
