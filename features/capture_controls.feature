@@ -38,6 +38,12 @@ Scenario: Report stopped status
   When I run "workgraph status"
   Then I see that background capture is not running
 
+Scenario: Report why background capture failed
+  Given background capture exited after a fatal local capture error
+  When I run "workgraph status"
+  Then I see that background capture is not running
+  And I see the last capture failure
+
 Scenario: Run foreground capture for debugging
   Given workgraph has been initialized
   And the settings contain watch directories

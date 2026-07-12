@@ -21,3 +21,10 @@ Scenario: Change connector interval
   Given Notion is connected
   When I run "workgraph connectors interval notion 30m"
   Then workgraph stores the Notion polling interval without changing Notion credentials
+
+Scenario: Isolate a failed connector poll
+  Given an enabled connector fails while workgraph capture is running
+  When the connector records its poll error
+  Then workgraph keeps filesystem capture running
+  And workgraph logs the connector error
+  And "workgraph status" shows the degraded connector and its latest error

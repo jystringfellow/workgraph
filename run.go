@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -346,37 +347,21 @@ func (capture *RunCapture) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-gitTicker.C:
-			if err := capture.captureGitCommits(); err != nil {
-				return err
-			}
+			capture.logConnectorPollError("git", capture.captureGitCommits())
 		case <-githubTicker.C:
-			if err := capture.captureGitHubEvents(); err != nil {
-				return err
-			}
+			capture.logConnectorPollError("github", capture.captureGitHubEvents())
 		case <-slackTicker.C:
-			if err := capture.captureSlackEvents(); err != nil {
-				return err
-			}
+			capture.logConnectorPollError("slack", capture.captureSlackEvents())
 		case <-slackListTicker.C:
-			if err := capture.captureSlackListItems(); err != nil {
-				return err
-			}
+			capture.logConnectorPollError("slack.lists", capture.captureSlackListItems())
 		case <-calendarTicker.C:
-			if err := capture.captureCalendarEvents(); err != nil {
-				return err
-			}
+			capture.logConnectorPollError("calendar", capture.captureCalendarEvents())
 		case <-mailTicker.C:
-			if err := capture.captureMailMessages(); err != nil {
-				return err
-			}
+			capture.logConnectorPollError("mail", capture.captureMailMessages())
 		case <-notionTicker.C:
-			if err := capture.captureNotionEvents(); err != nil {
-				return err
-			}
+			capture.logConnectorPollError("notion", capture.captureNotionEvents())
 		case <-azureBoardsTicker.C:
-			if err := capture.captureAzureBoardsEvents(); err != nil {
-				return err
-			}
+			capture.logConnectorPollError("azure.boards", capture.captureAzureBoardsEvents())
 		case event, ok := <-capture.watcher.Events:
 			if !ok {
 				return nil
@@ -393,6 +378,31 @@ func (capture *RunCapture) Run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func (capture *RunCapture) logConnectorPollError(id string, err error) {
+	if err == nil {
+		return
+	}
+	var failure *connectorPollFailure
+	if errors.As(err, &failure) {
+		id = failure.id
+		err = failure.err
+	}
+	log.Printf("workgraph connector poll failed: connector=%s error=%v", id, err)
+}
+
+type connectorPollFailure struct {
+	id  string
+	err error
+}
+
+func (failure *connectorPollFailure) Error() string {
+	return failure.err.Error()
+}
+
+func (failure *connectorPollFailure) Unwrap() error {
+	return failure.err
 }
 
 func connectedCalendarProviders(homeDir string, state connectorRuntimeFile, managed managedSettingsFile, managedPresent bool) []string {
@@ -570,10 +580,10 @@ func (capture *RunCapture) captureCalendarEvents() error {
 		})
 		if err != nil {
 			_ = recordConnectorPollError(capture.homeDir, id, time.Now(), err)
-			return err
+			return &connectorPollFailure{id: id, err: err}
 		}
 		if err := recordConnectorPollSuccess(capture.homeDir, id, time.Now()); err != nil {
-			return err
+			return &connectorPollFailure{id: id, err: err}
 		}
 	}
 	return nil
@@ -590,10 +600,10 @@ func (capture *RunCapture) captureMailMessages() error {
 		})
 		if err != nil {
 			_ = recordConnectorPollError(capture.homeDir, id, time.Now(), err)
-			return err
+			return &connectorPollFailure{id: id, err: err}
 		}
 		if err := recordConnectorPollSuccess(capture.homeDir, id, time.Now()); err != nil {
-			return err
+			return &connectorPollFailure{id: id, err: err}
 		}
 	}
 	return nil

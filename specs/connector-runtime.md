@@ -34,6 +34,10 @@ backfills, and one-off runs.
   should use the same connector-specific capture function.
 - **Inspectable status**: `workgraph status` should show enabled connector
   polling, last poll time, last error, and next poll time when available.
+- **Failure isolation**: a failed connector poll must not stop filesystem
+  capture or polling for other connectors. The failure must be recorded in
+  connector state, written to the daemon log, and shown by `workgraph status`
+  while capture continues.
 - **Conservative APIs**: API connectors must dedupe events, honor rate limits,
   and back off after failures.
 
@@ -161,3 +165,17 @@ stabilize.
 
 `workgraph connectors list` should display last poll, last error, and the next
 poll time derived from `last_poll_at + interval` when those values are known.
+
+## Poll Failures
+
+Provider availability and credentials can change while background capture is
+running. A connector poll error is therefore connector health information, not
+a fatal daemon error. The runtime should:
+
+- record the failed connector's `last_poll_at` and `last_error`
+- log the connector id and error to the daemon log
+- keep filesystem capture and other connector polling active
+- include degraded connector ids and their latest errors in `workgraph status`
+
+Errors from the filesystem watcher or local event store may still terminate the
+capture process because they affect the core local capture path.

@@ -95,6 +95,8 @@ Priority labels used below:
    - [ ] Fact-backed summary/suggestion command path using the configured LLM.
 - [ ] Configurable connector framework
    - [x] Connected services poll automatically from `workgraph start` with visible controls. [P0a, spec: `specs/connector-runtime.md`]
+   - [x] Connector poll failures are isolated from the daemon, recorded in connector state, logged, and shown by `workgraph status`. Fatal local capture exits preserve their last error. [P0a, specs: `specs/connector-runtime.md` and `specs/capture-controls.md`]
+   - [ ] Bound connector polls with request deadlines and retry backoff so a stalled or failing provider cannot block the shared capture loop. [P0a, spec: `specs/architecture-improvements.md`]
    - [ ] Memory routing/index file for loading relevant context by task.
    - [x] Connector setup handoff state: `draft`, `ready`, `error`, validation timestamps, validation errors, and `connectors status`. [P0a, spec: `specs/connector-runtime.md` and `specs/connector-setup.md`]
    - [ ] Interactive connector setup wizard for required/optional params with inline help. [P0a, spec: `specs/connector-setup.md`]
