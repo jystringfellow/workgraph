@@ -74,6 +74,9 @@ func Init(config InitConfig) (InitResult, error) {
 	if err := createSchema(db); err != nil {
 		return InitResult{}, fmt.Errorf("create database schema: %w", err)
 	}
+	if err := ensureUserOnlyFile(dbPath); err != nil {
+		return InitResult{}, fmt.Errorf("secure database: %w", err)
+	}
 
 	memoryDir, err := resolveMemoryDir(config.MemoryDir)
 	if err != nil {
@@ -168,20 +171,29 @@ func createDefaultSettings(settingsPath string, homeDir string, force bool) erro
 		flags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 	}
 
-	file, err := os.OpenFile(settingsPath, flags, 0o644)
+	file, err := os.OpenFile(settingsPath, flags, 0o600)
 	if err != nil {
 		if os.IsExist(err) {
-			return nil
+			return ensureUserOnlyFile(settingsPath)
 		}
 		return err
 	}
-	defer file.Close()
 
 	if _, err := file.Write(contents); err != nil {
+		_ = file.Close()
 		return err
 	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return ensureUserOnlyFile(settingsPath)
+}
 
-	return nil
+func ensureUserOnlyFile(path string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	return os.Chmod(path, 0o600)
 }
 
 func defaultIgnoreNames() []string {

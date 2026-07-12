@@ -33,6 +33,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runSettings(args[1:], stdout, stderr)
 	case "network":
 		return runNetwork(args[1:], stdout, stderr)
+	case "security":
+		return runSecurity(args[1:], stdout, stderr)
 	case "connectors":
 		return runConnectors(args[1:], stdout, stderr)
 	case "doctor":
@@ -77,6 +79,35 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unknown command: %s\n", args[0])
 		return 2
 	}
+}
+
+func runSecurity(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph security <report>")
+		return 2
+	}
+	if args[0] != "report" {
+		fmt.Fprintf(stderr, "unknown security command: %s\n", args[0])
+		return 2
+	}
+	flags := flag.NewFlagSet("security report", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	format := flags.String("format", "text", "output format: text or json")
+	if err := flags.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph security report [--format text|json]")
+		return 2
+	}
+	result, err := workgraph.SecurityReport(workgraph.SecurityReportConfig{HomeDir: *homeDir, Format: *format})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph security report: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
 }
 
 func runNetwork(args []string, stdout io.Writer, stderr io.Writer) int {

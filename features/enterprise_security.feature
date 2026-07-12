@@ -13,6 +13,19 @@ Scenario: Protect local captured context at rest
   Then the SQLite event store is encrypted at rest
   And encryption keys are stored in the operating system credential store
 
+Scenario: Audit endpoint security without exposing local data
+  Given workgraph stores captured events and connector credentials locally
+  When an administrator requests the machine-readable security report
+  Then the report describes local permission and managed-policy controls
+  And the report identifies storage encryption and credential-store gaps
+  And the report does not expose credentials or captured work data
+
+Scenario: Restrict local state to the current user
+  Given workgraph stores captured data and daemon diagnostics locally
+  When workgraph initializes or starts background capture
+  Then supported POSIX platforms restrict those files to the current user
+  And broader permissions from an older installation are repaired
+
 Scenario: Filter hosted LLM requests locally
   Given hosted AI features are configured
   When workgraph prepares captured context for an LLM request

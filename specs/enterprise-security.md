@@ -108,6 +108,50 @@ Markdown memory files are user-owned local files. If they contain sensitive
 company context, workgraph should document how users can place the memory repo
 inside their organization's approved encrypted storage location.
 
+Until encrypted storage and operating-system credential-store integration are
+implemented, workgraph must apply defense-in-depth permissions to its local
+state. On platforms with POSIX file modes, initialization must create and repair
+the SQLite event store and local settings file to `0600`, in addition to keeping
+the workgraph home at `0700` and connector credential files at `0600`.
+Background capture must preserve the `0700` home mode and create or repair its
+daemon state, PID, and log files to `0600` because those files contain local
+paths and operational error details.
+
+## Endpoint Security Report
+
+Administrators need a deterministic report of the controls enforced on a
+specific endpoint. The CLI should expose:
+
+```sh
+workgraph security report
+workgraph security report --format json
+```
+
+The report is read-only and must not contact provider APIs, refresh tokens, or
+modify local state. Its JSON format must be versioned and include:
+
+- platform and workgraph home information
+- existence and effective local-user-only permission status for the workgraph
+  home, SQLite event store, settings, connector credential files, and
+  credential-adjacent runtime files
+- whether managed settings are present and the fixed platform-managed path
+- whether SQLite encryption at rest and OS credential-store-backed connector
+  secrets are implemented
+- the number of locally configured network destinations
+- stable finding codes, severity, descriptions, and remediation text for
+  controls that still need attention
+
+The report may include local paths, file modes, counts, and control state. It
+must never include file contents, captured work data, access or refresh tokens,
+authorization headers, client secrets, PATs, API keys, or API-key environment
+variable names. Unsupported controls must be reported honestly rather than
+described as enforced.
+
+The repository must document how endpoint administrators collect and interpret
+the report, which controls are currently enforced, and which compensating
+endpoint controls are required while encryption and credential-store work is
+pending. The report is evidence for review, not a compliance attestation.
+
 ## Outbound AI Filtering
 
 If workgraph integrates hosted LLM providers, it must filter outbound text
