@@ -15,6 +15,13 @@ If background capture exits because of a fatal local watcher or event-store
 error, `workgraph status` preserves and reports the last failure. Starting
 capture again clears the prior failure after the new worker becomes ready.
 
+On macOS, the detached capture worker must retain a live workgraph supervisor
+as its parent. This avoids a Go/macOS platform-verifier failure where HTTPS
+requests from an orphaned child fail with `SecPolicyCreateSSL error: 0` after
+the command that launched it exits (Go issue
+[`#68557`](https://github.com/golang/go/issues/68557)). The supervisor performs
+no capture itself and exits when its worker exits.
+
 ## Commands
 
 ```text

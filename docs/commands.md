@@ -117,6 +117,11 @@ If no `--watch` flag is provided, background capture uses settings
 `watch_dirs`. Settings `ignore_paths` and `ignore_names` apply either way.
 The command returns after capture is ready.
 
+On macOS, background capture uses a lightweight `__capture-supervisor` process
+as the parent of the `__capture-worker`. This preserves macOS platform
+certificate verification after the interactive `workgraph start` command exits.
+The supervisor performs no capture itself and exits when the worker stops.
+
 Inspect or stop background capture:
 
 ```sh

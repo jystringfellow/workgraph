@@ -22,6 +22,7 @@ Priority labels used below:
 - [x] CLI: workgraph start
 - [x] Foreground file capture
 - [x] Background capture controls
+- [x] macOS capture supervisor keeps the worker's parent alive so detached HTTPS connector polling retains platform certificate verification. [spec: `specs/capture-controls.md`]
 - [x] CLI: workgraph today
 - [x] CLI: workgraph resume <project>
 - [x] Local config file

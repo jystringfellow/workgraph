@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -91,7 +92,11 @@ func StartDaemon(config DaemonConfig) (DaemonStatus, error) {
 		return DaemonStatus{}, fmt.Errorf("find executable: %w", err)
 	}
 
-	args := []string{executable, "__capture-worker", "--home", runStatus.HomeDir, "--database", runStatus.DatabasePath}
+	entrypoint := "__capture-worker"
+	if runtime.GOOS == "darwin" {
+		entrypoint = "__capture-supervisor"
+	}
+	args := []string{executable, entrypoint, "--home", runStatus.HomeDir, "--database", runStatus.DatabasePath}
 	for _, watchDir := range config.WatchDirs {
 		args = append(args, "--watch", watchDir)
 	}

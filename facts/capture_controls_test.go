@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -46,6 +48,48 @@ func TestStartStartsBackgroundCaptureWithConfiguredWatchDirs(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(homeDir, "daemon.log")); err != nil {
 		t.Fatalf("expected capture log under workgraph home: %v", err)
+	}
+}
+
+func TestMacOSBackgroundCaptureWorkerRetainsSupervisorParent(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS platform verifier lifecycle")
+	}
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	watchDir := filepath.Join(tempDir, "project")
+	if err := os.MkdirAll(watchDir, 0o755); err != nil {
+		t.Fatalf("create watch dir: %v", err)
+	}
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	runWorkgraphCommand(t, nil, "start", "--home", homeDir, "--database", initResult.DatabasePath, "--watch", watchDir)
+	defer runWorkgraphCommand(t, nil, "stop", "--home", homeDir)
+	status, err := workgraph.DaemonStatusForHome(homeDir)
+	if err != nil {
+		t.Fatalf("read daemon status: %v", err)
+	}
+	if !status.Running {
+		t.Fatalf("expected capture worker to be running, got:\n%s", status.Message)
+	}
+
+	parentOutput, err := exec.Command("ps", "-p", strconv.Itoa(status.PID), "-o", "ppid=").Output()
+	if err != nil {
+		t.Fatalf("read capture worker parent pid: %v", err)
+	}
+	parentPID := strings.TrimSpace(string(parentOutput))
+	if parentPID == "" || parentPID == "1" {
+		t.Fatalf("expected capture worker %d to retain a supervisor parent, got ppid %q", status.PID, parentPID)
+	}
+	commandOutput, err := exec.Command("ps", "-p", parentPID, "-o", "command=").Output()
+	if err != nil {
+		t.Fatalf("read capture supervisor command: %v", err)
+	}
+	if !strings.Contains(string(commandOutput), "__capture-supervisor") {
+		t.Fatalf("expected worker parent to be workgraph capture supervisor, got %q", strings.TrimSpace(string(commandOutput)))
 	}
 }
 
