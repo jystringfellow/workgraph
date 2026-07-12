@@ -177,6 +177,19 @@ workgraph calendar disconnect google
 workgraph calendar disconnect microsoft
 ```
 
+If Google Calendar polling reports `invalid_grant`, reconnect with a fresh
+credential:
+
+```sh
+workgraph calendar disconnect google
+workgraph calendar connect google
+workgraph connectors poll --once --connector calendar.google
+```
+
+When Google reports that the old token is already invalid, disconnect removes
+that credential locally so the new OAuth connection can proceed. Settings for
+other calendar providers are preserved.
+
 Run a one-off capture for debugging:
 
 ```sh

@@ -47,6 +47,7 @@ Scenario: Disconnect Google Calendar
   And workgraph removes local Calendar connector settings
   And workgraph preserves local settings for other calendar providers
   And disconnect succeeds when Google Calendar is already disconnected
+  And disconnect removes an already-invalid Google token locally so the user can reconnect
 
 Scenario: Verify Microsoft Calendar publisher domain
   Given workgraph has a Microsoft Entra application

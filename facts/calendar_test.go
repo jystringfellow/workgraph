@@ -1431,6 +1431,89 @@ func TestGoogleCalendarDisconnectRemovesConnectorConfigAndPreservesMicrosoft(t *
 	}
 }
 
+func TestGoogleCalendarDisconnectRemovesAlreadyInvalidTokenForReconnect(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	settingsPath := filepath.Join(homeDir, "calendar.json")
+	if err := os.WriteFile(settingsPath, []byte(`{
+  "google": {
+    "access_token": "expired-google-access-token",
+    "refresh_token": "invalid-google-refresh-token",
+    "token_type": "Bearer",
+    "calendar_ids": ["primary"]
+  },
+  "microsoft": {
+    "access_token": "microsoft-access-token",
+    "refresh_token": "microsoft-refresh-token",
+    "token_type": "Bearer",
+    "calendar_ids": ["primary"]
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write calendar config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, "connectors.json"), []byte(`{
+  "connectors": {
+    "calendar.google": {
+      "setup_state": "ready",
+      "last_poll_at": "2026-07-12T18:00:00Z",
+      "last_error": "refresh Google Calendar token: invalid_grant"
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write connector runtime config: %v", err)
+	}
+
+	revokeServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		response.WriteHeader(http.StatusBadRequest)
+		_, _ = response.Write([]byte(`{"error":"invalid_token","error_description":"Token has been expired or revoked."}`))
+	}))
+	defer revokeServer.Close()
+
+	output, err := runworkgraph(t, repoRoot, "calendar", "disconnect", "google",
+		"--home", homeDir,
+		"--calendar-revoke-url", revokeServer.URL,
+	)
+	if err != nil {
+		t.Fatalf("expected invalid Google token cleanup to succeed: %v\n%s", err, output)
+	}
+	for _, expected := range []string{"Google Calendar disconnected", "already invalid"} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected disconnect output to include %q, got:\n%s", expected, output)
+		}
+	}
+
+	contents, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read preserved Microsoft calendar config: %v", err)
+	}
+	var stored struct {
+		Google    *struct{} `json:"google"`
+		Microsoft *struct{} `json:"microsoft"`
+	}
+	if err := json.Unmarshal(contents, &stored); err != nil {
+		t.Fatalf("parse calendar config: %v", err)
+	}
+	if stored.Google != nil || stored.Microsoft == nil {
+		t.Fatalf("expected invalid Google credential removed and Microsoft preserved, got:\n%s", contents)
+	}
+
+	statusOutput, statusErr := runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)
+	if statusErr != nil {
+		t.Fatalf("workgraph connectors status failed: %v\n%s", statusErr, statusOutput)
+	}
+	if strings.Contains(string(statusOutput), "invalid_grant") || strings.Contains(string(statusOutput), "last error") {
+		t.Fatalf("expected stale Google poll error cleared, got:\n%s", statusOutput)
+	}
+}
+
 func TestMicrosoftCalendarDisconnectRemovesConnectorConfigAndPreservesGoogle(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
