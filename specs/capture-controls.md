@@ -11,6 +11,10 @@ workgraph stop
 Background capture is explicit. workgraph does not start capture silently during
 `init`, `today`, or other read commands.
 
+If background capture exits because of a fatal local watcher or event-store
+error, `workgraph status` preserves and reports the last failure. Starting
+capture again clears the prior failure after the new worker becomes ready.
+
 ## Commands
 
 ```text
@@ -51,7 +55,8 @@ When running, status includes:
 - ignored paths
 - ignored names
 
-When not running, status says background capture is not running.
+When not running, status says background capture is not running. If the last
+worker exited with a fatal capture error, status also shows that last failure.
 
 ## Stop
 

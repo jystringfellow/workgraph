@@ -161,6 +161,37 @@ func TestTopLevelRunIsNotACommand(t *testing.T) {
 	}
 }
 
+func TestStatusPreservesLastFatalCaptureFailure(t *testing.T) {
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, "daemon.json"), []byte(`{
+  "running": false,
+  "pid": 99999999,
+  "home_dir": "`+homeDir+`",
+  "database_path": "`+initResult.DatabasePath+`",
+  "last_error": "record file event: database is locked"
+}
+`), 0o644); err != nil {
+		t.Fatalf("write failed daemon state: %v", err)
+	}
+
+	status, err := workgraph.DaemonStatusForHome(homeDir)
+	if err != nil {
+		t.Fatalf("read daemon status: %v", err)
+	}
+	if status.Running {
+		t.Fatal("expected failed daemon not to be running")
+	}
+	for _, expected := range []string{"capture is not running", "Last failure: record file event: database is locked"} {
+		if !strings.Contains(status.Message, expected) {
+			t.Fatalf("expected stopped status to include %q, got:\n%s", expected, status.Message)
+		}
+	}
+}
+
 func TestBackgroundCaptureDoesNotRecordIgnoredPaths(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")

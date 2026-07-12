@@ -36,20 +36,22 @@ type DaemonConfig struct {
 
 // DaemonStatus describes the current background capture process.
 type DaemonStatus struct {
-	Running             bool     `json:"running"`
-	PID                 int      `json:"pid"`
-	HomeDir             string   `json:"home_dir"`
-	DatabasePath        string   `json:"database_path"`
-	WatchDirs           []string `json:"watch_dirs"`
-	IgnorePaths         []string `json:"ignore_paths"`
-	IgnoreNames         []string `json:"ignore_names"`
-	WatchCount          int      `json:"watch_count"`
-	WatchLimit          int      `json:"watch_limit"`
-	WatchLimitReached   bool     `json:"watch_limit_reached"`
-	WatchLimitPath      string   `json:"watch_limit_path"`
-	RegisteredWatchDirs []string `json:"registered_watch_dirs"`
-	MonitoredConnectors []string `json:"monitored_connectors,omitempty"`
-	Message             string   `json:"-"`
+	Running             bool                     `json:"running"`
+	PID                 int                      `json:"pid"`
+	HomeDir             string                   `json:"home_dir"`
+	DatabasePath        string                   `json:"database_path"`
+	WatchDirs           []string                 `json:"watch_dirs"`
+	IgnorePaths         []string                 `json:"ignore_paths"`
+	IgnoreNames         []string                 `json:"ignore_names"`
+	WatchCount          int                      `json:"watch_count"`
+	WatchLimit          int                      `json:"watch_limit"`
+	WatchLimitReached   bool                     `json:"watch_limit_reached"`
+	WatchLimitPath      string                   `json:"watch_limit_path"`
+	RegisteredWatchDirs []string                 `json:"registered_watch_dirs"`
+	MonitoredConnectors []string                 `json:"monitored_connectors,omitempty"`
+	ConnectorErrors     []ConnectorHealthFinding `json:"-"`
+	LastError           string                   `json:"last_error,omitempty"`
+	Message             string                   `json:"-"`
 }
 
 // StartDaemon starts background capture and writes daemon state under workgraph home.
@@ -148,15 +150,22 @@ func RunDaemon(config DaemonConfig) error {
 	if err != nil {
 		return err
 	}
-	defer removeDaemonState(capture.Status.HomeDir)
-
 	status := daemonStatusFromRun(capture.Status, os.Getpid())
 	if err := writeDaemonState(status); err != nil {
 		capture.Close()
 		return err
 	}
 
-	return capture.Run(ctx)
+	runErr := capture.Run(ctx)
+	if runErr != nil {
+		status.Running = false
+		status.LastError = runErr.Error()
+		if err := writeDaemonState(status); err != nil {
+			return fmt.Errorf("%v; record daemon failure: %w", runErr, err)
+		}
+		return runErr
+	}
+	return removeDaemonState(capture.Status.HomeDir)
 }
 
 // DaemonStatusForConfig reports whether background capture is running.
@@ -182,7 +191,18 @@ func DaemonStatusForHome(homeDir string) (DaemonStatus, error) {
 		}
 		return DaemonStatus{}, err
 	}
+	if !status.Running && status.LastError != "" {
+		_ = removeDaemonPID(resolvedHome)
+		status.Message = daemonFailedMessage(status)
+		return status, nil
+	}
 	if !processRunning(status.PID) {
+		if status.LastError != "" {
+			_ = removeDaemonPID(resolvedHome)
+			status.Running = false
+			status.Message = daemonFailedMessage(status)
+			return status, nil
+		}
 		_ = removeDaemonState(resolvedHome)
 		return daemonStoppedStatus(resolvedHome), nil
 	}
@@ -192,6 +212,7 @@ func DaemonStatusForHome(homeDir string) (DaemonStatus, error) {
 	}
 
 	status.Running = true
+	status.ConnectorErrors = activeConnectorPollErrors(resolvedHome)
 	status.Message = daemonRunningMessage(status)
 	return status, nil
 }
@@ -279,8 +300,12 @@ func writeDaemonState(status DaemonStatus) error {
 	if err := os.WriteFile(daemonStatePath(status.HomeDir), contents, 0o644); err != nil {
 		return fmt.Errorf("write daemon state: %w", err)
 	}
-	if err := os.WriteFile(daemonPIDPath(status.HomeDir), []byte(strconv.Itoa(status.PID)+"\n"), 0o644); err != nil {
-		return fmt.Errorf("write daemon pid: %w", err)
+	if status.Running {
+		if err := os.WriteFile(daemonPIDPath(status.HomeDir), []byte(strconv.Itoa(status.PID)+"\n"), 0o644); err != nil {
+			return fmt.Errorf("write daemon pid: %w", err)
+		}
+	} else if err := removeDaemonPID(status.HomeDir); err != nil {
+		return err
 	}
 
 	return nil
@@ -310,6 +335,10 @@ func removeDaemonState(homeDir string) error {
 	if err := os.Remove(daemonStatePath(homeDir)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove daemon state: %w", err)
 	}
+	return removeDaemonPID(homeDir)
+}
+
+func removeDaemonPID(homeDir string) error {
 	if err := os.Remove(daemonPIDPath(homeDir)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove daemon pid: %w", err)
 	}
@@ -362,6 +391,7 @@ func daemonRunningMessage(status DaemonStatus) string {
 	if len(status.MonitoredConnectors) > 0 {
 		lines = append(lines, "Monitoring: "+strings.Join(status.MonitoredConnectors, ", "))
 	}
+	appendDaemonConnectorErrors(&lines, status.ConnectorErrors)
 	for _, ignorePath := range status.IgnorePaths {
 		lines = append(lines, "Ignoring path: "+ignorePath)
 	}
@@ -370,6 +400,35 @@ func daemonRunningMessage(status DaemonStatus) string {
 	}
 	appendDaemonWatchLimitLine(&lines, status)
 	return strings.Join(lines, "\n")
+}
+
+func activeConnectorPollErrors(homeDir string) []ConnectorHealthFinding {
+	state, err := readConnectorRuntimeFile(homeDir)
+	if err != nil {
+		return nil
+	}
+	var findings []ConnectorHealthFinding
+	for _, status := range connectorStatuses(homeDir, state) {
+		if !status.Connected || !status.Enabled || strings.TrimSpace(status.LastError) == "" {
+			continue
+		}
+		findings = append(findings, ConnectorHealthFinding{
+			ID:      status.ID,
+			Status:  "poll error",
+			Details: status.LastError,
+		})
+	}
+	return findings
+}
+
+func appendDaemonConnectorErrors(lines *[]string, findings []ConnectorHealthFinding) {
+	if len(findings) == 0 {
+		return
+	}
+	*lines = append(*lines, "Connector errors:")
+	for _, finding := range findings {
+		*lines = append(*lines, fmt.Sprintf("- %s: %s", finding.ID, finding.Details))
+	}
 }
 
 func appendDaemonWatchLimitLine(lines *[]string, status DaemonStatus) {
@@ -402,6 +461,15 @@ func daemonStoppedMessage(homeDir string) string {
 		return "workgraph capture is not running"
 	}
 	return "workgraph capture is not running\nHome: " + homeDir
+}
+
+func daemonFailedMessage(status DaemonStatus) string {
+	return strings.Join([]string{
+		"workgraph capture is not running",
+		"Home: " + status.HomeDir,
+		"Last failure: " + status.LastError,
+		"Log: " + daemonLogPath(status.HomeDir),
+	}, "\n")
 }
 
 func daemonStopMessage(homeDir string) string {

@@ -228,6 +228,155 @@ func TestRunSkipsConnectorWithSetupError(t *testing.T) {
 	}
 }
 
+func TestRunKeepsCapturingFilesAfterConnectorPollFailure(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	watchDir := filepath.Join(tempDir, "project")
+	if err := os.MkdirAll(watchDir, 0o755); err != nil {
+		t.Fatalf("create watch dir: %v", err)
+	}
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	notionServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		http.Error(response, "temporary Notion outage", http.StatusServiceUnavailable)
+	}))
+	defer notionServer.Close()
+	if err := os.WriteFile(filepath.Join(homeDir, "notion.json"), []byte(fmt.Sprintf(`{
+  "access_token": "notion-token",
+  "api_base_url": %q
+}
+`, notionServer.URL)), 0o600); err != nil {
+		t.Fatalf("write notion config: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:            homeDir,
+		DatabasePath:       initResult.DatabasePath,
+		WatchDirs:          []string{watchDir},
+		NotionPollInterval: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("run start failed: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- capture.Run(ctx)
+	}()
+
+	waitForConnectorPollError(t, homeDir, "notion", "status 503")
+	select {
+	case err := <-done:
+		cancel()
+		t.Fatalf("connector poll failure stopped capture: %v", err)
+	default:
+	}
+
+	target := filepath.Join(watchDir, "still-captured.md")
+	if err := os.WriteFile(target, []byte("capture survives connector errors\n"), 0o644); err != nil {
+		cancel()
+		t.Fatalf("create watched file: %v", err)
+	}
+	waitForEvent(t, initResult.DatabasePath, "created", target)
+
+	status, err := workgraph.StatusConnectors(workgraph.ConnectorListConfig{HomeDir: homeDir})
+	if err != nil {
+		cancel()
+		t.Fatalf("read connector status: %v", err)
+	}
+	if !strings.Contains(status.Message, "notion") || !strings.Contains(status.Message, "last error") || !strings.Contains(status.Message, "status 503") {
+		cancel()
+		t.Fatalf("expected connector status to preserve the poll failure, got:\n%s", status.Message)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("capture run failed after cancellation: %v", err)
+	}
+}
+
+func TestBackgroundStatusAndLogShowConnectorPollFailure(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	watchDir := filepath.Join(tempDir, "project")
+	if err := os.MkdirAll(watchDir, 0o755); err != nil {
+		t.Fatalf("create watch dir: %v", err)
+	}
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	notionServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		http.Error(response, "visible Notion outage", http.StatusServiceUnavailable)
+	}))
+	defer notionServer.Close()
+	if err := os.WriteFile(filepath.Join(homeDir, "notion.json"), []byte(fmt.Sprintf(`{
+  "access_token": "notion-token",
+  "api_base_url": %q
+}
+`, notionServer.URL)), 0o600); err != nil {
+		t.Fatalf("write notion config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, "connectors.json"), []byte(`{
+  "connectors": {
+    "notion": {
+      "enabled": true,
+      "interval": "10ms",
+      "setup_state": "ready"
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write connector runtime config: %v", err)
+	}
+
+	output := runWorkgraphCommand(t, nil, "start", "--home", homeDir, "--database", initResult.DatabasePath, "--watch", watchDir)
+	defer runWorkgraphCommand(t, nil, "stop", "--home", homeDir)
+	if !strings.Contains(output, "started") {
+		t.Fatalf("expected capture start output, got:\n%s", output)
+	}
+	waitForConnectorPollError(t, homeDir, "notion", "status 503")
+
+	status := runWorkgraphCommand(t, nil, "status", "--home", homeDir)
+	for _, expected := range []string{"capture is running", "Connector errors:", "notion", "status 503"} {
+		if !strings.Contains(status, expected) {
+			t.Fatalf("expected capture status to include %q, got:\n%s", expected, status)
+		}
+	}
+
+	logContents, err := os.ReadFile(filepath.Join(homeDir, "daemon.log"))
+	if err != nil {
+		t.Fatalf("read daemon log: %v", err)
+	}
+	for _, expected := range []string{"connector=notion", "status 503", "visible Notion outage"} {
+		if !strings.Contains(string(logContents), expected) {
+			t.Fatalf("expected daemon log to include %q, got:\n%s", expected, logContents)
+		}
+	}
+}
+
+func waitForConnectorPollError(t *testing.T, homeDir string, connectorID string, expected string) {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err := workgraph.StatusConnectors(workgraph.ConnectorListConfig{HomeDir: homeDir})
+		if err == nil {
+			for _, connector := range result.Connectors {
+				if connector.ID == connectorID && strings.Contains(connector.LastError, expected) {
+					return
+				}
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s connector error containing %q", connectorID, expected)
+}
+
 func TestRunPollsConnectedSlackListsAndAzureBoards(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")

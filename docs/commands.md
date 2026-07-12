@@ -124,6 +124,12 @@ workgraph status
 workgraph stop
 ```
 
+Connector poll failures do not stop background file capture. `workgraph status`
+shows enabled connectors with active poll errors, and the same failures are
+written to `~/.workgraph/daemon.log`. If capture exits because of a fatal local
+watcher or event-store error, the next `workgraph status` shows `Last failure`
+and the daemon log path.
+
 Diagnose local readiness without contacting provider APIs or exposing secrets:
 
 ```sh
