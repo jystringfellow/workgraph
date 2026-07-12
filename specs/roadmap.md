@@ -61,7 +61,7 @@ Priority labels used below:
    - [x] Google Calendar OAuth connect stores local connector settings.
    - [x] Google Calendar browser OAuth uses PKCE with the default workgraph client id.
    - [x] Google Calendar OAuth token exchange uses the workgraph Cloudflare relay with local `.dev.vars` development setup.
-   - [x] Google Calendar disconnect revokes the stored token and removes local connector settings.
+   - [x] Google Calendar disconnect revokes the stored token and removes local connector settings, including local recovery when Google reports the token is already invalid.
    - [x] Google Calendar token refresh.
    - [x] Microsoft publisher-domain verification file is hosted from the workgraph Pages site.
    - [x] Microsoft Calendar OAuth connect uses PKCE and stores local connector settings.

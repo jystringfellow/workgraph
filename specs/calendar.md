@@ -102,6 +102,10 @@ such as Microsoft Calendar, if they are present in the same local calendar
 configuration file.
 If Google Calendar is not connected, disconnect should print that it is already
 disconnected and return successfully.
+If Google reports `invalid_token` while disconnecting, workgraph should treat
+the credential as already revoked, remove it locally, clear stale connector
+errors, and preserve other calendar provider settings. Other revocation
+failures should still leave local credentials in place for retry.
 
 The Google Calendar connector requests:
 
