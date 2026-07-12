@@ -50,3 +50,9 @@ Scenario: Run foreground capture for debugging
   When I run "workgraph start --foreground"
   Then workgraph keeps capture attached to the current terminal
   And captured events are printed as they arrive
+
+Scenario: Keep macOS background TLS available
+  Given workgraph runs background capture on macOS
+  When the "workgraph start" command returns
+  Then the capture worker retains a live workgraph supervisor as its parent
+  And HTTPS connectors continue using normal certificate verification

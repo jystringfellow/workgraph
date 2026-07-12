@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -70,6 +71,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runSlack(args[1:], stdout, stderr)
 	case "__capture-worker":
 		return runCaptureWorker(args[1:], stderr)
+	case "__capture-supervisor":
+		return runCaptureSupervisor(args[1:], stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command: %s\n", args[0])
 		return 2
@@ -2439,6 +2442,29 @@ func runCaptureWorker(args []string, stderr io.Writer) int {
 
 	if err := workgraph.RunDaemon(config); err != nil {
 		fmt.Fprintf(stderr, "workgraph capture worker: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func runCaptureSupervisor(args []string, stderr io.Writer) int {
+	executable, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph capture supervisor: find executable: %v\n", err)
+		return 1
+	}
+	command := exec.Command(executable, append([]string{"__capture-worker"}, args...)...)
+	command.Stdin = os.Stdin
+	command.Stdout = stderr
+	command.Stderr = stderr
+	if err := command.Run(); err != nil {
+		var exitError *exec.ExitError
+		if errors.As(err, &exitError) {
+			if status, ok := exitError.ProcessState.Sys().(syscall.WaitStatus); ok && status.Signaled() && status.Signal() == syscall.SIGTERM {
+				return 0
+			}
+		}
+		fmt.Fprintf(stderr, "workgraph capture supervisor: %v\n", err)
 		return 1
 	}
 	return 0
