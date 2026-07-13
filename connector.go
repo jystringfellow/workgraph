@@ -1,13 +1,16 @@
 package workgraph
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -33,8 +36,10 @@ type ConnectorStatus struct {
 	LastValidated       string
 	LastValidationError string
 	LastPoll            string
+	LastSuccess         string
 	LastError           string
 	NextPoll            string
+	ConsecutiveFailures int
 }
 
 // ConnectorUpdateConfig controls connector polling updates.
@@ -134,8 +139,13 @@ type connectorRuntimeEntry struct {
 	LastValidated       string `json:"last_validated_at,omitempty"`
 	LastValidationError string `json:"last_validation_error,omitempty"`
 	LastPoll            string `json:"last_poll_at,omitempty"`
+	LastSuccess         string `json:"last_success_at,omitempty"`
 	LastError           string `json:"last_error,omitempty"`
+	NextPoll            string `json:"next_poll_at,omitempty"`
+	ConsecutiveFailures int    `json:"consecutive_failures,omitempty"`
 }
+
+var connectorPollStateMu sync.Mutex
 
 // ListConnectors reports known connector polling state.
 func ListConnectors(config ConnectorListConfig) (ConnectorListResult, error) {
@@ -447,7 +457,10 @@ func connectRuntimeConnector(homeDir string, id string, interval string) (Connec
 	entry.LastValidated = time.Now().UTC().Format(time.RFC3339)
 	entry.LastValidationError = ""
 	entry.LastPoll = ""
+	entry.LastSuccess = ""
 	entry.LastError = ""
+	entry.NextPoll = ""
+	entry.ConsecutiveFailures = 0
 	if interval != "" {
 		entry.Interval = interval
 	}
@@ -476,7 +489,10 @@ func clearRuntimeConnector(homeDir string, id string) error {
 	entry.LastValidated = ""
 	entry.LastValidationError = ""
 	entry.LastPoll = ""
+	entry.LastSuccess = ""
 	entry.LastError = ""
+	entry.NextPoll = ""
+	entry.ConsecutiveFailures = 0
 	state.Connectors[id] = entry
 	return writeConnectorRuntimeFile(homeDir, state)
 }
@@ -505,19 +521,21 @@ func pollConnectorIDs(homeDir string, state connectorRuntimeFile, requested stri
 }
 
 func pollConnectorOnce(homeDir string, databasePath string, id string) error {
+	ctx := context.Background()
 	capture := &RunCapture{
 		homeDir:      homeDir,
 		databasePath: databasePath,
 		watchDirs:    []string{},
 		events:       make(chan CapturedEvent, 128),
 	}
+	var pollErr error
 	switch id {
 	case "git":
 		capture.gitEnabled = true
-		return capture.captureGitCommits()
+		pollErr = capture.captureGitCommits(ctx)
 	case "github":
 		capture.githubEnabled = true
-		return capture.captureGitHubEvents()
+		pollErr = capture.captureGitHubEvents(ctx)
 	case "slack":
 		config, err := readSlackConnectorConfig(homeDir)
 		if err != nil {
@@ -531,7 +549,7 @@ func pollConnectorOnce(homeDir string, databasePath string, id string) error {
 		capture.slackAPIBaseURL = config.APIBaseURL
 		capture.slackCursors = map[string]string{}
 		capture.slackThreadCursors = map[string]string{}
-		return capture.captureSlackEvents()
+		pollErr = capture.captureSlackEvents(ctx)
 	case "slack.lists":
 		config, err := readSlackConnectorConfig(homeDir)
 		if err != nil {
@@ -541,28 +559,30 @@ func pollConnectorOnce(homeDir string, databasePath string, id string) error {
 		capture.slackToken = config.AccessToken
 		capture.slackListIDs = append([]string(nil), config.ListIDs...)
 		capture.slackAPIBaseURL = config.APIBaseURL
-		return capture.captureSlackListItems()
+		pollErr = capture.captureSlackListItems(ctx)
 	case "calendar.google":
-		capture.calendarProviders = []string{"google"}
-		return capture.captureCalendarEvents()
+		pollErr = capture.captureCalendarEvents(ctx, "google")
 	case "calendar.microsoft":
-		capture.calendarProviders = []string{"microsoft"}
-		return capture.captureCalendarEvents()
+		pollErr = capture.captureCalendarEvents(ctx, "microsoft")
 	case "mail.google":
-		capture.mailProviders = []string{"google"}
-		return capture.captureMailMessages()
+		pollErr = capture.captureMailMessages(ctx, "google")
 	case "mail.microsoft":
-		capture.mailProviders = []string{"microsoft"}
-		return capture.captureMailMessages()
+		pollErr = capture.captureMailMessages(ctx, "microsoft")
 	case "notion":
 		capture.notionEnabled = true
-		return capture.captureNotionEvents()
+		pollErr = capture.captureNotionEvents(ctx)
 	case "azure.boards":
 		capture.azureBoardsEnabled = true
-		return capture.captureAzureBoardsEvents()
+		pollErr = capture.captureAzureBoardsEvents(ctx)
 	default:
 		return fmt.Errorf("unsupported connector %s", id)
 	}
+	when := time.Now()
+	if pollErr != nil {
+		_ = recordConnectorPollError(homeDir, id, when, pollErr)
+		return pollErr
+	}
+	return recordConnectorPollSuccess(homeDir, id, when)
 }
 
 func connectorStatuses(homeDir string, state connectorRuntimeFile) []ConnectorStatus {
@@ -591,8 +611,10 @@ func connectorStatuses(homeDir string, state connectorRuntimeFile) []ConnectorSt
 			LastValidated:       entry.LastValidated,
 			LastValidationError: entry.LastValidationError,
 			LastPoll:            entry.LastPoll,
+			LastSuccess:         entry.LastSuccess,
 			LastError:           entry.LastError,
 			NextPoll:            connectorNextPoll(entry, defaultConnectorInterval(id)),
+			ConsecutiveFailures: entry.ConsecutiveFailures,
 		})
 	}
 	return statuses
@@ -624,13 +646,46 @@ func recordConnectorPollError(homeDir string, id string, when time.Time, pollErr
 }
 
 func recordConnectorPollResult(homeDir string, id string, when time.Time, lastError string) error {
+	var pollErr error
+	if strings.TrimSpace(lastError) != "" {
+		pollErr = errors.New(strings.TrimSpace(lastError))
+	}
+	return recordConnectorPollAttempt(homeDir, id, when, time.Time{}, -1, pollErr)
+}
+
+func recordConnectorPollAttempt(homeDir string, id string, when time.Time, nextPoll time.Time, failures int, pollErr error) error {
+	connectorPollStateMu.Lock()
+	defer connectorPollStateMu.Unlock()
+
 	state, err := readConnectorRuntimeFile(homeDir)
 	if err != nil {
 		return err
 	}
 	entry := state.entry(id)
 	entry.LastPoll = when.UTC().Format(time.RFC3339)
-	entry.LastError = strings.TrimSpace(lastError)
+	if pollErr == nil {
+		entry.LastSuccess = entry.LastPoll
+		entry.LastError = ""
+		entry.ConsecutiveFailures = 0
+	} else {
+		entry.LastError = strings.TrimSpace(pollErr.Error())
+		if failures >= 0 {
+			entry.ConsecutiveFailures = failures
+		} else {
+			entry.ConsecutiveFailures++
+		}
+	}
+	if nextPoll.IsZero() {
+		entry.NextPoll = ""
+	} else {
+		entry.NextPoll = nextPoll.UTC().Format(time.RFC3339)
+	}
+	if pollErr != nil && connectorAuthFailure(pollErr.Error()) {
+		entry.SetupState = "error"
+		entry.LastValidated = entry.LastPoll
+		entry.LastValidationError = "last poll failed with invalid credentials; reconnect " + id
+		entry.NextPoll = ""
+	}
 	state.Connectors[id] = entry
 	return writeConnectorRuntimeFile(homeDir, state)
 }
@@ -790,6 +845,9 @@ func connectorInterval(state connectorRuntimeFile, id string, fallback time.Dura
 }
 
 func connectorNextPoll(entry connectorRuntimeEntry, fallback time.Duration) string {
+	if strings.TrimSpace(entry.NextPoll) != "" {
+		return entry.NextPoll
+	}
 	if strings.TrimSpace(entry.LastPoll) == "" {
 		return ""
 	}

@@ -1,6 +1,7 @@
 package workgraph
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,7 @@ type GitHubCaptureConfig struct {
 	WatchDirs     []string
 	EventsFile    string
 	GitHubCommand string
+	Context       context.Context
 }
 
 // GitHubCaptureResult describes a GitHub capture run.
@@ -115,7 +117,7 @@ func CaptureGitHubEvents(config GitHubCaptureConfig) (GitHubCaptureResult, error
 		return GitHubCaptureResult{}, fmt.Errorf("open database: %w", err)
 	}
 
-	remoteProjects := githubRemoteProjects(status.WatchDirs, status.HomeDir, status.DatabasePath, status.IgnorePaths, status.IgnoreNames)
+	remoteProjects := githubRemoteProjects(context.Background(), status.WatchDirs, status.HomeDir, status.DatabasePath, status.IgnorePaths, status.IgnoreNames)
 	stored := 0
 	for _, event := range exported {
 		inserted, err := storeGitHubEvent(db, event, inferGitHubProject(db, event, remoteProjects))
@@ -160,17 +162,27 @@ func CaptureGitHubFromGH(config GitHubCaptureConfig) (GitHubCaptureResult, error
 	if gh == "" {
 		gh = "gh"
 	}
-	if !githubRateLimitAllowsPolling(gh) {
+	ctx := config.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if !githubRateLimitAllowsPolling(ctx, gh) {
+		if ctx.Err() != nil {
+			return GitHubCaptureResult{}, ctx.Err()
+		}
 		return GitHubCaptureResult{HomeDir: status.HomeDir, DatabasePath: status.DatabasePath}, nil
 	}
 
-	remoteProjects := githubRemoteProjects(status.WatchDirs, status.HomeDir, status.DatabasePath, status.IgnorePaths, status.IgnoreNames)
+	remoteProjects := githubRemoteProjects(ctx, status.WatchDirs, status.HomeDir, status.DatabasePath, status.IgnorePaths, status.IgnoreNames)
 	stored := 0
-	for i, remote := range githubRemoteProjectEntries(status.WatchDirs, status.HomeDir, status.DatabasePath, status.IgnorePaths, status.IgnoreNames) {
+	for i, remote := range githubRemoteProjectEntries(ctx, status.WatchDirs, status.HomeDir, status.DatabasePath, status.IgnorePaths, status.IgnoreNames) {
 		if i >= maxGitHubReposPerPoll {
 			break
 		}
-		events := githubEventsFromGH(gh, remote.Repository)
+		events := githubEventsFromGH(ctx, gh, remote.Repository)
+		if ctx.Err() != nil {
+			return GitHubCaptureResult{}, ctx.Err()
+		}
 		for _, event := range events {
 			inserted, err := storeGitHubEvent(db, event, inferGitHubProject(db, event, remoteProjects))
 			if err != nil {
@@ -191,8 +203,8 @@ func CaptureGitHubFromGH(config GitHubCaptureConfig) (GitHubCaptureResult, error
 	return result, nil
 }
 
-func githubRateLimitAllowsPolling(gh string) bool {
-	output, err := exec.Command(gh, "api", "rate_limit").Output()
+func githubRateLimitAllowsPolling(ctx context.Context, gh string) bool {
+	output, err := exec.CommandContext(ctx, gh, "api", "rate_limit").Output()
 	if err != nil {
 		return false
 	}
@@ -203,15 +215,15 @@ func githubRateLimitAllowsPolling(gh string) bool {
 	return limit.Resources.Core.Remaining >= 100
 }
 
-func githubEventsFromGH(gh string, repository string) []githubExportEvent {
+func githubEventsFromGH(ctx context.Context, gh string, repository string) []githubExportEvent {
 	var events []githubExportEvent
-	events = append(events, githubPullRequestsFromGH(gh, repository)...)
-	events = append(events, githubIssuesFromGH(gh, repository)...)
+	events = append(events, githubPullRequestsFromGH(ctx, gh, repository)...)
+	events = append(events, githubIssuesFromGH(ctx, gh, repository)...)
 	return events
 }
 
-func githubPullRequestsFromGH(gh string, repository string) []githubExportEvent {
-	output, err := exec.Command(gh, "search", "prs", "--repo", repository, "--json", "number,url,state,author,title,headRefName,headSha,updatedAt", "--limit", "20").Output()
+func githubPullRequestsFromGH(ctx context.Context, gh string, repository string) []githubExportEvent {
+	output, err := exec.CommandContext(ctx, gh, "search", "prs", "--repo", repository, "--json", "number,url,state,author,title,headRefName,headSha,updatedAt", "--limit", "20").Output()
 	if err != nil {
 		return nil
 	}
@@ -237,8 +249,8 @@ func githubPullRequestsFromGH(gh string, repository string) []githubExportEvent 
 	return events
 }
 
-func githubIssuesFromGH(gh string, repository string) []githubExportEvent {
-	output, err := exec.Command(gh, "search", "issues", "--repo", repository, "--json", "number,url,state,author,title,updatedAt", "--limit", "20").Output()
+func githubIssuesFromGH(ctx context.Context, gh string, repository string) []githubExportEvent {
+	output, err := exec.CommandContext(ctx, gh, "search", "issues", "--repo", repository, "--json", "number,url,state,author,title,updatedAt", "--limit", "20").Output()
 	if err != nil {
 		return nil
 	}
@@ -364,9 +376,9 @@ func projectForCommit(db *sql.DB, commit string) string {
 	return project
 }
 
-func githubRemoteProjects(watchDirs []string, homeDir, dbPath string, ignorePaths []string, ignoreNames []string) map[string]string {
+func githubRemoteProjects(ctx context.Context, watchDirs []string, homeDir, dbPath string, ignorePaths []string, ignoreNames []string) map[string]string {
 	projects := map[string]string{}
-	for _, entry := range githubRemoteProjectEntries(watchDirs, homeDir, dbPath, ignorePaths, ignoreNames) {
+	for _, entry := range githubRemoteProjectEntries(ctx, watchDirs, homeDir, dbPath, ignorePaths, ignoreNames) {
 		projects[strings.ToLower(entry.Repository)] = entry.Project
 	}
 	return projects
@@ -377,7 +389,7 @@ type githubRemoteProjectEntry struct {
 	Project    string
 }
 
-func githubRemoteProjectEntries(watchDirs []string, homeDir, dbPath string, ignorePaths []string, ignoreNames []string) []githubRemoteProjectEntry {
+func githubRemoteProjectEntries(ctx context.Context, watchDirs []string, homeDir, dbPath string, ignorePaths []string, ignoreNames []string) []githubRemoteProjectEntry {
 	repos, err := findGitRepositories(watchDirs, homeDir, dbPath, ignorePaths, ignoreNames)
 	if err != nil {
 		return nil
@@ -385,7 +397,7 @@ func githubRemoteProjectEntries(watchDirs []string, homeDir, dbPath string, igno
 
 	var entries []githubRemoteProjectEntry
 	for _, repo := range repos {
-		output, err := exec.Command("git", "-C", repo, "remote", "get-url", "origin").Output()
+		output, err := exec.CommandContext(ctx, "git", "-C", repo, "remote", "get-url", "origin").Output()
 		if err != nil {
 			continue
 		}

@@ -28,3 +28,21 @@ Scenario: Isolate a failed connector poll
   Then workgraph keeps filesystem capture running
   And workgraph logs the connector error
   And "workgraph status" shows the degraded connector and its latest error
+
+Scenario: Bound a stalled connector independently
+  Given an enabled connector stops responding
+  When workgraph reaches that connector's poll deadline
+  Then filesystem events and other connectors continue while it is stalled
+  And workgraph records a timeout and a capped retry time for that connector
+
+Scenario: Poll ready connectors at startup
+  Given workgraph has enabled capture-ready connectors
+  When I run "workgraph start"
+  Then each connector polls immediately without waiting for its normal interval
+  And successful polls record last-success and next-poll timestamps
+
+Scenario: Stop retrying a connector that needs authentication
+  Given one enabled connector rejects its stored credentials
+  When its immediate poll returns an authentication error
+  Then workgraph marks only that connector as needing reconnection
+  And workgraph does not retry it until its setup is repaired

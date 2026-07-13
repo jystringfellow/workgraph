@@ -1,6 +1,7 @@
 package workgraph
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,7 @@ type GitCaptureConfig struct {
 	DatabasePath string
 	WatchDirs    []string
 	MaxCommits   int
+	Context      context.Context
 }
 
 // GitCaptureResult describes a local git capture run.
@@ -80,10 +82,17 @@ func CaptureGitCommits(config GitCaptureConfig) (GitCaptureResult, error) {
 
 	stored := 0
 	var events []CapturedEvent
+	ctx := config.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	for _, repo := range repos {
-		branch := gitBranch(repo)
-		commits, err := gitRecentCommits(repo, maxCommits)
+		branch := gitBranch(ctx, repo)
+		commits, err := gitRecentCommits(ctx, repo, maxCommits)
 		if err != nil {
+			if ctx.Err() != nil {
+				return GitCaptureResult{}, ctx.Err()
+			}
 			continue
 		}
 		for _, commit := range commits {
@@ -157,17 +166,17 @@ func findGitRepositories(watchDirs []string, homeDir, dbPath string, ignorePaths
 	return repos, nil
 }
 
-func gitBranch(repoPath string) string {
-	output, err := exec.Command("git", "-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD").Output()
+func gitBranch(ctx context.Context, repoPath string) string {
+	output, err := exec.CommandContext(ctx, "git", "-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD").Output()
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(string(output))
 }
 
-func gitRecentCommits(repoPath string, maxCommits int) ([]gitCommit, error) {
+func gitRecentCommits(ctx context.Context, repoPath string, maxCommits int) ([]gitCommit, error) {
 	format := "%H%x1f%ct%x1f%an%x1f%ae%x1f%s%x1e"
-	output, err := exec.Command("git", "-C", repoPath, "log", "-n", strconv.Itoa(maxCommits), "--format="+format).Output()
+	output, err := exec.CommandContext(ctx, "git", "-C", repoPath, "log", "-n", strconv.Itoa(maxCommits), "--format="+format).Output()
 	if err != nil {
 		return nil, err
 	}

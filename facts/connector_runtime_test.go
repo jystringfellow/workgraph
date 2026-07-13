@@ -3,18 +3,246 @@ package facts
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	workgraph "github.com/jystringfellow/workgraph"
 	_ "github.com/mattn/go-sqlite3"
 )
+
+func TestStalledConnectorPollIsImmediateBoundedAndDoesNotBlockFiles(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	watchDir := filepath.Join(tempDir, "project")
+	if err := os.MkdirAll(watchDir, 0o755); err != nil {
+		t.Fatalf("create watch dir: %v", err)
+	}
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startedOnce sync.Once
+	notionServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		startedOnce.Do(func() { close(started) })
+		select {
+		case <-request.Context().Done():
+		case <-release:
+		}
+	}))
+	defer func() {
+		close(release)
+		notionServer.Close()
+	}()
+	if err := os.WriteFile(filepath.Join(homeDir, "notion.json"), []byte(fmt.Sprintf(`{
+  "access_token": "notion-token",
+  "api_base_url": %q
+}
+`, notionServer.URL)), 0o600); err != nil {
+		t.Fatalf("write notion config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, "connectors.json"), []byte(`{
+  "connectors": {
+    "notion": {"enabled": true, "interval": "1h", "setup_state": "ready"}
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write connector runtime config: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:               homeDir,
+		DatabasePath:          initResult.DatabasePath,
+		WatchDirs:             []string{watchDir},
+		NotionPollInterval:    time.Hour,
+		ConnectorPollTimeout:  750 * time.Millisecond,
+		ConnectorRetryInitial: 100 * time.Millisecond,
+		ConnectorRetryMax:     200 * time.Millisecond,
+	})
+	if err != nil {
+		cancel()
+		t.Fatalf("run start failed: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- capture.Run(ctx) }()
+
+	select {
+	case <-started:
+	case <-time.After(500 * time.Millisecond):
+		cancel()
+		<-done
+		t.Fatal("ready Notion connector did not poll immediately")
+	}
+
+	target := filepath.Join(watchDir, "while-notion-stalled.md")
+	if err := os.WriteFile(target, []byte("still responsive\n"), 0o644); err != nil {
+		cancel()
+		<-done
+		t.Fatalf("create watched file: %v", err)
+	}
+	fileDeadline := time.After(300 * time.Millisecond)
+	for {
+		select {
+		case event := <-capture.Events:
+			if event.Operation == "created" && event.Path == target {
+				goto fileCaptured
+			}
+		case <-fileDeadline:
+			cancel()
+			<-done
+			t.Fatal("stalled Notion poll blocked filesystem capture")
+		}
+	}
+
+fileCaptured:
+	waitForConnectorPollError(t, homeDir, "notion", "deadline exceeded")
+	contents, err := os.ReadFile(filepath.Join(homeDir, "connectors.json"))
+	if err != nil {
+		cancel()
+		<-done
+		t.Fatalf("read connector runtime state: %v", err)
+	}
+	var state struct {
+		Connectors map[string]struct {
+			LastSuccess         string `json:"last_success_at"`
+			NextPoll            string `json:"next_poll_at"`
+			ConsecutiveFailures int    `json:"consecutive_failures"`
+		} `json:"connectors"`
+	}
+	if err := json.Unmarshal(contents, &state); err != nil {
+		cancel()
+		<-done
+		t.Fatalf("parse connector runtime state: %v", err)
+	}
+	notion := state.Connectors["notion"]
+	if notion.LastSuccess != "" || notion.NextPoll == "" || notion.ConsecutiveFailures < 1 {
+		cancel()
+		<-done
+		t.Fatalf("expected timeout backoff state, got %+v", notion)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("capture run failed after cancellation: %v", err)
+	}
+}
+
+func TestConnectorAuthenticationFailureStopsOnlyThatPoller(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	watchDir := filepath.Join(tempDir, "project")
+	if err := os.MkdirAll(watchDir, 0o755); err != nil {
+		t.Fatalf("create watch dir: %v", err)
+	}
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	var requestMu sync.Mutex
+	requests := 0
+	notionServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requestMu.Lock()
+		requests++
+		requestMu.Unlock()
+		http.Error(response, `{"message":"unauthenticated"}`, http.StatusUnauthorized)
+	}))
+	defer notionServer.Close()
+	if err := os.WriteFile(filepath.Join(homeDir, "notion.json"), []byte(fmt.Sprintf(`{
+  "access_token": "expired-notion-token",
+  "api_base_url": %q
+}
+`, notionServer.URL)), 0o600); err != nil {
+		t.Fatalf("write notion config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, "connectors.json"), []byte(`{
+  "connectors": {
+    "notion": {"enabled": true, "interval": "1h", "setup_state": "ready"}
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write connector runtime config: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:               homeDir,
+		DatabasePath:          initResult.DatabasePath,
+		WatchDirs:             []string{watchDir},
+		ConnectorRetryInitial: 25 * time.Millisecond,
+		ConnectorRetryMax:     50 * time.Millisecond,
+	})
+	if err != nil {
+		cancel()
+		t.Fatalf("run start failed: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- capture.Run(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		result, statusErr := workgraph.StatusConnectors(workgraph.ConnectorListConfig{HomeDir: homeDir})
+		if statusErr == nil {
+			for _, connector := range result.Connectors {
+				if connector.ID == "notion" && connector.SetupState == "error" && strings.Contains(connector.LastValidationError, "reconnect notion") {
+					goto authenticationRecorded
+				}
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	t.Fatal("authentication failure did not mark Notion for reconnection")
+
+authenticationRecorded:
+	time.Sleep(150 * time.Millisecond)
+	requestMu.Lock()
+	requestCount := requests
+	requestMu.Unlock()
+	if requestCount != 1 {
+		cancel()
+		<-done
+		t.Fatalf("expected authentication failure to stop retries, got %d requests", requestCount)
+	}
+
+	target := filepath.Join(watchDir, "after-auth-failure.md")
+	if err := os.WriteFile(target, []byte("capture continues\n"), 0o644); err != nil {
+		cancel()
+		<-done
+		t.Fatalf("create watched file: %v", err)
+	}
+	fileDeadline := time.After(500 * time.Millisecond)
+	for {
+		select {
+		case event := <-capture.Events:
+			if event.Operation == "created" && event.Path == target {
+				goto fileCapturedAfterAuthFailure
+			}
+		case <-fileDeadline:
+			cancel()
+			<-done
+			t.Fatal("authentication failure stopped filesystem capture")
+		}
+	}
+
+fileCapturedAfterAuthFailure:
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("capture run failed: %v", err)
+	}
+}
 
 func TestRunPollsConnectedCalendarMailAndNotion(t *testing.T) {
 	tempDir := t.TempDir()
@@ -156,6 +384,10 @@ func TestRunPollsConnectedCalendarMailAndNotion(t *testing.T) {
 	waitForEventTypeSummary(t, initResult.DatabasePath, "calendar.event", "Runtime Microsoft calendar event")
 	waitForEventTypeSummary(t, initResult.DatabasePath, "mail.message", "Runtime mail message")
 	waitForEventTypeSummary(t, initResult.DatabasePath, "notion.page", "Runtime Notion page")
+	waitForConnectorPollSuccess(t, homeDir, "calendar.google")
+	waitForConnectorPollSuccess(t, homeDir, "calendar.microsoft")
+	waitForConnectorPollSuccess(t, homeDir, "mail.google")
+	waitForConnectorPollSuccess(t, homeDir, "notion")
 
 	cancel()
 	if err := <-done; err != nil {
@@ -377,6 +609,24 @@ func waitForConnectorPollError(t *testing.T, homeDir string, connectorID string,
 	t.Fatalf("timed out waiting for %s connector error containing %q", connectorID, expected)
 }
 
+func waitForConnectorPollSuccess(t *testing.T, homeDir string, connectorID string) {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err := workgraph.StatusConnectors(workgraph.ConnectorListConfig{HomeDir: homeDir})
+		if err == nil {
+			for _, connector := range result.Connectors {
+				if connector.ID == connectorID && connector.LastSuccess != "" && connector.NextPoll != "" && connector.ConsecutiveFailures == 0 {
+					return
+				}
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s connector success state", connectorID)
+}
+
 func TestRunPollsConnectedSlackListsAndAzureBoards(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
@@ -390,14 +640,20 @@ func TestRunPollsConnectedSlackListsAndAzureBoards(t *testing.T) {
 	}
 
 	slackServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/api/slackLists.items.list" {
-			t.Fatalf("unexpected Slack Lists path %s", request.URL.Path)
-		}
 		if got := request.Header.Get("Authorization"); got != "Bearer slack-token" {
 			t.Fatalf("expected Slack bearer token, got %q", got)
 		}
 		response.Header().Set("Content-Type", "application/json")
-		_, _ = response.Write([]byte(`{"ok":true,"items":[{"id":"runtime-list-item","list_id":"LTODO","updated_timestamp":"1780938000.000000","updated_by":"U123","fields":[{"key":"task","text":"Runtime Slack List task","value":"Runtime Slack List task"}]}]}`))
+		switch request.URL.Path {
+		case "/api/auth.test":
+			_, _ = response.Write([]byte(`{"ok":true,"user_id":"U123"}`))
+		case "/api/conversations.list":
+			_, _ = response.Write([]byte(`{"ok":true,"channels":[]}`))
+		case "/api/slackLists.items.list":
+			_, _ = response.Write([]byte(`{"ok":true,"items":[{"id":"runtime-list-item","list_id":"LTODO","updated_timestamp":"1780938000.000000","updated_by":"U123","fields":[{"key":"task","text":"Runtime Slack List task","value":"Runtime Slack List task"}]}]}`))
+		default:
+			t.Fatalf("unexpected Slack path %s", request.URL.Path)
+		}
 	}))
 	defer slackServer.Close()
 	if err := os.WriteFile(filepath.Join(homeDir, "slack.json"), []byte(fmt.Sprintf(`{
