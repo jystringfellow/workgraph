@@ -332,7 +332,7 @@ func waitForDaemonReady(homeDir string) (DaemonStatus, error) {
 		status, err := readDaemonState(homeDir)
 		if err == nil {
 			lastStatus = status
-			if status.PID > 0 && processRunning(status.PID) {
+			if status.PID > 0 && processRunning(status.PID) && daemonPIDMatches(homeDir, status.PID) {
 				status.Running = true
 				return status, nil
 			}
@@ -343,6 +343,15 @@ func waitForDaemonReady(homeDir string) (DaemonStatus, error) {
 		return DaemonStatus{}, fmt.Errorf("daemon did not become ready with pid %d", lastStatus.PID)
 	}
 	return DaemonStatus{}, fmt.Errorf("daemon did not become ready")
+}
+
+func daemonPIDMatches(homeDir string, expectedPID int) bool {
+	contents, err := os.ReadFile(daemonPIDPath(homeDir))
+	if err != nil {
+		return false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(contents)))
+	return err == nil && pid == expectedPID
 }
 
 func removeDaemonState(homeDir string) error {

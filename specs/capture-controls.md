@@ -35,6 +35,11 @@ workgraph stop
 `workgraph start` starts local event capture in the background and returns after
 capture is ready.
 
+Ready means the worker is running and both `daemon.json` and `daemon.pid` have
+been written for the same worker PID. Connector-triggered daemon restarts have
+the same guarantee: the connector command must not return while the replacement
+worker's PID file is still pending.
+
 It must:
 
 - refuse to start before `workgraph init`

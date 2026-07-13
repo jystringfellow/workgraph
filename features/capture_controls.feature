@@ -27,6 +27,11 @@ Scenario: Report capture status
   And I see watched directories
   And I see ignored paths and names
 
+Scenario: Commit background readiness state
+  Given workgraph starts or restarts background capture
+  When the command reports that capture is ready
+  Then daemon state and the PID file identify the same running worker
+
 Scenario: Stop background capture
   Given workgraph background capture is running
   When I run "workgraph stop"

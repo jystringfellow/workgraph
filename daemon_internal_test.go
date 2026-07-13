@@ -1,9 +1,62 @@
 package workgraph
 
 import (
+	"encoding/json"
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
+
+func TestWaitForDaemonReadyWaitsForMatchingPIDFile(t *testing.T) {
+	homeDir := t.TempDir()
+	status := DaemonStatus{
+		Running:      true,
+		PID:          os.Getpid(),
+		HomeDir:      homeDir,
+		DatabasePath: filepath.Join(homeDir, "workgraph.db"),
+	}
+	contents, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("encode daemon state: %v", err)
+	}
+	if err := os.WriteFile(daemonStatePath(homeDir), contents, 0o600); err != nil {
+		t.Fatalf("write daemon state: %v", err)
+	}
+
+	ready := make(chan error, 1)
+	go func() {
+		_, err := waitForDaemonReady(homeDir)
+		ready <- err
+	}()
+	select {
+	case err := <-ready:
+		t.Fatalf("readiness returned before daemon PID file existed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if err := os.WriteFile(daemonPIDPath(homeDir), []byte("different-pid\n"), 0o600); err != nil {
+		t.Fatalf("write mismatched daemon PID: %v", err)
+	}
+	select {
+	case err := <-ready:
+		t.Fatalf("readiness returned for mismatched daemon PID file: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if err := os.WriteFile(daemonPIDPath(homeDir), []byte(fmt.Sprintf("%d\n", status.PID)), 0o600); err != nil {
+		t.Fatalf("write matching daemon PID: %v", err)
+	}
+	select {
+	case err := <-ready:
+		if err != nil {
+			t.Fatalf("readiness failed after matching daemon PID was written: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("readiness did not observe matching daemon PID file")
+	}
+}
 
 func TestMatchingCaptureWorkerProcessesForHomeAndDatabase(t *testing.T) {
 	homeDir := filepath.Join(t.TempDir(), ".workgraph")
