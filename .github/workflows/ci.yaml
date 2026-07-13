@@ -10,8 +10,12 @@ permissions:
 
 jobs:
   test:
-    name: Go tests
-    runs-on: ubuntu-latest
+    name: Go checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
 
     steps:
       - name: Check out repository
@@ -22,6 +26,8 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Run vet
+        run: go vet ./...
+
       - name: Run tests
         run: go test ./...
-        continue-on-error: true

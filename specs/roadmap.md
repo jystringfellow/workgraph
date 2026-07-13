@@ -164,8 +164,8 @@ Priority labels used below:
 - [ ] Approval-based execution
 
 ## Phase 7: Platform
-- [x] CI runs full Go tests on pull requests to main
-- [ ] Harden facts for GitHub Actions portability, including temp directory assumptions and long-running daemon/start tests.
+- [x] CI blocks pull requests on `go vet ./...` and the full Go suite on Linux and macOS. [spec: `specs/ci.md`]
+- [x] Facts use portable temporary directories and one suite-built CLI binary so cold compilation is not charged to daemon command timeouts. [spec: `specs/ci.md`]
 - [ ] Distribution
    - [ ] Homebrew formula/tap.
    - [ ] Scoop manifest.
