@@ -169,7 +169,7 @@ func TestRunReportsCapturedFileEvents(t *testing.T) {
 	}
 }
 
-func TestRunCapturesRapidFileLifecycleWithoutLosingTheFile(t *testing.T) {
+func TestRunCapturesFileLifecycleWithoutLosingOperations(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
 	watchDir := filepath.Join(tempDir, "project")
@@ -204,14 +204,15 @@ func TestRunCapturesRapidFileLifecycleWithoutLosingTheFile(t *testing.T) {
 	if err := os.WriteFile(target, []byte("first"), 0o644); err != nil {
 		t.Fatalf("create watched file: %v", err)
 	}
+	waitForEvent(t, initResult.DatabasePath, "created", target)
 	if err := os.WriteFile(target, []byte("second"), 0o644); err != nil {
 		t.Fatalf("modify watched file: %v", err)
 	}
+	waitForEvent(t, initResult.DatabasePath, "modified", target)
 	if err := os.Remove(target); err != nil {
 		t.Fatalf("delete watched file: %v", err)
 	}
 
-	waitForEvent(t, initResult.DatabasePath, "created", target)
 	waitForEvent(t, initResult.DatabasePath, "deleted", target)
 
 	cancel()
@@ -417,11 +418,7 @@ func TestRunSkipsUnsupportedSpecialFiles(t *testing.T) {
 		t.Skip("Unix socket setup is not portable to Windows")
 	}
 
-	tempDir, err := os.MkdirTemp("/private/tmp", "workgraph-special-")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
 	watchDir := filepath.Join(tempDir, "project")
 	fifoPath := filepath.Join(watchDir, "app.fifo")

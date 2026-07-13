@@ -336,8 +336,7 @@ func runWorkgraphCommandWithTimeout(env []string, timeout time.Duration, args ..
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	cmdArgs := append([]string{"run", "./cmd/workgraph"}, args...)
-	cmd := exec.CommandContext(ctx, "go", cmdArgs...)
+	cmd := exec.CommandContext(ctx, workgraphFactsBinary, args...)
 	cmd.Dir = repoRootForDaemon()
 	cmd.Env = daemonCommandEnv(env)
 	output, err := cmd.CombinedOutput()
@@ -347,18 +346,10 @@ func runWorkgraphCommandWithTimeout(env []string, timeout time.Duration, args ..
 func runWorkgraphBinaryWithTimeout(t *testing.T, env []string, timeout time.Duration, args ...string) (string, error) {
 	t.Helper()
 
-	binPath := filepath.Join(t.TempDir(), "workgraph")
-	build := exec.Command("go", "build", "-o", binPath, "./cmd/workgraph")
-	build.Dir = repoRootForDaemon()
-	build.Env = daemonCommandEnv(env)
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build workgraph: %v\n%s", err, output)
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, binPath, args...)
+	cmd := exec.CommandContext(ctx, workgraphFactsBinary, args...)
 	cmd.Dir = repoRootForDaemon()
 	cmd.Env = daemonCommandEnv(env)
 	output, err := cmd.CombinedOutput()

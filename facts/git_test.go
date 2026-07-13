@@ -223,7 +223,7 @@ type storedGitCommitEvent struct {
 func runworkgraph(t *testing.T, repoRoot string, args ...string) ([]byte, error) {
 	t.Helper()
 
-	cmd := exec.Command("go", append([]string{"run", "./cmd/workgraph"}, args...)...)
+	cmd := exec.Command(workgraphFactsBinary, args...)
 	cmd.Dir = repoRoot
 	return cmd.CombinedOutput()
 }
