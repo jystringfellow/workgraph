@@ -181,21 +181,18 @@ This does not need to land before the next feature slice, but each new
 
 ## HTTP Client Timeouts In Connector Polling
 
-Connector `*http.Client` fields in `RunCapture` carry no documented timeout
-guarantee. When callers pass `nil` (the default in daemon mode), the underlying
-transport is `http.DefaultClient` which has no timeout. A slow or unresponsive
-upstream API could hang a polling goroutine indefinitely, blocking the next
-poll cycle and leaking a goroutine for the life of the daemon.
+Connector polls now run with a 30-second outer context deadline. The runtime
+clones caller-provided HTTP clients and binds requests to that context. Git and
+GitHub provider commands also receive the poll context.
 
 LLM clients already set explicit timeouts (10 s for model advertisement, 60 s
-for completions). Apply the same discipline to connector clients:
+for completions). The connector runtime now applies the same discipline:
 
-- Set a reasonable read timeout (e.g., 30 s) when constructing the default
-  connector client.
-- Add a `context.WithTimeout` wrapping the outermost polling call so the
-  whole round trip is bounded, not just the TCP dial.
-- Write a fact that verifies a connector does not hang when the mock server
-  stops responding.
+- each ready connector polls immediately in its own goroutine
+- the outermost polling call has a configurable whole-poll deadline
+- transient failures use capped exponential backoff
+- authentication failures stop only the affected poller until setup is repaired
+- a fact verifies that a stalled mock provider does not block file capture
 
 ## Suggestion Pattern Key Stability
 
@@ -213,7 +210,7 @@ The `RunCapture` struct has grown to 30+ fields, mixing file-watching state
 channels, cursors, HTTP clients, intervals). Adding a new connector currently
 requires editing the struct, `StartRun`, and the polling loop together.
 
-Split connectors into a small value type when a new connector warrants it:
+Connector scheduling uses a small value type:
 
 ```go
 type connectorPoller struct {
@@ -223,9 +220,10 @@ type connectorPoller struct {
 }
 ```
 
-`StartRun` then builds a `[]connectorPoller` slice and the poll loop iterates
-it uniformly. This is not a refactor mandate — prefer landing it when a new
-connector or the connector policy layer needs it.
+`StartRun` builds connector-specific capture state, and `Run` builds a
+`[]connectorPoller` whose entries execute independently. Provider credentials,
+cursors, and clients still live on `RunCapture`; move those into provider-owned
+state only when another behavior change justifies the additional split.
 
 ## Non-Goals
 
@@ -233,4 +231,3 @@ connector or the connector policy layer needs it.
 - no generic connector option bag that hides provider-specific security meaning
 - no LLM-first association system
 - no relevance scoring that silently mutates stored events
-

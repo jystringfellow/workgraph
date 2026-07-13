@@ -40,6 +40,9 @@ backfills, and one-off runs.
   while capture continues.
 - **Conservative APIs**: API connectors must dedupe events, honor rate limits,
   and back off after failures.
+- **Bounded independent polls**: each connector polls independently with a
+  whole-poll deadline. A stalled provider must not block filesystem events or
+  another connector.
 
 ## Desired Commands
 
@@ -162,9 +165,13 @@ stabilize.
 
 - `last_poll_at`: RFC3339 timestamp for the last completed poll
 - `last_error`: most recent poll error, cleared after a successful poll
+- `last_success_at`: most recent successful completed poll
+- `next_poll_at`: scheduled next attempt, including retry backoff
+- `consecutive_failures`: failures since the last success
 
-`workgraph connectors list` should display last poll, last error, and the next
-poll time derived from `last_poll_at + interval` when those values are known.
+`workgraph connectors list` should display last poll, last error, and the
+explicit next poll time when those values are known. After a success the next
+poll uses the configured interval; after a transient failure it uses backoff.
 
 ## Poll Failures
 
@@ -176,6 +183,18 @@ a fatal daemon error. The runtime should:
 - log the connector id and error to the daemon log
 - keep filesystem capture and other connector polling active
 - include degraded connector ids and their latest errors in `workgraph status`
+
+Enabled, ready connectors poll once immediately when capture starts. Each
+connector runs independently. A poll has a 30-second default whole-poll
+deadline, including pagination and provider commands. Tests may configure a
+shorter deadline.
+
+Transient failures retry with exponential backoff starting at 5 seconds and
+capped at 5 minutes. A successful poll resets the failure count and returns to
+the configured interval. Authentication failures mark only that connector's
+setup state as `error`, retain reconnect guidance, and stop retrying it until
+the user reconnects or repairs setup. Other connectors and filesystem capture
+continue.
 
 Errors from the filesystem watcher or local event store may still terminate the
 capture process because they affect the core local capture path.

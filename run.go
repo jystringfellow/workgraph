@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -34,6 +35,12 @@ const ignoreNameSuggestionDistinctPathThreshold = 3
 const ignoreSuggestionRecentEventLimit = 200
 
 var ignoreSuggestionWindow = 10 * time.Minute
+
+const (
+	defaultConnectorPollTimeout  = 30 * time.Second
+	defaultConnectorRetryInitial = 5 * time.Second
+	defaultConnectorRetryMax     = 5 * time.Minute
+)
 
 // RunConfig controls foreground event capture.
 type RunConfig struct {
@@ -85,6 +92,12 @@ type RunConfig struct {
 	AzureBoardsPollInterval time.Duration
 	// AzureBoardsHTTPClient overrides the Azure Boards API HTTP client for tests.
 	AzureBoardsHTTPClient *http.Client
+	// ConnectorPollTimeout bounds one complete connector poll. Zero uses the default.
+	ConnectorPollTimeout time.Duration
+	// ConnectorRetryInitial controls the first transient retry delay. Zero uses the default.
+	ConnectorRetryInitial time.Duration
+	// ConnectorRetryMax caps transient retry delay. Zero uses the default.
+	ConnectorRetryMax time.Duration
 }
 
 // RunStatus describes an active capture process.
@@ -143,10 +156,10 @@ type RunCapture struct {
 	slackHTTPClient         *http.Client
 	slackCursors            map[string]string
 	slackThreadCursors      map[string]string
-	calendarPollInterval    time.Duration
+	calendarPollIntervals   map[string]time.Duration
 	calendarProviders       []string
 	calendarHTTPClient      *http.Client
-	mailPollInterval        time.Duration
+	mailPollIntervals       map[string]time.Duration
 	mailProviders           []string
 	mailHTTPClient          *http.Client
 	notionPollInterval      time.Duration
@@ -155,6 +168,9 @@ type RunCapture struct {
 	azureBoardsEnabled      bool
 	azureBoardsPollInterval time.Duration
 	azureBoardsHTTPClient   *http.Client
+	connectorPollTimeout    time.Duration
+	connectorRetryInitial   time.Duration
+	connectorRetryMax       time.Duration
 	suppressedCreates       map[string]time.Time
 	deleteCoalesceDelay     time.Duration
 	events                  chan CapturedEvent
@@ -275,38 +291,44 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 	events := make(chan CapturedEvent, 128)
 
 	return &RunCapture{
-		Status:                  status,
-		Events:                  events,
-		db:                      db,
-		watcher:                 watcher,
-		homeDir:                 status.HomeDir,
-		databasePath:            status.DatabasePath,
-		watchDirs:               status.WatchDirs,
-		ignorePaths:             status.IgnorePaths,
-		ignoreNames:             status.IgnoreNames,
-		watchBudget:             budget,
-		gitEnabled:              connectorEnabledForRuntime(connectorState, "git", managedSettings, managedSettingsPresent),
-		gitPollInterval:         connectorInterval(connectorState, "git", gitPollInterval(config.GitPollInterval)),
-		githubEnabled:           connectorReadyForRuntime(connectorState, "github", managedSettings, managedSettingsPresent),
-		githubPollInterval:      connectorInterval(connectorState, "github", githubPollInterval(config.GitHubPollInterval)),
-		githubCommand:           config.GitHubCommand,
-		slackEnabled:            connectorReadyForRuntime(connectorState, "slack", managedSettings, managedSettingsPresent),
-		slackListsEnabled:       connectorReadyForRuntime(connectorState, "slack.lists", managedSettings, managedSettingsPresent),
-		slackPollInterval:       connectorInterval(connectorState, "slack", slackPollInterval(config.SlackPollInterval)),
-		slackListPollInterval:   connectorInterval(connectorState, "slack.lists", slackListPollInterval(config.SlackListPollInterval)),
-		slackToken:              slackToken,
-		slackChannels:           slackChannels,
-		slackListIDs:            slackListIDs,
-		slackIncludeDMs:         slackIncludeDMs,
-		slackSelfUserID:         slackSelfUserID,
-		slackAPIBaseURL:         slackAPIBaseURL,
-		slackHTTPClient:         config.SlackHTTPClient,
-		slackCursors:            map[string]string{},
-		slackThreadCursors:      map[string]string{},
-		calendarPollInterval:    connectorInterval(connectorState, "calendar.google", calendarPollInterval(config.CalendarPollInterval)),
-		calendarProviders:       calendarProviders,
-		calendarHTTPClient:      config.CalendarHTTPClient,
-		mailPollInterval:        connectorInterval(connectorState, "mail.google", mailPollInterval(config.MailPollInterval)),
+		Status:                status,
+		Events:                events,
+		db:                    db,
+		watcher:               watcher,
+		homeDir:               status.HomeDir,
+		databasePath:          status.DatabasePath,
+		watchDirs:             status.WatchDirs,
+		ignorePaths:           status.IgnorePaths,
+		ignoreNames:           status.IgnoreNames,
+		watchBudget:           budget,
+		gitEnabled:            connectorEnabledForRuntime(connectorState, "git", managedSettings, managedSettingsPresent),
+		gitPollInterval:       connectorInterval(connectorState, "git", gitPollInterval(config.GitPollInterval)),
+		githubEnabled:         connectorReadyForRuntime(connectorState, "github", managedSettings, managedSettingsPresent),
+		githubPollInterval:    connectorInterval(connectorState, "github", githubPollInterval(config.GitHubPollInterval)),
+		githubCommand:         config.GitHubCommand,
+		slackEnabled:          connectorReadyForRuntime(connectorState, "slack", managedSettings, managedSettingsPresent),
+		slackListsEnabled:     connectorReadyForRuntime(connectorState, "slack.lists", managedSettings, managedSettingsPresent),
+		slackPollInterval:     connectorInterval(connectorState, "slack", slackPollInterval(config.SlackPollInterval)),
+		slackListPollInterval: connectorInterval(connectorState, "slack.lists", slackListPollInterval(config.SlackListPollInterval)),
+		slackToken:            slackToken,
+		slackChannels:         slackChannels,
+		slackListIDs:          slackListIDs,
+		slackIncludeDMs:       slackIncludeDMs,
+		slackSelfUserID:       slackSelfUserID,
+		slackAPIBaseURL:       slackAPIBaseURL,
+		slackHTTPClient:       config.SlackHTTPClient,
+		slackCursors:          map[string]string{},
+		slackThreadCursors:    map[string]string{},
+		calendarPollIntervals: map[string]time.Duration{
+			"google":    connectorInterval(connectorState, "calendar.google", calendarPollInterval(config.CalendarPollInterval)),
+			"microsoft": connectorInterval(connectorState, "calendar.microsoft", calendarPollInterval(config.CalendarPollInterval)),
+		},
+		calendarProviders:  calendarProviders,
+		calendarHTTPClient: config.CalendarHTTPClient,
+		mailPollIntervals: map[string]time.Duration{
+			"google":    connectorInterval(connectorState, "mail.google", mailPollInterval(config.MailPollInterval)),
+			"microsoft": connectorInterval(connectorState, "mail.microsoft", mailPollInterval(config.MailPollInterval)),
+		},
 		mailProviders:           mailProviders,
 		mailHTTPClient:          config.MailHTTPClient,
 		notionPollInterval:      connectorInterval(connectorState, "notion", notionPollInterval(config.NotionPollInterval)),
@@ -315,6 +337,9 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 		azureBoardsEnabled:      azureBoardsEnabled,
 		azureBoardsPollInterval: connectorInterval(connectorState, "azure.boards", azureBoardsPollInterval(config.AzureBoardsPollInterval)),
 		azureBoardsHTTPClient:   config.AzureBoardsHTTPClient,
+		connectorPollTimeout:    positiveDuration(config.ConnectorPollTimeout, defaultConnectorPollTimeout),
+		connectorRetryInitial:   positiveDuration(config.ConnectorRetryInitial, defaultConnectorRetryInitial),
+		connectorRetryMax:       positiveDuration(config.ConnectorRetryMax, defaultConnectorRetryMax),
 		suppressedCreates:       map[string]time.Time{},
 		deleteCoalesceDelay:     75 * time.Millisecond,
 		events:                  events,
@@ -325,43 +350,24 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 func (capture *RunCapture) Run(ctx context.Context) error {
 	defer capture.Close()
 
-	gitTicker := time.NewTicker(capture.gitPollInterval)
-	defer gitTicker.Stop()
-	githubTicker := time.NewTicker(capture.githubPollInterval)
-	defer githubTicker.Stop()
-	slackTicker := time.NewTicker(capture.slackPollInterval)
-	defer slackTicker.Stop()
-	slackListTicker := time.NewTicker(capture.slackListPollInterval)
-	defer slackListTicker.Stop()
-	calendarTicker := time.NewTicker(capture.calendarPollInterval)
-	defer calendarTicker.Stop()
-	mailTicker := time.NewTicker(capture.mailPollInterval)
-	defer mailTicker.Stop()
-	notionTicker := time.NewTicker(capture.notionPollInterval)
-	defer notionTicker.Stop()
-	azureBoardsTicker := time.NewTicker(capture.azureBoardsPollInterval)
-	defer azureBoardsTicker.Stop()
+	pollContext, stopPollers := context.WithCancel(ctx)
+	var pollers sync.WaitGroup
+	for _, poller := range capture.connectorPollers() {
+		pollers.Add(1)
+		go func(poller connectorPoller) {
+			defer pollers.Done()
+			capture.runConnectorPoller(pollContext, poller)
+		}(poller)
+	}
+	defer func() {
+		stopPollers()
+		pollers.Wait()
+	}()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-gitTicker.C:
-			capture.logConnectorPollError("git", capture.captureGitCommits())
-		case <-githubTicker.C:
-			capture.logConnectorPollError("github", capture.captureGitHubEvents())
-		case <-slackTicker.C:
-			capture.logConnectorPollError("slack", capture.captureSlackEvents())
-		case <-slackListTicker.C:
-			capture.logConnectorPollError("slack.lists", capture.captureSlackListItems())
-		case <-calendarTicker.C:
-			capture.logConnectorPollError("calendar", capture.captureCalendarEvents())
-		case <-mailTicker.C:
-			capture.logConnectorPollError("mail", capture.captureMailMessages())
-		case <-notionTicker.C:
-			capture.logConnectorPollError("notion", capture.captureNotionEvents())
-		case <-azureBoardsTicker.C:
-			capture.logConnectorPollError("azure.boards", capture.captureAzureBoardsEvents())
 		case event, ok := <-capture.watcher.Events:
 			if !ok {
 				return nil
@@ -380,29 +386,153 @@ func (capture *RunCapture) Run(ctx context.Context) error {
 	}
 }
 
+type connectorPoller struct {
+	id       string
+	interval time.Duration
+	poll     func(context.Context) error
+}
+
+func (capture *RunCapture) connectorPollers() []connectorPoller {
+	pollers := []connectorPoller{}
+	if capture.gitEnabled {
+		pollers = append(pollers, connectorPoller{id: "git", interval: capture.gitPollInterval, poll: capture.captureGitCommits})
+	}
+	if capture.githubEnabled {
+		pollers = append(pollers, connectorPoller{id: "github", interval: capture.githubPollInterval, poll: capture.captureGitHubEvents})
+	}
+	if capture.slackEnabled && capture.slackToken != "" {
+		pollers = append(pollers, connectorPoller{id: "slack", interval: capture.slackPollInterval, poll: capture.captureSlackEvents})
+	}
+	if capture.slackListsEnabled && capture.slackToken != "" && len(capture.slackListIDs) > 0 {
+		pollers = append(pollers, connectorPoller{id: "slack.lists", interval: capture.slackListPollInterval, poll: capture.captureSlackListItems})
+	}
+	for _, provider := range capture.calendarProviders {
+		provider := provider
+		pollers = append(pollers, connectorPoller{
+			id:       "calendar." + provider,
+			interval: capture.calendarPollIntervals[provider],
+			poll:     func(ctx context.Context) error { return capture.captureCalendarEvents(ctx, provider) },
+		})
+	}
+	for _, provider := range capture.mailProviders {
+		provider := provider
+		pollers = append(pollers, connectorPoller{
+			id:       "mail." + provider,
+			interval: capture.mailPollIntervals[provider],
+			poll:     func(ctx context.Context) error { return capture.captureMailMessages(ctx, provider) },
+		})
+	}
+	if capture.notionEnabled {
+		pollers = append(pollers, connectorPoller{id: "notion", interval: capture.notionPollInterval, poll: capture.captureNotionEvents})
+	}
+	if capture.azureBoardsEnabled {
+		pollers = append(pollers, connectorPoller{id: "azure.boards", interval: capture.azureBoardsPollInterval, poll: capture.captureAzureBoardsEvents})
+	}
+	return pollers
+}
+
+func (capture *RunCapture) runConnectorPoller(ctx context.Context, poller connectorPoller) {
+	failures := 0
+	delay := time.Duration(0)
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		if delay > 0 {
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+		}
+
+		pollCtx, cancel := context.WithTimeout(ctx, capture.connectorPollTimeout)
+		err := poller.poll(pollCtx)
+		timedOut := errors.Is(pollCtx.Err(), context.DeadlineExceeded)
+		cancel()
+		if ctx.Err() != nil {
+			return
+		}
+		if timedOut {
+			err = fmt.Errorf("poll deadline exceeded after %s: %w", capture.connectorPollTimeout, context.DeadlineExceeded)
+		}
+
+		completedAt := time.Now()
+		if err == nil {
+			failures = 0
+			delay = poller.interval
+		} else {
+			failures++
+			delay = connectorRetryDelay(capture.connectorRetryInitial, capture.connectorRetryMax, failures)
+			capture.logConnectorPollError(poller.id, err)
+		}
+		nextPoll := completedAt.Add(delay)
+		if stateErr := recordConnectorPollAttempt(capture.homeDir, poller.id, completedAt, nextPoll, failures, err); stateErr != nil {
+			capture.logConnectorPollError(poller.id, fmt.Errorf("record poll state: %w", stateErr))
+		}
+		if err != nil && connectorAuthFailure(err.Error()) {
+			return
+		}
+	}
+}
+
+func connectorRetryDelay(initial time.Duration, maximum time.Duration, failures int) time.Duration {
+	if failures <= 1 || initial >= maximum {
+		return minDuration(initial, maximum)
+	}
+	delay := initial
+	for attempt := 1; attempt < failures && delay < maximum; attempt++ {
+		if delay > maximum/2 {
+			return maximum
+		}
+		delay *= 2
+	}
+	return minDuration(delay, maximum)
+}
+
+func minDuration(first time.Duration, second time.Duration) time.Duration {
+	if first < second {
+		return first
+	}
+	return second
+}
+
+func positiveDuration(value time.Duration, fallback time.Duration) time.Duration {
+	if value > 0 {
+		return value
+	}
+	return fallback
+}
+
+type connectorContextTransport struct {
+	ctx  context.Context
+	base http.RoundTripper
+}
+
+func (transport connectorContextTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	return transport.base.RoundTrip(request.Clone(transport.ctx))
+}
+
+func connectorHTTPClient(ctx context.Context, client *http.Client) *http.Client {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	clone := *client
+	base := clone.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	clone.Transport = connectorContextTransport{ctx: ctx, base: base}
+	return &clone
+}
+
 func (capture *RunCapture) logConnectorPollError(id string, err error) {
 	if err == nil {
 		return
 	}
-	var failure *connectorPollFailure
-	if errors.As(err, &failure) {
-		id = failure.id
-		err = failure.err
-	}
 	log.Printf("workgraph connector poll failed: connector=%s error=%v", id, err)
-}
-
-type connectorPollFailure struct {
-	id  string
-	err error
-}
-
-func (failure *connectorPollFailure) Error() string {
-	return failure.err.Error()
-}
-
-func (failure *connectorPollFailure) Unwrap() error {
-	return failure.err
 }
 
 func connectedCalendarProviders(homeDir string, state connectorRuntimeFile, managed managedSettingsFile, managedPresent bool) []string {
@@ -473,53 +603,39 @@ func monitoredConnectorIDs(homeDir string, state connectorRuntimeFile) ([]string
 	return ids, nil
 }
 
-func (capture *RunCapture) captureGitCommits() error {
-	if !capture.gitEnabled {
-		return nil
-	}
+func (capture *RunCapture) captureGitCommits(ctx context.Context) error {
 	result, err := CaptureGitCommits(GitCaptureConfig{
 		HomeDir:      capture.homeDir,
 		DatabasePath: capture.databasePath,
 		WatchDirs:    capture.watchDirs,
 		MaxCommits:   20,
+		Context:      ctx,
 	})
 	if err != nil {
-		_ = recordConnectorPollError(capture.homeDir, "git", time.Now(), err)
-		return err
-	}
-	if err := recordConnectorPollSuccess(capture.homeDir, "git", time.Now()); err != nil {
 		return err
 	}
 	for _, event := range result.Events {
-		capture.events <- event
+		select {
+		case capture.events <- event:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
-	return err
+	return nil
 }
 
-func (capture *RunCapture) captureGitHubEvents() error {
-	if !capture.githubEnabled {
-		return nil
-	}
+func (capture *RunCapture) captureGitHubEvents(ctx context.Context) error {
 	_, err := CaptureGitHubFromGH(GitHubCaptureConfig{
 		HomeDir:       capture.homeDir,
 		DatabasePath:  capture.databasePath,
 		WatchDirs:     capture.watchDirs,
 		GitHubCommand: capture.githubCommand,
+		Context:       ctx,
 	})
-	if err != nil {
-		_ = recordConnectorPollError(capture.homeDir, "github", time.Now(), err)
-		return err
-	}
-	if err := recordConnectorPollSuccess(capture.homeDir, "github", time.Now()); err != nil {
-		return err
-	}
 	return err
 }
 
-func (capture *RunCapture) captureSlackEvents() error {
-	if !capture.slackEnabled || capture.slackToken == "" {
-		return nil
-	}
+func (capture *RunCapture) captureSlackEvents(ctx context.Context) error {
 	result, err := CaptureSlackFromAPI(SlackAPICaptureConfig{
 		HomeDir:       capture.homeDir,
 		DatabasePath:  capture.databasePath,
@@ -528,15 +644,11 @@ func (capture *RunCapture) captureSlackEvents() error {
 		IncludeDMs:    capture.slackIncludeDMs,
 		SelfUserID:    capture.slackSelfUserID,
 		APIBaseURL:    capture.slackAPIBaseURL,
-		HTTPClient:    capture.slackHTTPClient,
+		HTTPClient:    connectorHTTPClient(ctx, capture.slackHTTPClient),
 		Cursors:       capture.slackCursors,
 		ThreadCursors: capture.slackThreadCursors,
 	})
 	if err != nil {
-		_ = recordConnectorPollError(capture.homeDir, "slack", time.Now(), err)
-		return err
-	}
-	if err := recordConnectorPollSuccess(capture.homeDir, "slack", time.Now()); err != nil {
 		return err
 	}
 	capture.slackCursors = result.Cursors
@@ -544,10 +656,7 @@ func (capture *RunCapture) captureSlackEvents() error {
 	return nil
 }
 
-func (capture *RunCapture) captureSlackListItems() error {
-	if !capture.slackListsEnabled || capture.slackToken == "" || len(capture.slackListIDs) == 0 {
-		return nil
-	}
+func (capture *RunCapture) captureSlackListItems(ctx context.Context) error {
 	for _, listID := range capture.slackListIDs {
 		_, err := CaptureSlackList(SlackListCaptureConfig{
 			HomeDir:      capture.homeDir,
@@ -555,95 +664,51 @@ func (capture *RunCapture) captureSlackListItems() error {
 			Token:        capture.slackToken,
 			ListID:       listID,
 			APIBaseURL:   capture.slackAPIBaseURL,
-			HTTPClient:   capture.slackHTTPClient,
+			HTTPClient:   connectorHTTPClient(ctx, capture.slackHTTPClient),
 		})
 		if err != nil {
-			_ = recordConnectorPollError(capture.homeDir, "slack.lists", time.Now(), err)
 			return err
 		}
 	}
-	if err := recordConnectorPollSuccess(capture.homeDir, "slack.lists", time.Now()); err != nil {
-		return err
-	}
 	return nil
 }
 
-func (capture *RunCapture) captureCalendarEvents() error {
-	for _, provider := range capture.calendarProviders {
-		id := "calendar." + provider
-		_, err := CaptureCalendarEvents(CalendarCaptureConfig{
-			HomeDir:      capture.homeDir,
-			DatabasePath: capture.databasePath,
-			WatchDirs:    capture.watchDirs,
-			Provider:     provider,
-			HTTPClient:   capture.calendarHTTPClient,
-		})
-		if err != nil {
-			_ = recordConnectorPollError(capture.homeDir, id, time.Now(), err)
-			return &connectorPollFailure{id: id, err: err}
-		}
-		if err := recordConnectorPollSuccess(capture.homeDir, id, time.Now()); err != nil {
-			return &connectorPollFailure{id: id, err: err}
-		}
-	}
-	return nil
-}
-
-func (capture *RunCapture) captureMailMessages() error {
-	for _, provider := range capture.mailProviders {
-		id := "mail." + provider
-		_, err := CaptureMailMessages(MailCaptureConfig{
-			HomeDir:      capture.homeDir,
-			DatabasePath: capture.databasePath,
-			Provider:     provider,
-			HTTPClient:   capture.mailHTTPClient,
-		})
-		if err != nil {
-			_ = recordConnectorPollError(capture.homeDir, id, time.Now(), err)
-			return &connectorPollFailure{id: id, err: err}
-		}
-		if err := recordConnectorPollSuccess(capture.homeDir, id, time.Now()); err != nil {
-			return &connectorPollFailure{id: id, err: err}
-		}
-	}
-	return nil
-}
-
-func (capture *RunCapture) captureNotionEvents() error {
-	if !capture.notionEnabled {
-		return nil
-	}
-	_, err := CaptureNotion(NotionCaptureConfig{
+func (capture *RunCapture) captureCalendarEvents(ctx context.Context, provider string) error {
+	_, err := CaptureCalendarEvents(CalendarCaptureConfig{
 		HomeDir:      capture.homeDir,
 		DatabasePath: capture.databasePath,
-		HTTPClient:   capture.notionHTTPClient,
+		WatchDirs:    capture.watchDirs,
+		Provider:     provider,
+		HTTPClient:   connectorHTTPClient(ctx, capture.calendarHTTPClient),
 	})
-	if err != nil {
-		_ = recordConnectorPollError(capture.homeDir, "notion", time.Now(), err)
-		return err
-	}
-	if err := recordConnectorPollSuccess(capture.homeDir, "notion", time.Now()); err != nil {
-		return err
-	}
 	return err
 }
 
-func (capture *RunCapture) captureAzureBoardsEvents() error {
-	if !capture.azureBoardsEnabled {
-		return nil
-	}
+func (capture *RunCapture) captureMailMessages(ctx context.Context, provider string) error {
+	_, err := CaptureMailMessages(MailCaptureConfig{
+		HomeDir:      capture.homeDir,
+		DatabasePath: capture.databasePath,
+		Provider:     provider,
+		HTTPClient:   connectorHTTPClient(ctx, capture.mailHTTPClient),
+	})
+	return err
+}
+
+func (capture *RunCapture) captureNotionEvents(ctx context.Context) error {
+	_, err := CaptureNotion(NotionCaptureConfig{
+		HomeDir:      capture.homeDir,
+		DatabasePath: capture.databasePath,
+		HTTPClient:   connectorHTTPClient(ctx, capture.notionHTTPClient),
+	})
+	return err
+}
+
+func (capture *RunCapture) captureAzureBoardsEvents(ctx context.Context) error {
 	_, err := CaptureAzureBoards(AzureBoardsCaptureConfig{
 		HomeDir:      capture.homeDir,
 		DatabasePath: capture.databasePath,
-		HTTPClient:   capture.azureBoardsHTTPClient,
+		HTTPClient:   connectorHTTPClient(ctx, capture.azureBoardsHTTPClient),
 	})
-	if err != nil {
-		_ = recordConnectorPollError(capture.homeDir, "azure.boards", time.Now(), err)
-		return err
-	}
-	if err := recordConnectorPollSuccess(capture.homeDir, "azure.boards", time.Now()); err != nil {
-		return err
-	}
 	return err
 }
 
