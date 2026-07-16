@@ -50,6 +50,16 @@ type SuggestionStatusUpdate struct {
 	FeedbackNote string
 }
 
+// SuggestionSnoozeUpdate controls an atomic suggestion snooze and suppression.
+type SuggestionSnoozeUpdate struct {
+	HomeDir      string
+	DatabasePath string
+	ID           string
+	UntilAt      string
+	ReasonCode   string
+	FeedbackNote string
+}
+
 type SuggestionFeedbackEvent struct {
 	HomeDir      string
 	DatabasePath string
@@ -143,6 +153,13 @@ func UpdateSuggestionStatus(config SuggestionStatusUpdate) error {
 		return fmt.Errorf("start suggestion status update: %w", err)
 	}
 	defer tx.Rollback()
+	currentStatus, err := suggestionStatusForUpdate(tx, config.ID)
+	if err != nil {
+		return err
+	}
+	if !validSuggestionTransition(currentStatus, status) {
+		return fmt.Errorf("suggestion cannot transition from %q to %q", currentStatus, status)
+	}
 
 	resolvedAt := sql.NullString{}
 	if status == "approved" || status == "dismissed" || status == "snoozed" {
@@ -176,6 +193,111 @@ func UpdateSuggestionStatus(config SuggestionStatusUpdate) error {
 		return fmt.Errorf("commit suggestion status update: %w", err)
 	}
 	return nil
+}
+
+// SnoozeSuggestion atomically updates lifecycle state, appends feedback, and
+// stores the expiring suppression used to resurface the suggestion.
+func SnoozeSuggestion(config SuggestionSnoozeUpdate) (Suggestion, error) {
+	id := strings.TrimSpace(config.ID)
+	if id == "" {
+		return Suggestion{}, errors.New("suggestion id is required")
+	}
+	untilAt := strings.TrimSpace(config.UntilAt)
+	until, err := time.Parse(time.RFC3339, untilAt)
+	if err != nil {
+		return Suggestion{}, fmt.Errorf("suggestion snooze until_at must be RFC3339: %w", err)
+	}
+	now := time.Now().UTC()
+	if !until.After(now) {
+		return Suggestion{}, errors.New("suggestion snooze until_at must be in the future")
+	}
+
+	db, err := openSuggestionDatabase(config.HomeDir, config.DatabasePath)
+	if err != nil {
+		return Suggestion{}, err
+	}
+	defer db.Close()
+	tx, err := db.Begin()
+	if err != nil {
+		return Suggestion{}, fmt.Errorf("start suggestion snooze: %w", err)
+	}
+	defer tx.Rollback()
+
+	var suggestionType, patternKey, currentStatus string
+	if err := tx.QueryRow(`SELECT type, COALESCE(pattern_key, ''), status FROM suggestions WHERE id = ?`, id).Scan(&suggestionType, &patternKey, &currentStatus); err != nil {
+		return Suggestion{}, err
+	}
+	if !validSuggestionTransition(currentStatus, "snoozed") {
+		return Suggestion{}, fmt.Errorf("suggestion cannot transition from %q to %q", currentStatus, "snoozed")
+	}
+	if patternKey == "" {
+		return Suggestion{}, errors.New("suggestion pattern key is required for snooze")
+	}
+	nowText := now.Format(time.RFC3339)
+	if _, err := tx.Exec(`UPDATE suggestions SET status = 'snoozed', updated_at = ?, resolved_at = ? WHERE id = ?`, nowText, nowText, id); err != nil {
+		return Suggestion{}, fmt.Errorf("update suggestion snooze status: %w", err)
+	}
+	if err := appendSuggestionFeedback(tx, SuggestionFeedbackEvent{
+		SuggestionID: id,
+		Action:       "snoozed",
+		ReasonCode:   config.ReasonCode,
+		Note:         config.FeedbackNote,
+	}); err != nil {
+		return Suggestion{}, err
+	}
+	suppressionID := stableSuggestionID("suppress:"+suggestionType, patternKey)
+	if _, err := tx.Exec(`INSERT INTO suggestion_suppressions (id, type, pattern_key, reason, until_at, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(type, pattern_key) DO UPDATE SET reason = excluded.reason, until_at = excluded.until_at`,
+		suppressionID, suggestionType, patternKey, nullableString(config.ReasonCode), until.UTC().Format(time.RFC3339), nowText); err != nil {
+		return Suggestion{}, fmt.Errorf("store suggestion snooze suppression: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return Suggestion{}, fmt.Errorf("commit suggestion snooze: %w", err)
+	}
+	return readSuggestionByID(db, id)
+}
+
+// CompleteSuggestion records that an approved suggestion was useful without
+// repeating the action performed during approval.
+func CompleteSuggestion(config SuggestionStatusUpdate) (Suggestion, error) {
+	id := strings.TrimSpace(config.ID)
+	if id == "" {
+		return Suggestion{}, errors.New("suggestion id is required")
+	}
+	db, err := openSuggestionDatabase(config.HomeDir, config.DatabasePath)
+	if err != nil {
+		return Suggestion{}, err
+	}
+	defer db.Close()
+	tx, err := db.Begin()
+	if err != nil {
+		return Suggestion{}, fmt.Errorf("start suggestion completion: %w", err)
+	}
+	defer tx.Rollback()
+	currentStatus, err := suggestionStatusForUpdate(tx, id)
+	if err != nil {
+		return Suggestion{}, err
+	}
+	if !validSuggestionTransition(currentStatus, "acted") {
+		return Suggestion{}, fmt.Errorf("suggestion cannot transition from %q to %q", currentStatus, "acted")
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := tx.Exec(`UPDATE suggestions SET status = 'acted', updated_at = ?, resolved_at = ? WHERE id = ?`, now, now, id); err != nil {
+		return Suggestion{}, fmt.Errorf("update suggestion completion status: %w", err)
+	}
+	if err := appendSuggestionFeedback(tx, SuggestionFeedbackEvent{
+		SuggestionID: id,
+		Action:       "completed",
+		ReasonCode:   config.ReasonCode,
+		Note:         config.FeedbackNote,
+	}); err != nil {
+		return Suggestion{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Suggestion{}, fmt.Errorf("commit suggestion completion: %w", err)
+	}
+	return readSuggestionByID(db, id)
 }
 
 func AppendSuggestionFeedback(config SuggestionFeedbackEvent) error {
@@ -255,7 +377,7 @@ func ListSuggestions(config SuggestionListConfig) (SuggestionListResult, error) 
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err = db.Exec(`UPDATE suggestions
-		SET status = 'proposed', updated_at = ?
+		SET status = 'proposed', updated_at = ?, resolved_at = NULL
 		WHERE status = 'snoozed'
 		AND id IN (
 			SELECT s.id FROM suggestions s
@@ -309,6 +431,9 @@ func ListSuggestions(config SuggestionListConfig) (SuggestionListResult, error) 
 }
 
 func DismissSuggestion(config SuggestionStatusUpdate) (Suggestion, error) {
+	if strings.TrimSpace(config.ReasonCode) == "" {
+		return Suggestion{}, errors.New("dismiss reason code is required")
+	}
 	config.Status = "dismissed"
 	if err := UpdateSuggestionStatus(config); err != nil {
 		return Suggestion{}, err
@@ -330,6 +455,9 @@ func ApproveSuggestion(config SuggestionStatusUpdate) (Suggestion, error) {
 	db.Close()
 	if err != nil {
 		return Suggestion{}, err
+	}
+	if !validSuggestionTransition(suggestion.Status, "approved") {
+		return Suggestion{}, fmt.Errorf("suggestion cannot transition from %q to %q", suggestion.Status, "approved")
 	}
 
 	switch suggestion.Type {
@@ -419,6 +547,18 @@ func validateSuggestionSuppression(config SuggestionSuppressionChange) error {
 
 type suggestionFeedbackExecutor interface {
 	Exec(query string, args ...any) (sql.Result, error)
+}
+
+type suggestionStatusQuerier interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+func suggestionStatusForUpdate(db suggestionStatusQuerier, id string) (string, error) {
+	var status string
+	if err := db.QueryRow(`SELECT status FROM suggestions WHERE id = ?`, strings.TrimSpace(id)).Scan(&status); err != nil {
+		return "", err
+	}
+	return status, nil
 }
 
 func appendSuggestionFeedback(db suggestionFeedbackExecutor, config SuggestionFeedbackEvent) error {
@@ -657,6 +797,23 @@ func validSuggestionStatus(status string) bool {
 	switch status {
 	case "proposed", "reviewed", "approved", "dismissed", "snoozed", "acted":
 		return true
+	default:
+		return false
+	}
+}
+
+func validSuggestionTransition(from string, to string) bool {
+	switch to {
+	case "reviewed":
+		return from == "proposed"
+	case "approved":
+		return from == "proposed" || from == "reviewed"
+	case "dismissed":
+		return from == "proposed" || from == "reviewed" || from == "snoozed"
+	case "snoozed":
+		return from == "proposed" || from == "reviewed"
+	case "acted":
+		return from == "approved"
 	default:
 		return false
 	}

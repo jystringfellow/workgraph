@@ -48,11 +48,15 @@ Suppression metadata is local-only and inspectable.
 ## Lifecycle
 
 ```text
-proposed -> reviewed -> approved|dismissed|snoozed
+proposed|reviewed -> approved|dismissed|snoozed
+snoozed -> proposed (when its suppression expires) | dismissed
+approved -> acted (when the user marks the suggestion complete)
 ```
 
 Only explicit approval may trigger downstream actions that mutate configuration
-or derived state.
+or derived state. Completion is a feedback/lifecycle action after approval; it
+must not repeat the approved mutation. Invalid transitions fail without changing
+the suggestion row or appending feedback.
 
 ## Storage
 

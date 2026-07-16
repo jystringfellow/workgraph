@@ -247,6 +247,14 @@ Dismiss a suggestion without deleting its evidence:
 workgraph suggestions dismiss <id> --reason <code>
 ```
 
+Snooze a suggestion until a future RFC3339 instant, or mark an approved
+suggestion complete after its action proved useful:
+
+```sh
+workgraph suggestions snooze <id> --until 2026-07-17T09:00:00-07:00 --reason later
+workgraph suggestions complete <id> --note "This helped"
+```
+
 Approve an ignore-rule suggestion and update local config:
 
 ```sh
@@ -260,6 +268,24 @@ file events. Approval is explicit: approving an `ignore_path` suggestion appends
 to `ignore_paths`, and approving an `ignore_name` suggestion appends to
 `ignore_names`. No LLM profile is required for suggestion storage or
 deterministic ignore-rule suggestions.
+
+## Local Effectiveness Review
+
+Review suggestion outcomes and connector freshness from local state only:
+
+```sh
+workgraph review
+workgraph review --since 7d
+workgraph review --since 30d
+workgraph review --format json
+```
+
+The default window begins Monday at midnight in the local system timezone.
+Rolling windows are exactly 168 or 720 hours. Acceptance, dismissal, and snooze
+rates share the disposition-event denominator; unavailable metrics say
+`insufficient_data` instead of reporting zero quality. Connector freshness uses
+the last successful poll, while a separate degraded state preserves current
+poll failures. No review data is transmitted.
 
 ## Connectors
 
