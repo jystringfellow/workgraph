@@ -231,6 +231,24 @@ When matching project memory exists, resume includes it beside recent activity.
 When activity exists but memory does not, resume prints the Markdown path where
 that project context can be added.
 
+## Associations
+
+Inspect deterministic cross-source associations for one stored event:
+
+```sh
+workgraph associations explain <event-id>
+```
+
+The command considers at most the nearest 200 events from other sources in the
+closed seven-day window before and after the requested event. Qualifying pairs
+show their stable suggestion id, score, confidence, lifecycle state, cited event
+ids, matched signals, and reasons. Missing events fail explicitly; an event with
+insufficient evidence succeeds with an honest empty result.
+
+High- and medium-confidence pairs are coalesced into the local suggestion
+store. Dismissal and snooze state survive re-evaluation. Association approval is
+lifecycle-only and never changes or deletes raw events. No LLM is used.
+
 ## Suggestions
 
 Inspect locally stored suggestions:
@@ -255,7 +273,8 @@ workgraph suggestions snooze <id> --until 2026-07-17T09:00:00-07:00 --reason lat
 workgraph suggestions complete <id> --note "This helped"
 ```
 
-Approve an ignore-rule suggestion and update local config:
+Approve an ignore-rule suggestion and update local config, or approve an
+association as a lifecycle-only decision:
 
 ```sh
 workgraph suggestions approve <id>
@@ -267,7 +286,8 @@ proposed ignore-rule suggestions when generated-looking paths produce repeated
 file events. Approval is explicit: approving an `ignore_path` suggestion appends
 to `ignore_paths`, and approving an `ignore_name` suggestion appends to
 `ignore_names`. No LLM profile is required for suggestion storage or
-deterministic ignore-rule suggestions.
+deterministic ignore-rule or association suggestions. Association approval does
+not create another link record or mutate either source event.
 
 ## Local Effectiveness Review
 

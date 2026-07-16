@@ -52,3 +52,10 @@ Requirements:
 
 Suggestion rendering and suppression behavior should align with
 `specs/suggestion-explainability.md`.
+
+## Association Context
+
+The first deterministic association slice is inspected through
+`workgraph associations explain <event-id>`. It does not add association rows to
+`today`; this keeps raw event evidence and sessions primary until a separate fact
+defines a compact high-confidence presentation.

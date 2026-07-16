@@ -145,7 +145,7 @@ Priority labels used below:
 - [x] Explainable suggestion evidence trails with per-suggestion suppression controls. [P0b, spec: `specs/suggestion-explainability.md`]
 - [x] Suggestion snooze expiration: resurface snoozed suggestions when their scheduled `until_at` time passes. [P0b]
 - [x] First deterministic suggestion producer: ignore-rule or watch-root suggestions. [P0c, spec: `specs/ignore-suggestions.md` and `specs/watch-suggestions.md`]
-- [ ] Cross-source event association baseline (deterministic IDs + local fuzzy heuristics) without LLM dependency. [P1, spec: `specs/event-associations.md` and `specs/architecture-improvements.md`]
+- [x] Cross-source event association baseline (deterministic IDs + local fuzzy heuristics) without LLM dependency. [P1, spec: `specs/event-associations.md` and `specs/architecture-improvements.md`]
 - [ ] Optional semantic association lane (LLM/embeddings) behind explicit opt-in and confidence gates. [P1, spec: `specs/event-associations.md` and `specs/llm-integration.md`]
 - [x] Local personal effectiveness review (no telemetry): deterministic current-week/7d/30d windows, acceptance/dismissal/snooze rates, dismissal reasons, connector freshness and degradation, honest insufficient-data states, time-to-useful, and equivalent text/JSON output. [P0d, spec: `specs/effectiveness-review.md`]
 

@@ -89,23 +89,26 @@ system should be conservative when identity is unknown.
 Cross-source association should start as a deterministic local baseline before
 adding LLM or embedding ranking.
 
-The baseline association layer should score candidate links using concrete
-evidence:
+The baseline association layer scores a bounded, cross-source candidate window
+using concrete evidence:
 
 - same project or repository
 - same branch
 - same commit SHA
 - same pull request or issue number
 - same URL
-- same file path or directory
 - close timestamp window
-- same actor or participant
 - normalized title or summary token overlap
+
+The executable contract, weights, thresholds, canonical pair identity, and
+false-positive guards live in `specs/event-associations.md`. Qualifying pairs
+reuse the shared suggestion lifecycle; no separate association table is needed
+for the first slice.
 
 Scores should be explainable. A user or fact should be able to inspect why two
 events were considered related.
 
-Suggested future command:
+Inspection command:
 
 ```text
 workgraph associations explain <event-id>
@@ -114,14 +117,13 @@ workgraph associations explain <event-id>
 Example output:
 
 ```text
-Event github.pull_request:42
-Likely related:
-- git.commit:abc123
-  score: 92
+Event: github.pull_request:owner/repo:42
+Related associations:
+- slack.message:C123:1712345678.000100
+  score: 100 (high)
+  state: proposed
   reasons:
-  - same repository workgraph
-  - pull request references commit abc123
-  - commit author matches local git identity
+  - identical normalized URL https://github.com/owner/repo/pull/42
 ```
 
 The semantic lane should only rank or explain a small deterministic candidate

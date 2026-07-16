@@ -139,6 +139,12 @@ Resume a project from captured events and explicit memory:
 workgraph resume workgraph
 ```
 
+Inspect a deterministic cross-source association from local event evidence:
+
+```sh
+workgraph associations explain <event-id>
+```
+
 ## Useful References
 
 - [Command reference](docs/commands.md) for CLI examples and debugging
@@ -146,8 +152,9 @@ workgraph resume workgraph
 - [Connectors guide](docs/connectors.md) for connecting Slack, Notion, Azure
   Boards, calendar, mail, and other capture sources.
 - [Roadmap](specs/roadmap.md) for current implementation direction.
-- [Init](specs/init.md), [start](specs/start.md), [today](specs/today.md), and
-  [resume](specs/resume.md) for core command contracts.
+- [Init](specs/init.md), [start](specs/start.md), [today](specs/today.md),
+  [resume](specs/resume.md), and [event associations](specs/event-associations.md)
+  for core command contracts.
 - [Connector runtime](specs/connector-runtime.md) for connector polling
   behavior.
 
