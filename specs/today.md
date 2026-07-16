@@ -16,6 +16,7 @@ When events exist, output includes:
 - `Today`
 - `Projects`
 - `Sessions`
+- a `Details: workgraph events today` hint for inspecting complete event labels
 
 When no events exist for the local day, output includes `Today` and says no activity has been captured today.
 
@@ -26,6 +27,13 @@ When no events exist for the local day, output includes `Today` and says no acti
 - file events use their captured path when no summary exists
 - git commits use the commit subject plus branch and short SHA when available
 - GitHub pull requests and issues use the title plus number and state when available
+- whitespace, including embedded newlines and tabs, is collapsed so each event occupies one physical line
+- the rendered label is capped at 160 Unicode characters including a trailing ellipsis when truncated
+
+Compaction is presentation-only. `today` does not rewrite event summaries or
+payloads in SQLite. `workgraph events today` remains the detailed inspection
+path and renders the complete stored label, with optional `--type` and `--limit`
+filters.
 
 ## Sessions
 

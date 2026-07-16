@@ -14,7 +14,10 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const todaySessionGap = 30 * time.Minute
+const (
+	todaySessionGap         = 30 * time.Minute
+	todayEventLabelMaxRunes = 160
+)
 
 // TodayConfig controls the local-day activity view.
 type TodayConfig struct {
@@ -228,9 +231,10 @@ func todayMessage(result TodayResult, location *time.Location) string {
 	for _, session := range result.Sessions {
 		lines = append(lines, fmt.Sprintf("- %s %s (%s)", sessionRange(session, location), projectLabel(session.Project), pluralize(len(session.Events), "event")))
 		for _, event := range session.Events {
-			lines = append(lines, fmt.Sprintf("  - %s %s %s", event.Timestamp.In(location).Format("15:04"), event.Type, eventLabel(event)))
+			lines = append(lines, fmt.Sprintf("  - %s %s %s", event.Timestamp.In(location).Format("15:04"), event.Type, todayEventLabel(event)))
 		}
 	}
+	lines = append(lines, "", "Details: workgraph events today")
 
 	return strings.Join(lines, "\n")
 }
@@ -293,6 +297,18 @@ func eventLabel(event TodayEvent) string {
 		return event.Path
 	}
 	return event.ID
+}
+
+func todayEventLabel(event TodayEvent) string {
+	label := strings.Join(strings.Fields(eventLabel(event)), " ")
+	if label == "" {
+		label = event.ID
+	}
+	runes := []rune(label)
+	if len(runes) <= todayEventLabelMaxRunes {
+		return label
+	}
+	return strings.TrimSpace(string(runes[:todayEventLabelMaxRunes-1])) + "…"
 }
 
 func gitCommitEventLabel(event TodayEvent) string {

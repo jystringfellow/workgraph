@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	workgraph "github.com/jystringfellow/workgraph"
 	_ "github.com/mattn/go-sqlite3"
@@ -258,6 +259,91 @@ func TestTodayDisplaysGitHubIssueEventsWithNumberAndState(t *testing.T) {
 	}
 }
 
+func TestTodayCompactsLongMultilineEventSummariesAndPointsToDetails(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	result, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir: homeDir,
+	})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	now := time.Now()
+	longSummary := "Use this after clearing context:\n\n\tInvestigate the next roadmap slice. " +
+		strings.Repeat("Preserve deterministic local evidence. ", 8) + "TAIL-MARKER"
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "slack-long-summary",
+		Source:    "slack",
+		Type:      "slack.message",
+		Timestamp: now.Add(-time.Minute),
+		Project:   "DM: Stringfellow",
+		Payload:   `{"channel_id":"D123","channel_name":"DM: Stringfellow"}`,
+		Summary:   longSummary,
+	})
+
+	today, err := workgraph.Today(workgraph.TodayConfig{
+		HomeDir:      homeDir,
+		DatabasePath: result.DatabasePath,
+		Now:          now,
+	})
+	if err != nil {
+		t.Fatalf("today failed: %v", err)
+	}
+
+	var eventLine string
+	for _, line := range strings.Split(today.Message, "\n") {
+		if strings.Contains(line, "slack.message") {
+			eventLine = line
+			break
+		}
+	}
+	if eventLine == "" {
+		t.Fatalf("expected Slack event line, got:\n%s", today.Message)
+	}
+	parts := strings.SplitN(eventLine, "slack.message ", 2)
+	if len(parts) != 2 {
+		t.Fatalf("expected Slack label in event line, got %q", eventLine)
+	}
+	if utf8.RuneCountInString(parts[1]) > 160 {
+		t.Fatalf("expected label capped at 160 characters, got %d in %q", utf8.RuneCountInString(parts[1]), parts[1])
+	}
+	if !strings.HasSuffix(parts[1], "…") {
+		t.Fatalf("expected truncated label to end with an ellipsis, got %q", parts[1])
+	}
+	if strings.Contains(today.Message, "\n\n\tInvestigate") || strings.Contains(today.Message, "TAIL-MARKER") {
+		t.Fatalf("expected multiline summary to stay within one bounded event line, got:\n%s", today.Message)
+	}
+	if !strings.Contains(today.Message, "Details: workgraph events today") {
+		t.Fatalf("expected detailed-event handoff, got:\n%s", today.Message)
+	}
+
+	db, err := sql.Open("sqlite3", result.DatabasePath)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	var storedSummary string
+	if err := db.QueryRow(`SELECT summary FROM events WHERE id = ?`, "slack-long-summary").Scan(&storedSummary); err != nil {
+		t.Fatalf("read stored summary: %v", err)
+	}
+	if storedSummary != longSummary {
+		t.Fatalf("expected today rendering to preserve stored summary, got %q", storedSummary)
+	}
+
+	details, err := workgraph.EventsToday(workgraph.EventsTodayConfig{
+		HomeDir:      homeDir,
+		DatabasePath: result.DatabasePath,
+		Type:         "slack.message",
+	})
+	if err != nil {
+		t.Fatalf("events today failed: %v", err)
+	}
+	if !strings.Contains(details.Message, "TAIL-MARKER") {
+		t.Fatalf("expected detailed events output to retain the complete summary, got:\n%s", details.Message)
+	}
+}
+
 func TestTodayShowsUnfinishedWorkWhenKnown(t *testing.T) {
 	t.Skip("TBD: today command shows unfinished work when tasks or TODOs are known")
 }
@@ -298,7 +384,7 @@ func TestTodayOutputIncludesExpectedSections(t *testing.T) {
 		t.Fatalf("workgraph today failed: %v\n%s", err, output)
 	}
 
-	for _, expected := range []string{"Today", "Projects", "Sessions", "workgraph", "today.md"} {
+	for _, expected := range []string{"Today", "Projects", "Sessions", "workgraph", "today.md", "Details: workgraph events today"} {
 		if !strings.Contains(string(output), expected) {
 			t.Fatalf("expected today output to include %q, got:\n%s", expected, output)
 		}
@@ -332,6 +418,9 @@ func TestTodayShowsEmptyStateWhenNoEventsExist(t *testing.T) {
 	}
 	if strings.Contains(today.Message, "Projects") || strings.Contains(today.Message, "Sessions") {
 		t.Fatalf("expected empty state to omit data sections, got:\n%s", today.Message)
+	}
+	if strings.Contains(today.Message, "Details:") {
+		t.Fatalf("expected empty state to omit the detail handoff, got:\n%s", today.Message)
 	}
 }
 

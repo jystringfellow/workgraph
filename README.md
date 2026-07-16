@@ -117,6 +117,14 @@ workgraph status
 workgraph stop
 ```
 
+Use `today` for a compact overview. Its event previews are single-line and
+bounded; use `events today` when you want complete labels and event IDs:
+
+```sh
+workgraph today
+workgraph events today --type slack.message --limit 10
+```
+
 For command details, debugging workflows, and local database inspection, see
 the [command reference](docs/commands.md).
 

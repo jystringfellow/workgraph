@@ -205,7 +205,10 @@ workgraph today
 ```
 
 The output is deterministic plain text. When events exist, it includes `Today`,
-`Projects`, and `Sessions` sections.
+`Projects`, and `Sessions` sections plus a detail-command hint. Event labels are
+kept to one line and at most 160 Unicode characters so long Slack messages,
+Notion content, and other captured summaries do not overwhelm the overview.
+This compaction does not change the stored event.
 
 Inspect captured events without opening SQLite:
 
@@ -214,6 +217,9 @@ workgraph events today
 workgraph events today --type notion.page_updated
 workgraph events today --type slack.message --limit 10
 ```
+
+`workgraph events today` is the drill-down view: it shows complete stored event
+labels and event IDs, and can be narrowed by event type or recent result count.
 
 Create a starter memory template for a project:
 
