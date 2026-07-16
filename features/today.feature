@@ -36,6 +36,13 @@ Scenario: Show predictable output sections
   And the output includes a "Sessions" section when sessions are known
   And the output includes unfinished work when known
 
+Scenario: Keep captured details behind a compact overview
+  Given workgraph has captured a long multiline event summary today
+  When I run "workgraph today"
+  Then the event summary is rendered on one bounded line
+  And the output points to "workgraph events today" for complete details
+  And the complete stored event remains unchanged
+
 Scenario: Keep output simple for Phase 0
   Given workgraph has captured events today
   When I run "workgraph today"

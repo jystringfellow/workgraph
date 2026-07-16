@@ -35,6 +35,7 @@ Priority labels used below:
 - [x] Git-root project inference
 - [x] Session grouping (time-based)
 - [x] Simple output (no LLM)
+- [x] Bounded one-line event previews in `today` with a detailed `events today` handoff. [spec: `specs/today.md`]
 
 ## Phase 1: Initial integrations
 - [x] Git integration (commits, branches)
