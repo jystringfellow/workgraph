@@ -301,6 +301,13 @@ Contracts:
 - `pattern_key` identifies repeatable suggestion patterns for coalescing and
   suppression when available
 - low-confidence suggestions must not trigger irreversible mutations
+- association suggestions use a canonical two-event pair as `pattern_key` and
+  store score, matched signals, reasons, sources, and the two canonical event
+  ids in `evidence_json`
+- association approval changes suggestion lifecycle only; it does not require
+  another table and never mutates source events
+- deterministic association refresh preserves non-proposed lifecycle states
+  and does not change timestamps when the evidence is unchanged
 
 ### suggestion_feedback
 

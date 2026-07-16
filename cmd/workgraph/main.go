@@ -53,6 +53,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runLLM(args[1:], stdout, stderr)
 	case "events":
 		return runEvents(args[1:], stdout, stderr)
+	case "associations":
+		return runAssociations(args[1:], stdout, stderr)
 	case "suggestions":
 		return runSuggestions(args[1:], stdout, stderr)
 	case "review":
@@ -436,6 +438,46 @@ func runEvents(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unknown events command: %s\n", args[0])
 		return 2
 	}
+}
+
+func runAssociations(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph associations <explain>")
+		return 2
+	}
+	if args[0] != "explain" {
+		fmt.Fprintf(stderr, "unknown associations command: %s\n", args[0])
+		return 2
+	}
+	return runAssociationsExplain(args[1:], stdout, stderr)
+}
+
+func runAssociationsExplain(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph associations explain <event-id>")
+		return 2
+	}
+	eventID := args[0]
+	flags := flag.NewFlagSet("associations explain "+eventID, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
+	if err := flags.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph associations explain <event-id>")
+		return 2
+	}
+	result, err := workgraph.ExplainEventAssociations(workgraph.AssociationExplainConfig{
+		HomeDir: *homeDir, DatabasePath: *databasePath, EventID: eventID,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph associations explain: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
 }
 
 func runEventsToday(args []string, stdout io.Writer, stderr io.Writer) int {

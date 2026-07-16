@@ -375,20 +375,9 @@ func ListSuggestions(config SuggestionListConfig) (SuggestionListResult, error) 
 	}
 	defer db.Close()
 
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err = db.Exec(`UPDATE suggestions
-		SET status = 'proposed', updated_at = ?, resolved_at = NULL
-		WHERE status = 'snoozed'
-		AND id IN (
-			SELECT s.id FROM suggestions s
-			JOIN suggestion_suppressions ss
-				ON ss.type = s.type AND ss.pattern_key = s.pattern_key
-			WHERE s.status = 'snoozed'
-			AND ss.until_at IS NOT NULL
-			AND ss.until_at <= ?
-		)`, now, now)
-	if err != nil {
-		return SuggestionListResult{}, fmt.Errorf("expire snoozed suggestions: %w", err)
+	now := time.Now().UTC()
+	if err := expireSnoozedSuggestions(db, now); err != nil {
+		return SuggestionListResult{}, err
 	}
 
 	status := strings.TrimSpace(config.Status)
@@ -430,6 +419,25 @@ func ListSuggestions(config SuggestionListConfig) (SuggestionListResult, error) 
 	return result, nil
 }
 
+func expireSnoozedSuggestions(db *sql.DB, now time.Time) error {
+	nowText := now.UTC().Format(time.RFC3339)
+	_, err := db.Exec(`UPDATE suggestions
+		SET status = 'proposed', updated_at = ?, resolved_at = NULL
+		WHERE status = 'snoozed'
+		AND id IN (
+			SELECT s.id FROM suggestions s
+			JOIN suggestion_suppressions ss
+				ON ss.type = s.type AND ss.pattern_key = s.pattern_key
+			WHERE s.status = 'snoozed'
+			AND ss.until_at IS NOT NULL
+			AND ss.until_at <= ?
+		)`, nowText, nowText)
+	if err != nil {
+		return fmt.Errorf("expire snoozed suggestions: %w", err)
+	}
+	return nil
+}
+
 func DismissSuggestion(config SuggestionStatusUpdate) (Suggestion, error) {
 	if strings.TrimSpace(config.ReasonCode) == "" {
 		return Suggestion{}, errors.New("dismiss reason code is required")
@@ -469,6 +477,9 @@ func ApproveSuggestion(config SuggestionStatusUpdate) (Suggestion, error) {
 		if _, err := addIgnoreName(SettingsIgnoreConfig{HomeDir: config.HomeDir, Name: suggestion.PatternKey}); err != nil {
 			return Suggestion{}, err
 		}
+	case "association":
+		// Association approval is lifecycle-only. Raw events remain the source
+		// of truth and the suggestion row is the complete derived record.
 	default:
 		return Suggestion{}, fmt.Errorf("approval is not implemented for suggestion type %q", suggestion.Type)
 	}
@@ -716,6 +727,7 @@ func evidenceSummary(evidenceJSON string) string {
 	var ev struct {
 		EventIDs []string `json:"event_ids"`
 		Paths    []string `json:"paths"`
+		Score    int      `json:"score"`
 	}
 	if err := json.Unmarshal([]byte(evidenceJSON), &ev); err != nil {
 		return ""
@@ -727,6 +739,9 @@ func evidenceSummary(evidenceJSON string) string {
 	if n := len(ev.Paths); n > 0 {
 		parts = append(parts, fmt.Sprintf("%s", pluralize(n, "path")))
 	}
+	if ev.Score > 0 {
+		parts = append(parts, fmt.Sprintf("score %d", ev.Score))
+	}
 	if len(parts) == 0 {
 		return ""
 	}
@@ -736,8 +751,12 @@ func evidenceSummary(evidenceJSON string) string {
 // evidenceDetail returns human-readable lines for the full evidence display in show output.
 func evidenceDetail(evidenceJSON string) []string {
 	var ev struct {
-		EventIDs []string `json:"event_ids"`
-		Paths    []string `json:"paths"`
+		EventIDs       []string `json:"event_ids"`
+		Paths          []string `json:"paths"`
+		Sources        []string `json:"sources"`
+		Score          int      `json:"score"`
+		MatchedSignals []string `json:"matched_signals"`
+		Reasons        []string `json:"reasons"`
 	}
 	if err := json.Unmarshal([]byte(evidenceJSON), &ev); err != nil {
 		return []string{evidenceJSON}
@@ -750,6 +769,24 @@ func evidenceDetail(evidenceJSON string) []string {
 		lines = append(lines, fmt.Sprintf("paths (%d):", len(ev.Paths)))
 		for _, p := range ev.Paths {
 			lines = append(lines, "  "+p)
+		}
+	}
+	if len(ev.Sources) > 0 {
+		lines = append(lines, "sources: "+strings.Join(ev.Sources, ", "))
+	}
+	if ev.Score > 0 {
+		lines = append(lines, fmt.Sprintf("score: %d", ev.Score))
+	}
+	if len(ev.MatchedSignals) > 0 {
+		lines = append(lines, "matched signals:")
+		for _, signal := range ev.MatchedSignals {
+			lines = append(lines, "  "+signal)
+		}
+	}
+	if len(ev.Reasons) > 0 {
+		lines = append(lines, "reasons:")
+		for _, reason := range ev.Reasons {
+			lines = append(lines, "  "+reason)
 		}
 	}
 	return lines
