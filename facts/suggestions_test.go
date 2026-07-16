@@ -2,6 +2,7 @@ package facts
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +10,155 @@ import (
 
 	workgraph "github.com/jystringfellow/workgraph"
 )
+
+func TestSuggestionsCLISnoozesAndCompletesWithAppendOnlyFeedback(t *testing.T) {
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	result, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	completed, err := workgraph.UpsertSuggestion(workgraph.SuggestionUpsert{
+		HomeDir: homeDir, DatabasePath: result.DatabasePath, Type: "ignore_name", PatternKey: "dist",
+		Title: "Ignore dist", Reason: "Repeated generated output.", Confidence: "high", Lane: "baseline",
+		EvidenceJSON: `{"paths":["/repo/dist/main.js"]}`,
+	})
+	if err != nil {
+		t.Fatalf("create completion suggestion: %v", err)
+	}
+	if _, err := workgraph.ApproveSuggestion(workgraph.SuggestionStatusUpdate{HomeDir: homeDir, DatabasePath: result.DatabasePath, ID: completed.ID}); err != nil {
+		t.Fatalf("approve suggestion: %v", err)
+	}
+
+	output := runWorkgraphCommand(t, nil, "suggestions", "complete", completed.ID, "--home", homeDir, "--database", result.DatabasePath, "--note", "The ignore rule helped")
+	if !strings.Contains(output, "Suggestion completed") || !strings.Contains(output, "status: acted") {
+		t.Fatalf("expected completion output, got:\n%s", output)
+	}
+
+	snoozed, err := workgraph.UpsertSuggestion(workgraph.SuggestionUpsert{
+		HomeDir: homeDir, DatabasePath: result.DatabasePath, Type: "ignore_path", PatternKey: "/repo/cache",
+		Title: "Ignore cache", Reason: "Repeated cache output.", Confidence: "medium", Lane: "baseline",
+		EvidenceJSON: `{"paths":["/repo/cache/item"]}`,
+	})
+	if err != nil {
+		t.Fatalf("create snooze suggestion: %v", err)
+	}
+	until := time.Now().Add(24 * time.Hour).Truncate(time.Second).Format(time.RFC3339)
+	output = runWorkgraphCommand(t, nil, "suggestions", "snooze", snoozed.ID, "--home", homeDir, "--database", result.DatabasePath, "--until", until, "--reason", "later")
+	if !strings.Contains(output, "Suggestion snoozed") || !strings.Contains(output, until) {
+		t.Fatalf("expected snooze output, got:\n%s", output)
+	}
+
+	db := openSQLite(t, result.DatabasePath)
+	var completedStatus, snoozedStatus string
+	if err := db.QueryRow(`SELECT status FROM suggestions WHERE id = ?`, completed.ID).Scan(&completedStatus); err != nil {
+		t.Fatalf("read completed status: %v", err)
+	}
+	if err := db.QueryRow(`SELECT status FROM suggestions WHERE id = ?`, snoozed.ID).Scan(&snoozedStatus); err != nil {
+		t.Fatalf("read snoozed status: %v", err)
+	}
+	var acceptedCount, completedCount, snoozedCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM suggestion_feedback WHERE suggestion_id = ? AND action = 'accepted'`, completed.ID).Scan(&acceptedCount); err != nil {
+		t.Fatalf("count accepted feedback: %v", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM suggestion_feedback WHERE suggestion_id = ? AND action = 'completed'`, completed.ID).Scan(&completedCount); err != nil {
+		t.Fatalf("count completed feedback: %v", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM suggestion_feedback WHERE suggestion_id = ? AND action = 'snoozed'`, snoozed.ID).Scan(&snoozedCount); err != nil {
+		t.Fatalf("count snoozed feedback: %v", err)
+	}
+	var storedUntil string
+	if err := db.QueryRow(`SELECT until_at FROM suggestion_suppressions WHERE type = 'ignore_path' AND pattern_key = '/repo/cache'`).Scan(&storedUntil); err != nil {
+		t.Fatalf("read snooze suppression: %v", err)
+	}
+	requestedUntil, parseErr := time.Parse(time.RFC3339, until)
+	if parseErr != nil {
+		t.Fatalf("parse requested snooze time: %v", parseErr)
+	}
+	persistedUntil, parseErr := time.Parse(time.RFC3339, storedUntil)
+	if parseErr != nil {
+		t.Fatalf("parse stored snooze time: %v", parseErr)
+	}
+	if completedStatus != "acted" || snoozedStatus != "snoozed" || acceptedCount != 1 || completedCount != 1 || snoozedCount != 1 || !persistedUntil.Equal(requestedUntil) {
+		t.Fatalf("unexpected lifecycle state: completed=%q snoozed=%q feedback=%d/%d/%d until=%q", completedStatus, snoozedStatus, acceptedCount, completedCount, snoozedCount, storedUntil)
+	}
+
+	settings, err := os.ReadFile(filepath.Join(homeDir, "settings.json"))
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	if strings.Count(string(settings), `"dist"`) != 1 {
+		t.Fatalf("expected completion not to repeat approved config mutation, got:\n%s", settings)
+	}
+}
+
+func TestSnoozeSuggestionRollsBackStateWhenFeedbackAppendFails(t *testing.T) {
+	result, err := workgraph.Init(workgraph.InitConfig{HomeDir: filepath.Join(t.TempDir(), ".workgraph")})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	suggestion, err := workgraph.UpsertSuggestion(workgraph.SuggestionUpsert{
+		DatabasePath: result.DatabasePath, Type: "ignore_path", PatternKey: "/repo/tmp", Title: "Ignore tmp",
+		Reason: "Repeated temporary output.", Confidence: "medium", Lane: "baseline", EvidenceJSON: `{"paths":["/repo/tmp/a"]}`,
+	})
+	if err != nil {
+		t.Fatalf("create suggestion: %v", err)
+	}
+	db := openSQLite(t, result.DatabasePath)
+	if _, err := db.Exec(`CREATE TRIGGER fail_snooze_feedback BEFORE INSERT ON suggestion_feedback WHEN NEW.action = 'snoozed' BEGIN SELECT RAISE(ABORT, 'forced feedback failure'); END`); err != nil {
+		t.Fatalf("create failure trigger: %v", err)
+	}
+
+	_, err = workgraph.SnoozeSuggestion(workgraph.SuggestionSnoozeUpdate{
+		DatabasePath: result.DatabasePath,
+		ID:           suggestion.ID,
+		UntilAt:      time.Now().Add(time.Hour).Format(time.RFC3339),
+		ReasonCode:   "later",
+	})
+	if err == nil {
+		t.Fatal("expected forced snooze feedback failure")
+	}
+	var status string
+	if err := db.QueryRow(`SELECT status FROM suggestions WHERE id = ?`, suggestion.ID).Scan(&status); err != nil {
+		t.Fatalf("read suggestion status: %v", err)
+	}
+	var suppressions int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM suggestion_suppressions WHERE type = 'ignore_path' AND pattern_key = '/repo/tmp'`).Scan(&suppressions); err != nil {
+		t.Fatalf("count suppressions: %v", err)
+	}
+	if status != "proposed" || suppressions != 0 {
+		t.Fatalf("expected atomic rollback, got status=%q suppressions=%d", status, suppressions)
+	}
+}
+
+func TestSuggestionCompletionRequiresApprovalWithoutAppendingFeedback(t *testing.T) {
+	result, err := workgraph.Init(workgraph.InitConfig{HomeDir: filepath.Join(t.TempDir(), ".workgraph")})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	suggestion, err := workgraph.UpsertSuggestion(workgraph.SuggestionUpsert{
+		DatabasePath: result.DatabasePath, Type: "ignore_name", PatternKey: "cache", Title: "Ignore cache",
+		Reason: "Repeated cache output.", Confidence: "medium", Lane: "baseline", EvidenceJSON: `{"paths":["/repo/cache/a"]}`,
+	})
+	if err != nil {
+		t.Fatalf("create suggestion: %v", err)
+	}
+	if _, err := workgraph.CompleteSuggestion(workgraph.SuggestionStatusUpdate{DatabasePath: result.DatabasePath, ID: suggestion.ID}); err == nil {
+		t.Fatal("expected completion before approval to fail")
+	}
+	db := openSQLite(t, result.DatabasePath)
+	var status string
+	var feedback int
+	if err := db.QueryRow(`SELECT status FROM suggestions WHERE id = ?`, suggestion.ID).Scan(&status); err != nil {
+		t.Fatalf("read suggestion status: %v", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM suggestion_feedback WHERE suggestion_id = ?`, suggestion.ID).Scan(&feedback); err != nil {
+		t.Fatalf("count suggestion feedback: %v", err)
+	}
+	if status != "proposed" || feedback != 0 {
+		t.Fatalf("expected invalid transition not to mutate state, got status=%q feedback=%d", status, feedback)
+	}
+}
 
 func TestSuggestionStorageCoalescesByTypeAndPatternKey(t *testing.T) {
 	result, err := workgraph.Init(workgraph.InitConfig{HomeDir: filepath.Join(t.TempDir(), ".workgraph")})

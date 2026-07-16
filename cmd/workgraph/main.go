@@ -55,6 +55,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runEvents(args[1:], stdout, stderr)
 	case "suggestions":
 		return runSuggestions(args[1:], stdout, stderr)
+	case "review":
+		return runReview(args[1:], stdout, stderr)
 	case "notion":
 		return runNotion(args[1:], stdout, stderr)
 	case "memory":
@@ -154,7 +156,7 @@ func runNetworkDestinations(args []string, stdout io.Writer, stderr io.Writer) i
 
 func runSuggestions(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: workgraph suggestions <list|show|approve|dismiss>")
+		fmt.Fprintln(stderr, "usage: workgraph suggestions <list|show|approve|dismiss|snooze|complete>")
 		return 2
 	}
 	switch args[0] {
@@ -166,10 +168,99 @@ func runSuggestions(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runSuggestionsApprove(args[1:], stdout, stderr)
 	case "dismiss":
 		return runSuggestionsDismiss(args[1:], stdout, stderr)
+	case "snooze":
+		return runSuggestionsSnooze(args[1:], stdout, stderr)
+	case "complete":
+		return runSuggestionsComplete(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown suggestions command: %s\n", args[0])
 		return 2
 	}
+}
+
+func runSuggestionsSnooze(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph suggestions snooze <id> --until <RFC3339>")
+		return 2
+	}
+	id := args[0]
+	flags := flag.NewFlagSet("suggestions snooze "+id, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
+	until := flags.String("until", "", "Future RFC3339 instant when the suggestion should resurface")
+	reason := flags.String("reason", "", "Optional stable snooze reason code")
+	note := flags.String("note", "", "Optional snooze note")
+	if err := flags.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 || strings.TrimSpace(*until) == "" {
+		fmt.Fprintln(stderr, "usage: workgraph suggestions snooze <id> --until <RFC3339>")
+		return 2
+	}
+	suggestion, err := workgraph.SnoozeSuggestion(workgraph.SuggestionSnoozeUpdate{
+		HomeDir: *homeDir, DatabasePath: *databasePath, ID: id, UntilAt: *until, ReasonCode: *reason, FeedbackNote: *note,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph suggestions snooze: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "Suggestion snoozed\nid: %s\nstatus: %s\nuntil: %s\n", suggestion.ID, suggestion.Status, *until)
+	return 0
+}
+
+func runSuggestionsComplete(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph suggestions complete <id>")
+		return 2
+	}
+	id := args[0]
+	flags := flag.NewFlagSet("suggestions complete "+id, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
+	note := flags.String("note", "", "Optional completion note")
+	if err := flags.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph suggestions complete <id>")
+		return 2
+	}
+	suggestion, err := workgraph.CompleteSuggestion(workgraph.SuggestionStatusUpdate{
+		HomeDir: *homeDir, DatabasePath: *databasePath, ID: id, FeedbackNote: *note,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph suggestions complete: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "Suggestion completed\nid: %s\nstatus: %s\n", suggestion.ID, suggestion.Status)
+	return 0
+}
+
+func runReview(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("review", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
+	since := flags.String("since", "week", "Review window: week, 7d, or 30d")
+	format := flags.String("format", "text", "Output format: text or json")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph review [--since week|7d|30d] [--format text|json]")
+		return 2
+	}
+	result, err := workgraph.EffectivenessReview(workgraph.EffectivenessReviewConfig{
+		HomeDir: *homeDir, DatabasePath: *databasePath, Since: *since, Format: *format,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph review: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
 }
 
 func runSuggestionsShow(args []string, stdout io.Writer, stderr io.Writer) int {

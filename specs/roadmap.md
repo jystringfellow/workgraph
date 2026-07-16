@@ -147,13 +147,13 @@ Priority labels used below:
 - [x] First deterministic suggestion producer: ignore-rule or watch-root suggestions. [P0c, spec: `specs/ignore-suggestions.md` and `specs/watch-suggestions.md`]
 - [ ] Cross-source event association baseline (deterministic IDs + local fuzzy heuristics) without LLM dependency. [P1, spec: `specs/event-associations.md` and `specs/architecture-improvements.md`]
 - [ ] Optional semantic association lane (LLM/embeddings) behind explicit opt-in and confidence gates. [P1, spec: `specs/event-associations.md` and `specs/llm-integration.md`]
-- [ ] Local personal effectiveness review (no telemetry): acceptance rate, dismissal reasons, freshness, time-to-useful-suggestion. [P0d, spec: `specs/effectiveness-review.md`]
+- [x] Local personal effectiveness review (no telemetry): deterministic current-week/7d/30d windows, acceptance/dismissal/snooze rates, dismissal reasons, connector freshness and degradation, honest insufficient-data states, time-to-useful, and equivalent text/JSON output. [P0d, spec: `specs/effectiveness-review.md`]
 
 ## Phase 5: Personalization
 - [ ] Voice/tone learning
 - [ ] Preference modeling [P1, spec: `specs/personalization-feedback.md`]
 - [ ] Decision heuristics
-- [ ] Local feedback event capture (accept, dismiss, snooze, complete) for continuous reranking. [P0b, spec: `specs/personalization-feedback.md` and `specs/db-contracts.md`]
+- [x] Local feedback event capture (accept, dismiss, snooze, complete) with append-only history and transactional suggestion lifecycle updates; ranking remains future work. [P0b, spec: `specs/personalization-feedback.md` and `specs/db-contracts.md`]
 - [ ] Per-user ranking weights learned locally with reset/export controls. [P1, spec: `specs/personalization-feedback.md`]
 - [ ] Advanced editable local preference rules in addition to interaction-driven learning. [P1, spec: `specs/personalization-feedback.md`]
 

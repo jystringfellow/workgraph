@@ -25,6 +25,22 @@ from `specs/db-contracts.md` and update the current state on the related
 `suggestions` row. Ranking weights and preference rules should come later, once
 feedback records exist.
 
+The first user-facing actions are deterministic:
+
+- `approve` moves a proposed or reviewed suggestion to `approved` and appends
+  `accepted` only after its explicit downstream action succeeds
+- `dismiss` moves a proposed, reviewed, or snoozed suggestion to `dismissed` and
+  appends `dismissed` with a stable reason code
+- `snooze` moves a proposed or reviewed suggestion to `snoozed`, appends
+  `snoozed`, and upserts a matching suppression with a future RFC3339 `until_at`
+- `complete` moves only an approved suggestion to `acted` and appends
+  `completed`; completion records that the approved action proved useful and
+  does not repeat the downstream mutation
+
+The suggestion state change, feedback append, and snooze suppression update are
+one SQLite transaction. Feedback history is never rewritten when state changes.
+Expired snoozes may resurface as `proposed`; the original snooze feedback remains.
+
 ## Local Ranking Model
 
 A lightweight local reranker should combine:

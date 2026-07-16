@@ -329,6 +329,10 @@ Contracts:
 - `reason_code` is stable when present so review metrics can group it
 - feedback events are append-only; updates to current suggestion state happen
   on the suggestion row
+- a lifecycle state update and its feedback append happen in one transaction;
+  snooze suppression changes join that same transaction
+- `accepted` is emitted by approval, while `completed` moves an already approved
+  suggestion to `acted` without repeating the approved mutation
 
 ### suggestion_suppressions
 
