@@ -210,6 +210,15 @@ kept to one line and at most 160 Unicode characters so long Slack messages,
 Notion content, and other captured summaries do not overwhelm the overview.
 This compaction does not change the stored event.
 
+When at least one high-confidence (score 80-100) deterministic association
+qualifies, the output also includes a compact `Associations` section, additive
+to the raw events and sessions above it. Each rendered pair shows its cited
+event ids, score, confidence, lifecycle state, and strongest matched reason.
+At most 50 of today's most recent events are evaluated as association targets
+and at most 5 pairs are rendered; dismissed, snoozed, and suppressed
+associations are hidden. See the Associations section below for the shared
+scoring and lifecycle contract.
+
 Inspect captured events without opening SQLite:
 
 ```sh
@@ -254,6 +263,10 @@ insufficient evidence succeeds with an honest empty result.
 High- and medium-confidence pairs are coalesced into the local suggestion
 store. Dismissal and snooze state survive re-evaluation. Association approval is
 lifecycle-only and never changes or deletes raw events. No LLM is used.
+
+`workgraph today` reuses this same evaluator to surface a compact,
+high-confidence-only `Associations` section, but it never writes new
+suggestion rows itself; only `associations explain` coalesces new rows.
 
 ## Suggestions
 

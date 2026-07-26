@@ -48,3 +48,57 @@ Scenario: Keep output simple for Phase 0
   When I run "workgraph today"
   Then the output is plain text
   And the output does not require an LLM
+
+Scenario: Show high-confidence association context
+  Given workgraph has captured two events today that share an exact URL match
+  When I run "workgraph today"
+  Then the output includes an "Associations" section
+  And the association shows its score, confidence, lifecycle state, and strongest reason
+
+Scenario: Exclude medium-confidence associations from today
+  Given workgraph has captured two events today that only reach a medium confidence score
+  When I run "workgraph today"
+  Then the output does not include an "Associations" section
+
+Scenario: Coalesce a canonical pair when both events are today
+  Given workgraph has captured two high-confidence associated events today
+  When I run "workgraph today"
+  Then the pair is rendered exactly once
+
+Scenario: Hide dismissed, snoozed, and suppressed associations
+  Given a high-confidence association has been dismissed
+  When I run "workgraph today"
+  Then the output does not include an "Associations" section
+  Given a high-confidence association has been snoozed
+  When I run "workgraph today"
+  Then the output does not include an "Associations" section
+  Given a high-confidence association pattern has been suppressed
+  When I run "workgraph today"
+  Then the output does not include an "Associations" section
+
+Scenario: Keep approved and acted associations visible
+  Given a high-confidence association has been approved
+  When I run "workgraph today"
+  Then the output shows the association with an "approved" state
+  Given that association has been marked acted
+  When I run "workgraph today"
+  Then the output shows the association with an "acted" state
+
+Scenario: Show a related event from outside today without listing it in raw events
+  Given a today event is a high-confidence match for an event from three days ago
+  When I run "workgraph today"
+  Then the "Associations" section includes the pair
+  And the older event does not appear in the "Sessions" section
+
+Scenario: Keep association evaluation and rendering bounded
+  Given more than 50 candidate events exist today
+  When I run "workgraph today"
+  Then only the most recent 50 events are evaluated as association targets
+  Given more than 5 high-confidence pairs qualify today
+  When I run "workgraph today"
+  Then at most 5 associations are rendered
+
+Scenario: Never mutate raw events while computing association context
+  Given workgraph has captured events today with a qualifying association
+  When I run "workgraph today"
+  Then the stored event rows remain unchanged
