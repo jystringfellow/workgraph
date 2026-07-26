@@ -16,9 +16,11 @@ When events exist, output includes:
 - `Today`
 - `Projects`
 - `Sessions`
+- `Associations`, only when at least one high-confidence deterministic
+  association qualifies (see Association Context below)
 - a `Details: workgraph events today` hint for inspecting complete event labels
 
-When no events exist for the local day, output includes `Today` and says no activity has been captured today.
+When no events exist for the local day, output includes `Today` and says no activity has been captured today. No `Associations` heading is shown in that case.
 
 ## Event Labels
 
@@ -63,7 +65,37 @@ Suggestion rendering and suppression behavior should align with
 
 ## Association Context
 
-The first deterministic association slice is inspected through
-`workgraph associations explain <event-id>`. It does not add association rows to
-`today`; this keeps raw event evidence and sessions primary until a separate fact
-defines a compact high-confidence presentation.
+`today` includes a compact, additive `Associations` section built from the same
+deterministic baseline evaluator used by `workgraph associations explain
+<event-id>`. It supplements raw events and sessions; it never replaces or
+regroups them, and the related event outside today is never added to the
+`Events`/`Sessions` output.
+
+Visibility and bounds:
+
+- only score 80-100 (`high` confidence), lane `baseline`, type `association`
+  pairs qualify
+- at least one cited event must belong to the current local day; the other
+  cited event may fall outside today as long as it remains inside the
+  producer's existing seven-day candidate window
+- dismissed, snoozed, and explicitly suppressed associations are hidden;
+  proposed, reviewed, approved, and acted associations remain visible
+- the same canonical pair renders at most once even when both cited events
+  occurred today
+- `today` evaluates at most the 50 most recent events from today as
+  association targets, preserves the existing 200-candidate window per
+  evaluated target, and renders at most 5 association pairs
+- rendered associations are ordered by score descending, then by the most
+  recent cited event timestamp descending, then by canonical pattern key
+  ascending
+- each rendered association shows only its cited event ids, score,
+  confidence, lifecycle state, and the single strongest matched reason
+- no `Associations` heading is shown when no qualifying context exists
+
+`today` is a read-only consumer of the shared suggestion substrate: it never
+inserts or updates `suggestions` rows itself (only `associations explain`
+coalesces new rows), and it never rewrites or deletes raw events. It does call
+the same snoozed-suggestion expiration step already used elsewhere in the
+substrate, so a snooze whose window has passed is treated as `proposed` again.
+See `specs/event-associations.md` for the full evaluator, scoring, and
+lifecycle contract.

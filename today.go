@@ -17,6 +17,18 @@ import (
 const (
 	todaySessionGap         = 30 * time.Minute
 	todayEventLabelMaxRunes = 160
+
+	// todayAssociationTargetLimit bounds how many of today's most recent
+	// events are evaluated as association targets, matching the requirement
+	// that today's association context is a small supplement, not a broad
+	// re-scan of stored evidence.
+	todayAssociationTargetLimit = 50
+	// todayAssociationRenderLimit bounds how many coalesced association
+	// pairs are rendered in the compact today section.
+	todayAssociationRenderLimit = 5
+	// todayAssociationMinimumScore restricts today's association context to
+	// the high-confidence baseline tier only (score 80 through 100).
+	todayAssociationMinimumScore = 80
 )
 
 // TodayConfig controls the local-day activity view.
@@ -28,15 +40,17 @@ type TodayConfig struct {
 
 // TodayResult describes today's activity in deterministic plain text.
 type TodayResult struct {
-	Date     string
-	Events   []TodayEvent
-	Sessions []TodaySession
-	Message  string
+	Date         string
+	Events       []TodayEvent
+	Sessions     []TodaySession
+	Associations []TodayAssociation
+	Message      string
 }
 
 // TodayEvent is one stored event included in the local-day activity view.
 type TodayEvent struct {
 	ID        string
+	Source    string
 	Type      string
 	Timestamp time.Time
 	Project   string
@@ -53,8 +67,22 @@ type TodaySession struct {
 	Events    []TodayEvent
 }
 
+// TodayAssociation is a compact, high-confidence deterministic baseline
+// association surfaced alongside today's raw events and sessions. It
+// supplements that primary evidence and never regroups or replaces it.
+type TodayAssociation struct {
+	EventIDs     []string
+	PatternKey   string
+	SuggestionID string
+	Score        int
+	Confidence   string
+	Status       string
+	Reason       string
+}
+
 type storedTodayEvent struct {
 	ID          string
+	Source      string
 	Type        string
 	Timestamp   string
 	Project     sql.NullString
@@ -115,6 +143,11 @@ func Today(config TodayConfig) (TodayResult, error) {
 		Events: events,
 	}
 	result.Sessions = groupTodaySessions(events)
+	associations, err := loadTodayAssociations(db, events, now.UTC())
+	if err != nil {
+		return TodayResult{}, err
+	}
+	result.Associations = associations
 	result.Message = todayMessage(result, location)
 
 	return result, nil
@@ -126,7 +159,7 @@ func loadTodayEvents(db *sql.DB, now time.Time) ([]TodayEvent, error) {
 	dayEnd := dayStart.AddDate(0, 0, 1)
 
 	rows, err := db.Query(
-		`SELECT id, type, timestamp, project, summary, payload_json FROM events WHERE timestamp >= ? AND timestamp < ? ORDER BY timestamp ASC, id ASC`,
+		`SELECT id, source, type, timestamp, project, summary, payload_json FROM events WHERE timestamp >= ? AND timestamp < ? ORDER BY timestamp ASC, id ASC`,
 		dayStart.UTC().Format(time.RFC3339),
 		dayEnd.UTC().Format(time.RFC3339),
 	)
@@ -138,7 +171,7 @@ func loadTodayEvents(db *sql.DB, now time.Time) ([]TodayEvent, error) {
 	var events []TodayEvent
 	for rows.Next() {
 		var stored storedTodayEvent
-		if err := rows.Scan(&stored.ID, &stored.Type, &stored.Timestamp, &stored.Project, &stored.Summary, &stored.PayloadJSON); err != nil {
+		if err := rows.Scan(&stored.ID, &stored.Source, &stored.Type, &stored.Timestamp, &stored.Project, &stored.Summary, &stored.PayloadJSON); err != nil {
 			return nil, fmt.Errorf("scan event: %w", err)
 		}
 
@@ -149,6 +182,7 @@ func loadTodayEvents(db *sql.DB, now time.Time) ([]TodayEvent, error) {
 
 		event := TodayEvent{
 			ID:        stored.ID,
+			Source:    stored.Source,
 			Type:      stored.Type,
 			Timestamp: timestamp.In(location),
 			Path:      eventPath(stored.PayloadJSON),
@@ -208,6 +242,154 @@ func newTodaySession(event TodayEvent) TodaySession {
 	}
 }
 
+// loadTodayAssociations evaluates a small, bounded set of high-confidence
+// deterministic baseline associations to supplement today's raw events and
+// sessions. It reuses the same candidate window and scoring evaluator as
+// `workgraph associations explain`, but only reads existing suggestion
+// lifecycle state; it never coalesces or writes new association suggestion
+// rows. This keeps repeated `today` invocations free of uncontrolled writes.
+//
+// Only stored snoozed suggestions are refreshed via expireSnoozedSuggestions,
+// matching the read-path behavior already used by ListSuggestions and
+// ExplainEventAssociations.
+func loadTodayAssociations(db *sql.DB, events []TodayEvent, now time.Time) ([]TodayAssociation, error) {
+	if len(events) == 0 {
+		return nil, nil
+	}
+	if err := expireSnoozedSuggestions(db, now); err != nil {
+		return nil, err
+	}
+
+	targets := events
+	if len(targets) > todayAssociationTargetLimit {
+		targets = targets[len(targets)-todayAssociationTargetLimit:]
+	}
+
+	type candidateAssociation struct {
+		association TodayAssociation
+		recency     time.Time
+	}
+	found := map[string]candidateAssociation{}
+
+	for _, event := range targets {
+		target := AssociationEvent{
+			ID:        event.ID,
+			Source:    event.Source,
+			Type:      event.Type,
+			Timestamp: event.Timestamp.UTC(),
+			Project:   event.Project,
+			Summary:   event.Summary,
+			Payload:   event.Payload,
+		}
+		candidates, err := loadAssociationCandidates(db, target)
+		if err != nil {
+			return nil, err
+		}
+		for _, candidateEvent := range candidates {
+			candidate, ok, err := evaluateAssociationPair(target, candidateEvent)
+			if err != nil {
+				return nil, err
+			}
+			if !ok || candidate.Score < todayAssociationMinimumScore {
+				continue
+			}
+			if _, exists := found[candidate.PatternKey]; exists {
+				continue
+			}
+
+			status, err := todayAssociationLifecycleStatus(db, candidate.PatternKey)
+			if err != nil {
+				return nil, err
+			}
+			if todayAssociationStatusHidden(status) {
+				continue
+			}
+			suppressed, err := associationPatternSuppressed(db, candidate.PatternKey, now)
+			if err != nil {
+				return nil, err
+			}
+			if suppressed {
+				continue
+			}
+
+			recency := target.Timestamp
+			if candidateEvent.Timestamp.After(recency) {
+				recency = candidateEvent.Timestamp
+			}
+			reason := ""
+			if len(candidate.Reasons) > 0 {
+				reason = candidate.Reasons[0]
+			}
+			found[candidate.PatternKey] = candidateAssociation{
+				association: TodayAssociation{
+					EventIDs:     candidate.EventIDs,
+					PatternKey:   candidate.PatternKey,
+					SuggestionID: candidate.SuggestionID,
+					Score:        candidate.Score,
+					Confidence:   candidate.Confidence,
+					Status:       status,
+					Reason:       reason,
+				},
+				recency: recency,
+			}
+		}
+	}
+
+	if len(found) == 0 {
+		return nil, nil
+	}
+
+	ranked := make([]candidateAssociation, 0, len(found))
+	for _, entry := range found {
+		ranked = append(ranked, entry)
+	}
+	sort.Slice(ranked, func(i, j int) bool {
+		left, right := ranked[i], ranked[j]
+		if left.association.Score != right.association.Score {
+			return left.association.Score > right.association.Score
+		}
+		if !left.recency.Equal(right.recency) {
+			return left.recency.After(right.recency)
+		}
+		return left.association.PatternKey < right.association.PatternKey
+	})
+	if len(ranked) > todayAssociationRenderLimit {
+		ranked = ranked[:todayAssociationRenderLimit]
+	}
+
+	associations := make([]TodayAssociation, len(ranked))
+	for i, entry := range ranked {
+		associations[i] = entry.association
+	}
+	return associations, nil
+}
+
+// todayAssociationLifecycleStatus reports the current suggestion lifecycle
+// state for a candidate association pattern. A pattern with no stored
+// suggestion row yet (never inspected through `associations explain`)
+// defaults to "proposed" without writing anything.
+func todayAssociationLifecycleStatus(db *sql.DB, patternKey string) (string, error) {
+	suggestion, err := readSuggestionByPattern(db, "association", patternKey)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "proposed", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return suggestion.Status, nil
+}
+
+// todayAssociationStatusHidden hides dismissed and snoozed associations.
+// Proposed, reviewed, approved, and acted associations remain visible.
+func todayAssociationStatusHidden(status string) bool {
+	switch status {
+	case "dismissed", "snoozed":
+		return true
+	default:
+		return false
+	}
+}
+
 func todayMessage(result TodayResult, location *time.Location) string {
 	lines := []string{
 		"Today",
@@ -234,6 +416,17 @@ func todayMessage(result TodayResult, location *time.Location) string {
 			lines = append(lines, fmt.Sprintf("  - %s %s %s", event.Timestamp.In(location).Format("15:04"), event.Type, todayEventLabel(event)))
 		}
 	}
+
+	if len(result.Associations) > 0 {
+		lines = append(lines, "", "Associations")
+		for _, association := range result.Associations {
+			lines = append(lines, fmt.Sprintf("- %s", strings.Join(association.EventIDs, ", ")))
+			lines = append(lines, fmt.Sprintf("  score: %d (%s)", association.Score, association.Confidence))
+			lines = append(lines, "  state: "+association.Status)
+			lines = append(lines, "  reason: "+association.Reason)
+		}
+	}
+
 	lines = append(lines, "", "Details: workgraph events today")
 
 	return strings.Join(lines, "\n")

@@ -157,9 +157,55 @@ refreshed evidence deterministic across runs.
 
 ## Today Visibility
 
-The first slice does not add association output to `workgraph today`. Raw events
-and existing sessions remain the primary evidence there. A later fact may add a
-small high-confidence section after the inspection workflow has proved useful.
+`workgraph today` includes a compact `Associations` section that supplements,
+and never replaces or regroups, raw events and sessions.
+
+`today` evaluates association context with the same deterministic evaluator
+used by `associations explain`, but it is a read-only consumer of the
+suggestion substrate:
+
+- it evaluates at most the 50 most recent events from today as targets, each
+  bounded by the existing 200-candidate seven-day window
+- it computes candidate scores and canonical pattern keys in memory
+- it reads any existing suggestion row for a pattern key to determine
+  lifecycle state, defaulting to `proposed` when no row exists yet
+- it does not insert or update `suggestions` rows; only `associations explain`
+  coalesces new rows into durable storage
+
+The one exception is snoozed-suggestion expiration: `today` calls the same
+`expireSnoozedSuggestions` step already used by `associations explain` and
+`suggestions list`, so a snoozed association whose `until_at` has passed is
+treated as `proposed` again. This is existing shared substrate behavior, not a
+new write path specific to associations.
+
+Only high-confidence pairs (score 80 through 100, lane `baseline`, type
+`association`) are shown. Dismissed and snoozed associations, and associations
+whose pattern is explicitly suppressed, are hidden. Proposed, reviewed,
+approved, and acted associations remain visible: approval and completion are
+lifecycle-only per the existing contract, and hiding a confirmed association
+would remove context the user already found useful.
+
+An association is included only when at least one of its two cited events
+belongs to the current local day. The other cited event may fall outside
+today as long as it is inside the association producer's existing seven-day
+candidate window; it is not added to the raw `Events`/`Sessions` output.
+
+The same canonical pair is rendered at most once even when both cited events
+occurred today and each could independently surface it as an evaluation
+target. Rendered associations are ordered by score descending, then by the
+most recent cited event timestamp descending, then by canonical pattern key
+ascending, and are capped at 5 rendered pairs.
+
+Each rendered association shows only its cited event ids, score, confidence,
+lifecycle state, and the single strongest matched reason (the first entry in
+the scoring-table-ordered reasons list). No `Associations` heading is shown
+when there is no qualifying context, including on a day with no captured
+events.
+
+Association evaluation errors are limited to the same database-query error
+class already used by event loading; they propagate like any other `today`
+query failure. Malformed candidate timestamps are ignored exactly as in
+`associations explain`.
 
 ## Semantic Lane (Optional Future)
 

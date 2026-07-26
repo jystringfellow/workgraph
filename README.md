@@ -118,7 +118,9 @@ workgraph stop
 ```
 
 Use `today` for a compact overview. Its event previews are single-line and
-bounded; use `events today` when you want complete labels and event IDs:
+bounded, and it also surfaces a small `Associations` section for any
+high-confidence, deterministic cross-source matches among today's activity.
+Use `events today` when you want complete labels and event IDs:
 
 ```sh
 workgraph today

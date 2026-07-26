@@ -147,6 +147,7 @@ Priority labels used below:
 - [x] Suggestion snooze expiration: resurface snoozed suggestions when their scheduled `until_at` time passes. [P0b]
 - [x] First deterministic suggestion producer: ignore-rule or watch-root suggestions. [P0c, spec: `specs/ignore-suggestions.md` and `specs/watch-suggestions.md`]
 - [x] Cross-source event association baseline (deterministic IDs + local fuzzy heuristics) without LLM dependency. [P1, spec: `specs/event-associations.md` and `specs/architecture-improvements.md`]
+- [x] Compact high-confidence deterministic association context in `workgraph today`, additive to raw events and sessions. [P1, spec: `specs/event-associations.md` and `specs/today.md`]
 - [ ] Optional semantic association lane (LLM/embeddings) behind explicit opt-in and confidence gates. [P1, spec: `specs/event-associations.md` and `specs/llm-integration.md`]
 - [x] Local personal effectiveness review (no telemetry): deterministic current-week/7d/30d windows, acceptance/dismissal/snooze rates, dismissal reasons, connector freshness and degradation, honest insufficient-data states, time-to-useful, and equivalent text/JSON output. [P0d, spec: `specs/effectiveness-review.md`]
 
