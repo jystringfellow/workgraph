@@ -32,6 +32,27 @@ go run ./cmd/workgraph init
 go run ./cmd/workgraph start
 ```
 
+## Built-in Help
+
+List all public commands:
+
+```sh
+workgraph help
+workgraph --help
+```
+
+Get usage, a description, and available options for any command. Command groups
+also list their immediate subcommands:
+
+```sh
+workgraph help connectors
+workgraph help connectors poll
+workgraph connectors poll --help
+```
+
+`help`, `-h`, and `--help` are read-only and exit successfully. They can be
+placed after a public command path without running that command.
+
 ## Init
 
 Initialize local state:

@@ -130,6 +130,15 @@ workgraph events today --type slack.message --limit 10
 For command details, debugging workflows, and local database inspection, see
 the [command reference](docs/commands.md).
 
+Built-in help lists available commands and gives usage and options at every
+command level:
+
+```sh
+workgraph help
+workgraph help connectors poll
+workgraph connectors poll --help
+```
+
 ## Memory
 
 Project memory is user-owned Markdown under

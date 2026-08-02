@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -21,6 +20,19 @@ func main() {
 }
 
 func run(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "help" {
+		if len(args) == 2 && (args[1] == "-h" || args[1] == "--help") {
+			return runHelp([]string{"help"}, false, stdout, stderr)
+		}
+		return runHelp(args[1:], false, stdout, stderr)
+	}
+	if len(args) == 1 && isHelpArgument(args[0]) {
+		return runHelp(nil, false, stdout, stderr)
+	}
+	if len(args) > 1 && isHelpArgument(args[len(args)-1]) {
+		return runHelp(args[:len(args)-1], true, stdout, stderr)
+	}
+
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "usage: workgraph <command>")
 		return 2
