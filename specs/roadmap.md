@@ -18,6 +18,7 @@ Priority labels used below:
 - `P2`: later
 
 ## Phase 0: Core loop (weekend V1)
+- [x] Discoverable root and per-command CLI help. [spec: `specs/cli-help.md`]
 - [x] CLI: workgraph init
 - [x] CLI: workgraph start
 - [x] Foreground file capture
