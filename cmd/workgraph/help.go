@@ -4,6 +4,7 @@ import (
 	stdflag "flag"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 )
@@ -22,6 +23,12 @@ type helpTopic struct {
 }
 
 var helpTopics = map[string]helpTopic{
+	"ai":                      {"workgraph ai <subcommand>", "Capture and resume durable local CLI AI session context."},
+	"ai checkpoint":           {"workgraph ai checkpoint [session-id] --stdin [options]", "Append a validated structured checkpoint to an AI session."},
+	"ai resume":               {"workgraph ai resume <session-id> [options]", "Launch a verified native codex, claude, copilot, or opencode session as a linked lifetime."},
+	"ai run":                  {"workgraph ai run [options] -- <agent-command>", "Launch and record one CLI AI child-process lifetime; native adapters: codex, claude, copilot, opencode."},
+	"ai sessions":             {"workgraph ai sessions [options]", "List known local AI sessions and their derived status."},
+	"ai show":                 {"workgraph ai show <session-id> [options]", "Render stored restart context for one AI session."},
 	"associations":            {"workgraph associations <subcommand>", "Inspect deterministic relationships between captured events."},
 	"associations explain":    {"workgraph associations explain <event-id> [options]", "Explain the evidence and score for an event's associations."},
 	"azure":                   {"workgraph azure <subcommand>", "Connect and capture from Azure services."},
@@ -255,6 +262,8 @@ func helpOptionArgs(key string) []string {
 
 func runCommandForOptionHelp(args []string, stdout io.Writer, stderr io.Writer) int {
 	switch args[0] {
+	case "ai":
+		return runAI(args[1:], os.Stdin, stdout, stderr)
 	case "init":
 		return runInit(args[1:], stdout, stderr)
 	case "settings":

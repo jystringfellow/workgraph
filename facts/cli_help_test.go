@@ -8,6 +8,12 @@ import (
 )
 
 var publicCommandPaths = []string{
+	"ai",
+	"ai checkpoint",
+	"ai resume",
+	"ai run",
+	"ai sessions",
+	"ai show",
 	"associations",
 	"associations explain",
 	"azure",
@@ -151,6 +157,21 @@ func TestEveryPublicCommandHasHelp(t *testing.T) {
 				t.Fatalf("workgraph help %s did not list leaf-command options:\n%s", commandPath, firstOutput)
 			}
 		})
+	}
+}
+
+func TestAIHelpNamesVerifiedNativeAdapters(t *testing.T) {
+	for _, path := range []string{"ai run", "ai resume"} {
+		output := runWorkgraphCommand(t, nil, append([]string{"help"}, strings.Fields(path)...)...)
+		for _, tool := range []string{"codex", "claude", "copilot", "opencode"} {
+			if !strings.Contains(output, tool) {
+				t.Fatalf("help for %q does not name verified adapter %q:\n%s", path, tool, output)
+			}
+		}
+	}
+	resumeOutput := runWorkgraphCommand(t, nil, "help", "ai", "resume")
+	if !strings.Contains(resumeOutput, "Launch a verified native") {
+		t.Fatalf("AI resume help did not make process launch explicit:\n%s", resumeOutput)
 	}
 }
 

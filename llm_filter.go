@@ -46,10 +46,13 @@ func filterHostedLLMMessages(messages []openAICompatibleMessage) (llmOutboundFil
 func llmOutboundRedactionPatterns() ([]llmRedactionPattern, int, error) {
 	patterns := []llmRedactionPattern{
 		mustLLMRedactionPattern("github-token", `\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}\b`),
+		mustLLMRedactionPattern("github-fine-grained-token", `\bgithub_pat_[A-Za-z0-9_]{20,}\b`),
 		mustLLMRedactionPattern("slack-token", `\bxox(?:[abprs]|c)-[A-Za-z0-9-]{10,}\b`),
 		mustLLMRedactionPattern("notion-token", `\b(?:secret|ntn)_[A-Za-z0-9_]{20,}\b`),
 		mustLLMRedactionPattern("aws-access-key", `\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`),
 		mustLLMRedactionPattern("bearer-token", `(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{20,}`),
+		mustLLMRedactionPattern("openai-token", `\bsk-[A-Za-z0-9_-]{20,}\b`),
+		mustLLMRedactionPattern("private-key-header", `-----BEGIN [A-Z ]*PRIVATE KEY-----`),
 		mustLLMRedactionPattern("private-key", `-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----`),
 	}
 	managed, _, present, err := readManagedSettings()
