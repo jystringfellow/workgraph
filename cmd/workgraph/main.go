@@ -29,7 +29,7 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 1 && isHelpArgument(args[0]) {
 		return runHelp(nil, false, stdout, stderr)
 	}
-	if len(args) > 1 && isHelpArgument(args[len(args)-1]) {
+	if len(args) > 1 && isHelpArgument(args[len(args)-1]) && !isAIRunPassthrough(args) {
 		return runHelp(args[:len(args)-1], true, stdout, stderr)
 	}
 
@@ -39,6 +39,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	switch args[0] {
+	case "ai":
+		return runAI(args[1:], os.Stdin, stdout, stderr)
 	case "init":
 		return runInit(args[1:], stdout, stderr)
 	case "settings":
@@ -91,6 +93,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runCaptureWorker(args[1:], stderr)
 	case "__capture-supervisor":
 		return runCaptureSupervisor(args[1:], stderr)
+	case "__ai-native-session":
+		return runAINativeSessionHook(args[1:], os.Stdin, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command: %s\n", args[0])
 		return 2
