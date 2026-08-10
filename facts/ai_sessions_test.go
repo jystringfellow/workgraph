@@ -691,6 +691,335 @@ func TestAISessionsListsEndedSessionsFromEvents(t *testing.T) {
 	}
 }
 
+func TestAIArchiveAndUnarchivePreserveSessionEvidence(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init workgraph: %v", err)
+	}
+	workingDir := t.TempDir()
+	toolPath := writeAIFactExecutable(t, workingDir, "codex", "exit 0")
+	sessionID := "00000000-0000-4000-8000-000000000090"
+	insertAINativeFactSession(t, initialized.DatabasePath, sessionID, "codex", toolPath, "019c547f-d3a6-733d-8471-a0a043354c90", "", workingDir, "2026-08-03T12:00:00Z", true)
+
+	archiveOutput, err := runWorkgraphCommandAllowError(nil,
+		"ai", "archive", "--home", homeDir, "--database", initialized.DatabasePath, sessionID,
+	)
+	if err != nil || !strings.Contains(archiveOutput, "AI session archived\nSession: "+sessionID+"\nEvent: ai.session_archived:"+sessionID+":") {
+		t.Fatalf("archive AI session: %v\n%s", err, archiveOutput)
+	}
+	defaultOutput := runWorkgraphCommand(t, nil, "ai", "sessions", "--home", homeDir, "--database", initialized.DatabasePath)
+	if strings.Contains(defaultOutput, sessionID) || defaultOutput != "No AI sessions matched.\n" {
+		t.Fatalf("archived session remained in default list:\n%s", defaultOutput)
+	}
+	allOutput := runWorkgraphCommand(t, nil, "ai", "sessions", "--all", "--home", homeDir, "--database", initialized.DatabasePath)
+	if !strings.Contains(allOutput, sessionID) || !strings.Contains(allOutput, "archived: yes") {
+		t.Fatalf("archived session missing from all list:\n%s", allOutput)
+	}
+	showOutput := runWorkgraphCommand(t, nil, "ai", "show", "--home", homeDir, "--database", initialized.DatabasePath, sessionID)
+	if !strings.Contains(showOutput, "Archived: yes") {
+		t.Fatalf("show did not render archive state:\n%s", showOutput)
+	}
+	if resumeOutput, err := runWorkgraphCommandAllowError(nil, "ai", "resume", "--home", homeDir, "--database", initialized.DatabasePath, sessionID); err != nil {
+		t.Fatalf("archived session was not resumable: %v\n%s", err, resumeOutput)
+	}
+
+	repeatOutput := runWorkgraphCommand(t, nil, "ai", "archive", "--home", homeDir, "--database", initialized.DatabasePath, sessionID)
+	if repeatOutput != "AI session already archived\nSession: "+sessionID+"\n" {
+		t.Fatalf("unexpected idempotent archive receipt:\n%s", repeatOutput)
+	}
+
+	unarchiveOutput := runWorkgraphCommand(t, nil, "ai", "unarchive", "--home", homeDir, "--database", initialized.DatabasePath, sessionID)
+	if !strings.Contains(unarchiveOutput, "AI session unarchived\nSession: "+sessionID+"\nEvent: ai.session_unarchived:"+sessionID+":") {
+		t.Fatalf("unexpected unarchive receipt:\n%s", unarchiveOutput)
+	}
+	restoredOutput := runWorkgraphCommand(t, nil, "ai", "sessions", "--home", homeDir, "--database", initialized.DatabasePath)
+	if !strings.Contains(restoredOutput, sessionID) || !strings.Contains(restoredOutput, "archived: no") {
+		t.Fatalf("unarchived session missing from default list:\n%s", restoredOutput)
+	}
+
+	db, err := sql.Open("sqlite3", initialized.DatabasePath)
+	if err != nil {
+		t.Fatalf("open event database: %v", err)
+	}
+	defer db.Close()
+	var archiveCount, unarchiveCount, lifecycleCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type = 'ai.session_archived' AND json_extract(payload_json, '$.session_id') = ?`, sessionID).Scan(&archiveCount); err != nil {
+		t.Fatalf("count archive events: %v", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type = 'ai.session_unarchived' AND json_extract(payload_json, '$.session_id') = ?`, sessionID).Scan(&unarchiveCount); err != nil {
+		t.Fatalf("count unarchive events: %v", err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type IN ('ai.session_started', 'ai.session_ended') AND json_extract(payload_json, '$.session_id') = ?`, sessionID).Scan(&lifecycleCount); err != nil {
+		t.Fatalf("count preserved lifecycle events: %v", err)
+	}
+	if archiveCount != 1 || unarchiveCount != 1 || lifecycleCount != 2 {
+		t.Fatalf("unexpected archive history: archive=%d unarchive=%d lifecycle=%d", archiveCount, unarchiveCount, lifecycleCount)
+	}
+	var archivePayload string
+	if err := db.QueryRow(`SELECT payload_json FROM events WHERE type = 'ai.session_archived' AND json_extract(payload_json, '$.session_id') = ?`, sessionID).Scan(&archivePayload); err != nil {
+		t.Fatalf("read archive payload: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(archivePayload), &payload); err != nil || len(payload) != 2 || payload["session_id"] != sessionID || payload["schema_version"] != float64(1) {
+		t.Fatalf("unexpected archive payload: %v %#v", err, payload)
+	}
+}
+
+func TestAISessionsFiltersStatusAndLimitsNewestMatches(t *testing.T) {
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init workgraph: %v", err)
+	}
+	workingDir := t.TempDir()
+	toolPath := filepath.Join(workingDir, "codex")
+	endedIDs := []string{
+		"00000000-0000-4000-8000-000000000101",
+		"00000000-0000-4000-8000-000000000102",
+		"00000000-0000-4000-8000-000000000103",
+	}
+	for index, sessionID := range endedIDs {
+		startedAt := fmt.Sprintf("2026-08-03T%02d:00:00Z", 12+index)
+		insertAINativeFactSession(t, initialized.DatabasePath, sessionID, "codex", toolPath, "", "", workingDir, startedAt, true)
+	}
+	nonEndedID := "00000000-0000-4000-8000-000000000104"
+	insertAINativeFactSession(t, initialized.DatabasePath, nonEndedID, "codex", toolPath, "", "", workingDir, "2026-08-03T15:00:00Z", false)
+	runWorkgraphCommand(t, nil, "ai", "archive", "--home", homeDir, "--database", initialized.DatabasePath, endedIDs[2])
+
+	defaultOutput := runWorkgraphCommand(t, nil,
+		"ai", "sessions", "--status", "ended", "--limit", "2", "--home", homeDir, "--database", initialized.DatabasePath,
+	)
+	if strings.Contains(defaultOutput, endedIDs[2]) || strings.Contains(defaultOutput, nonEndedID) || !strings.Contains(defaultOutput, endedIDs[1]) || !strings.Contains(defaultOutput, endedIDs[0]) {
+		t.Fatalf("default status and limit filter returned wrong sessions:\n%s", defaultOutput)
+	}
+	if strings.Index(defaultOutput, endedIDs[1]) > strings.Index(defaultOutput, endedIDs[0]) {
+		t.Fatalf("limited sessions were not newest first:\n%s", defaultOutput)
+	}
+
+	allOutput := runWorkgraphCommand(t, nil,
+		"ai", "sessions", "--all", "--status", "ended", "--limit", "2", "--home", homeDir, "--database", initialized.DatabasePath,
+	)
+	if !strings.Contains(allOutput, endedIDs[2]) || !strings.Contains(allOutput, endedIDs[1]) || strings.Contains(allOutput, endedIDs[0]) || strings.Contains(allOutput, nonEndedID) {
+		t.Fatalf("all status and limit filter returned wrong sessions:\n%s", allOutput)
+	}
+
+	for _, test := range []struct {
+		args     []string
+		expected string
+	}{
+		{args: []string{"--status", "stale"}, expected: `unsupported AI session status "stale"`},
+		{args: []string{"--limit", "-1"}, expected: "AI session limit must not be negative"},
+	} {
+		args := append([]string{"ai", "sessions", "--home", homeDir, "--database", initialized.DatabasePath}, test.args...)
+		output, err := runWorkgraphCommandAllowError(nil, args...)
+		if err == nil || !strings.Contains(output, test.expected) {
+			t.Fatalf("expected sessions validation error %q, got %v\n%s", test.expected, err, output)
+		}
+	}
+}
+
+func TestAISessionsListsOnlyArchivedAndDisclosesLimit(t *testing.T) {
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init workgraph: %v", err)
+	}
+	workingDir := t.TempDir()
+	toolPath := filepath.Join(workingDir, "codex")
+	ids := []string{
+		"00000000-0000-4000-8000-000000000111",
+		"00000000-0000-4000-8000-000000000112",
+		"00000000-0000-4000-8000-000000000113",
+	}
+	for index, sessionID := range ids {
+		insertAINativeFactSession(t, initialized.DatabasePath, sessionID, "codex", toolPath, "", "", workingDir, fmt.Sprintf("2026-08-03T%02d:00:00Z", 12+index), true)
+	}
+	runWorkgraphCommand(t, nil, "ai", "archive", "--home", homeDir, "--database", initialized.DatabasePath, ids[0], ids[1])
+
+	output := runWorkgraphCommand(t, nil,
+		"ai", "sessions", "--archived", "--limit", "1", "--home", homeDir, "--database", initialized.DatabasePath,
+	)
+	if !strings.Contains(output, "Showing 1 of 2 matching sessions") || !strings.Contains(output, ids[0]) || strings.Contains(output, ids[1]) || strings.Contains(output, ids[2]) {
+		t.Fatalf("archived-only limited list was not disclosed deterministically:\n%s", output)
+	}
+	conflictOutput, err := runWorkgraphCommandAllowError(nil,
+		"ai", "sessions", "--all", "--archived", "--home", homeDir, "--database", initialized.DatabasePath,
+	)
+	if err == nil || !strings.Contains(conflictOutput, "--all and --archived cannot be combined") {
+		t.Fatalf("expected archived visibility conflict, got %v\n%s", err, conflictOutput)
+	}
+}
+
+func TestAIArchiveMultipleExplicitSessionsAtomically(t *testing.T) {
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init workgraph: %v", err)
+	}
+	workingDir := t.TempDir()
+	toolPath := filepath.Join(workingDir, "codex")
+	firstID := "00000000-0000-4000-8000-000000000121"
+	secondID := "00000000-0000-4000-8000-000000000122"
+	insertAINativeFactSession(t, initialized.DatabasePath, firstID, "codex", toolPath, "", "", workingDir, "2026-08-03T12:00:00Z", true)
+	insertAINativeFactSession(t, initialized.DatabasePath, secondID, "codex", toolPath, "", "", workingDir, "2026-08-03T13:00:00Z", true)
+
+	output := runWorkgraphCommand(t, nil,
+		"ai", "archive", "--home", homeDir, "--database", initialized.DatabasePath, firstID, secondID, firstID,
+	)
+	for _, expected := range []string{"AI sessions archived", "Matched: 2", "Archived: 2", "Already archived: 0", firstID, secondID} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("multi-archive output missing %q:\n%s", expected, output)
+		}
+	}
+	if strings.Index(output, firstID) > strings.Index(output, secondID) {
+		t.Fatalf("explicit IDs did not retain first-appearance order:\n%s", output)
+	}
+
+	repeatOutput := runWorkgraphCommand(t, nil,
+		"ai", "archive", "--home", homeDir, "--database", initialized.DatabasePath, firstID, secondID,
+	)
+	if !strings.Contains(repeatOutput, "Archived: 0") || !strings.Contains(repeatOutput, "Already archived: 2") {
+		t.Fatalf("multi-archive was not idempotent:\n%s", repeatOutput)
+	}
+
+	unarchiveOutput := runWorkgraphCommand(t, nil,
+		"ai", "unarchive", "--home", homeDir, "--database", initialized.DatabasePath, firstID, secondID,
+	)
+	if !strings.Contains(unarchiveOutput, "AI sessions unarchived") || !strings.Contains(unarchiveOutput, "Unarchived: 2") {
+		t.Fatalf("multi-unarchive failed:\n%s", unarchiveOutput)
+	}
+
+	db, err := sql.Open("sqlite3", initialized.DatabasePath)
+	if err != nil {
+		t.Fatalf("open event database: %v", err)
+	}
+	defer db.Close()
+	for _, sessionID := range []string{firstID, secondID} {
+		var archiveCount, unarchiveCount int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type = 'ai.session_archived' AND json_extract(payload_json, '$.session_id') = ?`, sessionID).Scan(&archiveCount); err != nil {
+			t.Fatalf("count archive events for %s: %v", sessionID, err)
+		}
+		if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type = 'ai.session_unarchived' AND json_extract(payload_json, '$.session_id') = ?`, sessionID).Scan(&unarchiveCount); err != nil {
+			t.Fatalf("count unarchive events for %s: %v", sessionID, err)
+		}
+		if archiveCount != 1 || unarchiveCount != 1 {
+			t.Fatalf("non-idempotent transitions for %s: archive=%d unarchive=%d", sessionID, archiveCount, unarchiveCount)
+		}
+	}
+}
+
+func TestAIArchiveExplicitBatchRollsBackOnValidationOrPersistenceFailure(t *testing.T) {
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init workgraph: %v", err)
+	}
+	workingDir := t.TempDir()
+	toolPath := filepath.Join(workingDir, "codex")
+	firstID := "00000000-0000-4000-8000-000000000131"
+	secondID := "00000000-0000-4000-8000-000000000132"
+	missingID := "00000000-0000-4000-8000-000000000139"
+	insertAINativeFactSession(t, initialized.DatabasePath, firstID, "codex", toolPath, "", "", workingDir, "2026-08-03T12:00:00Z", true)
+	insertAINativeFactSession(t, initialized.DatabasePath, secondID, "codex", toolPath, "", "", workingDir, "2026-08-03T13:00:00Z", true)
+
+	missingOutput, err := runWorkgraphCommandAllowError(nil,
+		"ai", "archive", "--home", homeDir, "--database", initialized.DatabasePath, firstID, missingID,
+	)
+	if err == nil || !strings.Contains(missingOutput, `AI session "`+missingID+`" was not found`) {
+		t.Fatalf("expected whole-batch missing-session error, got %v\n%s", err, missingOutput)
+	}
+
+	db, err := sql.Open("sqlite3", initialized.DatabasePath)
+	if err != nil {
+		t.Fatalf("open event database: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER fail_second_bulk_archive BEFORE INSERT ON events
+		WHEN NEW.type = 'ai.session_archived' AND json_extract(NEW.payload_json, '$.session_id') = '` + secondID + `'
+		BEGIN SELECT RAISE(ABORT, 'injected bulk archive failure'); END`); err != nil {
+		db.Close()
+		t.Fatalf("install bulk archive failure: %v", err)
+	}
+	db.Close()
+
+	failureOutput, err := runWorkgraphCommandAllowError(nil,
+		"ai", "archive", "--home", homeDir, "--database", initialized.DatabasePath, firstID, secondID,
+	)
+	if err == nil || !strings.Contains(failureOutput, "injected bulk archive failure") {
+		t.Fatalf("expected transactional bulk failure, got %v\n%s", err, failureOutput)
+	}
+	db, err = sql.Open("sqlite3", initialized.DatabasePath)
+	if err != nil {
+		t.Fatalf("reopen event database: %v", err)
+	}
+	defer db.Close()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type = 'ai.session_archived' AND json_extract(payload_json, '$.session_id') IN (?, ?)`, firstID, secondID).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("bulk archive did not roll back: count=%d err=%v", count, err)
+	}
+}
+
+func TestAIArchiveSelectorRequiresPreviewOrConfirmation(t *testing.T) {
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init workgraph: %v", err)
+	}
+	workingDir := t.TempDir()
+	toolPath := filepath.Join(workingDir, "codex")
+	oldID := "00000000-0000-4000-8000-000000000141"
+	newID := "00000000-0000-4000-8000-000000000142"
+	nonEndedID := "00000000-0000-4000-8000-000000000143"
+	alreadyArchivedID := "00000000-0000-4000-8000-000000000144"
+	insertAINativeFactSession(t, initialized.DatabasePath, oldID, "codex", toolPath, "", "", workingDir, "2026-07-01T12:00:00Z", true)
+	insertAINativeFactSession(t, initialized.DatabasePath, newID, "codex", toolPath, "", "", workingDir, "2026-08-02T12:00:00Z", true)
+	insertAINativeFactSession(t, initialized.DatabasePath, nonEndedID, "codex", toolPath, "", "", workingDir, "2026-07-01T13:00:00Z", false)
+	insertAINativeFactSession(t, initialized.DatabasePath, alreadyArchivedID, "codex", toolPath, "", "", workingDir, "2026-07-01T14:00:00Z", true)
+	runWorkgraphCommand(t, nil, "ai", "archive", "--home", homeDir, "--database", initialized.DatabasePath, alreadyArchivedID)
+
+	baseArgs := []string{"ai", "archive", "--home", homeDir, "--database", initialized.DatabasePath, "--status", "ended", "--before", "2026-08-01"}
+	previewOutput := runWorkgraphCommand(t, nil, append(baseArgs, "--dry-run")...)
+	for _, expected := range []string{"AI archive preview", "Matched: 1", oldID, "codex", "ended", "No events written."} {
+		if !strings.Contains(previewOutput, expected) {
+			t.Fatalf("archive preview missing %q:\n%s", expected, previewOutput)
+		}
+	}
+	for _, excluded := range []string{newID, nonEndedID, alreadyArchivedID, workingDir} {
+		if strings.Contains(previewOutput, excluded) {
+			t.Fatalf("archive preview exposed or selected %q:\n%s", excluded, previewOutput)
+		}
+	}
+
+	approvalOutput, err := runWorkgraphCommandAllowError(nil, baseArgs...)
+	if err == nil || !strings.Contains(approvalOutput, "matched 1 sessions") || !strings.Contains(approvalOutput, "--dry-run") || !strings.Contains(approvalOutput, "--yes") {
+		t.Fatalf("selector did not require approval: %v\n%s", err, approvalOutput)
+	}
+
+	confirmedOutput := runWorkgraphCommand(t, nil, append(baseArgs, "--yes")...)
+	if !strings.Contains(confirmedOutput, "AI sessions archived") || !strings.Contains(confirmedOutput, "Archived: 1") || !strings.Contains(confirmedOutput, oldID) {
+		t.Fatalf("confirmed archive failed:\n%s", confirmedOutput)
+	}
+
+	for _, test := range []struct {
+		args     []string
+		expected string
+	}{
+		{args: []string{"--all", "--status", "ended", "--dry-run"}, expected: "--all cannot be combined with --status or --before"},
+		{args: []string{"--before", "2026-08-01", "--dry-run"}, expected: "--before requires --status"},
+		{args: []string{"--status", "ended", "--before", "not-a-date", "--dry-run"}, expected: "invalid AI archive cutoff"},
+		{args: []string{"--all", "--dry-run", "--yes"}, expected: "--dry-run and --yes cannot be combined"},
+	} {
+		args := append([]string{"ai", "archive", "--home", homeDir, "--database", initialized.DatabasePath}, test.args...)
+		output, err := runWorkgraphCommandAllowError(nil, args...)
+		if err == nil || !strings.Contains(output, test.expected) {
+			t.Fatalf("expected selector validation %q, got %v\n%s", test.expected, err, output)
+		}
+	}
+}
+
 func TestAIShowSeparatesStoredObservationFromAgentCheckpoint(t *testing.T) {
 	homeDir := filepath.Join(t.TempDir(), ".workgraph")
 	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})

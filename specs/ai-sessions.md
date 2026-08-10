@@ -34,7 +34,10 @@ manages worktrees.
 ```text
 workgraph ai run [--home <path>] [--database <path>] -- <agent-command>
 workgraph ai checkpoint [--home <path>] [--database <path>] [session-id] --stdin
-workgraph ai sessions [--home <path>] [--database <path>]
+workgraph ai sessions [--home <path>] [--database <path>] [--status <status>] [--limit <count>] [--all | --archived]
+workgraph ai archive [--home <path>] [--database <path>] <session-id> [<session-id>...]
+workgraph ai archive [--home <path>] [--database <path>] (--all | --status <status> [--before <date>]) (--dry-run | --yes)
+workgraph ai unarchive [--home <path>] [--database <path>] <session-id> [<session-id>...]
 workgraph ai show [--home <path>] [--database <path>] <session-id>
 workgraph ai resume [--home <path>] [--database <path>] <session-id>
 ```
@@ -76,12 +79,17 @@ ai.session_started:<session-id>
 ai.session_native_bound:<session-id>:<native-id-digest>
 ai.session_checkpointed:<session-id>:<event-uuid>
 ai.session_ended:<session-id>
+ai.session_archived:<session-id>:<event-uuid>
+ai.session_unarchived:<session-id>:<event-uuid>
 ```
 
 Start and end IDs make persistence retries idempotent. Every checkpoint has a
 new UUIDv4 event component and therefore appends a distinct immutable event.
 The native binding suffix is a SHA-256 digest of the tool name and native ID;
 the opaque native ID itself appears only in the event payload.
+Archive transitions also use new UUIDv4 event components. Repeating a command
+when the session already has the requested archive state succeeds without
+appending a redundant transition.
 
 ## Path, Checkout, and Project Identity
 
@@ -469,6 +477,8 @@ AI sessions use only these append-only event types:
 - `ai.session_native_bound`
 - `ai.session_checkpointed`
 - `ai.session_ended`
+- `ai.session_archived`
+- `ai.session_unarchived`
 
 No AI-specific mutable session table exists in V1. Events are the source of
 truth, and current session views are projections computed at read time.
@@ -477,7 +487,7 @@ Shared event columns are:
 
 ```text
 source:     ai
-type:       one of the four event types
+type:       one of the six event types
 timestamp:  lifecycle occurrence time in UTC RFC3339Nano
 created_at: persistence time in UTC RFC3339Nano
 project:    stable project label from the start event, possibly empty
@@ -598,6 +608,13 @@ AI session ended
 
 The final form represents an unknown outcome.
 
+Archive summaries are exactly:
+
+```text
+AI session archived
+AI session unarchived
+```
+
 ## Status Derivation
 
 Status is computed at query time and never stored. Precedence is:
@@ -618,8 +635,27 @@ available.
 
 ## `workgraph ai sessions`
 
-`ai sessions` is read-only and lists every known session. There is no hidden
-freshness cutoff, limit, filtering, deletion, or pagination in V1.
+`ai sessions` is read-only. By default it lists every unarchived known session;
+there is no hidden freshness cutoff or default count limit. `--all` includes
+archived sessions, while `--archived` lists only archived sessions. `--all` and
+`--archived` are mutually exclusive.
+
+`--status <status>` accepts exactly one derived status: `running`,
+`interrupted`, `ended`, or `unknown`. Any other value is a nonzero validation
+error. `--limit <count>` accepts a non-negative integer. Zero means unlimited.
+Visibility and status filters are applied before the limit. The limit is
+applied after deterministic sorting, so it always selects the newest matching
+sessions.
+
+When a positive limit omits matching sessions, the output immediately after
+the `AI sessions` heading includes:
+
+```text
+Showing <shown> of <matching> matching sessions
+```
+
+The count is computed after archive visibility and status filtering but before
+the limit. It does not include sessions excluded by those filters.
 
 Sessions are sorted by parsed latest event time descending, then full session
 ID ascending. Each entry shows:
@@ -633,6 +669,7 @@ ID ascending. Each entry shows:
 - started time
 - latest checkpoint time, or `-`
 - latest event time
+- archive state as `yes` or `no`
 
 Displayed times use local RFC3339 with an explicit UTC offset. The overview
 never shows paths or agent-stated text. Liveness is inspected only for sessions
@@ -642,6 +679,80 @@ without an end event. With no sessions, output is exactly:
 No AI sessions recorded.
 ```
 
+When sessions exist but none match the requested visibility or status filter,
+output is exactly:
+
+```text
+No AI sessions matched.
+```
+
+## `workgraph ai archive` and `workgraph ai unarchive`
+
+Archival is a reversible list-visibility state derived from append-only events.
+It never deletes session events, removes checkpoints, terminates a process, or
+changes the derived process status. It may be explicitly applied to a session
+in any status. `ai show` and `ai resume` continue to accept archived sessions.
+
+One or more explicit IDs may be archived or unarchived in one invocation.
+Explicit IDs are deduplicated in first-appearance order and act immediately;
+they cannot be combined with selector, preview, or confirmation flags. Every
+ID must resolve before any write occurs. The required transitions are appended
+in one SQLite transaction, so persistence failure rolls back the entire batch.
+
+Selector-based archival accepts either `--all` by itself or one `--status`
+filter with an optional `--before`. `--all` selects every unarchived session
+and is mutually exclusive with `--status` and `--before`. `--before` is invalid
+without `--status`, preventing an accidental age-only sweep across running
+sessions. Selector filters combine with AND and never select sessions already
+archived.
+
+`--before YYYY-MM-DD` means strictly before local midnight at the start of that
+date. An RFC3339 timestamp supplies an exact cutoff instead. The compared value
+is the session's latest event timestamp, not its start or latest checkpoint
+time. Invalid dates are rejected before writes.
+
+For a nonempty selector match, selector-based archival requires exactly one of
+`--dry-run` or `--yes`.
+`--dry-run` prints matching session IDs, tools, derived statuses, and latest
+event times in normal newest-first session order, but appends no events.
+Without either flag, workgraph reports the match count and instructs the user
+to preview or confirm, then exits nonzero without writes. `--yes` applies all
+required transitions atomically. A zero-match selection succeeds without
+writing an event.
+
+For a known session, archive appends `ai.session_archived` and unarchive
+appends `ai.session_unarchived`. Both payloads contain only the schema version
+and session ID. The latest supported archive transition by parsed event
+timestamp, then event ID, determines current archive state. A missing explicit
+session is a nonzero error.
+
+Successful transitions print:
+
+```text
+AI session archived
+Session: <session-id>
+Event: <event-id>
+```
+
+or the corresponding `unarchived` form. Requesting the current state is an
+idempotent success, appends no event, and prints:
+
+```text
+AI session already archived
+Session: <session-id>
+```
+
+or the corresponding `already unarchived` form.
+
+Multiple explicit IDs and confirmed selector batches print a bounded summary
+with matched, changed, and already-in-state counts followed by one session ID
+and event ID for each appended transition. Preview and batch summaries never
+show paths, native IDs, checkpoint text, or other agent-authored content.
+
+`workgraph help ai archive` includes examples for explicit IDs, a guarded date
+selection preview, and confirmed all-session archival. `workgraph help ai
+sessions` includes examples for status, archived-only, and limited listings.
+
 ## `workgraph ai show`
 
 `ai show` is read-only. It does not inspect current Git or filesystem state,
@@ -650,7 +761,7 @@ command.
 
 For a known session it renders:
 
-- session ID, tool, project, and derived status
+- session ID, tool, project, derived status, and archive state
 - latest native session ID and predecessor workgraph session ID when available
 - latest supported stored observed snapshot, whether from start, checkpoint,
   or end, with its observation time and source event
@@ -810,7 +921,7 @@ the explicitly selected local session and verified adapter command.
 - worktree creation or management
 - non-Git project inference without an explicit mapping
 - abbreviated session IDs
-- filtering, pagination, retention, archival, or deletion
+- pagination, automatic retention, or permanent deletion
 - live repository comparison during show
 - cloud storage, synchronization, export-for-resume, path remapping, and
   cross-machine continuity

@@ -24,11 +24,13 @@ type helpTopic struct {
 
 var helpTopics = map[string]helpTopic{
 	"ai":                      {"workgraph ai <subcommand>", "Capture and resume durable local CLI AI session context."},
+	"ai archive":              {"workgraph ai archive <session-id> [<session-id>...] [options]", "Hide AI sessions from the default list without deleting their events."},
 	"ai checkpoint":           {"workgraph ai checkpoint [session-id] --stdin [options]", "Append a validated structured checkpoint to an AI session."},
 	"ai resume":               {"workgraph ai resume <session-id> [options]", "Launch a verified native codex, claude, copilot, or opencode session as a linked lifetime."},
 	"ai run":                  {"workgraph ai run [options] -- <agent-command>", "Launch and record one CLI AI child-process lifetime; native adapters: codex, claude, copilot, opencode."},
-	"ai sessions":             {"workgraph ai sessions [options]", "List known local AI sessions and their derived status."},
+	"ai sessions":             {"workgraph ai sessions [--status <status>] [--limit <count>] [--all | --archived] [options]", "List known local AI sessions and their derived status."},
 	"ai show":                 {"workgraph ai show <session-id> [options]", "Render stored restart context for one AI session."},
+	"ai unarchive":            {"workgraph ai unarchive <session-id> [<session-id>...] [options]", "Restore archived AI sessions to the default list."},
 	"associations":            {"workgraph associations <subcommand>", "Inspect deterministic relationships between captured events."},
 	"associations explain":    {"workgraph associations explain <event-id> [options]", "Explain the evidence and score for an event's associations."},
 	"azure":                   {"workgraph azure <subcommand>", "Connect and capture from Azure services."},
@@ -119,6 +121,19 @@ var helpTopics = map[string]helpTopic{
 	"today":                   {"workgraph today [options]", "Show a compact overview of work captured today."},
 }
 
+var helpExamples = map[string][]string{
+	"ai archive": {
+		"workgraph ai archive <session-id> <session-id>",
+		"workgraph ai archive --status ended --before 2026-08-01 --dry-run",
+		"workgraph ai archive --all --yes",
+	},
+	"ai sessions": {
+		"workgraph ai sessions --status interrupted",
+		"workgraph ai sessions --archived",
+		"workgraph ai sessions --limit 20",
+	},
+}
+
 func isHelpArgument(argument string) bool {
 	return argument == "help" || argument == "-h" || argument == "--help"
 }
@@ -185,6 +200,13 @@ func writeTopicHelp(output io.Writer, key string, topic helpTopic) {
 
 	fmt.Fprintln(output)
 	writeCommandOptions(output, key)
+	if examples := helpExamples[key]; len(examples) > 0 {
+		fmt.Fprintln(output)
+		fmt.Fprintln(output, "Examples:")
+		for _, example := range examples {
+			fmt.Fprintln(output, "  "+example)
+		}
+	}
 }
 
 func writeSubcommands(output io.Writer, parent string) {

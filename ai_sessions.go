@@ -133,6 +133,10 @@ type AISessionsConfig struct {
 	DatabasePath     string
 	ProcessInspector AIProcessInspector
 	Location         *time.Location
+	IncludeArchived  bool
+	ArchivedOnly     bool
+	Status           string
+	Limit            int
 }
 
 // AISessionsResult contains the derived local session overview.
@@ -140,6 +144,8 @@ type AISessionsResult struct {
 	Sessions []AISessionSummary
 	Warnings []string
 	Message  string
+	Known    int
+	Matched  int
 }
 
 // AISessionSummary is one event-derived AI session row.
@@ -153,6 +159,42 @@ type AISessionSummary struct {
 	StartedAt            time.Time
 	LatestCheckpointAt   *time.Time
 	LatestEventAt        time.Time
+	Archived             bool
+}
+
+// AIArchiveConfig selects one local AI session for a visibility transition.
+type AIArchiveConfig struct {
+	HomeDir      string
+	DatabasePath string
+	SessionID    string
+}
+
+// AIArchiveResult describes an archive transition or idempotent success.
+type AIArchiveResult struct {
+	SessionID string
+	EventID   string
+	Archived  bool
+	Changed   bool
+}
+
+// AIArchiveBatchConfig selects explicit sessions or an unarchived archive cohort.
+type AIArchiveBatchConfig struct {
+	HomeDir          string
+	DatabasePath     string
+	SessionIDs       []string
+	Status           string
+	Before           *time.Time
+	SelectAll        bool
+	Apply            bool
+	ProcessInspector AIProcessInspector
+	Location         *time.Location
+}
+
+// AIArchiveBatchResult contains deterministic matches and their transitions.
+type AIArchiveBatchResult struct {
+	Matches     []AISessionSummary
+	Transitions []AIArchiveResult
+	Message     string
 }
 
 // AIShowConfig controls deterministic rendering for one stored session.
@@ -183,6 +225,8 @@ type aiSessionProjection struct {
 	latestEventID      string
 	latestCheckpointID string
 	latestNativeID     string
+	ArchiveEventAt     time.Time
+	archiveEventID     string
 	LatestObserved     *AIObservedState
 	ObservedEventAt    time.Time
 	ObservedSource     string
@@ -441,12 +485,30 @@ func CheckpointAISession(config AICheckpointConfig) (AICheckpointResult, error) 
 
 // ListAISessions projects every known local AI session from append-only events.
 func ListAISessions(config AISessionsConfig) (AISessionsResult, error) {
+	if config.IncludeArchived && config.ArchivedOnly {
+		return AISessionsResult{}, errors.New("--all and --archived cannot be combined")
+	}
+	if config.Status != "" && !validAIStatus(config.Status) {
+		return AISessionsResult{}, fmt.Errorf("unsupported AI session status %q", config.Status)
+	}
+	if config.Limit < 0 {
+		return AISessionsResult{}, errors.New("AI session limit must not be negative")
+	}
 	projections, warnings, err := loadAISessionProjections(config.HomeDir, config.DatabasePath, config.ProcessInspector)
 	if err != nil {
 		return AISessionsResult{}, err
 	}
 	summaries := make([]AISessionSummary, 0, len(projections))
 	for _, projection := range projections {
+		if config.ArchivedOnly && !projection.Summary.Archived {
+			continue
+		}
+		if !config.ArchivedOnly && projection.Summary.Archived && !config.IncludeArchived {
+			continue
+		}
+		if config.Status != "" && projection.Summary.Status != config.Status {
+			continue
+		}
 		summaries = append(summaries, projection.Summary)
 	}
 	sort.Slice(summaries, func(i, j int) bool {
@@ -455,13 +517,228 @@ func ListAISessions(config AISessionsConfig) (AISessionsResult, error) {
 		}
 		return summaries[i].LatestEventAt.After(summaries[j].LatestEventAt)
 	})
+	matched := len(summaries)
+	if config.Limit > 0 && len(summaries) > config.Limit {
+		summaries = summaries[:config.Limit]
+	}
 	location := config.Location
 	if location == nil {
 		location = time.Local
 	}
-	result := AISessionsResult{Sessions: summaries, Warnings: warnings}
+	result := AISessionsResult{Sessions: summaries, Warnings: warnings, Known: len(projections), Matched: matched}
 	result.Message = aiSessionsMessage(result, location)
 	return result, nil
+}
+
+// ArchiveAISession hides a known session from the default list without deleting evidence.
+func ArchiveAISession(config AIArchiveConfig) (AIArchiveResult, error) {
+	result, err := ArchiveAISessions(AIArchiveBatchConfig{
+		HomeDir: config.HomeDir, DatabasePath: config.DatabasePath,
+		SessionIDs: []string{config.SessionID}, Apply: true,
+	})
+	if err != nil {
+		return AIArchiveResult{}, err
+	}
+	return result.Transitions[0], nil
+}
+
+// UnarchiveAISession restores a known session to the default list.
+func UnarchiveAISession(config AIArchiveConfig) (AIArchiveResult, error) {
+	result, err := UnarchiveAISessions(AIArchiveBatchConfig{
+		HomeDir: config.HomeDir, DatabasePath: config.DatabasePath,
+		SessionIDs: []string{config.SessionID}, Apply: true,
+	})
+	if err != nil {
+		return AIArchiveResult{}, err
+	}
+	return result.Transitions[0], nil
+}
+
+// ArchiveAISessions previews or applies one explicit or selector-based archive batch.
+func ArchiveAISessions(config AIArchiveBatchConfig) (AIArchiveBatchResult, error) {
+	return updateAIArchiveStates(config, true)
+}
+
+// UnarchiveAISessions applies one explicit unarchive batch.
+func UnarchiveAISessions(config AIArchiveBatchConfig) (AIArchiveBatchResult, error) {
+	return updateAIArchiveStates(config, false)
+}
+
+func updateAIArchiveStates(config AIArchiveBatchConfig, archived bool) (AIArchiveBatchResult, error) {
+	projections, _, err := loadAISessionProjections(config.HomeDir, config.DatabasePath, config.ProcessInspector)
+	if err != nil {
+		return AIArchiveBatchResult{}, err
+	}
+	matches, err := matchAIArchiveSessions(projections, config, archived)
+	if err != nil {
+		return AIArchiveBatchResult{}, err
+	}
+	result := AIArchiveBatchResult{Matches: make([]AISessionSummary, len(matches))}
+	for index, projection := range matches {
+		result.Matches[index] = projection.Summary
+	}
+	location := config.Location
+	if location == nil {
+		location = time.Local
+	}
+	result.Message = aiArchivePreviewMessage(result.Matches, location)
+	if !config.Apply {
+		return result, nil
+	}
+
+	type pendingArchiveEvent struct {
+		eventID   string
+		eventType string
+		summary   string
+		project   string
+		payload   aiEventEnvelope
+	}
+	result.Transitions = make([]AIArchiveResult, len(matches))
+	pending := make([]pendingArchiveEvent, 0, len(matches))
+	for index, projection := range matches {
+		transition := AIArchiveResult{SessionID: projection.Summary.SessionID, Archived: archived}
+		if projection.Summary.Archived == archived {
+			result.Transitions[index] = transition
+			continue
+		}
+		eventUUID, err := newAIUUID()
+		if err != nil {
+			return AIArchiveBatchResult{}, fmt.Errorf("create AI archive event id: %w", err)
+		}
+		eventType := "ai.session_unarchived"
+		summary := "AI session unarchived"
+		if archived {
+			eventType = "ai.session_archived"
+			summary = "AI session archived"
+		}
+		transition.EventID = eventType + ":" + projection.Summary.SessionID + ":" + eventUUID
+		transition.Changed = true
+		result.Transitions[index] = transition
+		pending = append(pending, pendingArchiveEvent{
+			eventID: transition.EventID, eventType: eventType, summary: summary,
+			project: projection.Summary.Project,
+			payload: aiEventEnvelope{SchemaVersion: aiSchemaVersion, SessionID: projection.Summary.SessionID},
+		})
+	}
+	if len(pending) == 0 {
+		return result, nil
+	}
+	status, err := prepareRunStatus(RunConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath})
+	if err != nil {
+		return AIArchiveBatchResult{}, err
+	}
+	db, err := sql.Open("sqlite3", status.DatabasePath)
+	if err != nil {
+		return AIArchiveBatchResult{}, fmt.Errorf("open AI event database: %w", err)
+	}
+	defer db.Close()
+	tx, err := db.Begin()
+	if err != nil {
+		return AIArchiveBatchResult{}, fmt.Errorf("begin AI archive batch: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	now := time.Now().UTC()
+	for _, event := range pending {
+		if err := insertAIEvent(tx, event.eventID, event.eventType, now, event.project, event.summary, event.payload); err != nil {
+			return AIArchiveBatchResult{}, fmt.Errorf("persist AI archive batch: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return AIArchiveBatchResult{}, fmt.Errorf("commit AI archive batch: %w", err)
+	}
+	committed = true
+	return result, nil
+}
+
+func matchAIArchiveSessions(projections []aiSessionProjection, config AIArchiveBatchConfig, archived bool) ([]*aiSessionProjection, error) {
+	if len(config.SessionIDs) > 0 {
+		if config.SelectAll || config.Status != "" || config.Before != nil {
+			return nil, errors.New("explicit AI session IDs cannot be combined with archive selectors")
+		}
+		byID := make(map[string]*aiSessionProjection, len(projections))
+		for index := range projections {
+			byID[projections[index].Summary.SessionID] = &projections[index]
+		}
+		seen := make(map[string]bool, len(config.SessionIDs))
+		matches := make([]*aiSessionProjection, 0, len(config.SessionIDs))
+		for _, sessionID := range config.SessionIDs {
+			if seen[sessionID] {
+				continue
+			}
+			seen[sessionID] = true
+			projection := byID[sessionID]
+			if projection == nil {
+				return nil, fmt.Errorf("AI session %q was not found", sessionID)
+			}
+			matches = append(matches, projection)
+		}
+		return matches, nil
+	}
+	if !archived {
+		return nil, errors.New("at least one AI session id is required for unarchive")
+	}
+	if config.SelectAll && (config.Status != "" || config.Before != nil) {
+		return nil, errors.New("--all cannot be combined with --status or --before")
+	}
+	if !config.SelectAll && config.Status == "" {
+		if config.Before != nil {
+			return nil, errors.New("--before requires --status")
+		}
+		return nil, errors.New("archive requires explicit session ids, --all, or --status")
+	}
+	if config.Status != "" && !validAIStatus(config.Status) {
+		return nil, fmt.Errorf("unsupported AI session status %q", config.Status)
+	}
+	matches := make([]*aiSessionProjection, 0, len(projections))
+	for index := range projections {
+		projection := &projections[index]
+		if projection.Summary.Archived {
+			continue
+		}
+		if config.Status != "" && projection.Summary.Status != config.Status {
+			continue
+		}
+		if config.Before != nil && !projection.Summary.LatestEventAt.Before(*config.Before) {
+			continue
+		}
+		matches = append(matches, projection)
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].Summary.LatestEventAt.Equal(matches[j].Summary.LatestEventAt) {
+			return matches[i].Summary.SessionID < matches[j].Summary.SessionID
+		}
+		return matches[i].Summary.LatestEventAt.After(matches[j].Summary.LatestEventAt)
+	})
+	return matches, nil
+}
+
+func validAIStatus(status string) bool {
+	switch status {
+	case "running", "interrupted", "ended", "unknown":
+		return true
+	default:
+		return false
+	}
+}
+
+func aiArchivePreviewMessage(matches []AISessionSummary, location *time.Location) string {
+	if len(matches) == 0 {
+		return "No AI sessions matched."
+	}
+	lines := []string{"AI archive preview", fmt.Sprintf("Matched: %d", len(matches))}
+	for _, session := range matches {
+		lines = append(lines,
+			fmt.Sprintf("%s %s %s", safeAITerminalText(session.SessionID), safeAITerminalText(session.Tool), session.Status),
+			"  latest event: "+session.LatestEventAt.In(location).Format(time.RFC3339),
+		)
+	}
+	lines = append(lines, "No events written.")
+	return strings.Join(lines, "\n")
 }
 
 // ShowAISession renders only supported evidence already stored in events.
@@ -583,6 +860,12 @@ func loadAISessionProjections(homeDir string, databasePath string, inspector AIP
 			} else {
 				projection.Warnings = append(projection.Warnings, "invalid supported end payload")
 			}
+		case "ai.session_archived", "ai.session_unarchived":
+			if projection.ArchiveEventAt.IsZero() || timestamp.After(projection.ArchiveEventAt) || (timestamp.Equal(projection.ArchiveEventAt) && id > projection.archiveEventID) {
+				projection.Summary.Archived = eventType == "ai.session_archived"
+				projection.ArchiveEventAt = timestamp
+				projection.archiveEventID = id
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -664,9 +947,15 @@ func (localAIProcessInspector) InspectProcess(pid int) (AIProcessInspection, err
 
 func aiSessionsMessage(result AISessionsResult, location *time.Location) string {
 	if len(result.Sessions) == 0 {
+		if result.Known > 0 {
+			return "No AI sessions matched."
+		}
 		return "No AI sessions recorded."
 	}
 	lines := []string{"AI sessions"}
+	if len(result.Sessions) < result.Matched {
+		lines = append(lines, fmt.Sprintf("Showing %d of %d matching sessions", len(result.Sessions), result.Matched))
+	}
 	for _, session := range result.Sessions {
 		project := session.Project
 		if project == "" {
@@ -688,6 +977,7 @@ func aiSessionsMessage(result AISessionsResult, location *time.Location) string 
 			"  started: "+started,
 			"  checkpoint: "+checkpoint,
 			"  latest event: "+session.LatestEventAt.In(location).Format(time.RFC3339),
+			"  archived: "+aiYesNo(session.Archived),
 		)
 	}
 	for _, warning := range result.Warnings {
@@ -707,6 +997,7 @@ func aiShowMessage(session *aiSessionProjection, location *time.Location) string
 		"Native session: " + safeAITerminalText(aiDisplayValue(session.Summary.NativeSessionID)),
 		"Predecessor: " + safeAITerminalText(aiDisplayValue(session.Summary.PredecessorSessionID)),
 		"Status: " + session.Summary.Status,
+		"Archived: " + aiYesNo(session.Summary.Archived),
 		"Project: " + safeAITerminalText(project),
 	}
 	if session.LatestObserved != nil {
@@ -772,6 +1063,13 @@ func aiShowMessage(session *aiSessionProjection, location *time.Location) string
 		lines = append(lines, "Warning: "+safeAITerminalText(warning))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func aiYesNo(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
 }
 
 func aiDisplayValue(value string) string {
@@ -948,7 +1246,12 @@ func sameAIPath(left string, right string) bool {
 	return leftErr == nil && rightErr == nil && leftPath == rightPath
 }
 
-func insertAIEvent(db *sql.DB, id string, eventType string, timestamp time.Time, project string, summary string, payload any) error {
+type aiEventStore interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+func insertAIEvent(db aiEventStore, id string, eventType string, timestamp time.Time, project string, summary string, payload any) error {
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("encode event: %w", err)
