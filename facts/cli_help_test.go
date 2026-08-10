@@ -9,11 +9,13 @@ import (
 
 var publicCommandPaths = []string{
 	"ai",
+	"ai archive",
 	"ai checkpoint",
 	"ai resume",
 	"ai run",
 	"ai sessions",
 	"ai show",
+	"ai unarchive",
 	"associations",
 	"associations explain",
 	"azure",
@@ -175,12 +177,38 @@ func TestAIHelpNamesVerifiedNativeAdapters(t *testing.T) {
 	}
 }
 
+func TestAIArchiveAndSessionsHelpShowLifecycleExamples(t *testing.T) {
+	archiveOutput := runWorkgraphCommand(t, nil, "help", "ai", "archive")
+	for _, expected := range []string{
+		"Examples:",
+		"workgraph ai archive <session-id> <session-id>",
+		"workgraph ai archive --status ended --before 2026-08-01 --dry-run",
+		"workgraph ai archive --all --yes",
+	} {
+		if !strings.Contains(archiveOutput, expected) {
+			t.Fatalf("archive help missing %q:\n%s", expected, archiveOutput)
+		}
+	}
+	sessionsOutput := runWorkgraphCommand(t, nil, "help", "ai", "sessions")
+	for _, expected := range []string{
+		"Examples:",
+		"workgraph ai sessions --status interrupted",
+		"workgraph ai sessions --archived",
+		"workgraph ai sessions --limit 20",
+	} {
+		if !strings.Contains(sessionsOutput, expected) {
+			t.Fatalf("sessions help missing %q:\n%s", expected, sessionsOutput)
+		}
+	}
+}
+
 func TestLeafHelpListsAvailableOptions(t *testing.T) {
 	for _, test := range []struct {
 		commandPath string
 		options     []string
 	}{
 		{"today", []string{"Options:", "--home", "--database"}},
+		{"ai sessions", []string{"Options:", "--all", "--archived", "--status", "--limit"}},
 		{"llm add", []string{"Options:", "--provider", "--model", "--api-key-env"}},
 		{"calendar connect", []string{"Options:", "--client-id", "--no-browser", "--calendar-id"}},
 		{"suggestions dismiss", []string{"Options:", "--reason", "--note"}},

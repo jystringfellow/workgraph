@@ -139,6 +139,63 @@ Feature: Local AI coding session continuity
     And each entry shows the full session id, tool, status, project, started time, latest checkpoint time, and latest event time
     And the overview does not show paths or agent-stated checkpoint text
 
+  Scenario: Archive and restore a session without deleting evidence
+    Given workgraph has an ended AI session with durable restart context
+    When I run "workgraph ai archive <session-id>"
+    Then workgraph appends an ai.session_archived event
+    And the session is hidden from "workgraph ai sessions"
+    But the session appears as archived in "workgraph ai sessions --all"
+    And "workgraph ai show <session-id>" and native resume remain available
+    And no lifecycle event or checkpoint is deleted
+    When I run "workgraph ai unarchive <session-id>"
+    Then workgraph appends an ai.session_unarchived event
+    And the session appears in the default session list again
+
+  Scenario: Repeat an archive transition idempotently
+    Given an AI session is already archived
+    When I archive that session again
+    Then the command succeeds and reports that the session is already archived
+    And workgraph does not append another archive event
+
+  Scenario: Filter and limit sessions deterministically
+    Given workgraph has archived and unarchived AI sessions in different derived states
+    When I run "workgraph ai sessions --status ended --limit 2"
+    Then only the two newest unarchived ended sessions are shown
+    When I also pass "--all"
+    Then archived ended sessions are eligible for the same deterministic limit
+    And an unsupported status or negative limit is rejected
+
+  Scenario: List only archived sessions and disclose truncation
+    Given workgraph has archived and unarchived AI sessions
+    When I run "workgraph ai sessions --archived --limit 2"
+    Then only archived sessions are eligible
+    And workgraph reports how many matching sessions were shown and omitted
+    And combining "--archived" with "--all" is rejected
+
+  Scenario: Archive multiple explicit sessions atomically
+    Given workgraph has multiple known unarchived AI sessions
+    When I run "workgraph ai archive <session-id-1> <session-id-2>"
+    Then duplicate ids are deduplicated in first-appearance order
+    And all required archive events are committed in one transaction
+    And a missing id or persistence failure writes none of the batch
+
+  Scenario: Preview and confirm an archive selection
+    Given workgraph has ended sessions on both sides of a local date cutoff
+    When I run "workgraph ai archive --status ended --before 2026-08-01 --dry-run"
+    Then workgraph previews only unarchived ended sessions whose latest event is strictly before the cutoff
+    And the preview contains no paths, native ids, or checkpoint text
+    And workgraph writes no archive event
+    When I replace "--dry-run" with "--yes"
+    Then all matching sessions are archived atomically
+
+  Scenario: Require explicit approval for selector-based archive
+    Given an archive status or all-sessions selector matches sessions
+    When I omit both "--dry-run" and "--yes"
+    Then workgraph reports the match count and how to preview or confirm
+    And workgraph writes no archive event
+    And "--all" cannot be combined with status or date selectors
+    And a date selector cannot be used without a status selector
+
   Scenario: Show stored evidence without live inspection
     Given an AI session has multiple observed snapshots and agent checkpoints
     When I run "workgraph ai show <session-id>"
