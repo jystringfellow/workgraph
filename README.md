@@ -69,11 +69,16 @@ Install the CLI from this checkout:
 go install ./cmd/workgraph
 ```
 
-Make sure your Go binary directory is on `PATH`. It is usually:
+Make sure your Go binary directory is on `PATH`. When `go env GOBIN` is empty,
+Go installs commands under `$(go env GOPATH)/bin`:
 
 ```sh
-$(go env GOPATH)/bin
+export PATH="$(go env GOPATH)/bin:$PATH"
+command -v workgraph
 ```
+
+If `go env GOBIN` prints a directory, add that directory to `PATH` instead.
+Verify the installed build with `workgraph version`.
 
 Then initialize local state:
 
@@ -168,6 +173,8 @@ workgraph associations explain <event-id>
 
 - [Command reference](docs/commands.md) for CLI examples and debugging
   workflows.
+- [Release guide](docs/releasing.md) for tagged archives, checksums, and the
+  Homebrew tap workflow.
 - [Connectors guide](docs/connectors.md) for connecting Slack, Notion, Azure
   Boards, calendar, mail, and other capture sources.
 - [Roadmap](specs/roadmap.md) for current implementation direction.
@@ -179,20 +186,30 @@ workgraph associations explain <event-id>
 
 ## Installing From GitHub
 
-Once the current code is pushed to GitHub, install it with:
+Install or explicitly upgrade through the Go toolchain with:
 
 ```sh
 go install github.com/jystringfellow/workgraph/cmd/workgraph@latest
+workgraph version
 ```
 
-Then run:
+When the Homebrew tap is enabled, macOS and Linux users can instead use:
+
+```sh
+brew install jystringfellow/tap/workgraph
+brew upgrade workgraph
+```
+
+For a new installation, then run:
 
 ```sh
 workgraph init
 ```
 
-Published release binaries may come later. For now, source builds and
-`go install` are the expected install paths.
+Tagged releases publish platform archives, SHA-256 checksums, and a generated
+Homebrew formula on GitHub. workgraph does not silently check for or install
+updates; executable replacement remains an explicit Go or package-manager
+operation.
 
 ## Verification
 

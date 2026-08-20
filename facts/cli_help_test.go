@@ -104,6 +104,7 @@ var publicCommandPaths = []string{
 	"suggestions show",
 	"suggestions snooze",
 	"today",
+	"version",
 }
 
 func TestRootHelpListsPublicCommands(t *testing.T) {
@@ -118,6 +119,7 @@ func TestRootHelpListsPublicCommands(t *testing.T) {
 			"connectors",
 			"today",
 			"resume",
+			"version",
 			"workgraph help <command>",
 		} {
 			if !strings.Contains(output, expected) {
