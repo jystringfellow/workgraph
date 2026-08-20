@@ -24,6 +24,7 @@ Feature: Inspectable workgraph distribution
     Given release archives and their checksums exist
     When the release workflow renders the Homebrew formula
     Then the formula pins the archive checksum for each supported Mac and Linux architecture
+    And Homebrew infers the formula version from the release archive URL
     And the formula verifies the installed version
     And tap publication occurs only when its separate write token is configured
 
