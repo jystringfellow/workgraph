@@ -106,4 +106,7 @@ func TestHomebrewFormulaTemplatePinsEverySupportedArchive(t *testing.T) {
 			t.Fatalf("Homebrew formula template is missing %q:\n%s", expected, formula)
 		}
 	}
+	if strings.Contains(formula, `version "{{VERSION}}"`) {
+		t.Fatalf("Homebrew formula template redundantly declares a version that Homebrew infers from its URLs:\n%s", formula)
+	}
 }

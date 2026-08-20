@@ -78,7 +78,9 @@ the checksum file, and the generated Homebrew formula.
 The release workflow renders one `workgraph.rb` formula from a repository-owned
 template. The formula selects the matching macOS or Linux archive by operating
 system and CPU architecture, pins its SHA-256 digest, installs only the
-workgraph executable, and verifies `workgraph version` in its test block.
+workgraph executable, and verifies `workgraph version` in its test block. The
+formula relies on Homebrew to infer the release version from the archive URL and
+must not duplicate that value with an explicit `version` declaration.
 
 Publishing the generated formula to `jystringfellow/homebrew-tap` requires an
 explicitly configured `HOMEBREW_TAP_TOKEN` Actions secret with contents write
