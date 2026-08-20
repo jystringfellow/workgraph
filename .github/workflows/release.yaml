@@ -1,0 +1,238 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+      build_date: ${{ steps.tag.outputs.build_date }}
+    steps:
+      - name: Require a stable semantic version tag
+        id: tag
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "release tags must match vMAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          echo "build_date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+
+  verify:
+    name: Verify tagged source
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run vet
+        run: go vet ./...
+
+      - name: Run full Go suite
+        run: go test ./...
+
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: [validate, verify]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            goos: linux
+            goarch: amd64
+            format: tar.gz
+            macos_deployment_target: ""
+          - runner: ubuntu-22.04-arm
+            goos: linux
+            goarch: arm64
+            format: tar.gz
+            macos_deployment_target: ""
+          - runner: macos-15-intel
+            goos: darwin
+            goarch: amd64
+            format: tar.gz
+            macos_deployment_target: "13.0"
+          - runner: macos-15
+            goos: darwin
+            goarch: arm64
+            format: tar.gz
+            macos_deployment_target: "13.0"
+          - runner: windows-latest
+            goos: windows
+            goarch: amd64
+            format: zip
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build and archive Unix executable
+        if: matrix.format == 'tar.gz'
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_BUILD_DATE: ${{ needs.validate.outputs.build_date }}
+          TARGET_OS: ${{ matrix.goos }}
+          TARGET_ARCH: ${{ matrix.goarch }}
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_deployment_target }}
+        run: |
+          archive="workgraph_${RELEASE_VERSION}_${TARGET_OS}_${TARGET_ARCH}"
+          mkdir -p dist/package
+          CGO_ENABLED=1 GOOS="$TARGET_OS" GOARCH="$TARGET_ARCH" go build -trimpath \
+            -ldflags="-s -w -X main.version=$RELEASE_TAG -X main.commit=$GITHUB_SHA -X main.buildDate=$RELEASE_BUILD_DATE" \
+            -o dist/package/workgraph ./cmd/workgraph
+          cp README.md dist/package/README.md
+          tar -C dist/package -czf "dist/${archive}.tar.gz" workgraph README.md
+
+      - name: Build and archive Windows executable
+        if: matrix.format == 'zip'
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_BUILD_DATE: ${{ needs.validate.outputs.build_date }}
+          TARGET_OS: ${{ matrix.goos }}
+          TARGET_ARCH: ${{ matrix.goarch }}
+        run: |
+          $archive = "workgraph_$($env:RELEASE_VERSION)_$($env:TARGET_OS)_$($env:TARGET_ARCH)"
+          New-Item -ItemType Directory -Force -Path dist/package | Out-Null
+          $env:CGO_ENABLED = "1"
+          $env:GOOS = $env:TARGET_OS
+          $env:GOARCH = $env:TARGET_ARCH
+          $ldflags = "-s -w -X main.version=$($env:RELEASE_TAG) -X main.commit=$($env:GITHUB_SHA) -X main.buildDate=$($env:RELEASE_BUILD_DATE)"
+          go build -trimpath -ldflags $ldflags -o dist/package/workgraph.exe ./cmd/workgraph
+          Copy-Item README.md dist/package/README.md
+          Compress-Archive -Path dist/package/workgraph.exe,dist/package/README.md -DestinationPath "dist/$archive.zip"
+
+      - name: Upload release archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: workgraph-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/workgraph_*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish GitHub release
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out formula template
+        uses: actions/checkout@v4
+
+      - name: Download native archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: workgraph-*
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums and Homebrew formula
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          archive_count="$(find dist -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) | wc -l | tr -d ' ')"
+          if [[ "$archive_count" != "5" ]]; then
+            echo "expected 5 release archives, found $archive_count" >&2
+            exit 1
+          fi
+          (
+            cd dist
+            sha256sum workgraph_* > checksums.txt
+          )
+          archive_sha() {
+            awk -v archive="$1" '$2 == archive { print $1 }' dist/checksums.txt
+          }
+          darwin_arm64_sha="$(archive_sha "workgraph_${RELEASE_VERSION}_darwin_arm64.tar.gz")"
+          darwin_amd64_sha="$(archive_sha "workgraph_${RELEASE_VERSION}_darwin_amd64.tar.gz")"
+          linux_arm64_sha="$(archive_sha "workgraph_${RELEASE_VERSION}_linux_arm64.tar.gz")"
+          linux_amd64_sha="$(archive_sha "workgraph_${RELEASE_VERSION}_linux_amd64.tar.gz")"
+          sed \
+            -e "s/{{VERSION}}/${RELEASE_VERSION}/g" \
+            -e "s/{{DARWIN_ARM64_SHA256}}/${darwin_arm64_sha}/g" \
+            -e "s/{{DARWIN_AMD64_SHA256}}/${darwin_amd64_sha}/g" \
+            -e "s/{{LINUX_ARM64_SHA256}}/${linux_arm64_sha}/g" \
+            -e "s/{{LINUX_AMD64_SHA256}}/${linux_amd64_sha}/g" \
+            packaging/homebrew/workgraph.rb.tmpl > dist/workgraph.rb
+          if grep -q '{{' dist/workgraph.rb; then
+            echo "Homebrew formula contains unresolved placeholders" >&2
+            exit 1
+          fi
+
+      - name: Retain generated Homebrew formula
+        uses: actions/upload-artifact@v4
+        with:
+          name: homebrew-formula
+          path: dist/workgraph.rb
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Create release for existing tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME" dist/*
+          --repo "$GITHUB_REPOSITORY"
+          --verify-tag
+          --generate-notes
+          --title "workgraph $GITHUB_REF_NAME"
+
+  homebrew:
+    name: Publish Homebrew formula
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download generated formula
+        uses: actions/download-artifact@v4
+        with:
+          name: homebrew-formula
+          path: formula
+
+      - name: Publish formula when the tap token is configured
+        shell: bash
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [[ -z "$HOMEBREW_TAP_TOKEN" ]]; then
+            echo "HOMEBREW_TAP_TOKEN is not configured; skipping tap publication."
+            exit 0
+          fi
+          export GH_TOKEN="$HOMEBREW_TAP_TOKEN"
+          gh auth setup-git
+          gh repo clone jystringfellow/homebrew-tap tap
+          mkdir -p tap/Formula
+          cp formula/workgraph.rb tap/Formula/workgraph.rb
+          if [[ -z "$(git -C tap status --porcelain -- Formula/workgraph.rb)" ]]; then
+            echo "Homebrew formula is already current."
+            exit 0
+          fi
+          git -C tap config user.name "github-actions[bot]"
+          git -C tap config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C tap add Formula/workgraph.rb
+          git -C tap commit -m "workgraph $GITHUB_REF_NAME"
+          git -C tap push

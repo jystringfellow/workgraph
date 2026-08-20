@@ -9,14 +9,38 @@ Install the CLI into your Go binary path:
 
 ```sh
 go install ./cmd/workgraph
+```
+
+When `go env GOBIN` is empty, Go installs commands under
+`$(go env GOPATH)/bin`. Add that directory to `PATH`; do not try to execute the
+directory itself:
+
+```sh
+export PATH="$(go env GOPATH)/bin:$PATH"
+command -v workgraph
+workgraph version
 workgraph init
 ```
 
-Make sure your Go binary directory is on `PATH`. It is usually:
+If `go env GOBIN` prints a directory, add that directory to `PATH` instead.
+
+Install or explicitly upgrade the latest GitHub version through Go with:
 
 ```sh
-$(go env GOPATH)/bin
+go install github.com/jystringfellow/workgraph/cmd/workgraph@latest
+workgraph version
 ```
+
+When the Homebrew tap is enabled, install and upgrade with:
+
+```sh
+brew install jystringfellow/tap/workgraph
+brew upgrade workgraph
+```
+
+Tagged GitHub releases also provide platform archives and `checksums.txt` for
+manual verification. workgraph does not perform automatic update checks or
+silently replace its own executable.
 
 You can also build a local binary inside the checkout:
 

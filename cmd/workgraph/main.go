@@ -85,6 +85,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runCaptureStop(args[1:], stdout, stderr)
 	case "today":
 		return runToday(args[1:], stdout, stderr)
+	case "version":
+		return runVersion(args[1:], stdout, stderr)
 	case "resume":
 		return runResume(args[1:], stdout, stderr)
 	case "slack":

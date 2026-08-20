@@ -119,6 +119,7 @@ var helpTopics = map[string]helpTopic{
 	"suggestions show":        {"workgraph suggestions show <id> [options]", "Show a suggestion with its evidence and history."},
 	"suggestions snooze":      {"workgraph suggestions snooze <id> --until <RFC3339> [options]", "Snooze a suggestion until a future instant."},
 	"today":                   {"workgraph today [options]", "Show a compact overview of work captured today."},
+	"version":                 {"workgraph version", "Show the installed workgraph version and build identity."},
 }
 
 var helpExamples = map[string][]string{
@@ -330,6 +331,8 @@ func runCommandForOptionHelp(args []string, stdout io.Writer, stderr io.Writer) 
 		return runCaptureStop(args[1:], stdout, stderr)
 	case "today":
 		return runToday(args[1:], stdout, stderr)
+	case "version":
+		return runVersion(args[1:], stdout, stderr)
 	case "resume":
 		return runResume(args[1:], stdout, stderr)
 	case "slack":
