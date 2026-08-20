@@ -175,9 +175,9 @@ Priority labels used below:
 - [x] Facts use portable temporary directories and one suite-built CLI binary so cold compilation is not charged to daemon command timeouts. [spec: `specs/ci.md`]
 - [ ] Distribution
    - [x] Inspectable `workgraph version` build identity and corrected Go install/upgrade PATH guidance. [spec: `specs/distribution.md`]
-   - [ ] Homebrew formula/tap.
+   - [x] Homebrew formula/tap.
       - [x] Generate a checksum-pinned cross-platform formula and conditionally publish it with a separately scoped tap token. [spec: `specs/distribution.md`]
-      - [ ] Create/configure `jystringfellow/homebrew-tap` and validate installation against the first tagged release.
+      - [x] Create/configure `jystringfellow/homebrew-tap` and validate installation against the first tagged release.
    - [ ] Scoop manifest.
    - [x] Tag-driven native macOS, Linux, and Windows release archives with SHA-256 checksums and a pre-publish vet/full-suite gate. [spec: `specs/distribution.md`]
 - [ ] Plugin system
