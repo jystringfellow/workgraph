@@ -27,6 +27,24 @@ Scenario: Ignore high-noise names
   When a file changes under a directory named "node_modules"
   Then workgraph does not record a user work event
 
+Scenario: Manage an ignored path from the CLI
+  Given workgraph has been initialized
+  When I run "workgraph settings add-ignore-path /path/to/generated-output"
+  Then the absolute path is added to ignore_paths
+  And running the command again does not duplicate it
+  When I run "workgraph settings remove-ignore-path /path/to/generated-output"
+  Then the path is removed from ignore_paths
+  And removing it again succeeds without changing settings
+
+Scenario: Manage an ignored basename from the CLI
+  Given workgraph has been initialized
+  When I run "workgraph settings add-ignore-name .cache"
+  Then ".cache" is added to ignore_names
+  And running the command again does not duplicate it
+  When I run "workgraph settings remove-ignore-name .cache"
+  Then ".cache" is removed from ignore_names
+  And removing it again succeeds without changing settings
+
 Scenario: Ignore generated build output by default
   Given workgraph has been initialized
   When I inspect the settings file

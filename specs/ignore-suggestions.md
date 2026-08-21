@@ -33,3 +33,59 @@ tracked noisy activity -> suggest ignore rule
 ```
 
 This preserves the workgraph rule: suggest -> draft -> approve -> act.
+
+## On-Demand Deterministic Scan
+
+`workgraph suggestions list` only renders suggestions already stored in SQLite;
+it does not initiate analysis. Users can explicitly run the deterministic
+ignore producer with:
+
+```text
+workgraph suggestions scan
+workgraph suggestions scan --type ignore
+```
+
+Omitting `--type` runs every supported deterministic scanner. V1 supports only
+`ignore`; unknown types fail without storing suggestions. The scan accepts a
+positive `--limit` for the maximum number of candidates to store and render,
+defaulting to 20 and capped at 100.
+
+The ignore scan combines two local evidence sources:
+
+- directory pressure under configured watch roots
+- file events already stored in the local database during the preceding 24
+  hours
+
+Filesystem scanning:
+
+- examines directory names and structure, never file contents
+- does not follow symbolic links
+- respects configured ignore paths, ignore names, the workgraph home, and the
+  database path
+- applies the same conservative top-level traversal rule as capture
+- inspects at most 10,000 directories across all roots and reports when that
+  bound truncates the scan
+- chooses the highest generated-looking directory in a nested candidate tree so
+  one generated subtree does not produce many overlapping path suggestions
+
+A directory is generated-looking when its lowercase basename contains `cache`,
+`generated`, `tmp`, `temp`, `derived`, `.noindex`, or `userdata`; exactly matches
+`build`, `dist`, `out`, `target`, `release`, or `releases`; or ends in
+`.xcarchive`. Existing ignore rules still take precedence over this candidate
+classification.
+
+The scanner proposes an `ignore_path` when a generated-looking subtree contains
+at least 16 directories or has at least 8 captured file events in the lookback
+window. It proposes an `ignore_name` when at least 8 captured file events occur
+under the same generated-looking basename across at least 3 distinct candidate
+paths. Counts are threshold rules, not probabilistic scores.
+
+Every stored scan suggestion uses the deterministic baseline lane, includes the
+matched signals, bounded sample paths and event ids, and coalesces through the
+existing stable `(type, pattern_key)` identity. Active suppressions and existing
+ignore rules remain effective.
+
+The scan may append or refresh suggestion records, but it must not update
+settings, start or stop capture, read file contents, or invoke an LLM. Its output
+reports roots inspected, directory count, truncation, and the suggestions it
+recorded. Applying a proposal still requires `workgraph suggestions approve`.

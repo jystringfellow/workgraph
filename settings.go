@@ -30,6 +30,15 @@ type SettingsIgnoreConfig struct {
 	Name    string
 }
 
+// SettingsIgnoreResult describes an ignore rule settings update.
+type SettingsIgnoreResult struct {
+	SettingsPath string
+	Path         string
+	Name         string
+	Changed      bool
+	Message      string
+}
+
 // SettingsGetConfig controls effective settings reporting.
 type SettingsGetConfig struct {
 	HomeDir string
@@ -438,52 +447,147 @@ func removePath(path string, paths []string) []string {
 	return result
 }
 
-func addIgnorePath(config SettingsIgnoreConfig) (string, error) {
+// AddIgnorePath appends a normalized path to the local ignore rules.
+func AddIgnorePath(config SettingsIgnoreConfig) (SettingsIgnoreResult, error) {
+	return updateIgnorePath(config, false)
+}
+
+// RemoveIgnorePath removes a normalized path from the local ignore rules.
+func RemoveIgnorePath(config SettingsIgnoreConfig) (SettingsIgnoreResult, error) {
+	return updateIgnorePath(config, true)
+}
+
+func updateIgnorePath(config SettingsIgnoreConfig, remove bool) (SettingsIgnoreResult, error) {
 	homeDir, err := resolvedSettingsHome(config.HomeDir)
 	if err != nil {
-		return "", err
+		return SettingsIgnoreResult{}, err
 	}
 	settingsPath := filepath.Join(homeDir, "settings.json")
 	localSettings, err := readSettings(settingsPath)
 	if err != nil {
-		return "", err
+		return SettingsIgnoreResult{}, err
 	}
 
 	ignorePath := strings.TrimSpace(config.Path)
 	if ignorePath == "" {
-		return "", fmt.Errorf("ignore path is required")
+		return SettingsIgnoreResult{}, fmt.Errorf("ignore path is required")
 	}
 	ignorePath, err = filepath.Abs(ignorePath)
 	if err != nil {
-		return "", fmt.Errorf("resolve ignore path: %w", err)
+		return SettingsIgnoreResult{}, fmt.Errorf("resolve ignore path: %w", err)
 	}
-	localSettings.IgnorePaths = appendUniqueString(localSettings.IgnorePaths, ignorePath)
-	if err := writeSettings(settingsPath, localSettings); err != nil {
-		return "", err
+
+	present := containsExactString(localSettings.IgnorePaths, ignorePath)
+	changed := (!remove && !present) || (remove && present)
+	if changed {
+		if remove {
+			localSettings.IgnorePaths = removeExactString(localSettings.IgnorePaths, ignorePath)
+		} else {
+			localSettings.IgnorePaths = append(localSettings.IgnorePaths, ignorePath)
+		}
+		if err := writeSettings(settingsPath, localSettings); err != nil {
+			return SettingsIgnoreResult{}, err
+		}
 	}
-	return ignorePath, nil
+
+	result := SettingsIgnoreResult{
+		SettingsPath: settingsPath,
+		Path:         ignorePath,
+		Changed:      changed,
+	}
+	result.Message = ignoreUpdateMessage(result, remove)
+	return result, nil
 }
 
-func addIgnoreName(config SettingsIgnoreConfig) (string, error) {
+// AddIgnoreName appends a basename to the local ignore rules.
+func AddIgnoreName(config SettingsIgnoreConfig) (SettingsIgnoreResult, error) {
+	return updateIgnoreName(config, false)
+}
+
+// RemoveIgnoreName removes a basename from the local ignore rules.
+func RemoveIgnoreName(config SettingsIgnoreConfig) (SettingsIgnoreResult, error) {
+	return updateIgnoreName(config, true)
+}
+
+func updateIgnoreName(config SettingsIgnoreConfig, remove bool) (SettingsIgnoreResult, error) {
 	homeDir, err := resolvedSettingsHome(config.HomeDir)
 	if err != nil {
-		return "", err
+		return SettingsIgnoreResult{}, err
 	}
 	settingsPath := filepath.Join(homeDir, "settings.json")
 	localSettings, err := readSettings(settingsPath)
 	if err != nil {
-		return "", err
+		return SettingsIgnoreResult{}, err
 	}
 
 	ignoreName := strings.TrimSpace(config.Name)
 	if ignoreName == "" {
-		return "", fmt.Errorf("ignore name is required")
+		return SettingsIgnoreResult{}, fmt.Errorf("ignore name is required")
 	}
-	localSettings.IgnoreNames = appendUniqueString(localSettings.IgnoreNames, ignoreName)
-	if err := writeSettings(settingsPath, localSettings); err != nil {
-		return "", err
+	if ignoreName == "." || ignoreName == ".." || strings.ContainsAny(ignoreName, `/\`) {
+		return SettingsIgnoreResult{}, fmt.Errorf("ignore name must be a basename, got %q", ignoreName)
 	}
-	return ignoreName, nil
+
+	present := containsExactString(localSettings.IgnoreNames, ignoreName)
+	changed := (!remove && !present) || (remove && present)
+	if changed {
+		if remove {
+			localSettings.IgnoreNames = removeExactString(localSettings.IgnoreNames, ignoreName)
+		} else {
+			localSettings.IgnoreNames = append(localSettings.IgnoreNames, ignoreName)
+		}
+		if err := writeSettings(settingsPath, localSettings); err != nil {
+			return SettingsIgnoreResult{}, err
+		}
+	}
+
+	result := SettingsIgnoreResult{
+		SettingsPath: settingsPath,
+		Name:         ignoreName,
+		Changed:      changed,
+	}
+	result.Message = ignoreUpdateMessage(result, remove)
+	return result, nil
+}
+
+func ignoreUpdateMessage(result SettingsIgnoreResult, remove bool) string {
+	title := "workgraph settings unchanged"
+	if result.Changed {
+		title = "workgraph settings updated"
+	}
+
+	action := "Added"
+	if remove {
+		action = "Removed"
+	}
+	valueType := "ignore path"
+	value := result.Path
+	if result.Name != "" {
+		valueType = "ignore name"
+		value = result.Name
+	}
+	if !result.Changed {
+		if remove {
+			action = "Ignore " + strings.TrimPrefix(valueType, "ignore ") + " was not configured"
+		} else {
+			action = "Ignore " + strings.TrimPrefix(valueType, "ignore ") + " already configured"
+		}
+		valueType = ""
+	}
+
+	label := action
+	if valueType != "" {
+		label += " " + valueType
+	}
+	lines := []string{
+		title,
+		"Settings: " + result.SettingsPath,
+		label + ": " + value,
+	}
+	if result.Changed {
+		lines = append(lines, "Restart capture for this change to take effect.")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func resolvedSettingsHome(homeDir string) (string, error) {
@@ -498,14 +602,23 @@ func resolvedSettingsHome(homeDir string) (string, error) {
 	return homeDir, nil
 }
 
-func appendUniqueString(values []string, value string) []string {
+func containsExactString(values []string, value string) bool {
 	for _, existing := range values {
 		if existing == value {
-			return append([]string(nil), values...)
+			return true
 		}
 	}
-	result := append([]string(nil), values...)
-	return append(result, value)
+	return false
+}
+
+func removeExactString(values []string, value string) []string {
+	result := make([]string, 0, len(values))
+	for _, existing := range values {
+		if existing != value {
+			result = append(result, existing)
+		}
+	}
+	return result
 }
 
 func writeSettings(settingsPath string, config settingsFile) error {
