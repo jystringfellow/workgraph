@@ -103,11 +103,37 @@ Adding a path that is already watched is idempotent.
 
 This field is for user-owned directories or files that should never be tracked, such as caches, private folders, generated output, or the workgraph home.
 
+Users manage path rules without editing JSON directly:
+
+```text
+workgraph settings add-ignore-path <path>
+workgraph settings remove-ignore-path <path>
+```
+
+Both commands require a path, resolve it to an absolute path without requiring
+it to exist, and update the local settings file. Adding an existing rule and
+removing a missing rule are successful no-ops. Other settings and rule order are
+preserved.
+
 ### ignore_names
 
 `ignore_names` is a list of file or directory basenames. A captured source path is ignored when any path segment matches one of these names.
 
 This field is for high-noise project internals and generated content that commonly appear under watched roots, such as `.git`, `node_modules`, Xcode `DerivedData`, Xcode `xcuserdata`, Apple `.noindex` directories, and common build output names including `bin`, `obj`, `dist`, `build`, `target`, `.build`, and `.gradle`.
+
+Users manage basename rules with:
+
+```text
+workgraph settings add-ignore-name <name>
+workgraph settings remove-ignore-name <name>
+```
+
+Names must be non-empty basenames, not paths, and cannot be `.` or `..`.
+Adding an existing rule and removing a missing rule are successful no-ops.
+
+Every ignore command reports the settings file and normalized rule. A command
+that changes settings tells the user to restart capture because an already
+running daemon keeps the rules loaded when it started.
 
 ## Precedence
 

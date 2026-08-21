@@ -53,6 +53,105 @@ func TestSettingsCommandAddWatchDefaultsToCurrentDirectory(t *testing.T) {
 	}
 }
 
+func TestSettingsCommandsManageIgnorePaths(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	ignoredPath := filepath.Join(tempDir, "generated-output")
+	settingsPath := filepath.Join(homeDir, "settings.json")
+
+	runWorkgraphCommand(t, nil, "init", "--home", homeDir)
+
+	output := runWorkgraphCommand(t, nil, "settings", "add-ignore-path", "--home", homeDir, ignoredPath)
+	for _, expected := range []string{
+		"workgraph settings updated",
+		"Settings: " + settingsPath,
+		"Added ignore path: " + ignoredPath,
+		"Restart capture for this change to take effect.",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("expected add-ignore-path output to include %q, got:\n%s", expected, output)
+		}
+	}
+
+	duplicateOutput := runWorkgraphCommand(t, nil, "settings", "add-ignore-path", "--home", homeDir, ignoredPath)
+	if !strings.Contains(duplicateOutput, "Ignore path already configured: "+ignoredPath) {
+		t.Fatalf("expected duplicate add to report an idempotent no-op, got:\n%s", duplicateOutput)
+	}
+	config := readCLIInitSettings(t, settingsPath)
+	if countExactString(config.IgnorePaths, ignoredPath) != 1 {
+		t.Fatalf("expected ignored path exactly once, got %#v", config.IgnorePaths)
+	}
+
+	removeOutput := runWorkgraphCommand(t, nil, "settings", "remove-ignore-path", "--home", homeDir, ignoredPath)
+	if !strings.Contains(removeOutput, "Removed ignore path: "+ignoredPath) ||
+		!strings.Contains(removeOutput, "Restart capture for this change to take effect.") {
+		t.Fatalf("expected remove-ignore-path confirmation and restart guidance, got:\n%s", removeOutput)
+	}
+	config = readCLIInitSettings(t, settingsPath)
+	if containsString(config.IgnorePaths, ignoredPath) {
+		t.Fatalf("expected ignored path to be removed, got %#v", config.IgnorePaths)
+	}
+
+	missingOutput := runWorkgraphCommand(t, nil, "settings", "remove-ignore-path", "--home", homeDir, ignoredPath)
+	if !strings.Contains(missingOutput, "Ignore path was not configured: "+ignoredPath) {
+		t.Fatalf("expected missing removal to report an idempotent no-op, got:\n%s", missingOutput)
+	}
+}
+
+func TestSettingsCommandsManageIgnoreNames(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	settingsPath := filepath.Join(homeDir, "settings.json")
+	ignoreName := ".cache"
+
+	runWorkgraphCommand(t, nil, "init", "--home", homeDir)
+
+	output := runWorkgraphCommand(t, nil, "settings", "add-ignore-name", "--home", homeDir, ignoreName)
+	if !strings.Contains(output, "Added ignore name: "+ignoreName) ||
+		!strings.Contains(output, "Restart capture for this change to take effect.") {
+		t.Fatalf("expected add-ignore-name confirmation and restart guidance, got:\n%s", output)
+	}
+	duplicateOutput := runWorkgraphCommand(t, nil, "settings", "add-ignore-name", "--home", homeDir, ignoreName)
+	if !strings.Contains(duplicateOutput, "Ignore name already configured: "+ignoreName) {
+		t.Fatalf("expected duplicate add to report an idempotent no-op, got:\n%s", duplicateOutput)
+	}
+	config := readCLIInitSettings(t, settingsPath)
+	if countExactString(config.IgnoreNames, ignoreName) != 1 {
+		t.Fatalf("expected ignored name exactly once, got %#v", config.IgnoreNames)
+	}
+
+	removeOutput := runWorkgraphCommand(t, nil, "settings", "remove-ignore-name", "--home", homeDir, ignoreName)
+	if !strings.Contains(removeOutput, "Removed ignore name: "+ignoreName) {
+		t.Fatalf("expected remove-ignore-name confirmation, got:\n%s", removeOutput)
+	}
+	config = readCLIInitSettings(t, settingsPath)
+	if containsString(config.IgnoreNames, ignoreName) {
+		t.Fatalf("expected ignored name to be removed, got %#v", config.IgnoreNames)
+	}
+	missingOutput := runWorkgraphCommand(t, nil, "settings", "remove-ignore-name", "--home", homeDir, ignoreName)
+	if !strings.Contains(missingOutput, "Ignore name was not configured: "+ignoreName) {
+		t.Fatalf("expected missing removal to report an idempotent no-op, got:\n%s", missingOutput)
+	}
+
+	invalidOutput, err := runWorkgraphCommandAllowError(nil, "settings", "add-ignore-name", "--home", homeDir, "nested/cache")
+	if err == nil {
+		t.Fatalf("expected path-like ignore name to fail, got:\n%s", invalidOutput)
+	}
+	if !strings.Contains(invalidOutput, "ignore name must be a basename") {
+		t.Fatalf("expected basename validation error, got:\n%s", invalidOutput)
+	}
+}
+
+func countExactString(values []string, expected string) int {
+	count := 0
+	for _, value := range values {
+		if value == expected {
+			count++
+		}
+	}
+	return count
+}
+
 func TestSettingsGetReportsManagedSettingsWithoutSecrets(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")

@@ -52,3 +52,27 @@ Scenario: Suggestion show includes full evidence detail
   When I run "workgraph suggestions show <id>"
   Then the output includes all cited event ids
   And the output includes all cited paths
+
+Scenario: Scan deterministically for watch-budget pressure
+  Given a configured watch root contains a generated-looking release subtree
+  And that subtree contains at least sixteen directories
+  When I run "workgraph suggestions scan --type ignore"
+  Then workgraph creates a proposed ignore-path suggestion for the release subtree
+  And the evidence cites filesystem directory pressure
+  And workgraph does not update ignore settings
+
+Scenario: Bound an on-demand ignore scan
+  Given a configured watch root contains more directories than the scan bound
+  When I run "workgraph suggestions scan --type ignore"
+  Then workgraph stops after the deterministic directory bound
+  And the output reports that the scan was truncated
+
+Scenario: Respect existing ignores during a scan
+  Given a generated-looking subtree is already ignored
+  When I run "workgraph suggestions scan --type ignore"
+  Then workgraph does not propose another ignore rule for that subtree
+
+Scenario: Reject an unsupported suggestion scanner
+  Given workgraph has been initialized
+  When I run "workgraph suggestions scan --type semantic"
+  Then the command fails without storing suggestions

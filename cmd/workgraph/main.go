@@ -176,10 +176,12 @@ func runNetworkDestinations(args []string, stdout io.Writer, stderr io.Writer) i
 
 func runSuggestions(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: workgraph suggestions <list|show|approve|dismiss|snooze|complete>")
+		fmt.Fprintln(stderr, "usage: workgraph suggestions <scan|list|show|approve|dismiss|snooze|complete>")
 		return 2
 	}
 	switch args[0] {
+	case "scan":
+		return runSuggestionsScan(args[1:], stdout, stderr)
 	case "list":
 		return runSuggestionsList(args[1:], stdout, stderr)
 	case "show":
@@ -343,6 +345,38 @@ func runSuggestionsList(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "workgraph suggestions list: %v\n", err)
 		return 1
 	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runSuggestionsScan(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("suggestions scan", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
+	scanType := flags.String("type", "", "Deterministic scanner to run: ignore")
+	limit := flags.Int("limit", 20, "Maximum number of suggestions to record and show")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph suggestions scan [--type ignore] [--limit <count>]")
+		return 2
+	}
+
+	result, err := workgraph.ScanSuggestions(workgraph.SuggestionScanConfig{
+		HomeDir:      *homeDir,
+		DatabasePath: *databasePath,
+		Type:         *scanType,
+		Limit:        *limit,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph suggestions scan: %v\n", err)
+		return 1
+	}
+
 	fmt.Fprintln(stdout, result.Message)
 	return 0
 }
@@ -2269,12 +2303,20 @@ func runSettings(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	switch args[0] {
+	case "add-ignore-name":
+		return runSettingsIgnoreName(args[1:], false, stdout, stderr)
+	case "add-ignore-path":
+		return runSettingsIgnorePath(args[1:], false, stdout, stderr)
 	case "add-watch":
 		return runSettingsAddWatch(args[1:], stdout, stderr)
 	case "get":
 		return runSettingsGet(args[1:], stdout, stderr)
 	case "doctor":
 		return runSettingsDoctor(args[1:], stdout, stderr)
+	case "remove-ignore-name":
+		return runSettingsIgnoreName(args[1:], true, stdout, stderr)
+	case "remove-ignore-path":
+		return runSettingsIgnorePath(args[1:], true, stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown settings command: %s\n", args[0])
 		return 2
@@ -2358,6 +2400,76 @@ func runSettingsAddWatch(args []string, stdout io.Writer, stderr io.Writer) int 
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph settings add-watch: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runSettingsIgnorePath(args []string, remove bool, stdout io.Writer, stderr io.Writer) int {
+	command := "add-ignore-path"
+	if remove {
+		command = "remove-ignore-path"
+	}
+	flags := flag.NewFlagSet("settings "+command, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 1 {
+		fmt.Fprintf(stderr, "usage: workgraph settings %s <path>\n", command)
+		return 2
+	}
+
+	config := workgraph.SettingsIgnoreConfig{HomeDir: *homeDir, Path: flags.Arg(0)}
+	var result workgraph.SettingsIgnoreResult
+	var err error
+	if remove {
+		result, err = workgraph.RemoveIgnorePath(config)
+	} else {
+		result, err = workgraph.AddIgnorePath(config)
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph settings %s: %v\n", command, err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runSettingsIgnoreName(args []string, remove bool, stdout io.Writer, stderr io.Writer) int {
+	command := "add-ignore-name"
+	if remove {
+		command = "remove-ignore-name"
+	}
+	flags := flag.NewFlagSet("settings "+command, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 1 {
+		fmt.Fprintf(stderr, "usage: workgraph settings %s <name>\n", command)
+		return 2
+	}
+
+	config := workgraph.SettingsIgnoreConfig{HomeDir: *homeDir, Name: flags.Arg(0)}
+	var result workgraph.SettingsIgnoreResult
+	var err error
+	if remove {
+		result, err = workgraph.RemoveIgnoreName(config)
+	} else {
+		result, err = workgraph.AddIgnoreName(config)
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph settings %s: %v\n", command, err)
 		return 1
 	}
 

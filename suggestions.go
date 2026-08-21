@@ -470,11 +470,11 @@ func ApproveSuggestion(config SuggestionStatusUpdate) (Suggestion, error) {
 
 	switch suggestion.Type {
 	case "ignore_path":
-		if _, err := addIgnorePath(SettingsIgnoreConfig{HomeDir: config.HomeDir, Path: suggestion.PatternKey}); err != nil {
+		if _, err := AddIgnorePath(SettingsIgnoreConfig{HomeDir: config.HomeDir, Path: suggestion.PatternKey}); err != nil {
 			return Suggestion{}, err
 		}
 	case "ignore_name":
-		if _, err := addIgnoreName(SettingsIgnoreConfig{HomeDir: config.HomeDir, Name: suggestion.PatternKey}); err != nil {
+		if _, err := AddIgnoreName(SettingsIgnoreConfig{HomeDir: config.HomeDir, Name: suggestion.PatternKey}); err != nil {
 			return Suggestion{}, err
 		}
 	case "association":
