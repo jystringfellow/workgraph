@@ -17,3 +17,8 @@ Scenario: Request help for an unknown command
   When I run "workgraph help does-not-exist"
   Then workgraph identifies the unknown help path
   And workgraph points me to "workgraph help"
+
+Scenario: Discover agent plugin setup
+  When I request help for "workgraph plugin"
+  Then workgraph lists install and doctor
+  And both commands describe Codex and Claude Code client selection

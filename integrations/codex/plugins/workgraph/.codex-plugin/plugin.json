@@ -1,0 +1,21 @@
+{
+  "name": "workgraph",
+  "version": "0.2.0",
+  "description": "Use local workgraph capture, memory, and AI session continuity from Codex.",
+  "author": { "name": "workgraph" },
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "workgraph",
+    "shortDescription": "Build durable local context for your work.",
+    "longDescription": "Connects Codex to workgraph's local capture, durable memory, and AI session continuity while preserving each capability's approval boundaries.",
+    "developerName": "workgraph",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": [
+      "Set up workgraph using my approved connectors.",
+      "Update durable memory for this project.",
+      "Checkpoint my current workgraph AI session."
+    ]
+  }
+}

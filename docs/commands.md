@@ -399,6 +399,36 @@ workgraph connectors poll --once --connector notion
 
 See the [connectors guide](connectors.md) for provider-specific setup.
 
+## Agent Plugin
+
+Install or update one logical `workgraph` plugin for Codex or Claude Code:
+
+```sh
+workgraph plugin install --client codex
+# or
+workgraph plugin install --client claude-code
+```
+
+The host packages use their native manifest formats but bundle the same local
+MCP and three canonical skills: `workgraph-bridge`, `workgraph-memory`, and
+`workgraph-ai-checkpoint`. Verify the client executable, package, skills, MCP,
+disposable bridge round trip, worker, and heartbeat without contacting a
+provider:
+
+```sh
+workgraph plugin doctor --client codex
+workgraph plugin doctor --client claude-code
+```
+
+Rerun `plugin install` after upgrading workgraph to refresh the package. Start a
+new Codex or Claude Code session after installation so the client discovers the
+new skills and MCP tools. Installing the plugin does not create an LLM profile
+or enable hosted-model consent; `workgraph llm connect` remains an independent
+model-execution setup path.
+
+The older `workgraph bridge install` and `workgraph bridge doctor` commands are
+compatibility aliases that operate on this same broader plugin.
+
 ## Bridged Capture
 
 Bridged capture is for remote sources that are already approved through Codex
@@ -407,19 +437,19 @@ keeps the schedule, cursor, retries, and local event store; the signed-in client
 performs the provider reads and returns normalized events. `git` always remains
 local and direct.
 
-Install one macOS reference integration:
+Install the workgraph plugin for one macOS reference client:
 
 ```sh
-workgraph bridge install --client codex
+workgraph plugin install --client codex
 # or
-workgraph bridge install --client claude-code
+workgraph plugin install --client claude-code
 ```
 
 Verify the local package, MCP server, worker, and client executable without
 contacting a provider:
 
 ```sh
-workgraph bridge doctor --client codex
+workgraph plugin doctor --client codex
 ```
 
 Ask the installed client to use its workgraph bridge skill to discover approved
