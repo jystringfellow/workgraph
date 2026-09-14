@@ -29,6 +29,7 @@ type ConnectorListResult struct {
 // ConnectorStatus describes one connector's polling state.
 type ConnectorStatus struct {
 	ID                  string
+	CaptureMode         string
 	Connected           bool
 	Enabled             bool
 	Interval            time.Duration
@@ -37,9 +38,30 @@ type ConnectorStatus struct {
 	LastValidationError string
 	LastPoll            string
 	LastSuccess         string
+	LastIngest          string
 	LastError           string
 	NextPoll            string
 	ConsecutiveFailures int
+	CaptureRequestID    string
+	CaptureStatus       string
+	CaptureWorker       string
+	CaptureLeaseExpires string
+	CaptureAvailableAt  string
+}
+
+// ConnectorModeConfig controls how a connector captures provider data.
+type ConnectorModeConfig struct {
+	HomeDir string
+	ID      string
+	Mode    string
+}
+
+// ConnectorBridgeConfig controls one approved bridged connector setup.
+type ConnectorBridgeConfig struct {
+	HomeDir      string
+	ID           string
+	Interval     time.Duration
+	BridgeParams json.RawMessage
 }
 
 // ConnectorUpdateConfig controls connector polling updates.
@@ -133,19 +155,157 @@ type connectorRuntimeFile struct {
 }
 
 type connectorRuntimeEntry struct {
-	Enabled             *bool  `json:"enabled,omitempty"`
-	Interval            string `json:"interval,omitempty"`
-	SetupState          string `json:"setup_state,omitempty"`
-	LastValidated       string `json:"last_validated_at,omitempty"`
-	LastValidationError string `json:"last_validation_error,omitempty"`
-	LastPoll            string `json:"last_poll_at,omitempty"`
-	LastSuccess         string `json:"last_success_at,omitempty"`
-	LastError           string `json:"last_error,omitempty"`
-	NextPoll            string `json:"next_poll_at,omitempty"`
-	ConsecutiveFailures int    `json:"consecutive_failures,omitempty"`
+	Enabled             *bool           `json:"enabled,omitempty"`
+	CaptureMode         string          `json:"capture_mode,omitempty"`
+	BridgeParams        json.RawMessage `json:"bridge_params,omitempty"`
+	Interval            string          `json:"interval,omitempty"`
+	SetupState          string          `json:"setup_state,omitempty"`
+	LastValidated       string          `json:"last_validated_at,omitempty"`
+	LastValidationError string          `json:"last_validation_error,omitempty"`
+	LastPoll            string          `json:"last_poll_at,omitempty"`
+	LastSuccess         string          `json:"last_success_at,omitempty"`
+	LastIngest          string          `json:"last_ingest_at,omitempty"`
+	LastError           string          `json:"last_error,omitempty"`
+	NextPoll            string          `json:"next_poll_at,omitempty"`
+	ConsecutiveFailures int             `json:"consecutive_failures,omitempty"`
 }
 
 var connectorPollStateMu sync.Mutex
+
+// ConnectBridgedConnector enables a provider connector without requiring local credentials.
+func ConnectBridgedConnector(config ConnectorModeConfig) (ConnectorConnectResult, error) {
+	config.Mode = "bridged"
+	result, err := SetConnectorMode(config)
+	if err != nil {
+		return ConnectorConnectResult{}, err
+	}
+	return ConnectorConnectResult{
+		HomeDir: result.HomeDir,
+		ID:      result.ID,
+		Message: strings.Join([]string{
+			fmt.Sprintf("Connector %s connected in bridged mode", result.ID),
+			"Status: awaiting first ingest",
+			"workgraph will not store provider credentials or call the provider directly.",
+			"Config: " + connectorRuntimePath(result.HomeDir),
+		}, "\n"),
+	}, nil
+}
+
+// ConfigureBridgedConnector records approved non-secret scope and cadence.
+func ConfigureBridgedConnector(config ConnectorBridgeConfig) (ConnectorConnectResult, error) {
+	result, err := ConnectBridgedConnector(ConnectorModeConfig{HomeDir: config.HomeDir, ID: config.ID, Mode: "bridged"})
+	if err != nil {
+		return ConnectorConnectResult{}, err
+	}
+	if config.Interval > 0 {
+		if _, err := SetConnectorInterval(ConnectorUpdateConfig{HomeDir: result.HomeDir, ID: result.ID, Interval: config.Interval}); err != nil {
+			return ConnectorConnectResult{}, err
+		}
+	}
+	params := canonicalBridgeParams(config.BridgeParams)
+	if err := rejectBridgeSecrets(params); err != nil {
+		return ConnectorConnectResult{}, err
+	}
+	connectorPollStateMu.Lock()
+	defer connectorPollStateMu.Unlock()
+	state, err := readConnectorRuntimeFile(result.HomeDir)
+	if err != nil {
+		return ConnectorConnectResult{}, err
+	}
+	entry := state.entry(result.ID)
+	entry.BridgeParams = params
+	state.Connectors[result.ID] = entry
+	if err := writeConnectorRuntimeFile(result.HomeDir, state); err != nil {
+		return ConnectorConnectResult{}, err
+	}
+	result.Message = fmt.Sprintf("Connector %s configured in bridged mode\nStatus: awaiting first ingest\nConfig: %s", result.ID, connectorRuntimePath(result.HomeDir))
+	return result, nil
+}
+
+func rejectBridgeSecrets(params json.RawMessage) error {
+	var value any
+	if err := json.Unmarshal(params, &value); err != nil {
+		return fmt.Errorf("bridge parameters must be valid JSON: %w", err)
+	}
+	var inspect func(any) error
+	inspect = func(current any) error {
+		switch typed := current.(type) {
+		case map[string]any:
+			for key, child := range typed {
+				normalized := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(key, "_", ""), "-", ""))
+				if strings.Contains(normalized, "token") || strings.Contains(normalized, "secret") || strings.Contains(normalized, "password") || normalized == "authorization" || normalized == "apikey" {
+					return fmt.Errorf("bridge parameter %q may contain a secret", key)
+				}
+				if err := inspect(child); err != nil {
+					return err
+				}
+			}
+		case []any:
+			for _, child := range typed {
+				if err := inspect(child); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	return inspect(value)
+}
+
+// SetConnectorMode selects direct or bridged capture for one connector.
+func SetConnectorMode(config ConnectorModeConfig) (ConnectorUpdateResult, error) {
+	homeDir, err := connectorHomeDir(config.HomeDir)
+	if err != nil {
+		return ConnectorUpdateResult{}, err
+	}
+	id, err := normalizeConnectorID(config.ID)
+	if err != nil {
+		return ConnectorUpdateResult{}, err
+	}
+	mode := strings.ToLower(strings.TrimSpace(config.Mode))
+	if mode != "direct" && mode != "bridged" {
+		return ConnectorUpdateResult{}, fmt.Errorf("capture mode must be direct or bridged")
+	}
+	if id == "git" && mode == "bridged" {
+		return ConnectorUpdateResult{}, fmt.Errorf("connector git only supports direct capture")
+	}
+	if err := enforceConnectorManagedSettings(id); err != nil {
+		return ConnectorUpdateResult{}, err
+	}
+
+	connectorPollStateMu.Lock()
+	defer connectorPollStateMu.Unlock()
+	state, err := readConnectorRuntimeFile(homeDir)
+	if err != nil {
+		return ConnectorUpdateResult{}, err
+	}
+	entry := state.entry(id)
+	previousMode := connectorCaptureMode(state, id)
+	entry.CaptureMode = mode
+	if mode == "bridged" {
+		enabled := true
+		entry.Enabled = &enabled
+		entry.SetupState = "ready"
+		entry.LastValidationError = ""
+		entry.LastError = ""
+		entry.NextPoll = ""
+		entry.ConsecutiveFailures = 0
+	}
+	if previousMode == "bridged" && mode == "direct" {
+		if err := cancelActiveCaptureRequests(homeDir, id, time.Now()); err != nil {
+			return ConnectorUpdateResult{}, err
+		}
+	}
+	state.Connectors[id] = entry
+	if err := writeConnectorRuntimeFile(homeDir, state); err != nil {
+		return ConnectorUpdateResult{}, err
+	}
+	return ConnectorUpdateResult{
+		HomeDir: homeDir,
+		ID:      id,
+		Message: fmt.Sprintf("Connector %s capture mode: %s\nConfig: %s", id, mode, connectorRuntimePath(homeDir)),
+	}, nil
+}
 
 // ListConnectors reports known connector polling state.
 func ListConnectors(config ConnectorListConfig) (ConnectorListResult, error) {
@@ -419,6 +579,23 @@ func PollConnectors(config ConnectorPollConfig) (ConnectorPollResult, error) {
 	result := ConnectorPollResult{HomeDir: homeDir}
 	for _, id := range ids {
 		pollResult := ConnectorPollConnectorResult{ID: id, Status: "ok"}
+		if connectorCaptureMode(state, id) == "bridged" {
+			emitted, emitErr := EmitBridgedCaptureRequest(CaptureRequestEmitConfig{
+				HomeDir:      homeDir,
+				DatabasePath: dbPath,
+				ConnectorID:  id,
+			})
+			if emitErr != nil {
+				pollResult.Status = "error"
+				pollResult.Error = emitErr.Error()
+			} else if emitted.Coalesced {
+				pollResult.Status = "pending (coalesced), request " + emitted.Request.ID
+			} else {
+				pollResult.Status = "pending, request " + emitted.Request.ID
+			}
+			result.Results = append(result.Results, pollResult)
+			continue
+		}
 		if err := pollConnectorOnce(homeDir, dbPath, id); err != nil {
 			pollResult.Status = "error"
 			pollResult.Error = err.Error()
@@ -453,6 +630,7 @@ func connectRuntimeConnector(homeDir string, id string, interval string) (Connec
 	entry := state.entry(id)
 	enabled := true
 	entry.Enabled = &enabled
+	entry.CaptureMode = "direct"
 	entry.SetupState = "ready"
 	entry.LastValidated = time.Now().UTC().Format(time.RFC3339)
 	entry.LastValidationError = ""
@@ -506,7 +684,7 @@ func pollConnectorIDs(homeDir string, state connectorRuntimeFile, requested stri
 		if err := enforceConnectorManagedSettings(id); err != nil {
 			return nil, err
 		}
-		if !connectorConnected(homeDir, id) {
+		if !connectorConnected(homeDir, state, id) {
 			return nil, fmt.Errorf("connector %s is not connected", id)
 		}
 		if !connectorEnabled(state, id) {
@@ -521,6 +699,13 @@ func pollConnectorIDs(homeDir string, state connectorRuntimeFile, requested stri
 }
 
 func pollConnectorOnce(homeDir string, databasePath string, id string) error {
+	state, err := readConnectorRuntimeFile(homeDir)
+	if err != nil {
+		return err
+	}
+	if connectorCaptureMode(state, id) == "bridged" {
+		return fmt.Errorf("connector %s is bridged; feed it via capture ingest", id)
+	}
 	ctx := context.Background()
 	capture := &RunCapture{
 		homeDir:      homeDir,
@@ -599,11 +784,21 @@ func connectorStatuses(homeDir string, state connectorRuntimeFile) []ConnectorSt
 		"azure.boards",
 	}
 	statuses := make([]ConnectorStatus, 0, len(ids))
+	activeRequests := map[string]CaptureRequest{}
+	if requests, err := ListCaptureRequests(CaptureRequestListConfig{HomeDir: homeDir}); err == nil {
+		for _, request := range requests {
+			if request.Status == "pending" || request.Status == "claimed" {
+				activeRequests[request.ConnectorID] = request
+			}
+		}
+	}
 	for _, id := range ids {
-		connected := connectorConnected(homeDir, id)
+		connected := connectorConnected(homeDir, state, id)
 		entry := state.entry(id)
+		request := activeRequests[id]
 		statuses = append(statuses, ConnectorStatus{
 			ID:                  id,
+			CaptureMode:         connectorCaptureMode(state, id),
 			Connected:           connected,
 			Enabled:             connectorEnabled(state, id),
 			Interval:            connectorInterval(state, id, defaultConnectorInterval(id)),
@@ -612,9 +807,15 @@ func connectorStatuses(homeDir string, state connectorRuntimeFile) []ConnectorSt
 			LastValidationError: entry.LastValidationError,
 			LastPoll:            entry.LastPoll,
 			LastSuccess:         entry.LastSuccess,
+			LastIngest:          entry.LastIngest,
 			LastError:           entry.LastError,
 			NextPoll:            connectorNextPoll(entry, defaultConnectorInterval(id)),
 			ConsecutiveFailures: entry.ConsecutiveFailures,
+			CaptureRequestID:    request.ID,
+			CaptureStatus:       request.Status,
+			CaptureWorker:       request.ClaimedBy,
+			CaptureLeaseExpires: request.LeaseExpiresAt,
+			CaptureAvailableAt:  request.AvailableAt,
 		})
 	}
 	return statuses
@@ -690,7 +891,10 @@ func recordConnectorPollAttempt(homeDir string, id string, when time.Time, nextP
 	return writeConnectorRuntimeFile(homeDir, state)
 }
 
-func connectorConnected(homeDir string, id string) bool {
+func connectorConnected(homeDir string, state connectorRuntimeFile, id string) bool {
+	if id != "git" && connectorCaptureMode(state, id) == "bridged" {
+		return true
+	}
 	switch id {
 	case "git":
 		return true
@@ -721,6 +925,48 @@ func connectorConnected(homeDir string, id string) bool {
 	default:
 		return false
 	}
+}
+
+func connectorCaptureMode(state connectorRuntimeFile, id string) string {
+	mode := strings.ToLower(strings.TrimSpace(state.entry(id).CaptureMode))
+	if mode == "bridged" {
+		return mode
+	}
+	return "direct"
+}
+
+func recordConnectorIngest(homeDir string, id string, when time.Time) error {
+	connectorPollStateMu.Lock()
+	defer connectorPollStateMu.Unlock()
+
+	state, err := readConnectorRuntimeFile(homeDir)
+	if err != nil {
+		return err
+	}
+	entry := state.entry(id)
+	entry.LastIngest = when.UTC().Format(time.RFC3339)
+	state.Connectors[id] = entry
+	return writeConnectorRuntimeFile(homeDir, state)
+}
+
+func recordConnectorCaptureCompletion(homeDir string, id string, when time.Time) error {
+	connectorPollStateMu.Lock()
+	defer connectorPollStateMu.Unlock()
+
+	state, err := readConnectorRuntimeFile(homeDir)
+	if err != nil {
+		return err
+	}
+	entry := state.entry(id)
+	completedAt := when.UTC().Format(time.RFC3339)
+	entry.LastIngest = completedAt
+	entry.LastPoll = completedAt
+	entry.LastSuccess = completedAt
+	entry.LastError = ""
+	entry.ConsecutiveFailures = 0
+	entry.NextPoll = when.UTC().Add(connectorInterval(state, id, defaultConnectorInterval(id))).Format(time.RFC3339)
+	state.Connectors[id] = entry
+	return writeConnectorRuntimeFile(homeDir, state)
 }
 
 func connectorHomeDir(homeDir string) (string, error) {
@@ -975,6 +1221,10 @@ func connectorListMessage(result ConnectorListResult) string {
 		return statuses[i].ID < statuses[j].ID
 	})
 	for _, status := range statuses {
+		label := status.ID
+		if status.CaptureMode == "bridged" {
+			label += " (bridged)"
+		}
 		connected := "not connected"
 		if status.Connected {
 			connected = "connected"
@@ -983,7 +1233,7 @@ func connectorListMessage(result ConnectorListResult) string {
 		if status.Enabled {
 			enabled = "enabled"
 		}
-		line := fmt.Sprintf("- %s: %s, %s, interval %s", status.ID, connected, enabled, status.Interval)
+		line := fmt.Sprintf("- %s: %s, %s, interval %s", label, connected, enabled, status.Interval)
 		if status.LastPoll != "" {
 			line += ", last poll " + status.LastPoll
 		}
@@ -992,6 +1242,15 @@ func connectorListMessage(result ConnectorListResult) string {
 		}
 		if status.NextPoll != "" {
 			line += ", next poll " + status.NextPoll
+		}
+		if status.CaptureStatus != "" {
+			line += ", capture " + status.CaptureStatus
+			if status.CaptureWorker != "" {
+				line += ", worker " + status.CaptureWorker
+			}
+			if status.CaptureLeaseExpires != "" {
+				line += ", lease expires " + status.CaptureLeaseExpires
+			}
 		}
 		lines = append(lines, line)
 	}
@@ -1035,6 +1294,10 @@ func connectorStatusMessage(result ConnectorListResult) string {
 		return statuses[i].ID < statuses[j].ID
 	})
 	for _, status := range statuses {
+		label := status.ID
+		if status.CaptureMode == "bridged" {
+			label += " (bridged)"
+		}
 		polling := "polling disabled"
 		if status.Enabled {
 			polling = "polling enabled"
@@ -1042,7 +1305,7 @@ func connectorStatusMessage(result ConnectorListResult) string {
 		if status.SetupState != "ready" || !status.Connected {
 			polling = "polling not ready"
 		}
-		line := fmt.Sprintf("- %s: setup %s, %s, interval %s", status.ID, status.SetupState, polling, status.Interval)
+		line := fmt.Sprintf("- %s: setup %s, %s, interval %s", label, status.SetupState, polling, status.Interval)
 		if status.LastValidated != "" {
 			line += ", last validated " + status.LastValidated
 		}
@@ -1052,11 +1315,23 @@ func connectorStatusMessage(result ConnectorListResult) string {
 		if status.LastPoll != "" {
 			line += ", last poll " + status.LastPoll
 		}
+		if status.LastIngest != "" {
+			line += ", last ingest " + status.LastIngest
+		}
 		if status.LastError != "" {
 			line += ", last error " + status.LastError
 		}
 		if status.NextPoll != "" {
 			line += ", next poll " + status.NextPoll
+		}
+		if status.CaptureStatus != "" {
+			line += ", capture " + status.CaptureStatus
+			if status.CaptureWorker != "" {
+				line += ", worker " + status.CaptureWorker
+			}
+			if status.CaptureLeaseExpires != "" {
+				line += ", lease expires " + status.CaptureLeaseExpires
+			}
 		}
 		lines = append(lines, line)
 	}

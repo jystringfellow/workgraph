@@ -1,0 +1,12 @@
+{
+  "name": "workgraph",
+  "owner": { "name": "workgraph" },
+  "plugins": [
+    {
+      "name": "workgraph-bridge",
+      "source": "./plugins/workgraph-bridge",
+      "description": "Drain locally scheduled workgraph capture through approved Claude Code connectors.",
+      "version": "0.1.0"
+    }
+  ]
+}

@@ -29,6 +29,7 @@ Priority labels used below:
 - [x] Local config file
 - [x] Sane default watch roots
 - [x] Configurable ignored paths and names
+- [ ] CLI removal of configured watch roots with `workgraph settings remove-watch <path>`.
 - [x] SQLite event store
 - [x] Database indices on events (timestamp, project, source, type) to prevent full-table-scan degradation as event volume grows. [spec: `specs/architecture-improvements.md`]
 - [x] File system watcher
@@ -94,10 +95,12 @@ Priority labels used below:
    - [ ] Rich local HTML artifacts/reports linked to memory and evidence.
 - [ ] LLM connector
    - [x] Local config for provider/model selection.
+   - [x] Signed-in Codex and Claude Code client profiles for credential-free LLM testing and summaries, with per-task routing and managed client allowlists. [P1, spec: `specs/llm-integration.md`]
    - [ ] Explicit opt-in hosted LLM credentials and outbound request controls. [P1, spec: `specs/llm-integration.md`]
    - [ ] Fact-backed summary/suggestion command path using the configured LLM.
 - [ ] Configurable connector framework
    - [x] Connected services poll automatically from `workgraph start` with visible controls. [P0a, spec: `specs/connector-runtime.md`]
+   - [x] Bridged connector capture through approved AI-client connectors, with daemon-owned cadence, durable outbox ingestion, and Claude Code/Codex macOS reference integrations. [P0a, spec: `specs/bridged-capture.md`]
    - [x] Connector poll failures are isolated from the daemon, recorded in connector state, logged, and shown by `workgraph status`. Fatal local capture exits preserve their last error. [P0a, specs: `specs/connector-runtime.md` and `specs/capture-controls.md`]
    - [x] Bound connector polls with request deadlines and retry backoff so a stalled or failing provider cannot block the shared capture loop. [P0a, specs: `specs/connector-runtime.md` and `specs/architecture-improvements.md`]
    - [ ] Memory routing/index file for loading relevant context by task.
@@ -137,6 +140,7 @@ Priority labels used below:
 
 ## Phase 4: Suggestions and intelligence
 - [ ] Suggest watch roots from external signals
+- [ ] Deterministic watch-budget coverage analysis: report per-root/project watch cost, covered and uncovered directories, recent activity, and explicit `add-watch`, `remove-watch`, or ignore-rule recommendations without relying on an LLM.
 - [x] Suggest ignore rules from noisy tracked activity
 - [ ] Session summaries
 - [ ] Task extraction

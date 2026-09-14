@@ -399,6 +399,69 @@ workgraph connectors poll --once --connector notion
 
 See the [connectors guide](connectors.md) for provider-specific setup.
 
+## Bridged Capture
+
+Bridged capture is for remote sources that are already approved through Codex
+or Claude Code but cannot be connected to workgraph with direct OAuth. workgraph
+keeps the schedule, cursor, retries, and local event store; the signed-in client
+performs the provider reads and returns normalized events. `git` always remains
+local and direct.
+
+Install one macOS reference integration:
+
+```sh
+workgraph bridge install --client codex
+# or
+workgraph bridge install --client claude-code
+```
+
+Verify the local package, MCP server, worker, and client executable without
+contacting a provider:
+
+```sh
+workgraph bridge doctor --client codex
+```
+
+Ask the installed client to use its workgraph bridge skill to discover approved
+provider connectors and propose source scopes and cadences. After approval, the
+client configures each source through the local MCP. The equivalent explicit
+CLI setup is:
+
+```sh
+workgraph connectors connect slack --mode bridged
+workgraph connectors interval slack 15m
+workgraph start
+```
+
+Inspect the daemon-owned outbox and cursor:
+
+```sh
+workgraph capture requests --list
+workgraph capture watermark --connector slack
+workgraph connectors status
+```
+
+The installed worker normally claims and completes requests automatically. For
+diagnosis, trigger one drain or execute the capability-based protocol manually:
+
+```sh
+workgraph bridge drain --client codex
+workgraph capture requests --claim --connector slack --max 1 \
+  --worker manual --claim-file /private/path/claim.json
+workgraph capture ingest --request <request-id> \
+  --claim-file /private/path/claim.json --json -
+workgraph capture requests --renew <request-id> \
+  --claim-file /private/path/claim.json
+workgraph capture requests --fail <request-id> \
+  --claim-file /private/path/claim.json --error-json -
+```
+
+Claim files contain short-lived local capabilities. Keep them private, never
+put their contents in process arguments or logs, and remove them after the
+request completes. Manual source ingestion is available for recovery and import
+work through `capture ingest --source <source>`, but scheduled workers should
+always bind ingestion to a claimed request.
+
 ## Local Database
 
 workgraph stores local operational memory in SQLite:
@@ -441,6 +504,58 @@ workgraph llm doctor --profile local-gemma
 `llm doctor` checks `/v1/models` for OpenAI-compatible profiles and reports
 whether the configured model is advertised. It does not print API key
 environment variable names or connector data.
+
+### Signed-in Codex and Claude Code
+
+Instead of running a local model or configuring another API credential, use an
+already signed-in AI client as an LLM profile:
+
+```sh
+workgraph llm connect codex --for summarize
+# or
+workgraph llm connect claude-code --for summarize
+```
+
+The default profile name is `codex` or `claude-code`. Multiple profiles and
+task-specific routes can coexist:
+
+```sh
+workgraph llm connect codex --name personal-codex --for summarize
+workgraph llm connect claude-code --name work-claude --model <approved-model> --for categorize
+workgraph llm list
+workgraph llm use personal-codex --for summarize
+```
+
+`categorize` is a reserved task route; the project-categorization suggestion
+workflow is not implemented yet. Current client-backed execution supports
+`llm test`, `llm doctor`, and `llm summarize today`.
+
+Client-backed models are still hosted models, even though workgraph stores no
+model token and calls only the local client executable. Explicitly allow focused
+captured context to leave the machine, then test and summarize:
+
+```sh
+workgraph llm hosted enable
+workgraph llm doctor --profile codex
+workgraph llm test --profile codex
+workgraph llm summarize today --dry-run
+workgraph llm summarize today
+```
+
+If `llm test` reports that the client's selected model is unavailable, configure
+an accessible client model explicitly and rerun the test:
+
+```sh
+workgraph llm connect claude-code --model <approved-model> --for summarize
+workgraph llm test --profile claude-code
+```
+
+workgraph applies the same focused-context selection, outbound secret filtering,
+and managed provider policy used by direct hosted profiles. It sends the prompt
+through standard input to an ephemeral, non-writing client invocation and does
+not expose capture connectors to the summarization task. Client-backed output is
+buffered and validated before it is printed; `--no-stream` remains available for
+consistent full-response output across every provider.
 
 Hosted LLM profiles, such as Bedrock or non-local OpenAI-compatible endpoints,
 require explicit hosted LLM opt-in before workgraph sends prompt content:

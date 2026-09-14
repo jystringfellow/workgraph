@@ -59,7 +59,11 @@ The current managed policy schema supports these controls:
 - `llm.hosted_enabled`: disables hosted LLM providers when set to `false` and
   locked.
 - `llm.allowed_providers`: restricts LLM use to listed providers such as
-  `openai-compatible` or `bedrock`.
+  `openai-compatible`, `bedrock`, or `ai-client`.
+- `llm.ai_client.allowed_clients`: when `ai-client` is allowed, restricts
+  workgraph invocation to `codex`, `claude-code`, or both. This controls only
+  workgraph's delegated LLM calls; the organization must manage the AI client's
+  wider policy and sign-in separately.
 - `llm.allowed_base_urls`: restricts OpenAI-compatible LLM destinations to the
   listed base URLs when locked.
 - `llm.outbound_filter.sensitive_patterns`: adds organization-specific regular
@@ -85,6 +89,31 @@ The current managed policy schema supports these controls:
 The recommended policy is intentionally narrow. It addresses the highest-risk
 controls implemented today while keeping connector governance explicit and
 inspectable.
+
+For example, a managed deployment that permits client-backed LLM calls only
+through an approved Codex installation can include:
+
+```json
+{
+  "llm": {
+    "allowed_providers": {
+      "value": ["ai-client"],
+      "locked": true
+    },
+    "ai_client": {
+      "allowed_clients": {
+        "value": ["codex"],
+        "locked": true
+      }
+    }
+  }
+}
+```
+
+For these profiles, `workgraph network destinations` reports a logical
+`client://codex` or `client://claude-code` destination. The actual remote model
+endpoint, retention policy, account controls, and authentication remain owned
+by the separately managed client and are not inspectable by workgraph.
 
 ## Verification
 

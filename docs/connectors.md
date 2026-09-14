@@ -26,6 +26,52 @@ with invalid-auth errors. `connectors upgrade` performs a local-only
 reconciliation of `connectors.json`; it does not contact provider APIs or
 overwrite stored tokens.
 
+## Bridged remote connectors
+
+When workgraph itself is not approved for a provider OAuth connection, a
+signed-in Codex or Claude Code installation can execute capture through provider
+connectors already approved in that client. Install one reference integration:
+
+```sh
+workgraph bridge install --client codex
+# or
+workgraph bridge install --client claude-code
+workgraph bridge doctor --client codex
+```
+
+Then ask that client to set up workgraph bridges. It discovers available
+read-only provider tools, proposes non-secret scopes and cadences, waits for
+approval, and configures the local workgraph MCP. A connector can also be put in
+bridged mode explicitly:
+
+```sh
+workgraph connectors connect notion --mode bridged
+workgraph connectors interval notion 30m
+workgraph start
+```
+
+The daemon emits bounded capture requests on the configured cadence. The
+installed per-user worker drains those requests; workgraph never receives the
+provider token and never calls that provider directly. Inspect operation with:
+
+```sh
+workgraph capture requests --list
+workgraph capture watermark --connector notion
+workgraph connectors status
+workgraph bridge drain --client codex
+```
+
+Bridging is supported for registered remote connectors with event contracts.
+Local `git` capture cannot be bridged. Switching a connector back to `direct`
+preserves any direct credentials already stored by workgraph:
+
+```sh
+workgraph connectors mode notion direct
+```
+
+See the [bridged capture specification](../specs/bridged-capture.md) for the
+outbox lifecycle, claim security, source matrix, and normalization contracts.
+
 ## Slack
 
 Connect Slack:

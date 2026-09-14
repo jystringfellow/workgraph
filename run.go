@@ -168,6 +168,7 @@ type RunCapture struct {
 	azureBoardsEnabled      bool
 	azureBoardsPollInterval time.Duration
 	azureBoardsHTTPClient   *http.Client
+	bridgedConnectors       map[string]time.Duration
 	connectorPollTimeout    time.Duration
 	connectorRetryInitial   time.Duration
 	connectorRetryMax       time.Duration
@@ -278,8 +279,9 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 	}
 	calendarProviders := connectedCalendarProviders(status.HomeDir, connectorState, managedSettings, managedSettingsPresent)
 	mailProviders := connectedMailProviders(status.HomeDir, connectorState, managedSettings, managedSettingsPresent)
-	notionEnabled := notionConnectorConnected(status.HomeDir) && connectorReadyForRuntime(connectorState, "notion", managedSettings, managedSettingsPresent)
-	azureBoardsEnabled := azureBoardsConnectorConnected(status.HomeDir) && connectorReadyForRuntime(connectorState, "azure.boards", managedSettings, managedSettingsPresent)
+	notionEnabled := connectorCaptureMode(connectorState, "notion") == "direct" && notionConnectorConnected(status.HomeDir) && connectorReadyForRuntime(connectorState, "notion", managedSettings, managedSettingsPresent)
+	azureBoardsEnabled := connectorCaptureMode(connectorState, "azure.boards") == "direct" && azureBoardsConnectorConnected(status.HomeDir) && connectorReadyForRuntime(connectorState, "azure.boards", managedSettings, managedSettingsPresent)
+	bridgedConnectors := readyBridgedConnectors(connectorState, managedSettings, managedSettingsPresent)
 	status.MonitoredConnectors, err = monitoredConnectorIDs(status.HomeDir, connectorState)
 	if err != nil {
 		watcher.Close()
@@ -303,11 +305,11 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 		watchBudget:           budget,
 		gitEnabled:            connectorEnabledForRuntime(connectorState, "git", managedSettings, managedSettingsPresent),
 		gitPollInterval:       connectorInterval(connectorState, "git", gitPollInterval(config.GitPollInterval)),
-		githubEnabled:         connectorReadyForRuntime(connectorState, "github", managedSettings, managedSettingsPresent),
+		githubEnabled:         connectorCaptureMode(connectorState, "github") == "direct" && connectorReadyForRuntime(connectorState, "github", managedSettings, managedSettingsPresent),
 		githubPollInterval:    connectorInterval(connectorState, "github", githubPollInterval(config.GitHubPollInterval)),
 		githubCommand:         config.GitHubCommand,
-		slackEnabled:          connectorReadyForRuntime(connectorState, "slack", managedSettings, managedSettingsPresent),
-		slackListsEnabled:     connectorReadyForRuntime(connectorState, "slack.lists", managedSettings, managedSettingsPresent),
+		slackEnabled:          connectorCaptureMode(connectorState, "slack") == "direct" && connectorReadyForRuntime(connectorState, "slack", managedSettings, managedSettingsPresent),
+		slackListsEnabled:     connectorCaptureMode(connectorState, "slack.lists") == "direct" && connectorReadyForRuntime(connectorState, "slack.lists", managedSettings, managedSettingsPresent),
 		slackPollInterval:     connectorInterval(connectorState, "slack", slackPollInterval(config.SlackPollInterval)),
 		slackListPollInterval: connectorInterval(connectorState, "slack.lists", slackListPollInterval(config.SlackListPollInterval)),
 		slackToken:            slackToken,
@@ -337,6 +339,7 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 		azureBoardsEnabled:      azureBoardsEnabled,
 		azureBoardsPollInterval: connectorInterval(connectorState, "azure.boards", azureBoardsPollInterval(config.AzureBoardsPollInterval)),
 		azureBoardsHTTPClient:   config.AzureBoardsHTTPClient,
+		bridgedConnectors:       bridgedConnectors,
 		connectorPollTimeout:    positiveDuration(config.ConnectorPollTimeout, defaultConnectorPollTimeout),
 		connectorRetryInitial:   positiveDuration(config.ConnectorRetryInitial, defaultConnectorRetryInitial),
 		connectorRetryMax:       positiveDuration(config.ConnectorRetryMax, defaultConnectorRetryMax),
@@ -358,6 +361,13 @@ func (capture *RunCapture) Run(ctx context.Context) error {
 			defer pollers.Done()
 			capture.runConnectorPoller(pollContext, poller)
 		}(poller)
+	}
+	for id, interval := range capture.bridgedConnectors {
+		pollers.Add(1)
+		go func(id string, interval time.Duration) {
+			defer pollers.Done()
+			capture.runBridgedConnectorScheduler(pollContext, id, interval)
+		}(id, interval)
 	}
 	defer func() {
 		stopPollers()
@@ -383,6 +393,65 @@ func (capture *RunCapture) Run(ctx context.Context) error {
 				return err
 			}
 		}
+	}
+}
+
+func (capture *RunCapture) runBridgedConnectorScheduler(ctx context.Context, id string, interval time.Duration) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		state, err := readConnectorRuntimeFile(capture.homeDir)
+		if err != nil {
+			capture.logConnectorPollError(id, fmt.Errorf("read bridged connector state: %w", err))
+			if !waitForConnectorSchedule(ctx, time.Second) {
+				return
+			}
+			continue
+		}
+		if connectorCaptureMode(state, id) != "bridged" || !connectorEnabled(state, id) {
+			return
+		}
+		now := time.Now()
+		if next := strings.TrimSpace(state.entry(id).NextPoll); next != "" {
+			if nextTime, parseErr := time.Parse(time.RFC3339Nano, next); parseErr == nil && nextTime.After(now) {
+				if !waitForConnectorSchedule(ctx, nextTime.Sub(now)) {
+					return
+				}
+				continue
+			}
+		}
+		emitted, err := EmitBridgedCaptureRequest(CaptureRequestEmitConfig{
+			HomeDir: capture.homeDir, DatabasePath: capture.databasePath, ConnectorID: id, Now: now,
+		})
+		if err != nil {
+			capture.logConnectorPollError(id, err)
+			if !waitForConnectorSchedule(ctx, capture.connectorRetryInitial) {
+				return
+			}
+			continue
+		}
+		delay := minDuration(interval, 30*time.Second)
+		if !emitted.Coalesced {
+			delay = minDuration(interval, 30*time.Second)
+		}
+		if !waitForConnectorSchedule(ctx, delay) {
+			return
+		}
+	}
+}
+
+func waitForConnectorSchedule(ctx context.Context, delay time.Duration) bool {
+	if delay <= 0 {
+		delay = time.Second
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 
@@ -541,10 +610,10 @@ func connectedCalendarProviders(homeDir string, state connectorRuntimeFile, mana
 		return nil
 	}
 	var providers []string
-	if config.Google != nil && strings.TrimSpace(config.Google.AccessToken) != "" && connectorReadyForRuntime(state, "calendar.google", managed, managedPresent) {
+	if connectorCaptureMode(state, "calendar.google") == "direct" && config.Google != nil && strings.TrimSpace(config.Google.AccessToken) != "" && connectorReadyForRuntime(state, "calendar.google", managed, managedPresent) {
 		providers = append(providers, "google")
 	}
-	if config.Microsoft != nil && strings.TrimSpace(config.Microsoft.AccessToken) != "" && connectorReadyForRuntime(state, "calendar.microsoft", managed, managedPresent) {
+	if connectorCaptureMode(state, "calendar.microsoft") == "direct" && config.Microsoft != nil && strings.TrimSpace(config.Microsoft.AccessToken) != "" && connectorReadyForRuntime(state, "calendar.microsoft", managed, managedPresent) {
 		providers = append(providers, "microsoft")
 	}
 	return providers
@@ -556,10 +625,10 @@ func connectedMailProviders(homeDir string, state connectorRuntimeFile, managed 
 		return nil
 	}
 	var providers []string
-	if config.Google != nil && strings.TrimSpace(config.Google.AccessToken) != "" && connectorReadyForRuntime(state, "mail.google", managed, managedPresent) {
+	if connectorCaptureMode(state, "mail.google") == "direct" && config.Google != nil && strings.TrimSpace(config.Google.AccessToken) != "" && connectorReadyForRuntime(state, "mail.google", managed, managedPresent) {
 		providers = append(providers, "google")
 	}
-	if config.Microsoft != nil && strings.TrimSpace(config.Microsoft.AccessToken) != "" && connectorReadyForRuntime(state, "mail.microsoft", managed, managedPresent) {
+	if connectorCaptureMode(state, "mail.microsoft") == "direct" && config.Microsoft != nil && strings.TrimSpace(config.Microsoft.AccessToken) != "" && connectorReadyForRuntime(state, "mail.microsoft", managed, managedPresent) {
 		providers = append(providers, "microsoft")
 	}
 	return providers
@@ -572,6 +641,19 @@ func connectorEnabledForRuntime(state connectorRuntimeFile, id string, managed m
 
 func connectorReadyForRuntime(state connectorRuntimeFile, id string, managed managedSettingsFile, managedPresent bool) bool {
 	return connectorEnabledForRuntime(state, id, managed, managedPresent) && connectorReadyForPolling(state, id)
+}
+
+func readyBridgedConnectors(state connectorRuntimeFile, managed managedSettingsFile, managedPresent bool) map[string]time.Duration {
+	bridged := map[string]time.Duration{}
+	for _, id := range []string{
+		"github", "slack", "slack.lists", "calendar.google", "calendar.microsoft",
+		"mail.google", "mail.microsoft", "notion", "azure.boards",
+	} {
+		if connectorCaptureMode(state, id) == "bridged" && connectorReadyForRuntime(state, id, managed, managedPresent) {
+			bridged[id] = connectorInterval(state, id, defaultConnectorInterval(id))
+		}
+	}
+	return bridged
 }
 
 func notionConnectorConnected(homeDir string) bool {

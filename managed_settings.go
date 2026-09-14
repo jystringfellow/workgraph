@@ -25,9 +25,14 @@ type managedLLMSettings struct {
 	HostedEnabled    managedBoolSetting              `json:"hosted_enabled"`
 	AllowedBaseURL   managedStringSliceSetting       `json:"allowed_base_urls"`
 	AllowedProvider  managedStringSliceSetting       `json:"allowed_providers"`
+	AIClient         managedAIClientSettings         `json:"ai_client"`
 	OutboundFilter   managedOutboundFilterSettings   `json:"outbound_filter"`
 	OpenAICompatible managedOpenAICompatibleSettings `json:"openai_compatible"`
 	Bedrock          managedBedrockSettings          `json:"bedrock"`
+}
+
+type managedAIClientSettings struct {
+	AllowedClients managedStringSliceSetting `json:"allowed_clients"`
 }
 
 type managedOutboundFilterSettings struct {
@@ -129,6 +134,9 @@ func enforceLLMManagedSettings(profile llmProfile, client *http.Client) error {
 	}
 	if len(settings.LLM.AllowedProvider.Value) > 0 && !stringAllowedFold(profile.Provider, settings.LLM.AllowedProvider.Value) {
 		return fmt.Errorf("llm provider %q is not allowed by managed settings", profile.Provider)
+	}
+	if profile.Provider == "ai-client" && len(settings.LLM.AIClient.AllowedClients.Value) > 0 && !stringAllowedFold(profile.Client, settings.LLM.AIClient.AllowedClients.Value) {
+		return fmt.Errorf("ai client %q is not allowed by managed settings", profile.Client)
 	}
 	if len(settings.LLM.AllowedBaseURL.Value) > 0 && profile.Provider == "openai-compatible" {
 		if !baseURLAllowed(profile.BaseURL, settings.LLM.AllowedBaseURL.Value) {

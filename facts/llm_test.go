@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,255 @@ import (
 	workgraph "github.com/jystringfellow/workgraph"
 	_ "github.com/mattn/go-sqlite3"
 )
+
+func TestLLMConnectsCodexAndClaudeCodeAsRoutableProfiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("signed-in AI client reference integrations currently target macOS and Unix clients")
+	}
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	if output, err := runworkgraph(t, repoRoot(t), "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	binDir := t.TempDir()
+	codexMarker := filepath.Join(binDir, "codex-invoked")
+	claudeMarker := filepath.Join(binDir, "claude-invoked")
+	writeLLMClientFixture(t, binDir, "codex", `touch "`+codexMarker+`"`)
+	writeLLMClientFixture(t, binDir, "claude", `touch "`+claudeMarker+`"`)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	output, err := runworkgraph(t, repoRoot(t), "llm", "connect", "codex",
+		"--home", homeDir, "--for", "summarize")
+	if err != nil {
+		t.Fatalf("connect Codex LLM client: %v\n%s", err, output)
+	}
+	for _, expected := range []string{"LLM client connected: codex", "Profile: codex", "Task: summarize"} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("Codex connect output omitted %q:\n%s", expected, output)
+		}
+	}
+	output, err = runworkgraph(t, repoRoot(t), "llm", "connect", "claude-code",
+		"--home", homeDir, "--name", "claude-work", "--model", "sonnet", "--for", "categorize")
+	if err != nil {
+		t.Fatalf("connect Claude Code LLM client: %v\n%s", err, output)
+	}
+
+	contents, err := os.ReadFile(filepath.Join(homeDir, "llm.json"))
+	if err != nil {
+		t.Fatalf("read LLM config: %v", err)
+	}
+	var stored struct {
+		HostedLLM *struct {
+			Enabled bool `json:"enabled"`
+		} `json:"hosted_llm"`
+		TaskProfiles map[string]string `json:"task_profiles"`
+		Profiles     map[string]struct {
+			Provider string `json:"provider"`
+			Client   string `json:"client"`
+			Model    string `json:"model"`
+		} `json:"profiles"`
+	}
+	if err := json.Unmarshal(contents, &stored); err != nil {
+		t.Fatalf("parse LLM config: %v", err)
+	}
+	if profile := stored.Profiles["codex"]; profile.Provider != "ai-client" || profile.Client != "codex" {
+		t.Fatalf("unexpected Codex profile: %#v", profile)
+	}
+	if profile := stored.Profiles["claude-work"]; profile.Provider != "ai-client" || profile.Client != "claude-code" || profile.Model != "sonnet" {
+		t.Fatalf("unexpected Claude Code profile: %#v", profile)
+	}
+	if stored.TaskProfiles["summarize"] != "codex" || stored.TaskProfiles["categorize"] != "claude-work" {
+		t.Fatalf("unexpected client task routes: %#v", stored.TaskProfiles)
+	}
+	if stored.HostedLLM != nil && stored.HostedLLM.Enabled {
+		t.Fatalf("connecting a client must not silently enable hosted LLM use")
+	}
+	for _, marker := range []string{codexMarker, claudeMarker} {
+		if _, err := os.Stat(marker); !os.IsNotExist(err) {
+			t.Fatalf("LLM connect invoked a model client: %v", err)
+		}
+	}
+	doctorOutput, err := runworkgraph(t, repoRoot(t), "llm", "doctor", "--home", homeDir, "--profile", "codex")
+	if err != nil || !strings.Contains(string(doctorOutput), "client executable: ready") {
+		t.Fatalf("doctor did not verify Codex without generation: %v\n%s", err, doctorOutput)
+	}
+	if _, err := os.Stat(codexMarker); !os.IsNotExist(err) {
+		t.Fatalf("LLM doctor invoked Codex: %v", err)
+	}
+	testOutput, err := runworkgraph(t, repoRoot(t), "llm", "test", "--home", homeDir, "--profile", "codex")
+	if err == nil || !strings.Contains(string(testOutput), "hosted LLM use is not enabled") {
+		t.Fatalf("client test should require hosted consent: %v\n%s", err, testOutput)
+	}
+	if _, err := os.Stat(codexMarker); !os.IsNotExist(err) {
+		t.Fatalf("blocked LLM test invoked Codex: %v", err)
+	}
+}
+
+func TestLLMSummarizeTodayUsesSignedInCodexAndClaudeCodeClients(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("signed-in AI client reference integrations currently target macOS and Unix clients")
+	}
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	if output, err := runworkgraph(t, repoRoot(t), "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	fixtureDir := t.TempDir()
+	codexArgs := filepath.Join(fixtureDir, "codex.args")
+	codexPrompt := filepath.Join(fixtureDir, "codex.prompt")
+	writeLLMClientFixture(t, fixtureDir, "codex", `
+printf '%s\n' "$@" > "`+codexArgs+`"
+cat > "`+codexPrompt+`"
+output=''
+next_output=0
+for argument in "$@"; do
+  if [ "$next_output" = 1 ]; then output="$argument"; next_output=0; continue; fi
+  if [ "$argument" = "--output-last-message" ]; then next_output=1; fi
+done
+printf '%s' 'Codex summarized the client-backed day.' > "$output"
+`)
+	claudeArgs := filepath.Join(fixtureDir, "claude.args")
+	claudePrompt := filepath.Join(fixtureDir, "claude.prompt")
+	claudeEnvironment := filepath.Join(fixtureDir, "claude.environment")
+	writeLLMClientFixture(t, fixtureDir, "claude", `
+printf '%s\n' "$@" > "`+claudeArgs+`"
+cat > "`+claudePrompt+`"
+printf '%s|%s' "${CLAUDE_CODE_OAUTH_TOKEN:-missing}" "${WORKGRAPH_SLACK_TOKEN:-missing}" > "`+claudeEnvironment+`"
+printf '%s' 'Claude summarized the client-backed day.'
+`)
+	t.Setenv("PATH", fixtureDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "fake-client-auth")
+	t.Setenv("WORKGRAPH_SLACK_TOKEN", "fake-connector-secret")
+
+	insertLLMEvent(t, filepath.Join(homeDir, "workgraph.db"), "client-summary-event", "notion.page_updated",
+		time.Now().UTC().Format(time.RFC3339Nano), "workgraph", "Shipped delegated LLM profiles",
+		`{"title":"Shipped delegated LLM profiles","content_preview":"Implementation notes include ghp_abcdefghijklmnopqrstuvwxyz1234567890ABCD"}`)
+	if output, err := runworkgraph(t, repoRoot(t), "llm", "hosted", "enable", "--home", homeDir); err != nil {
+		t.Fatalf("enable hosted LLM use: %v\n%s", err, output)
+	}
+
+	for _, test := range []struct {
+		client       string
+		wantSummary  string
+		argsPath     string
+		promptPath   string
+		wantArgs     []string
+		forbiddenArg string
+	}{
+		{"codex", "Codex summarized the client-backed day.", codexArgs, codexPrompt,
+			[]string{"exec", "--ephemeral", "--sandbox", "read-only", "--output-last-message"}, "Shipped delegated"},
+		{"claude-code", "Claude summarized the client-backed day.", claudeArgs, claudePrompt,
+			[]string{"--print", "--no-session-persistence", "--tools"}, "Shipped delegated"},
+	} {
+		output, err := runworkgraph(t, repoRoot(t), "llm", "connect", test.client,
+			"--home", homeDir, "--for", "summarize")
+		if err != nil {
+			t.Fatalf("connect %s: %v\n%s", test.client, err, output)
+		}
+		output, err = runworkgraph(t, repoRoot(t), "llm", "summarize", "today", "--home", homeDir, "--no-stream")
+		if err != nil {
+			t.Fatalf("summarize with %s: %v\n%s", test.client, err, output)
+		}
+		if !strings.Contains(string(output), test.wantSummary) || !strings.Contains(string(output), "Provider: ai-client") {
+			t.Fatalf("unexpected %s summary:\n%s", test.client, output)
+		}
+		arguments, err := os.ReadFile(test.argsPath)
+		if err != nil {
+			t.Fatalf("read %s arguments: %v", test.client, err)
+		}
+		for _, expected := range test.wantArgs {
+			if !strings.Contains(string(arguments), expected) {
+				t.Fatalf("%s invocation omitted %q:\n%s", test.client, expected, arguments)
+			}
+		}
+		if strings.Contains(string(arguments), test.forbiddenArg) {
+			t.Fatalf("%s prompt leaked into process arguments:\n%s", test.client, arguments)
+		}
+		prompt, err := os.ReadFile(test.promptPath)
+		if err != nil {
+			t.Fatalf("read %s prompt: %v", test.client, err)
+		}
+		if !strings.Contains(string(prompt), "notion.page_updated Shipped delegated LLM profiles") {
+			t.Fatalf("%s prompt omitted focused event context:\n%s", test.client, prompt)
+		}
+		if strings.Contains(string(prompt), "ghp_abcdefghijklmnopqrstuvwxyz1234567890ABCD") || !strings.Contains(string(prompt), "[REDACTED:github-token]") {
+			t.Fatalf("%s prompt did not apply hosted outbound filtering:\n%s", test.client, prompt)
+		}
+	}
+	environment, err := os.ReadFile(claudeEnvironment)
+	if err != nil {
+		t.Fatalf("read Claude environment fixture: %v", err)
+	}
+	if string(environment) != "fake-client-auth|missing" {
+		t.Fatalf("expected client auth to remain available and connector secrets to be scrubbed, got %q", environment)
+	}
+}
+
+func TestManagedSettingsRestrictSignedInAIClients(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("signed-in AI client reference integrations currently target macOS and Unix clients")
+	}
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("initialize workgraph: %v", err)
+	}
+	managedPath := filepath.Join(tempDir, "managed-settings.json")
+	if err := os.WriteFile(managedPath, []byte(`{
+  "version": 1,
+  "llm": {
+    "allowed_providers": {"value": ["ai-client"], "locked": true},
+    "ai_client": {"allowed_clients": {"value": ["codex"], "locked": true}}
+  }
+}`), 0o600); err != nil {
+		t.Fatalf("write managed settings: %v", err)
+	}
+	restore := workgraph.SetManagedSettingsPathForTest(managedPath)
+	defer restore()
+	binDir := t.TempDir()
+	writeLLMClientFixture(t, binDir, "codex", "exit 0")
+	writeLLMClientFixture(t, binDir, "claude", "exit 0")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if _, err := workgraph.ConnectLLMClient(workgraph.LLMConnectClientConfig{HomeDir: homeDir, Client: "codex"}); err != nil {
+		t.Fatalf("managed settings should allow Codex: %v", err)
+	}
+	if _, err := workgraph.ConnectLLMClient(workgraph.LLMConnectClientConfig{HomeDir: homeDir, Client: "claude-code"}); err == nil {
+		t.Fatalf("managed settings should reject Claude Code")
+	} else if !strings.Contains(err.Error(), `ai client "claude-code" is not allowed by managed settings`) {
+		t.Fatalf("unexpected managed client error: %v", err)
+	}
+}
+
+func TestAIClientFailurePreservesBoundedClientDiagnostic(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("signed-in AI client reference integrations currently target macOS and Unix clients")
+	}
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("initialize workgraph: %v", err)
+	}
+	binDir := t.TempDir()
+	writeLLMClientFixture(t, binDir, "claude", "printf '%s' 'selected model is not available'; exit 1")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if _, err := workgraph.ConnectLLMClient(workgraph.LLMConnectClientConfig{HomeDir: homeDir, Client: "claude-code"}); err != nil {
+		t.Fatalf("connect Claude Code: %v", err)
+	}
+	if _, err := workgraph.EnableHostedLLM(workgraph.LLMHostedConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("enable hosted LLM: %v", err)
+	}
+	_, err := workgraph.TestLLMProfile(workgraph.LLMTestConfig{HomeDir: homeDir, Profile: "claude-code"})
+	if err == nil || !strings.Contains(err.Error(), "selected model is not available") {
+		t.Fatalf("expected actionable client diagnostic, got %v", err)
+	}
+}
+
+func writeLLMClientFixture(t *testing.T, directory string, name string, body string) string {
+	t.Helper()
+	path := filepath.Join(directory, name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nset -eu\n"+body+"\n"), 0o700); err != nil {
+		t.Fatalf("write fake %s client: %v", name, err)
+	}
+	return path
+}
 
 func TestLLMAddListAndUseProfiles(t *testing.T) {
 	tempDir := t.TempDir()

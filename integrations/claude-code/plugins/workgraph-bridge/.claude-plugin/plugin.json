@@ -1,0 +1,6 @@
+{
+  "name": "workgraph-bridge",
+  "version": "0.1.0",
+  "description": "Drain locally scheduled workgraph capture through approved Claude Code connectors.",
+  "author": { "name": "workgraph" }
+}

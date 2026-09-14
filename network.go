@@ -228,6 +228,8 @@ func appendLLMNetworkDestinations(homeDir string, destinations *[]NetworkDestina
 			*destinations = append(*destinations, networkLLMDestination("llm.openai-compatible."+name, "llm.openai-compatible", name, destination, "OpenAI-compatible LLM profile destination"))
 		case "bedrock":
 			*destinations = append(*destinations, networkLLMDestination("llm.bedrock."+name, "llm.bedrock", name, destination, "Amazon Bedrock LLM profile destination"))
+		case "ai-client":
+			*destinations = append(*destinations, networkLLMDestination("llm.ai-client."+name, "llm.ai-client", name, destination, "Delegated AI client; the remote model destination is controlled by that client"))
 		default:
 			*destinations = append(*destinations, networkLLMDestination("llm."+profile.Provider+"."+name, "llm."+profile.Provider, name, destination, "LLM profile destination"))
 		}

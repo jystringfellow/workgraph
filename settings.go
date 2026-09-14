@@ -119,6 +119,9 @@ func GetSettings(config SettingsGetConfig) (SettingsGetResult, error) {
 	if len(managed.LLM.AllowedProvider.Value) > 0 {
 		lines = append(lines, "LLM allowed providers: "+strings.Join(managed.LLM.AllowedProvider.Value, ", ")+" ("+managedSettingSource(managed.LLM.AllowedProvider.Locked)+")")
 	}
+	if len(managed.LLM.AIClient.AllowedClients.Value) > 0 {
+		lines = append(lines, "LLM allowed AI clients: "+strings.Join(managed.LLM.AIClient.AllowedClients.Value, ", ")+" ("+managedSettingSource(managed.LLM.AIClient.AllowedClients.Locked)+")")
+	}
 	if len(managed.LLM.OpenAICompatible.AllowedModels.Value) > 0 {
 		lines = append(lines, "OpenAI-compatible allowed models: "+strings.Join(managed.LLM.OpenAICompatible.AllowedModels.Value, ", ")+" ("+managedSettingSource(managed.LLM.OpenAICompatible.AllowedModels.Locked)+")")
 	}
@@ -183,9 +186,14 @@ type llmSettingsJSONInfo struct {
 	HostedEnabled    managedBoolJSONInfo              `json:"hosted_enabled"`
 	AllowedBaseURL   managedStringSliceJSONInfo       `json:"allowed_base_urls"`
 	AllowedProvider  managedStringSliceJSONInfo       `json:"allowed_providers"`
+	AIClient         aiClientSettingsJSONInfo         `json:"ai_client"`
 	OutboundFilter   outboundFilterSettingsJSONInfo   `json:"outbound_filter"`
 	OpenAICompatible openAICompatibleSettingsJSONInfo `json:"openai_compatible"`
 	Bedrock          bedrockSettingsJSONInfo          `json:"bedrock"`
+}
+
+type aiClientSettingsJSONInfo struct {
+	AllowedClients managedStringSliceJSONInfo `json:"allowed_clients"`
 }
 
 type outboundFilterSettingsJSONInfo struct {
@@ -247,6 +255,9 @@ func settingsGetJSON(settingsPath, managedPath string, managedPresent bool, loca
 			HostedEnabled:   boolManagedJSON(managed.LLM.HostedEnabled),
 			AllowedBaseURL:  stringSliceManagedJSON(managed.LLM.AllowedBaseURL),
 			AllowedProvider: stringSliceManagedJSON(managed.LLM.AllowedProvider),
+			AIClient: aiClientSettingsJSONInfo{
+				AllowedClients: stringSliceManagedJSON(managed.LLM.AIClient.AllowedClients),
+			},
 			OutboundFilter: outboundFilterSettingsJSONInfo{
 				SensitivePatterns: stringSliceManagedJSON(managed.LLM.OutboundFilter.SensitivePatterns),
 			},

@@ -23,16 +23,27 @@ var publicCommandPaths = []string{
 	"azure boards capture",
 	"azure boards connect",
 	"azure boards disconnect",
+	"bridge",
+	"bridge doctor",
+	"bridge drain",
+	"bridge install",
+	"bridge mcp",
 	"calendar",
 	"calendar capture",
 	"calendar connect",
 	"calendar disconnect",
+	"capture",
+	"capture ingest",
+	"capture requests",
+	"capture watermark",
 	"connectors",
+	"connectors connect",
 	"connectors disable",
 	"connectors doctor",
 	"connectors enable",
 	"connectors interval",
 	"connectors list",
+	"connectors mode",
 	"connectors poll",
 	"connectors status",
 	"connectors upgrade",
@@ -50,6 +61,7 @@ var publicCommandPaths = []string{
 	"init",
 	"llm",
 	"llm add",
+	"llm connect",
 	"llm doctor",
 	"llm hosted",
 	"llm hosted disable",
@@ -217,6 +229,9 @@ func TestLeafHelpListsAvailableOptions(t *testing.T) {
 		{"today", []string{"Options:", "--home", "--database"}},
 		{"ai sessions", []string{"Options:", "--all", "--archived", "--status", "--limit"}},
 		{"llm add", []string{"Options:", "--provider", "--model", "--api-key-env"}},
+		{"llm connect", []string{"Options:", "--name", "--for", "--model"}},
+		{"bridge install", []string{"Options:", "--client", "--no-launchd"}},
+		{"capture requests", []string{"Options:", "--claim", "--renew", "--fail", "--claim-file"}},
 		{"calendar connect", []string{"Options:", "--client-id", "--no-browser", "--calendar-id"}},
 		{"suggestions dismiss", []string{"Options:", "--reason", "--note"}},
 	} {
@@ -224,6 +239,36 @@ func TestLeafHelpListsAvailableOptions(t *testing.T) {
 		for _, expected := range test.options {
 			if !strings.Contains(output, expected) {
 				t.Fatalf("workgraph help %s: expected option %q, got:\n%s", test.commandPath, expected, output)
+			}
+		}
+	}
+}
+
+func TestBridgeAndAIClientCommandsAreDocumented(t *testing.T) {
+	root := repoRoot(t)
+	for _, test := range []struct {
+		path     string
+		expected []string
+	}{
+		{filepath.Join(root, "docs", "commands.md"), []string{
+			"workgraph bridge install --client codex",
+			"workgraph capture requests --claim",
+			"workgraph capture ingest --request",
+			"workgraph llm connect codex --for summarize",
+			"workgraph llm connect claude-code",
+		}},
+		{filepath.Join(root, "README.md"), []string{
+			"workgraph bridge install --client codex",
+			"workgraph llm connect codex --for summarize",
+		}},
+	} {
+		contents, err := os.ReadFile(test.path)
+		if err != nil {
+			t.Fatalf("read %s: %v", test.path, err)
+		}
+		for _, expected := range test.expected {
+			if !strings.Contains(string(contents), expected) {
+				t.Fatalf("%s does not document %q", test.path, expected)
 			}
 		}
 	}

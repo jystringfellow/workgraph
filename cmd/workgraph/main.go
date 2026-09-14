@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -51,6 +52,10 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runSecurity(args[1:], stdout, stderr)
 	case "connectors":
 		return runConnectors(args[1:], stdout, stderr)
+	case "capture":
+		return runCapture(args[1:], os.Stdin, stdout, stderr)
+	case "bridge":
+		return runBridge(args[1:], os.Stdin, stdout, stderr)
 	case "doctor":
 		return runDoctor(args[1:], stdout, stderr)
 	case "git":
@@ -101,6 +106,118 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unknown command: %s\n", args[0])
 		return 2
 	}
+}
+
+func runBridge(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph bridge <mcp|install|drain|doctor>")
+		return 2
+	}
+	if args[0] == "install" {
+		return runBridgeInstall(args[1:], stdout, stderr)
+	}
+	if args[0] == "drain" {
+		return runBridgeDrain(args[1:], stdout, stderr)
+	}
+	if args[0] == "doctor" {
+		return runBridgeDoctor(args[1:], stdout, stderr)
+	}
+	if args[0] != "mcp" {
+		fmt.Fprintf(stderr, "unknown bridge command: %s\n", args[0])
+		return 2
+	}
+	flags := flag.NewFlagSet("bridge mcp", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
+	if err := flags.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph bridge mcp [--home <path>] [--database <path>]")
+		return 2
+	}
+	if err := workgraph.ServeBridgeMCP(workgraph.BridgeMCPConfig{HomeDir: *homeDir, DatabasePath: *databasePath, Input: stdin, Output: stdout}); err != nil {
+		fmt.Fprintf(stderr, "workgraph bridge mcp: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func runBridgeDoctor(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("bridge doctor", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	client := flags.String("client", "", "reference client: codex or claude-code")
+	clientCommand := flags.String("client-command", "", "client executable override")
+	installRoot := flags.String("install-root", "", "package installation root override")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 || strings.TrimSpace(*client) == "" {
+		fmt.Fprintln(stderr, "usage: workgraph bridge doctor --client <codex|claude-code>")
+		return 2
+	}
+	message, err := workgraph.DoctorBridge(workgraph.BridgeDoctorConfig{
+		HomeDir: *homeDir, Client: *client, ClientCommand: *clientCommand, InstallRoot: *installRoot,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph bridge doctor: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, message)
+	return 0
+}
+
+func runBridgeDrain(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("bridge drain", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	client := flags.String("client", "", "reference client: codex or claude-code")
+	clientCommand := flags.String("client-command", "", "client executable override")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 || strings.TrimSpace(*client) == "" {
+		fmt.Fprintln(stderr, "usage: workgraph bridge drain --client <codex|claude-code>")
+		return 2
+	}
+	message, err := workgraph.DrainBridge(*homeDir, *client, *clientCommand)
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph bridge drain: %v\n", err)
+		return 1
+	}
+	if message != "" {
+		fmt.Fprintln(stdout, message)
+	}
+	return 0
+}
+
+func runBridgeInstall(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("bridge install", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	client := flags.String("client", "", "reference client: codex or claude-code")
+	clientCommand := flags.String("client-command", "", "client executable override")
+	installRoot := flags.String("install-root", "", "package installation root override")
+	noLaunchd := flags.Bool("no-launchd", false, "skip installing the macOS drain worker")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 || strings.TrimSpace(*client) == "" {
+		fmt.Fprintln(stderr, "usage: workgraph bridge install --client <codex|claude-code>")
+		return 2
+	}
+	result, err := workgraph.InstallBridge(workgraph.BridgeInstallConfig{
+		HomeDir: *homeDir, Client: *client, ClientCommand: *clientCommand,
+		InstallRoot: *installRoot, SkipLaunchd: *noLaunchd,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph bridge install: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
 }
 
 func runSecurity(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -568,6 +685,8 @@ func runLLM(args []string, stdout io.Writer, stderr io.Writer) int {
 	switch args[0] {
 	case "add":
 		return runLLMAdd(args[1:], stdout, stderr)
+	case "connect":
+		return runLLMConnect(args[1:], stdout, stderr)
 	case "list":
 		return runLLMList(args[1:], stdout, stderr)
 	case "remove":
@@ -600,6 +719,7 @@ func runLLMAdd(args []string, stdout io.Writer, stderr io.Writer) int {
 
 	homeDir := flags.String("home", "", "workgraph home directory")
 	provider := flags.String("provider", "", "LLM provider")
+	client := flags.String("client", "", "Signed-in AI client: codex or claude-code")
 	baseURL := flags.String("base-url", "", "OpenAI-compatible base URL")
 	model := flags.String("model", "", "LLM model")
 	apiKeyEnv := flags.String("api-key-env", "", "Environment variable containing the API key")
@@ -615,6 +735,7 @@ func runLLMAdd(args []string, stdout io.Writer, stderr io.Writer) int {
 		HomeDir:    *homeDir,
 		Name:       profile,
 		Provider:   *provider,
+		Client:     *client,
 		BaseURL:    *baseURL,
 		Model:      *model,
 		APIKeyEnv:  *apiKeyEnv,
@@ -624,6 +745,40 @@ func runLLMAdd(args []string, stdout io.Writer, stderr io.Writer) int {
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph llm add: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runLLMConnect(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph llm connect <codex|claude-code> [options]")
+		return 2
+	}
+	client := args[0]
+	flags := flag.NewFlagSet("llm connect "+client, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	name := flags.String("name", "", "Profile name; defaults to the client id")
+	task := flags.String("for", "", "Task to route to this profile")
+	model := flags.String("model", "", "Optional client model; defaults to the client's configured model")
+	if err := flags.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph llm connect <codex|claude-code> [options]")
+		return 2
+	}
+	result, err := workgraph.ConnectLLMClient(workgraph.LLMConnectClientConfig{
+		HomeDir: *homeDir,
+		Client:  client,
+		Name:    *name,
+		Task:    *task,
+		Model:   *model,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph llm connect: %v\n", err)
 		return 1
 	}
 	fmt.Fprintln(stdout, result.Message)
@@ -879,11 +1034,15 @@ func runLLMSummarize(args []string, stdout io.Writer, stderr io.Writer) int {
 
 func runConnectors(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: workgraph connectors <list|status|doctor|upgrade|poll|validate|enable|disable|interval>")
+		fmt.Fprintln(stderr, "usage: workgraph connectors <connect|mode|list|status|doctor|upgrade|poll|validate|enable|disable|interval>")
 		return 2
 	}
 
 	switch args[0] {
+	case "connect":
+		return runConnectorsConnect(args[1:], stdout, stderr)
+	case "mode":
+		return runConnectorsMode(args[1:], stdout, stderr)
 	case "list":
 		return runConnectorsList(args[1:], stdout, stderr)
 	case "status":
@@ -906,6 +1065,331 @@ func runConnectors(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unknown connectors command: %s\n", args[0])
 		return 2
 	}
+}
+
+func runConnectorsConnect(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("connectors connect", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	mode := flags.String("mode", "direct", "capture mode: direct or bridged")
+	connectorArg := ""
+	connectorFirst := false
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		connectorArg = args[0]
+		connectorFirst = true
+		args = args[1:]
+	}
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if connectorArg == "" && flags.NArg() == 1 {
+		connectorArg = flags.Arg(0)
+	}
+	if connectorArg == "" || flags.NArg() > 1 || (connectorFirst && flags.NArg() != 0) {
+		fmt.Fprintln(stderr, "usage: workgraph connectors connect [--mode direct|bridged] <connector>")
+		return 2
+	}
+	if strings.ToLower(strings.TrimSpace(*mode)) != "bridged" {
+		fmt.Fprintln(stderr, "workgraph connectors connect: generic setup currently requires --mode bridged; use the provider-specific connect command for direct capture")
+		return 1
+	}
+	result, err := workgraph.ConnectBridgedConnector(workgraph.ConnectorModeConfig{
+		HomeDir: *homeDir,
+		ID:      connectorArg,
+		Mode:    *mode,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph connectors connect: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runConnectorsMode(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("connectors mode", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 2 {
+		fmt.Fprintln(stderr, "usage: workgraph connectors mode <connector> <direct|bridged>")
+		return 2
+	}
+	result, err := workgraph.SetConnectorMode(workgraph.ConnectorModeConfig{
+		HomeDir: *homeDir,
+		ID:      flags.Arg(0),
+		Mode:    flags.Arg(1),
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph connectors mode: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runCapture(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph capture <requests|ingest|watermark>")
+		return 2
+	}
+	switch args[0] {
+	case "requests":
+		return runCaptureRequests(args[1:], stdin, stdout, stderr)
+	case "ingest":
+		return runCaptureIngest(args[1:], stdin, stdout, stderr)
+	case "watermark":
+		return runCaptureWatermark(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "unknown capture command: %s\n", args[0])
+		return 2
+	}
+
+}
+
+func runCaptureRequests(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("capture requests", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
+	claim := flags.Bool("claim", false, "claim available capture requests")
+	list := flags.Bool("list", false, "list capture requests")
+	renewID := flags.String("renew", "", "renew a claimed request id")
+	failID := flags.String("fail", "", "report failure for a claimed request id")
+	errorJSON := flags.String("error-json", "", "JSON failure details; - reads stdin")
+	connector := flags.String("connector", "", "limit claims to one connector")
+	maxClaims := flags.Int("max", 1, "maximum requests to claim")
+	worker := flags.String("worker", "", "bridge worker identity")
+	claimFile := flags.String("claim-file", "", "0600 file for the returned claim capability")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph capture requests --claim [--connector X] [--max N] --worker <name> --claim-file <path>")
+		return 2
+	}
+	capabilityOperation := strings.TrimSpace(*renewID) != "" || strings.TrimSpace(*failID) != ""
+	if capabilityOperation {
+		if *claim || *list || (strings.TrimSpace(*renewID) != "" && strings.TrimSpace(*failID) != "") || strings.TrimSpace(*claimFile) == "" {
+			fmt.Fprintln(stderr, "usage: workgraph capture requests (--renew <id> | --fail <id>) --claim-file <path>")
+			return 2
+		}
+		requestID := strings.TrimSpace(*renewID)
+		if requestID == "" {
+			requestID = strings.TrimSpace(*failID)
+		}
+		claimRequestID, claimToken, err := readCaptureClaimFile(*claimFile)
+		if err != nil {
+			fmt.Fprintf(stderr, "workgraph capture requests: %v\n", err)
+			return 1
+		}
+		if claimRequestID != requestID {
+			fmt.Fprintln(stderr, "workgraph capture requests: claim file does not match request")
+			return 1
+		}
+		config := workgraph.CaptureRequestCapabilityConfig{
+			HomeDir: *homeDir, DatabasePath: *databasePath, RequestID: requestID, ClaimToken: claimToken,
+		}
+		if strings.TrimSpace(*renewID) != "" {
+			request, err := workgraph.RenewCaptureRequest(config)
+			if err != nil {
+				fmt.Fprintf(stderr, "workgraph capture requests renew: %v\n", err)
+				return 1
+			}
+			fmt.Fprintf(stdout, "Capture request renewed\nRequest: %s\nLease expires: %s\n", request.ID, request.LeaseExpiresAt)
+			return 0
+		}
+		if *errorJSON != "" {
+			if *errorJSON != "-" {
+				fmt.Fprintln(stderr, "workgraph capture requests: --error-json currently supports stdin (-) only")
+				return 2
+			}
+			var details struct {
+				Error string `json:"error"`
+			}
+			if err := json.NewDecoder(stdin).Decode(&details); err != nil {
+				fmt.Fprintf(stderr, "workgraph capture requests: parse failure JSON: %v\n", err)
+				return 1
+			}
+			config.Error = details.Error
+		}
+		if err := workgraph.FailCaptureRequest(config); err != nil {
+			fmt.Fprintf(stderr, "workgraph capture requests fail: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "Capture request returned for retry\nRequest: %s\n", requestID)
+		return 0
+	}
+	if !*claim {
+		if strings.TrimSpace(*worker) != "" || strings.TrimSpace(*claimFile) != "" {
+			fmt.Fprintln(stderr, "workgraph capture requests: --worker and --claim-file require --claim")
+			return 2
+		}
+		requests, err := workgraph.ListCaptureRequests(workgraph.CaptureRequestListConfig{
+			HomeDir: *homeDir, DatabasePath: *databasePath, ConnectorID: *connector,
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "workgraph capture requests: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(stdout, "Capture requests")
+		if len(requests) == 0 {
+			fmt.Fprintln(stdout, "No capture requests.")
+		}
+		for _, request := range requests {
+			line := fmt.Sprintf("- %s: %s, connector %s, %s to %s, attempts %d", request.ID, request.Status, request.ConnectorID, request.Since, request.Until, request.Attempts)
+			if request.ClaimedBy != "" {
+				line += ", worker " + request.ClaimedBy + ", lease expires " + request.LeaseExpiresAt
+			}
+			fmt.Fprintln(stdout, line)
+		}
+		return 0
+	}
+	if *list {
+		fmt.Fprintln(stderr, "workgraph capture requests: choose either --list or --claim")
+		return 2
+	}
+	if strings.TrimSpace(*worker) == "" || strings.TrimSpace(*claimFile) == "" {
+		fmt.Fprintln(stderr, "usage: workgraph capture requests --claim [--connector X] [--max N] --worker <name> --claim-file <path>")
+		return 2
+	}
+	if *maxClaims != 1 {
+		fmt.Fprintln(stderr, "workgraph capture requests: CLI claim files currently require --max 1")
+		return 2
+	}
+	claimed, err := workgraph.ClaimCaptureRequests(workgraph.CaptureRequestClaimConfig{
+		HomeDir:      *homeDir,
+		DatabasePath: *databasePath,
+		ConnectorID:  *connector,
+		Worker:       *worker,
+		Max:          *maxClaims,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph capture requests: %v\n", err)
+		return 1
+	}
+	if len(claimed) == 0 {
+		fmt.Fprintln(stdout, "No capture requests available.")
+		return 0
+	}
+	claimContents, err := json.MarshalIndent(struct {
+		RequestID  string `json:"request_id"`
+		ClaimToken string `json:"claim_token"`
+	}{RequestID: claimed[0].Request.ID, ClaimToken: claimed[0].ClaimToken}, "", "  ")
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph capture requests: encode claim file: %v\n", err)
+		return 1
+	}
+	if err := os.WriteFile(*claimFile, append(claimContents, '\n'), 0o600); err != nil {
+		fmt.Fprintf(stderr, "workgraph capture requests: write claim file: %v\n", err)
+		return 1
+	}
+	if err := os.Chmod(*claimFile, 0o600); err != nil {
+		fmt.Fprintf(stderr, "workgraph capture requests: secure claim file: %v\n", err)
+		return 1
+	}
+	request := claimed[0].Request
+	fmt.Fprintf(stdout, "Capture request claimed\nRequest: %s\nConnector: %s\nSource: %s\nSince: %s\nUntil: %s\nLease expires: %s\nClaim file: %s\n",
+		request.ID, request.ConnectorID, request.Source, request.Since, request.Until, request.LeaseExpiresAt, *claimFile)
+	return 0
+}
+
+func runCaptureWatermark(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("capture watermark", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
+	connector := flags.String("connector", "", "connector id")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 || strings.TrimSpace(*connector) == "" {
+		fmt.Fprintln(stderr, "usage: workgraph capture watermark --connector <connector>")
+		return 2
+	}
+	watermark, err := workgraph.CaptureWatermark(workgraph.CaptureRequestListConfig{
+		HomeDir: *homeDir, DatabasePath: *databasePath, ConnectorID: *connector,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph capture watermark: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, watermark)
+	return 0
+}
+
+func runCaptureIngest(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("capture ingest", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
+	source := flags.String("source", "", "connector source id")
+	requestID := flags.String("request", "", "claimed capture request id")
+	claimFile := flags.String("claim-file", "", "file containing the claim capability")
+	jsonInput := flags.String("json", "-", "JSON input path; - reads stdin")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	manual := strings.TrimSpace(*source) != ""
+	scheduled := strings.TrimSpace(*requestID) != "" && strings.TrimSpace(*claimFile) != ""
+	if flags.NArg() != 0 || manual == scheduled {
+		fmt.Fprintln(stderr, "usage: workgraph capture ingest (--source <connector> | --request <id> --claim-file <path>) [--json -]")
+		return 2
+	}
+	if *jsonInput != "-" {
+		fmt.Fprintln(stderr, "workgraph capture ingest: --json currently supports stdin (-) only")
+		return 1
+	}
+	claimToken := ""
+	if scheduled {
+		claimRequestID, token, err := readCaptureClaimFile(*claimFile)
+		if err != nil {
+			fmt.Fprintf(stderr, "workgraph capture ingest: %v\n", err)
+			return 1
+		}
+		if claimRequestID != *requestID {
+			fmt.Fprintln(stderr, "workgraph capture ingest: claim file does not match request")
+			return 1
+		}
+		claimToken = token
+	}
+	result, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{
+		HomeDir:      *homeDir,
+		DatabasePath: *databasePath,
+		Source:       *source,
+		RequestID:    *requestID,
+		ClaimToken:   claimToken,
+		Input:        stdin,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph capture ingest: %v\n", err)
+		return 1
+	}
+	if result.WeakDedupe > 0 {
+		fmt.Fprintf(stderr, "workgraph capture ingest warning: %d event(s) omitted external_id; weak dedupe was used\n", result.WeakDedupe)
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func readCaptureClaimFile(path string) (string, string, error) {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return "", "", fmt.Errorf("read claim file: %w", err)
+	}
+	var claim struct {
+		RequestID  string `json:"request_id"`
+		ClaimToken string `json:"claim_token"`
+	}
+	if err := json.Unmarshal(contents, &claim); err != nil {
+		return "", "", fmt.Errorf("parse claim file: %w", err)
+	}
+	if strings.TrimSpace(claim.RequestID) == "" || strings.TrimSpace(claim.ClaimToken) == "" {
+		return "", "", fmt.Errorf("claim file is missing request_id or claim_token")
+	}
+	return claim.RequestID, claim.ClaimToken, nil
 }
 
 func runConnectorsList(args []string, stdout io.Writer, stderr io.Writer) int {
