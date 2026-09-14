@@ -1,0 +1,530 @@
+package facts
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	workgraph "github.com/jystringfellow/workgraph"
+	_ "github.com/mattn/go-sqlite3"
+)
+
+func TestBridgedConnectorSetupNeedsNoProviderCredentials(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+
+	output, err := runworkgraph(t, repoRoot, "connectors", "connect", "--home", homeDir, "--mode", "bridged", "slack")
+	if err != nil {
+		t.Fatalf("connect bridged Slack: %v\n%s", err, output)
+	}
+	for _, expected := range []string{"slack", "bridged", "awaiting first ingest"} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected setup output to contain %q, got:\n%s", expected, output)
+		}
+	}
+
+	contents, err := os.ReadFile(filepath.Join(homeDir, "connectors.json"))
+	if err != nil {
+		t.Fatalf("read connectors config: %v", err)
+	}
+	var state struct {
+		Connectors map[string]struct {
+			Enabled     *bool  `json:"enabled"`
+			CaptureMode string `json:"capture_mode"`
+			SetupState  string `json:"setup_state"`
+		} `json:"connectors"`
+	}
+	if err := json.Unmarshal(contents, &state); err != nil {
+		t.Fatalf("parse connectors config: %v", err)
+	}
+	slack := state.Connectors["slack"]
+	if slack.Enabled == nil || !*slack.Enabled || slack.CaptureMode != "bridged" || slack.SetupState != "ready" {
+		t.Fatalf("expected enabled ready bridged Slack state, got %#v", slack)
+	}
+	if _, err := os.Stat(filepath.Join(homeDir, "slack.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected bridged setup not to create Slack credentials, stat error %v", err)
+	}
+
+	output, err = runworkgraph(t, repoRoot, "connectors", "mode", "--home", homeDir, "git", "bridged")
+	if err == nil {
+		t.Fatalf("expected git bridged mode to be rejected, got:\n%s", output)
+	}
+	if !strings.Contains(string(output), "git only supports direct capture") {
+		t.Fatalf("expected direct-only git error, got:\n%s", output)
+	}
+}
+
+func TestBridgedCaptureSchemaIsDurable(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	db := openBridgedCaptureDatabase(t, homeDir)
+
+	for _, table := range []string{"capture_requests", "capture_cursors"} {
+		var name string
+		if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name); err != nil {
+			t.Fatalf("expected %s table: %v", table, err)
+		}
+	}
+
+	requestColumns := bridgedTableColumns(t, db, "capture_requests")
+	for _, column := range []string{
+		"id", "connector_id", "since", "until", "params_json", "status", "attempts",
+		"available_at", "last_error", "created_at", "claim_token", "claimed_by",
+		"claimed_at", "lease_expires_at", "completed_at", "cancelled_at",
+	} {
+		if !requestColumns[column] {
+			t.Fatalf("expected capture_requests.%s, got %#v", column, requestColumns)
+		}
+	}
+
+	cursorColumns := bridgedTableColumns(t, db, "capture_cursors")
+	for _, column := range []string{"connector_id", "completed_through", "updated_at"} {
+		if !cursorColumns[column] {
+			t.Fatalf("expected capture_cursors.%s, got %#v", column, cursorColumns)
+		}
+	}
+}
+
+func TestManualBridgedIngestDeduplicatesSlackEvents(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+	connectBridgedConnector(t, repoRoot, homeDir, "slack")
+
+	input := strings.Join([]string{
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:54.844Z","external_id":"C0DEMO123:1789300854.844369","project":"demo-production","actor":"U0DEMO001","summary":"Deployment succeeded for demo-service","payload":{"channel":"C0DEMO123","ts":"1789300854.844369","text":"Deployment succeeded"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:38.180Z","external_id":"C0DEMO123:1789300838.180579","project":"demo-production","actor":"U0DEMO001","summary":"demo-api modified","payload":{"channel":"C0DEMO123","ts":"1789300838.180579","text":"demo-api modified"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:37.767Z","external_id":"C0DEMO123:1789300837.767919","project":"demo-production","actor":"U0DEMO001","summary":"demo-worker modified","payload":{"channel":"C0DEMO123","ts":"1789300837.767919","text":"demo-worker modified"}}`,
+	}, "\n") + "\n"
+
+	output, err := runworkgraphInput(t, repoRoot, input, "capture", "ingest", "--home", homeDir, "--source", "slack", "--json", "-")
+	if err != nil {
+		t.Fatalf("first bridged ingest: %v\n%s", err, output)
+	}
+	for _, expected := range []string{"Events read: 3", "Events inserted: 3", "Events deduplicated: 0"} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected first ingest output to contain %q, got:\n%s", expected, output)
+		}
+	}
+
+	output, err = runworkgraphInput(t, repoRoot, input, "capture", "ingest", "--home", homeDir, "--source", "slack", "--json", "-")
+	if err != nil {
+		t.Fatalf("second bridged ingest: %v\n%s", err, output)
+	}
+	for _, expected := range []string{"Events read: 3", "Events inserted: 0", "Events deduplicated: 3"} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected second ingest output to contain %q, got:\n%s", expected, output)
+		}
+	}
+
+	db := openBridgedCaptureDatabase(t, homeDir)
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE source = 'slack' AND project = 'demo-production'`).Scan(&count); err != nil {
+		t.Fatalf("count bridged Slack events: %v", err)
+	}
+	if count != 3 {
+		t.Fatalf("expected three bridged Slack events, got %d", count)
+	}
+	var timestamp string
+	if err := db.QueryRow(`SELECT timestamp FROM events WHERE id = ?`, "34452d3e0dd72c3d120bd0399e0f69a9").Scan(&timestamp); err != nil {
+		t.Fatalf("read deterministic bridged event: %v", err)
+	}
+	if timestamp != "2026-09-13T12:00:54.844Z" {
+		t.Fatalf("expected normalized event timestamp, got %q", timestamp)
+	}
+}
+
+func TestManualBridgedNotionIngestProjectsCurrentPage(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+	connectBridgedConnector(t, repoRoot, homeDir, "notion")
+
+	input := `[{"type":"notion.page","timestamp":"2026-06-23T04:58:22.726-07:00","external_id":"11111111111111111111111111111111:2026-06-23T11:58:22.726Z","project":"demo-documentation","actor":"alex@example.com","summary":"Local development authentication guide","payload":{"id":"11111111111111111111111111111111","url":"https://www.notion.so/11111111111111111111111111111111","title":"Local development authentication guide","path":"Engineering Home / Documentation","page_last_edited_at":"2026-06-23T11:58:22.726Z","last_edited_by":"alex@example.com","preview":"Bounded local development guidance."}}]`
+	output, err := runworkgraphInput(t, repoRoot, input, "capture", "ingest", "--home", homeDir, "--source", "notion", "--json", "-")
+	if err != nil {
+		t.Fatalf("ingest bridged Notion page: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Notion projections: 1") {
+		t.Fatalf("expected projection count, got:\n%s", output)
+	}
+
+	db := openBridgedCaptureDatabase(t, homeDir)
+	var timestamp string
+	if err := db.QueryRow(`SELECT timestamp FROM events WHERE id = ?`, "b4414bc559b981234e78ae5a3f7a697a").Scan(&timestamp); err != nil {
+		t.Fatalf("read bridged Notion event: %v", err)
+	}
+	if timestamp != "2026-06-23T11:58:22.726Z" {
+		t.Fatalf("expected UTC-normalized timestamp, got %q", timestamp)
+	}
+
+	var title, preview, lastEdited, source, parentJSON string
+	if err := db.QueryRow(`SELECT title, content_preview, last_edited_time, source, parent_json
+		FROM notion_index WHERE notion_id = ?`, "11111111111111111111111111111111").Scan(&title, &preview, &lastEdited, &source, &parentJSON); err != nil {
+		t.Fatalf("read bridged Notion projection: %v", err)
+	}
+	if title != "Local development authentication guide" || preview != "Bounded local development guidance." || lastEdited != "2026-06-23T11:58:22.726Z" || source != "bridged" {
+		t.Fatalf("unexpected Notion projection: title=%q preview=%q lastEdited=%q source=%q", title, preview, lastEdited, source)
+	}
+	if parentJSON != `{"path":"Engineering Home / Documentation"}` {
+		t.Fatalf("expected projected Notion path, got %s", parentJSON)
+	}
+}
+
+func TestBridgedPollEmitsOneCoalescedRequestWithoutReportingSuccess(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+	connectBridgedConnector(t, repoRoot, homeDir, "slack")
+
+	output, err := runworkgraph(t, repoRoot, "connectors", "poll", "--home", homeDir, "--once", "--connector", "slack")
+	if err != nil {
+		t.Fatalf("emit bridged request: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "pending") || strings.Contains(string(output), "last success") {
+		t.Fatalf("expected pending request without capture success, got:\n%s", output)
+	}
+
+	db := openBridgedCaptureDatabase(t, homeDir)
+	var requestID, since, until, status string
+	if err := db.QueryRow(`SELECT id, since, until, status FROM capture_requests WHERE connector_id = 'slack'`).Scan(&requestID, &since, &until, &status); err != nil {
+		t.Fatalf("read emitted request: %v", err)
+	}
+	if requestID == "" || status != "pending" {
+		t.Fatalf("expected pending request, got id=%q status=%q", requestID, status)
+	}
+	sinceTime, err := time.Parse(time.RFC3339Nano, since)
+	if err != nil {
+		t.Fatalf("parse request since: %v", err)
+	}
+	untilTime, err := time.Parse(time.RFC3339Nano, until)
+	if err != nil {
+		t.Fatalf("parse request until: %v", err)
+	}
+	if window := untilTime.Sub(sinceTime); window < 23*time.Hour+59*time.Minute || window > 24*time.Hour+time.Minute {
+		t.Fatalf("expected initial 24 hour window, got %s", window)
+	}
+
+	if output, err := runworkgraph(t, repoRoot, "connectors", "poll", "--home", homeDir, "--once", "--connector", "slack"); err != nil {
+		t.Fatalf("coalesce bridged request: %v\n%s", err, output)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM capture_requests WHERE connector_id = 'slack'`).Scan(&count); err != nil {
+		t.Fatalf("count coalesced requests: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one coalesced request, got %d", count)
+	}
+
+	var lastSuccess string
+	contents, err := os.ReadFile(filepath.Join(homeDir, "connectors.json"))
+	if err != nil {
+		t.Fatalf("read connector state: %v", err)
+	}
+	var state struct {
+		Connectors map[string]struct {
+			LastSuccess string `json:"last_success_at"`
+		} `json:"connectors"`
+	}
+	if err := json.Unmarshal(contents, &state); err != nil {
+		t.Fatalf("parse connector state: %v", err)
+	}
+	lastSuccess = state.Connectors["slack"].LastSuccess
+	if lastSuccess != "" {
+		t.Fatalf("expected emission not to record success, got %q", lastSuccess)
+	}
+}
+
+func TestClaimAndEmptyIngestCompletesRequestAndAdvancesControlCursor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("claim-file permission assertion is Unix-specific")
+	}
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+	connectBridgedConnector(t, repoRoot, homeDir, "calendar.microsoft")
+	if output, err := runworkgraph(t, repoRoot, "connectors", "poll", "--home", homeDir, "--once", "--connector", "calendar.microsoft"); err != nil {
+		t.Fatalf("emit calendar request: %v\n%s", err, output)
+	}
+
+	claimFile := filepath.Join(t.TempDir(), "calendar.claim.json")
+	output, err := runworkgraph(t, repoRoot, "capture", "requests", "--claim", "--home", homeDir,
+		"--connector", "calendar.microsoft", "--max", "1", "--worker", "facts", "--claim-file", claimFile)
+	if err != nil {
+		t.Fatalf("claim request: %v\n%s", err, output)
+	}
+	if strings.Contains(string(output), "claim_token") {
+		t.Fatalf("expected claim token to remain out of command output, got:\n%s", output)
+	}
+	info, err := os.Stat(claimFile)
+	if err != nil {
+		t.Fatalf("stat claim file: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("expected claim file mode 0600, got %o", info.Mode().Perm())
+	}
+	var claim struct {
+		RequestID string `json:"request_id"`
+		Token     string `json:"claim_token"`
+	}
+	contents, err := os.ReadFile(claimFile)
+	if err != nil {
+		t.Fatalf("read claim file: %v", err)
+	}
+	if err := json.Unmarshal(contents, &claim); err != nil {
+		t.Fatalf("parse claim file: %v", err)
+	}
+	if claim.RequestID == "" || claim.Token == "" {
+		t.Fatalf("expected request id and token in claim file, got %#v", claim)
+	}
+	statusOutput, err := runworkgraph(t, repoRoot, "connectors", "status", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("read claimed connector status: %v\n%s", err, statusOutput)
+	}
+	for _, expected := range []string{"calendar.microsoft (bridged)", "capture claimed", "worker facts", "lease expires"} {
+		if !strings.Contains(string(statusOutput), expected) {
+			t.Fatalf("claimed connector status omitted %q:\n%s", expected, statusOutput)
+		}
+	}
+	if strings.Contains(string(statusOutput), claim.Token) || strings.Contains(string(statusOutput), "claim_token") {
+		t.Fatalf("connector status exposed claim token:\n%s", statusOutput)
+	}
+
+	db := openBridgedCaptureDatabase(t, homeDir)
+	var requestUntil string
+	if err := db.QueryRow(`SELECT until FROM capture_requests WHERE id = ?`, claim.RequestID).Scan(&requestUntil); err != nil {
+		t.Fatalf("read request bound: %v", err)
+	}
+	output, err = runworkgraphInput(t, repoRoot, "[]", "capture", "ingest", "--home", homeDir,
+		"--request", claim.RequestID, "--claim-file", claimFile, "--json", "-")
+	if err != nil {
+		t.Fatalf("complete empty capture: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Events read: 0") || !strings.Contains(string(output), "Request completed") {
+		t.Fatalf("expected successful empty completion, got:\n%s", output)
+	}
+
+	var requestStatus, completedThrough string
+	if err := db.QueryRow(`SELECT status FROM capture_requests WHERE id = ?`, claim.RequestID).Scan(&requestStatus); err != nil {
+		t.Fatalf("read completed request: %v", err)
+	}
+	if err := db.QueryRow(`SELECT completed_through FROM capture_cursors WHERE connector_id = 'calendar.microsoft'`).Scan(&completedThrough); err != nil {
+		t.Fatalf("read completed cursor: %v", err)
+	}
+	if requestStatus != "completed" || completedThrough != requestUntil {
+		t.Fatalf("expected completed request and cursor %q, got status=%q cursor=%q", requestUntil, requestStatus, completedThrough)
+	}
+}
+
+func TestDaemonSchedulesBridgedConnectorWithoutCallingProvider(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("initialize workgraph: %v", err)
+	}
+	providerCalled := make(chan struct{}, 1)
+	provider := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		select {
+		case providerCalled <- struct{}{}:
+		default:
+		}
+		response.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(response, `{"results":[],"has_more":false}`)
+	}))
+	defer provider.Close()
+	if err := os.WriteFile(filepath.Join(homeDir, "notion.json"), []byte(fmt.Sprintf(`{
+  "access_token": "preserved-direct-token",
+  "api_base_url": %q
+}
+`, provider.URL)), 0o600); err != nil {
+		t.Fatalf("write preserved direct credentials: %v", err)
+	}
+	if _, err := workgraph.ConnectBridgedConnector(workgraph.ConnectorModeConfig{HomeDir: homeDir, ID: "notion"}); err != nil {
+		t.Fatalf("connect bridged Notion: %v", err)
+	}
+
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:      homeDir,
+		DatabasePath: initResult.DatabasePath,
+		WatchDirs:    []string{tempDir},
+	})
+	if err != nil {
+		t.Fatalf("start capture daemon: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- capture.Run(ctx) }()
+
+	db := openBridgedCaptureDatabase(t, homeDir)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var count int
+		err := db.QueryRow(`SELECT COUNT(*) FROM capture_requests WHERE connector_id = 'notion' AND status = 'pending'`).Scan(&count)
+		if err == nil && count == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			<-done
+			t.Fatalf("daemon did not emit bridged Notion request: count=%d error=%v", count, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("stop capture daemon: %v", err)
+	}
+	select {
+	case <-providerCalled:
+		t.Fatal("workgraph called the Notion provider for a bridged connector")
+	default:
+	}
+}
+
+func TestExpiredClaimRetriesSameRequestAndInvalidatesOldToken(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	connectBridgedConnector(t, repoRoot(t), homeDir, "slack")
+	start := time.Now().UTC().Add(-time.Hour)
+	emitted, err := workgraph.EmitBridgedCaptureRequest(workgraph.CaptureRequestEmitConfig{
+		HomeDir: homeDir, ConnectorID: "slack", Now: start,
+	})
+	if err != nil {
+		t.Fatalf("emit capture request: %v", err)
+	}
+	first, err := workgraph.ClaimCaptureRequests(workgraph.CaptureRequestClaimConfig{
+		HomeDir: homeDir, ConnectorID: "slack", Worker: "first", Max: 1, Now: start, Lease: time.Minute,
+	})
+	if err != nil || len(first) != 1 {
+		t.Fatalf("first claim: claims=%d error=%v", len(first), err)
+	}
+
+	recycledAt := start.Add(2 * time.Minute)
+	claims, err := workgraph.ClaimCaptureRequests(workgraph.CaptureRequestClaimConfig{
+		HomeDir: homeDir, ConnectorID: "slack", Worker: "second", Max: 1, Now: recycledAt,
+	})
+	if err != nil {
+		t.Fatalf("recycle expired claim: %v", err)
+	}
+	if len(claims) != 0 {
+		t.Fatalf("expected persisted retry backoff before reclaim, got %d claim(s)", len(claims))
+	}
+	second, err := workgraph.ClaimCaptureRequests(workgraph.CaptureRequestClaimConfig{
+		HomeDir: homeDir, ConnectorID: "slack", Worker: "second", Max: 1, Now: recycledAt.Add(6 * time.Second),
+	})
+	if err != nil || len(second) != 1 {
+		t.Fatalf("second claim after backoff: claims=%d error=%v", len(second), err)
+	}
+	if second[0].Request.ID != emitted.Request.ID || second[0].Request.Since != emitted.Request.Since || second[0].Request.Until != emitted.Request.Until {
+		t.Fatalf("expected retry to preserve request and bounds, first=%#v second=%#v", emitted.Request, second[0].Request)
+	}
+	if second[0].ClaimToken == first[0].ClaimToken || second[0].Request.Attempts != 2 {
+		t.Fatalf("expected a new token and second attempt, first=%#v second=%#v", first[0], second[0])
+	}
+	if _, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{
+		HomeDir: homeDir, RequestID: emitted.Request.ID, ClaimToken: first[0].ClaimToken, Input: strings.NewReader("[]"),
+	}); err == nil || !strings.Contains(err.Error(), "stale or invalid") {
+		t.Fatalf("expected old claim token rejection, got %v", err)
+	}
+}
+
+func TestBridgeRenewsLeaseAndReportsRetryableFailure(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	connectBridgedConnector(t, repoRoot(t), homeDir, "github")
+	start := time.Now().UTC()
+	emitted, err := workgraph.EmitBridgedCaptureRequest(workgraph.CaptureRequestEmitConfig{HomeDir: homeDir, ConnectorID: "github", Now: start})
+	if err != nil {
+		t.Fatalf("emit request: %v", err)
+	}
+	claimed, err := workgraph.ClaimCaptureRequests(workgraph.CaptureRequestClaimConfig{
+		HomeDir: homeDir, ConnectorID: "github", Worker: "facts", Max: 1, Now: start, Lease: time.Minute,
+	})
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim request: claims=%d error=%v", len(claimed), err)
+	}
+	renewed, err := workgraph.RenewCaptureRequest(workgraph.CaptureRequestCapabilityConfig{
+		HomeDir: homeDir, RequestID: emitted.Request.ID, ClaimToken: claimed[0].ClaimToken, Now: start.Add(30 * time.Second), Lease: 5 * time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("renew request: %v", err)
+	}
+	if renewed.LeaseExpiresAt != start.Add(5*time.Minute+30*time.Second).Format(time.RFC3339Nano) {
+		t.Fatalf("expected renewed lease, got %q", renewed.LeaseExpiresAt)
+	}
+	if err := workgraph.FailCaptureRequest(workgraph.CaptureRequestCapabilityConfig{
+		HomeDir: homeDir, RequestID: emitted.Request.ID, ClaimToken: claimed[0].ClaimToken,
+		Error: "provider permission denied", Now: start.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("report request failure: %v", err)
+	}
+	requests, err := workgraph.ListCaptureRequests(workgraph.CaptureRequestListConfig{HomeDir: homeDir, ConnectorID: "github"})
+	if err != nil || len(requests) != 1 {
+		t.Fatalf("list retried request: requests=%d error=%v", len(requests), err)
+	}
+	if requests[0].Status != "pending" || requests[0].AvailableAt <= start.Add(time.Minute).Format(time.RFC3339Nano) {
+		t.Fatalf("expected pending request after persisted backoff, got %#v", requests[0])
+	}
+}
+
+func initBridgedCaptureHome(t *testing.T) string {
+	t.Helper()
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	if output, err := runworkgraph(t, repoRoot(t), "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	return homeDir
+}
+
+func connectBridgedConnector(t *testing.T, repoRoot string, homeDir string, connector string) {
+	t.Helper()
+	if output, err := runworkgraph(t, repoRoot, "connectors", "connect", "--home", homeDir, "--mode", "bridged", connector); err != nil {
+		t.Fatalf("connect bridged %s: %v\n%s", connector, err, output)
+	}
+}
+
+func runworkgraphInput(t *testing.T, repoRoot string, input string, args ...string) ([]byte, error) {
+	t.Helper()
+	command := exec.Command(workgraphFactsBinary, args...)
+	command.Dir = repoRoot
+	command.Stdin = strings.NewReader(input)
+	return command.CombinedOutput()
+}
+
+func openBridgedCaptureDatabase(t *testing.T, homeDir string) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite3", filepath.Join(homeDir, "workgraph.db"))
+	if err != nil {
+		t.Fatalf("open bridged capture database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
+func bridgedTableColumns(t *testing.T, db *sql.DB, table string) map[string]bool {
+	t.Helper()
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		t.Fatalf("read %s columns: %v", table, err)
+	}
+	defer rows.Close()
+	columns := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, primaryKey int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatalf("scan %s column: %v", table, err)
+		}
+		columns[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate %s columns: %v", table, err)
+	}
+	return columns
+}

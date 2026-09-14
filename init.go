@@ -313,6 +313,34 @@ func createSchema(db *sql.DB) error {
 			last_seen_at TEXT NOT NULL,
 			last_synced_at TEXT NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS capture_requests (
+			id TEXT PRIMARY KEY,
+			connector_id TEXT NOT NULL,
+			since TEXT NOT NULL,
+			until TEXT NOT NULL,
+			params_json TEXT NOT NULL CHECK (json_valid(params_json)),
+			status TEXT NOT NULL CHECK (status IN ('pending', 'claimed', 'completed', 'cancelled')),
+			attempts INTEGER NOT NULL DEFAULT 0,
+			available_at TEXT NOT NULL,
+			last_error TEXT,
+			created_at TEXT NOT NULL,
+			claim_token TEXT,
+			claimed_by TEXT,
+			claimed_at TEXT,
+			lease_expires_at TEXT,
+			completed_at TEXT,
+			cancelled_at TEXT
+		);`,
+		`CREATE TABLE IF NOT EXISTS capture_cursors (
+			connector_id TEXT PRIMARY KEY,
+			completed_through TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS bridge_workers (
+			worker TEXT PRIMARY KEY,
+			last_heartbeat_at TEXT NOT NULL,
+			details_json TEXT NOT NULL CHECK (json_valid(details_json))
+		);`,
 		`CREATE TABLE IF NOT EXISTS suggestions (
 			id TEXT PRIMARY KEY,
 			type TEXT NOT NULL,
@@ -351,6 +379,11 @@ func createSchema(db *sql.DB) error {
 		if _, err := db.Exec(statement); err != nil {
 			return err
 		}
+	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_capture_requests_active_connector
+		ON capture_requests (connector_id)
+		WHERE status IN ('pending', 'claimed')`); err != nil {
+		return err
 	}
 
 	if err := ensureColumn(db, "notion_index", "content_preview", "TEXT"); err != nil {

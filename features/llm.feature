@@ -33,6 +33,38 @@ Scenario: Use a Bedrock inference profile for LLM tasks
   When I route summarize tasks to "bedrock-work"
   Then "workgraph llm summarize today" uses the Bedrock profile for generation
 
+Scenario: Connect signed-in AI clients as separate LLM profiles
+  Given Codex and Claude Code are installed and signed in
+  When I run "workgraph llm connect codex --for summarize"
+  And I run "workgraph llm connect claude-code --for categorize"
+  Then workgraph stores separate ai-client profiles without storing login tokens
+  And summarize tasks use Codex
+  And future categorize tasks use Claude Code
+  And hosted LLM consent is still required before captured context is sent
+
+Scenario: Summarize through a signed-in AI client
+  Given workgraph has captured local events today
+  And Codex or Claude Code is selected for summarize tasks
+  And hosted LLM use is enabled
+  When I run "workgraph llm summarize today"
+  Then workgraph sends the filtered focused prompt to the client through standard input
+  And the client runs non-persistently without provider connector access
+  And workgraph prints only the validated final model response
+  And workgraph stores no client login token
+
+Scenario: Diagnose a signed-in AI client without sending data
+  Given workgraph has a Codex or Claude Code LLM profile
+  When I run "workgraph llm doctor"
+  Then workgraph reports whether the registered client executable is available
+  And workgraph does not invoke the model
+
+Scenario: Restrict signed-in AI clients with managed settings
+  Given managed settings allow the ai-client provider and only the Codex client
+  When I connect Codex as an LLM profile
+  Then the profile is accepted
+  When I connect Claude Code as an LLM profile
+  Then workgraph rejects it before invoking the client
+
 Scenario: Preview today's LLM summary without sending data
   Given workgraph has captured local events today
   And workgraph has a configured LLM profile for summarize tasks

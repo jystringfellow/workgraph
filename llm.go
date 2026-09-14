@@ -27,12 +27,21 @@ type LLMAddProfileConfig struct {
 	HomeDir    string
 	Name       string
 	Provider   string
+	Client     string
 	BaseURL    string
 	Model      string
 	APIKeyEnv  string
 	AWSProfile string
 	Region     string
 	ModelARN   string
+}
+
+type LLMConnectClientConfig struct {
+	HomeDir string
+	Client  string
+	Name    string
+	Task    string
+	Model   string
 }
 
 type LLMListConfig struct {
@@ -87,6 +96,7 @@ type llmConnectorConfig struct {
 
 type llmProfile struct {
 	Provider   string `json:"provider"`
+	Client     string `json:"client,omitempty"`
 	BaseURL    string `json:"base_url,omitempty"`
 	Model      string `json:"model,omitempty"`
 	APIKeyEnv  string `json:"api_key_env,omitempty"`
@@ -142,12 +152,19 @@ func AddLLMProfile(config LLMAddProfileConfig) (LLMResult, error) {
 	}
 	profile := llmProfile{
 		Provider:   strings.TrimSpace(config.Provider),
+		Client:     strings.TrimSpace(config.Client),
 		BaseURL:    strings.TrimRight(strings.TrimSpace(config.BaseURL), "/"),
 		Model:      strings.TrimSpace(config.Model),
 		APIKeyEnv:  strings.TrimSpace(config.APIKeyEnv),
 		AWSProfile: strings.TrimSpace(config.AWSProfile),
 		Region:     strings.TrimSpace(config.Region),
 		ModelARN:   strings.TrimSpace(config.ModelARN),
+	}
+	if profile.Provider == "ai-client" {
+		profile.Client, err = normalizeAIClient(profile.Client)
+		if err != nil {
+			return LLMResult{}, err
+		}
 	}
 	if err := validateLLMProfile(profile); err != nil {
 		return LLMResult{}, err
@@ -402,7 +419,7 @@ func TestLLMProfile(config LLMTestConfig) (LLMResult, error) {
 		return LLMResult{}, err
 	}
 	messages := []openAICompatibleMessage{
-		{Role: "system", Content: "You are testing a local language model connection."},
+		{Role: "system", Content: "You are testing a language model execution profile."},
 		{Role: "user", Content: "Reply with a short confirmation that the model connection works."},
 	}
 	filterResult, err := filterMessagesForProfile(profile, messages)
@@ -472,6 +489,14 @@ func DoctorLLMProfiles(config LLMDoctorConfig) (LLMResult, error) {
 			} else {
 				ok = false
 				lines = append(lines, "  model probe: failed - model "+profile.Model+" is not advertised")
+			}
+		} else if profile.Provider == "ai-client" {
+			path, err := resolveAIClientExecutable(profile.Client)
+			if err != nil {
+				ok = false
+				lines = append(lines, "  client executable: missing - "+err.Error())
+			} else {
+				lines = append(lines, "  client executable: ready - "+path)
 			}
 		} else {
 			lines = append(lines, "  model probe: skipped - provider does not expose OpenAI-compatible /models")
@@ -595,6 +620,8 @@ func callLLMProfile(client *http.Client, profile llmProfile, messages []openAICo
 		return callOpenAICompatible(client, profile, messages)
 	case "bedrock":
 		return callBedrockConverse(client, profile, messages)
+	case "ai-client":
+		return callAIClient(profile, messages)
 	default:
 		return "", fmt.Errorf("llm calls do not support provider %q yet", profile.Provider)
 	}
@@ -1174,6 +1201,13 @@ func validateLLMProfile(profile llmProfile) error {
 		if profile.ModelARN == "" {
 			return errors.New("bedrock llm model ARN is required")
 		}
+	case "ai-client":
+		if _, err := normalizeAIClient(profile.Client); err != nil {
+			return err
+		}
+		if profile.BaseURL != "" || profile.APIKeyEnv != "" || profile.AWSProfile != "" || profile.Region != "" || profile.ModelARN != "" {
+			return errors.New("ai-client profiles cannot configure provider credentials or endpoints")
+		}
 	case "openai", "anthropic", "google", "azure":
 		if profile.Model == "" && profile.ModelARN == "" {
 			return fmt.Errorf("%s llm model is required", profile.Provider)
@@ -1255,6 +1289,9 @@ func llmProfileModelLabel(profile llmProfile) string {
 	if profile.Model != "" {
 		return profile.Model
 	}
+	if profile.Provider == "ai-client" {
+		return "client default"
+	}
 	return profile.ModelARN
 }
 
@@ -1264,6 +1301,8 @@ func llmProfileDestination(profile llmProfile) string {
 		return profile.BaseURL
 	case "bedrock":
 		return "bedrock://" + profile.Region + "/" + profile.ModelARN
+	case "ai-client":
+		return "client://" + profile.Client
 	default:
 		return profile.Provider
 	}

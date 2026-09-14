@@ -215,6 +215,7 @@ func TestManagedSettingsDeploymentGuideAndPolicyExample(t *testing.T) {
 		"hosted LLM providers",
 		"Bedrock inference profiles",
 		"llm.allowed_providers",
+		"llm.ai_client.allowed_clients",
 		"llm.outbound_filter.sensitive_patterns",
 		"llm.openai_compatible.allowed_models",
 		"llm.openai_compatible.require_model_probe",

@@ -11,6 +11,8 @@ The LLM connector must support:
 - cloud-account models such as AWS Bedrock and Azure-hosted model endpoints
 - third-party model subscriptions such as OpenAI, Anthropic, Google, and other
   provider APIs when users bring their own credentials
+- signed-in AI clients such as Codex and Claude Code, without requiring a
+  separate model API key in workgraph
 
 ## Principles
 
@@ -97,6 +99,82 @@ workgraph llm summarize today --dry-run
 workgraph llm summarize today
 workgraph llm summarize today --no-stream
 ```
+
+## Signed-in AI client profiles
+
+Codex and Claude Code are supported as local execution clients for hosted LLM
+tasks. This is distinct from bridged capture: capture uses an asynchronous
+outbox because workgraph cannot call client-owned provider connectors, while an
+LLM task can synchronously invoke a signed-in local client process.
+
+The guided setup is:
+
+```text
+workgraph llm connect codex
+workgraph llm connect claude-code
+workgraph llm connect codex --name personal-codex --for summarize
+workgraph llm use claude-code --for categorize
+```
+
+`llm connect` verifies that the selected client executable is available and
+stores an `ai-client` profile. The default profile name is the client id; an
+explicit `--name` allows more than one profile. `--for <task>` immediately
+routes that task to the profile. Without `--for`, setup does not replace an
+existing default or task route.
+
+The stored shape is provider-neutral:
+
+```json
+{
+  "profiles": {
+    "codex": {
+      "provider": "ai-client",
+      "client": "codex"
+    },
+    "claude-code": {
+      "provider": "ai-client",
+      "client": "claude-code",
+      "model": "sonnet"
+    }
+  },
+  "task_profiles": {
+    "summarize": "codex",
+    "categorize": "claude-code"
+  }
+}
+```
+
+The model is optional for an AI-client profile. When omitted, the client uses
+its own client-selected default. workgraph stores no client login token and does not
+accept arbitrary command lines as LLM profiles.
+
+AI-client execution must:
+
+- resolve only the registered `codex` or `claude` executable;
+- pass the filtered prompt through standard input, never a process argument;
+- use a non-persistent invocation and a private empty working directory;
+- disable client tools and connector access where supported, and otherwise use
+  the strictest non-writing sandbox available;
+- apply a bounded timeout and bounded response size;
+- return only the final model response, without client progress output;
+- preserve the existing hosted-LLM opt-in and managed-provider policy checks.
+
+Managed deployments may additionally set
+`llm.ai_client.allowed_clients` to `codex`, `claude-code`, or both. This limits
+which local signed-in client workgraph may invoke; it does not govern the
+client's behavior outside workgraph.
+
+`llm test` performs a minimal generation through the selected client.
+`llm doctor` verifies executable availability without making a model call.
+Client-backed summaries use the same focused context, outbound filtering, and
+task routing as direct providers. A missing, unauthenticated, timed-out, or
+malformed client invocation fails only the requested LLM command and never
+affects capture.
+
+Task routing is intentionally broader than the currently implemented task set.
+The `categorize` route may be configured now, but project categorization remains
+a future suggestion-producing task: it must not rewrite captured events without
+review and approval.
 
 Future provider commands may add provider-specific flags for OpenAI, Anthropic,
 Google, Bedrock, and Azure without changing the task command surface.
@@ -289,6 +367,8 @@ Dry-run behavior remains provider-independent and does not call Bedrock.
 - [x] Streaming `workgraph llm summarize today` output.
 - [x] Include captured content previews in summary context.
 - [x] Bedrock profile support through local AWS credentials.
+- [x] Signed-in Codex and Claude Code profiles with guided `llm connect` setup.
+- [x] Client-backed `test`, `doctor`, and `summarize today` execution.
 - [ ] Hosted provider support for OpenAI, Anthropic, Google, and similar APIs.
 - [ ] Association suggestions across Slack, calendar, GitHub, Notion, mail, and
   local file events.

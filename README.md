@@ -105,6 +105,17 @@ workgraph notion connect
 workgraph azure boards connect --organization <org> --project <project> --team <team>
 ```
 
+If workgraph cannot receive OAuth approval but Codex or Claude Code already has
+approved provider connectors, install a credential-free capture bridge instead:
+
+```sh
+workgraph bridge install --client codex
+workgraph bridge doctor --client codex
+```
+
+The workgraph daemon still owns connector cadence and local storage; the signed-in
+client performs bounded provider reads without giving workgraph its OAuth token.
+
 Start local capture:
 
 ```sh
@@ -143,6 +154,20 @@ workgraph help
 workgraph help connectors poll
 workgraph connectors poll --help
 ```
+
+For optional summaries without a local model or separate model API key, route
+LLM work through an already signed-in client. Hosted-context consent remains
+explicit because the selected client uses a remote model:
+
+```sh
+workgraph llm connect codex --for summarize
+workgraph llm hosted enable
+workgraph llm summarize today
+```
+
+Claude Code is supported equivalently with
+`workgraph llm connect claude-code --for summarize`. Multiple profiles can
+coexist and be selected per LLM task.
 
 ## Memory
 

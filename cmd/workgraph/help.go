@@ -38,16 +38,27 @@ var helpTopics = map[string]helpTopic{
 	"azure boards capture":    {"workgraph azure boards capture [options]", "Capture work items from a connected Azure Boards account."},
 	"azure boards connect":    {"workgraph azure boards connect --organization <name> --project <name> --team <name> [options]", "Connect an Azure Boards account with OAuth."},
 	"azure boards disconnect": {"workgraph azure boards disconnect [options]", "Remove the locally stored Azure Boards connection."},
+	"bridge":                  {"workgraph bridge <subcommand>", "Install, diagnose, and run credential-free AI-client capture bridges."},
+	"bridge doctor":           {"workgraph bridge doctor --client <codex|claude-code> [options]", "Verify the client package, local MCP, worker, and heartbeat without provider access."},
+	"bridge drain":            {"workgraph bridge drain --client <codex|claude-code> [options]", "Drain active daemon requests through a signed-in reference client."},
+	"bridge install":          {"workgraph bridge install --client <codex|claude-code> [options]", "Install the reference client package, local MCP, and macOS worker."},
+	"bridge mcp":              {"workgraph bridge mcp [options]", "Serve local bridge tools over stdio MCP."},
 	"calendar":                {"workgraph calendar <subcommand>", "Connect, capture, or disconnect calendar providers."},
 	"calendar capture":        {"workgraph calendar capture [options]", "Capture normalized calendar events from a provider or JSON export."},
 	"calendar connect":        {"workgraph calendar connect <google|microsoft> [options]", "Connect a calendar provider with OAuth."},
 	"calendar disconnect":     {"workgraph calendar disconnect <google|microsoft> [options]", "Revoke and remove a calendar provider connection."},
+	"capture":                 {"workgraph capture <subcommand>", "Inspect, claim, and ingest daemon-scheduled bridged capture work."},
+	"capture ingest":          {"workgraph capture ingest (--source <source> | --request <id> --claim-file <path>) [options]", "Validate and atomically store normalized bridged events."},
+	"capture requests":        {"workgraph capture requests (--list | --claim | --renew <id> | --fail <id>) [options]", "Inspect, claim, renew, or fail work in the local bridged-capture outbox."},
+	"capture watermark":       {"workgraph capture watermark --connector <connector> [options]", "Print the connector's completed-through capture cursor."},
 	"connectors":              {"workgraph connectors <subcommand>", "Inspect and control configured connector polling."},
+	"connectors connect":      {"workgraph connectors connect <connector> --mode bridged [options]", "Configure a remote connector for credential-free bridged capture."},
 	"connectors disable":      {"workgraph connectors disable <connector> [options]", "Disable automatic polling for a connector."},
 	"connectors doctor":       {"workgraph connectors doctor [options]", "Diagnose connector configuration and runtime state."},
 	"connectors enable":       {"workgraph connectors enable <connector> [options]", "Enable automatic polling for a connector."},
 	"connectors interval":     {"workgraph connectors interval <connector> <duration> [options]", "Set a connector's automatic polling interval."},
 	"connectors list":         {"workgraph connectors list [options]", "List available connector types."},
+	"connectors mode":         {"workgraph connectors mode <connector> <direct|bridged> [options]", "Change a connector capture backend without deleting credentials."},
 	"connectors poll":         {"workgraph connectors poll --once [--connector <connector>] [options]", "Poll enabled connectors once and exit."},
 	"connectors status":       {"workgraph connectors status [options]", "Show configured connectors and their runtime state."},
 	"connectors upgrade":      {"workgraph connectors upgrade [options]", "Upgrade stored connector configuration."},
@@ -63,8 +74,9 @@ var helpTopics = map[string]helpTopic{
 	"github connect":          {"workgraph github connect [options]", "Validate GitHub CLI authentication and save the connection."},
 	"help":                    {"workgraph help [command [subcommand ...]]", "Show root or command-specific help."},
 	"init":                    {"workgraph init [--force] [options]", "Initialize or refresh local workgraph state."},
-	"llm":                     {"workgraph llm <subcommand>", "Configure and use optional LLM profiles."},
-	"llm add":                 {"workgraph llm add <profile> --provider <provider> --model <model> [options]", "Add or replace a local LLM profile."},
+	"llm":                     {"workgraph llm <subcommand>", "Configure and use local, direct, or signed-in-client LLM profiles."},
+	"llm add":                 {"workgraph llm add <profile> --provider <provider> [options]", "Add or replace an advanced LLM profile."},
+	"llm connect":             {"workgraph llm connect <codex|claude-code> [--name <profile>] [--for <task>] [options]", "Configure a signed-in AI client as an LLM profile without storing model credentials."},
 	"llm doctor":              {"workgraph llm doctor [--profile <name>] [options]", "Inspect an LLM profile's local readiness."},
 	"llm hosted":              {"workgraph llm hosted <subcommand>", "Inspect or change hosted LLM opt-in state."},
 	"llm hosted disable":      {"workgraph llm hosted disable [options]", "Disable hosted LLM use."},
@@ -139,6 +151,18 @@ var helpExamples = map[string][]string{
 		"workgraph ai sessions --status interrupted",
 		"workgraph ai sessions --archived",
 		"workgraph ai sessions --limit 20",
+	},
+	"bridge install": {
+		"workgraph bridge install --client codex",
+		"workgraph bridge install --client claude-code",
+	},
+	"capture requests": {
+		"workgraph capture requests --list",
+		"workgraph capture requests --claim --connector slack --max 1 --worker manual --claim-file /private/path/claim.json",
+	},
+	"llm connect": {
+		"workgraph llm connect codex --for summarize",
+		"workgraph llm connect claude-code --name work-claude --for summarize",
 	},
 	"settings add-ignore-name": {
 		"workgraph settings add-ignore-name .cache",
@@ -285,6 +309,8 @@ func helpOptionArgs(key string) []string {
 		placeholder = "event-id"
 	case "calendar connect", "calendar disconnect", "mail connect", "mail disconnect":
 		placeholder = "google"
+	case "llm connect":
+		placeholder = "codex"
 	case "llm add", "llm remove", "llm use":
 		placeholder = "profile"
 	case "llm summarize":
@@ -314,6 +340,10 @@ func runCommandForOptionHelp(args []string, stdout io.Writer, stderr io.Writer) 
 		return runSecurity(args[1:], stdout, stderr)
 	case "connectors":
 		return runConnectors(args[1:], stdout, stderr)
+	case "capture":
+		return runCapture(args[1:], os.Stdin, stdout, stderr)
+	case "bridge":
+		return runBridge(args[1:], os.Stdin, stdout, stderr)
 	case "doctor":
 		return runDoctor(args[1:], stdout, stderr)
 	case "git":
