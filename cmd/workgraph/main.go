@@ -56,6 +56,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runCapture(args[1:], os.Stdin, stdout, stderr)
 	case "bridge":
 		return runBridge(args[1:], os.Stdin, stdout, stderr)
+	case "plugin":
+		return runPlugin(args[1:], stdout, stderr)
 	case "doctor":
 		return runDoctor(args[1:], stdout, stderr)
 	case "git":
@@ -106,6 +108,74 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unknown command: %s\n", args[0])
 		return 2
 	}
+}
+
+func runPlugin(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph plugin <install|doctor>")
+		return 2
+	}
+	switch args[0] {
+	case "install":
+		return runPluginInstall(args[1:], stdout, stderr)
+	case "doctor":
+		return runPluginDoctor(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "unknown plugin command: %s\n", args[0])
+		return 2
+	}
+}
+
+func runPluginInstall(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("plugin install", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	client := flags.String("client", "", "client to install into: codex or claude-code")
+	clientCommand := flags.String("client-command", "", "client executable override")
+	installRoot := flags.String("install-root", "", "package installation root override")
+	noLaunchd := flags.Bool("no-launchd", false, "skip installing the macOS bridge drain worker")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 || strings.TrimSpace(*client) == "" {
+		fmt.Fprintln(stderr, "usage: workgraph plugin install --client <codex|claude-code>")
+		return 2
+	}
+	result, err := workgraph.InstallPlugin(workgraph.PluginInstallConfig{
+		HomeDir: *homeDir, Client: *client, ClientCommand: *clientCommand,
+		InstallRoot: *installRoot, SkipLaunchd: *noLaunchd,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph plugin install: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runPluginDoctor(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("plugin doctor", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	client := flags.String("client", "", "client to diagnose: codex or claude-code")
+	clientCommand := flags.String("client-command", "", "client executable override")
+	installRoot := flags.String("install-root", "", "package installation root override")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 || strings.TrimSpace(*client) == "" {
+		fmt.Fprintln(stderr, "usage: workgraph plugin doctor --client <codex|claude-code>")
+		return 2
+	}
+	message, err := workgraph.DoctorPlugin(workgraph.PluginDoctorConfig{
+		HomeDir: *homeDir, Client: *client, ClientCommand: *clientCommand, InstallRoot: *installRoot,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph plugin doctor: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, message)
+	return 0
 }
 
 func runBridge(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {

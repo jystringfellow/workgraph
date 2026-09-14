@@ -33,18 +33,20 @@ func TestBridgeInstallPackagesCodexAndClaudeCodeIdempotently(t *testing.T) {
 			if client == "claude-code" {
 				manifest = ".claude-plugin/plugin.json"
 			}
-			if _, err := os.Stat(filepath.Join(installRoot, "plugins", "workgraph-bridge", manifest)); err != nil {
+			if _, err := os.Stat(filepath.Join(installRoot, "plugins", "workgraph", manifest)); err != nil {
 				t.Fatalf("installed %s manifest: %v", client, err)
 			}
-			if _, err := os.Stat(filepath.Join(installRoot, "plugins", "workgraph-bridge", "skills", "workgraph-bridge", "SKILL.md")); err != nil {
-				t.Fatalf("installed %s skill: %v", client, err)
+			for _, skill := range []string{"workgraph-bridge", "workgraph-memory", "workgraph-ai-checkpoint"} {
+				if _, err := os.Stat(filepath.Join(installRoot, "plugins", "workgraph", "skills", skill, "SKILL.md")); err != nil {
+					t.Fatalf("installed %s skill %s: %v", client, skill, err)
+				}
 			}
 			logContents, err := os.ReadFile(logPath)
 			if err != nil {
 				t.Fatalf("read client registration log: %v", err)
 			}
 			logText := string(logContents)
-			for _, expected := range []string{"plugin marketplace add", "plugin"} {
+			for _, expected := range []string{"plugin marketplace add", "workgraph@workgraph"} {
 				if !strings.Contains(logText, expected) {
 					t.Fatalf("%s registration omitted %q:\n%s", client, expected, logText)
 				}

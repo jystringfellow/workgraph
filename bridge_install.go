@@ -16,11 +16,11 @@ import (
 	"time"
 )
 
-//go:embed all:integrations/codex all:integrations/claude-code all:.agents/skills/workgraph-bridge
-var bridgeIntegrationAssets embed.FS
+//go:embed all:integrations/codex all:integrations/claude-code all:.agents/skills/workgraph-bridge all:.agents/skills/workgraph-memory all:.agents/skills/workgraph-ai-checkpoint
+var agentPluginAssets embed.FS
 
-// BridgeInstallConfig controls one client integration installation.
-type BridgeInstallConfig struct {
+// PluginInstallConfig controls one client plugin installation.
+type PluginInstallConfig struct {
 	HomeDir       string
 	Client        string
 	ClientCommand string
@@ -28,30 +28,36 @@ type BridgeInstallConfig struct {
 	SkipLaunchd   bool
 }
 
-// BridgeInstallResult describes an installed client bridge package.
-type BridgeInstallResult struct {
+// PluginInstallResult describes an installed client plugin package.
+type PluginInstallResult struct {
 	Client      string
 	InstallRoot string
+	Version     string
 	Message     string
 }
 
-// BridgeDoctorConfig controls provider-free reference integration diagnostics.
-type BridgeDoctorConfig struct {
+// PluginDoctorConfig controls provider-free client plugin diagnostics.
+type PluginDoctorConfig struct {
 	HomeDir       string
 	Client        string
 	ClientCommand string
 	InstallRoot   string
 }
 
-// InstallBridge installs and registers one reference client package idempotently.
-func InstallBridge(config BridgeInstallConfig) (BridgeInstallResult, error) {
+// Compatibility aliases retain the public bridge install API.
+type BridgeInstallConfig = PluginInstallConfig
+type BridgeInstallResult = PluginInstallResult
+type BridgeDoctorConfig = PluginDoctorConfig
+
+// InstallPlugin installs and registers one reference client package idempotently.
+func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 	homeDir, err := connectorHomeDir(config.HomeDir)
 	if err != nil {
-		return BridgeInstallResult{}, err
+		return PluginInstallResult{}, err
 	}
 	client := strings.ToLower(strings.TrimSpace(config.Client))
 	if client != "codex" && client != "claude-code" {
-		return BridgeInstallResult{}, fmt.Errorf("bridge client must be codex or claude-code")
+		return PluginInstallResult{}, fmt.Errorf("plugin client must be codex or claude-code")
 	}
 	commandName := strings.TrimSpace(config.ClientCommand)
 	if commandName == "" {
@@ -61,7 +67,7 @@ func InstallBridge(config BridgeInstallConfig) (BridgeInstallResult, error) {
 		}
 	}
 	if _, err := exec.LookPath(commandName); err != nil {
-		return BridgeInstallResult{}, fmt.Errorf("find %s client: %w", client, err)
+		return PluginInstallResult{}, fmt.Errorf("find %s client: %w", client, err)
 	}
 	installRoot := strings.TrimSpace(config.InstallRoot)
 	if installRoot == "" {
@@ -69,53 +75,146 @@ func InstallBridge(config BridgeInstallConfig) (BridgeInstallResult, error) {
 	}
 	installRoot, err = filepath.Abs(installRoot)
 	if err != nil {
-		return BridgeInstallResult{}, fmt.Errorf("resolve bridge install root: %w", err)
+		return PluginInstallResult{}, fmt.Errorf("resolve plugin install root: %w", err)
 	}
-	if err := copyBridgeIntegration(client, installRoot); err != nil {
-		return BridgeInstallResult{}, err
+	if err := copyAgentPlugin(client, installRoot); err != nil {
+		return PluginInstallResult{}, err
 	}
 	executable, err := os.Executable()
 	if err != nil {
-		return BridgeInstallResult{}, fmt.Errorf("resolve workgraph executable: %w", err)
+		return PluginInstallResult{}, fmt.Errorf("resolve workgraph executable: %w", err)
 	}
-	if err := writeInstalledBridgeMCP(client, installRoot, executable, homeDir); err != nil {
-		return BridgeInstallResult{}, err
+	if err := writeInstalledPluginMCP(client, installRoot, executable, homeDir); err != nil {
+		return PluginInstallResult{}, err
 	}
-	if err := registerBridgePlugin(client, commandName, installRoot); err != nil {
-		return BridgeInstallResult{}, err
+	pluginVersion, err := stampInstalledPluginVersion(client, installRoot, time.Now().UTC())
+	if err != nil {
+		return PluginInstallResult{}, err
+	}
+	if err := registerAgentPlugin(client, commandName, installRoot); err != nil {
+		return PluginInstallResult{}, err
 	}
 	launchStatus := "launchd setup skipped"
 	if !config.SkipLaunchd {
 		if err := installBridgeLaunchAgent(client, commandName, executable, homeDir); err != nil {
-			return BridgeInstallResult{}, err
+			return PluginInstallResult{}, err
 		}
 		launchStatus = "launchd worker installed"
 	}
-	result := BridgeInstallResult{Client: client, InstallRoot: installRoot}
+	clientLabel := "Codex"
+	if client == "claude-code" {
+		clientLabel = "Claude Code"
+	}
+	result := PluginInstallResult{Client: client, InstallRoot: installRoot, Version: pluginVersion}
 	result.Message = strings.Join([]string{
-		"workgraph bridge installed",
+		"workgraph plugin installed",
 		"Client: " + client,
 		"Package: " + installRoot,
+		"Version: " + pluginVersion,
+		"Skills: 3",
 		"MCP: workgraph",
 		"Worker: " + launchStatus,
+		"Next: start a new " + clientLabel + " session to load the plugin.",
 	}, "\n")
 	return result, nil
 }
 
-func copyBridgeIntegration(client string, destination string) error {
-	prefix := "integrations/" + client
-	if err := os.MkdirAll(destination, 0o700); err != nil {
-		return fmt.Errorf("create bridge package: %w", err)
+func stampInstalledPluginVersion(client string, installRoot string, installedAt time.Time) (string, error) {
+	versionOwner := "codex"
+	manifest := filepath.Join(installRoot, "plugins", "workgraph", ".codex-plugin", "plugin.json")
+	if client == "claude-code" {
+		versionOwner = "claude"
+		manifest = filepath.Join(installRoot, "plugins", "workgraph", ".claude-plugin", "plugin.json")
 	}
-	if err := copyEmbeddedBridgeTree(prefix, destination); err != nil {
-		return err
+	version := "0.2.0+" + versionOwner + ".local-" + installedAt.UTC().Format("20060102-150405.000000000")
+	if err := setJSONVersion(manifest, version); err != nil {
+		return "", fmt.Errorf("stamp plugin manifest: %w", err)
 	}
-	skillDestination := filepath.Join(destination, "plugins", "workgraph-bridge", "skills", "workgraph-bridge")
-	return copyEmbeddedBridgeTree(".agents/skills/workgraph-bridge", skillDestination)
+	if client == "claude-code" {
+		marketplace := filepath.Join(installRoot, ".claude-plugin", "marketplace.json")
+		if err := setClaudeMarketplacePluginVersion(marketplace, version); err != nil {
+			return "", fmt.Errorf("stamp Claude Code marketplace: %w", err)
+		}
+	}
+	return version, nil
 }
 
-func copyEmbeddedBridgeTree(prefix string, destination string) error {
-	return fs.WalkDir(bridgeIntegrationAssets, prefix, func(path string, entry fs.DirEntry, walkErr error) error {
+func setJSONVersion(path string, version string) error {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var document map[string]any
+	if err := json.Unmarshal(contents, &document); err != nil {
+		return err
+	}
+	document["version"] = version
+	return writeJSONFile(path, document)
+}
+
+func setClaudeMarketplacePluginVersion(path string, version string) error {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var document map[string]any
+	if err := json.Unmarshal(contents, &document); err != nil {
+		return err
+	}
+	plugins, ok := document["plugins"].([]any)
+	if !ok {
+		return fmt.Errorf("plugins list is missing")
+	}
+	found := false
+	for _, value := range plugins {
+		plugin, ok := value.(map[string]any)
+		if !ok || plugin["name"] != "workgraph" {
+			continue
+		}
+		plugin["version"] = version
+		found = true
+	}
+	if !found {
+		return fmt.Errorf("workgraph plugin entry is missing")
+	}
+	return writeJSONFile(path, document)
+}
+
+func writeJSONFile(path string, document any) error {
+	contents, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, append(contents, '\n'), 0o600); err != nil {
+		return err
+	}
+	return nil
+}
+
+// InstallBridge is a compatibility wrapper around InstallPlugin.
+func InstallBridge(config BridgeInstallConfig) (BridgeInstallResult, error) {
+	return InstallPlugin(config)
+}
+
+func copyAgentPlugin(client string, destination string) error {
+	prefix := "integrations/" + client
+	if err := os.MkdirAll(destination, 0o700); err != nil {
+		return fmt.Errorf("create plugin package: %w", err)
+	}
+	if err := copyEmbeddedPluginTree(prefix, destination); err != nil {
+		return err
+	}
+	for _, skill := range []string{"workgraph-bridge", "workgraph-memory", "workgraph-ai-checkpoint"} {
+		skillDestination := filepath.Join(destination, "plugins", "workgraph", "skills", skill)
+		if err := copyEmbeddedPluginTree(".agents/skills/"+skill, skillDestination); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyEmbeddedPluginTree(prefix string, destination string) error {
+	return fs.WalkDir(agentPluginAssets, prefix, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -127,7 +226,7 @@ func copyEmbeddedBridgeTree(prefix string, destination string) error {
 		if entry.IsDir() {
 			return os.MkdirAll(target, 0o700)
 		}
-		contents, err := bridgeIntegrationAssets.ReadFile(path)
+		contents, err := agentPluginAssets.ReadFile(path)
 		if err != nil {
 			return err
 		}
@@ -138,33 +237,37 @@ func copyEmbeddedBridgeTree(prefix string, destination string) error {
 	})
 }
 
-func writeInstalledBridgeMCP(client string, installRoot string, executable string, homeDir string) error {
+func writeInstalledPluginMCP(client string, installRoot string, executable string, homeDir string) error {
 	server := map[string]any{"command": executable, "args": []string{"bridge", "mcp", "--home", homeDir}}
 	var document any = map[string]any{"workgraph": server}
 	if client == "codex" {
 		document = map[string]any{"mcpServers": map[string]any{"workgraph": server}}
 	}
 	contents, _ := json.MarshalIndent(document, "", "  ")
-	path := filepath.Join(installRoot, "plugins", "workgraph-bridge", ".mcp.json")
+	path := filepath.Join(installRoot, "plugins", "workgraph", ".mcp.json")
 	if err := os.WriteFile(path, append(contents, '\n'), 0o600); err != nil {
 		return fmt.Errorf("write installed bridge MCP config: %w", err)
 	}
 	return nil
 }
 
-func registerBridgePlugin(client string, commandName string, installRoot string) error {
+func registerAgentPlugin(client string, commandName string, installRoot string) error {
 	commands := [][]string{}
 	if client == "codex" {
-		commands = [][]string{{"plugin", "marketplace", "add", installRoot}, {"plugin", "add", "workgraph-bridge@workgraph"}}
+		commands = [][]string{{"plugin", "marketplace", "add", installRoot}, {"plugin", "add", "workgraph@workgraph"}}
 	} else {
-		commands = [][]string{{"plugin", "marketplace", "add", "--scope", "user", installRoot}, {"plugin", "install", "--scope", "user", "workgraph-bridge@workgraph"}}
+		commands = [][]string{
+			{"plugin", "marketplace", "add", "--scope", "user", installRoot},
+			{"plugin", "install", "--scope", "user", "workgraph@workgraph"},
+			{"plugin", "update", "--scope", "user", "workgraph@workgraph"},
+		}
 	}
 	for _, args := range commands {
 		output, err := exec.Command(commandName, args...).CombinedOutput()
 		if err != nil {
 			details := strings.ToLower(strings.TrimSpace(string(output)))
-			if !strings.Contains(details, "already") && !strings.Contains(details, "exist") && !strings.Contains(details, "installed") {
-				return fmt.Errorf("register %s bridge plugin: %s", client, strings.TrimSpace(string(output)))
+			if !strings.Contains(details, "already") && !strings.Contains(details, "exist") {
+				return fmt.Errorf("register %s workgraph plugin: %s", client, strings.TrimSpace(string(output)))
 			}
 		}
 	}
@@ -287,15 +390,15 @@ func DrainBridge(homeDir string, client string, clientCommand string) (string, e
 	return strings.TrimSpace(string(output)), nil
 }
 
-// DoctorBridge verifies a package, client binary, local MCP, and worker marker without provider access.
-func DoctorBridge(config BridgeDoctorConfig) (string, error) {
+// DoctorPlugin verifies a package, skills, client binary, local MCP, and worker marker without provider access.
+func DoctorPlugin(config PluginDoctorConfig) (string, error) {
 	homeDir, err := connectorHomeDir(config.HomeDir)
 	if err != nil {
 		return "", err
 	}
 	client := strings.ToLower(strings.TrimSpace(config.Client))
 	if client != "codex" && client != "claude-code" {
-		return "", fmt.Errorf("bridge client must be codex or claude-code")
+		return "", fmt.Errorf("plugin client must be codex or claude-code")
 	}
 	commandName := strings.TrimSpace(config.ClientCommand)
 	if commandName == "" {
@@ -311,12 +414,27 @@ func DoctorBridge(config BridgeDoctorConfig) (string, error) {
 	if installRoot == "" {
 		installRoot = filepath.Join(homeDir, "bridge", "integrations", client)
 	}
-	manifest := filepath.Join(installRoot, "plugins", "workgraph-bridge", ".codex-plugin", "plugin.json")
+	pluginRoot := filepath.Join(installRoot, "plugins", "workgraph")
+	manifest := filepath.Join(pluginRoot, ".codex-plugin", "plugin.json")
 	if client == "claude-code" {
-		manifest = filepath.Join(installRoot, "plugins", "workgraph-bridge", ".claude-plugin", "plugin.json")
+		manifest = filepath.Join(pluginRoot, ".claude-plugin", "plugin.json")
 	}
 	if _, err := os.Stat(manifest); err != nil {
-		return "", fmt.Errorf("bridge package is not installed: %w", err)
+		return "", fmt.Errorf("workgraph plugin is not installed: %w", err)
+	}
+	pluginVersion, err := readPluginVersion(manifest)
+	if err != nil {
+		return "", fmt.Errorf("read workgraph plugin version: %w", err)
+	}
+	for _, required := range []string{
+		filepath.Join("skills", "workgraph-bridge", "SKILL.md"),
+		filepath.Join("skills", "workgraph-bridge", "references", "event-contracts.md"),
+		filepath.Join("skills", "workgraph-memory", "SKILL.md"),
+		filepath.Join("skills", "workgraph-ai-checkpoint", "SKILL.md"),
+	} {
+		if _, err := os.Stat(filepath.Join(pluginRoot, required)); err != nil {
+			return "", fmt.Errorf("required plugin capability %s is not installed: %w", required, err)
+		}
 	}
 	input := strings.NewReader("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}\n")
 	var output bytes.Buffer
@@ -339,14 +457,42 @@ func DoctorBridge(config BridgeDoctorConfig) (string, error) {
 		heartbeat = strings.TrimSpace(string(contents))
 	}
 	return strings.Join([]string{
-		"workgraph bridge doctor",
+		"workgraph plugin doctor",
 		"Client: ready",
 		"Package: ready",
+		"Version: " + pluginVersion,
+		"Skills: 3/3 ready",
 		"MCP: ready",
 		"Round trip: ready",
 		"Worker: " + worker,
 		"Last heartbeat: " + heartbeat,
 	}, "\n"), nil
+}
+
+func readPluginVersion(manifest string) (string, error) {
+	contents, err := os.ReadFile(manifest)
+	if err != nil {
+		return "", err
+	}
+	var document struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(contents, &document); err != nil {
+		return "", err
+	}
+	if document.Name != "workgraph" {
+		return "", fmt.Errorf("manifest names %q instead of workgraph", document.Name)
+	}
+	if strings.TrimSpace(document.Version) == "" {
+		return "", fmt.Errorf("manifest version is empty")
+	}
+	return document.Version, nil
+}
+
+// DoctorBridge is a compatibility wrapper around DoctorPlugin.
+func DoctorBridge(config BridgeDoctorConfig) (string, error) {
+	return DoctorPlugin(config)
 }
 
 func verifyBridgeLifecycleRoundTrip() error {

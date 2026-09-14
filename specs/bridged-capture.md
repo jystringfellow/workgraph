@@ -451,15 +451,18 @@ and normal scheduling resumes. The configured connector interval expresses
 desired cadence; actual latency is bounded by bridge drain frequency and fetch
 duration and is shown rather than hidden.
 
-## Client integration and bridge skill
+## Client integration and workgraph plugin
 
 The feature is not complete with an ingest API alone. Claude Code and Codex on
 macOS are equal reference integrations and must both provide a complete setup,
-drain, and verification path. A supported client package must provide:
+drain, and verification path. Each client receives the broader `workgraph`
+plugin defined in `specs/agent-plugin.md`; bridged capture is one capability
+inside it. A supported client package must provide:
 
 - registration of the local workgraph MCP server;
-- a bridge skill containing provider-tool selection, normalization, identity,
-  scope, overlap, and request-completion rules;
+- the canonical bridge, memory, and AI checkpoint skills, with the bridge skill
+  containing provider-tool selection, normalization, identity, scope, overlap,
+  and request-completion rules;
 - a least-privilege automated capture profile where the client supports one;
 - a client scheduler or user-level worker that drains the outbox;
 - a manual drain command for diagnosis and clients without unattended runs;
@@ -476,11 +479,14 @@ the remaining client-specific action when the client cannot be configured
 programmatically:
 
 ```sh
-workgraph bridge install --client claude-code
-workgraph bridge install --client codex
-workgraph bridge doctor --client claude-code
-workgraph bridge doctor --client codex
+workgraph plugin install --client claude-code
+workgraph plugin install --client codex
+workgraph plugin doctor --client claude-code
+workgraph plugin doctor --client codex
 ```
+
+`workgraph bridge install` and `workgraph bridge doctor` remain compatibility
+aliases for the same plugin installation and diagnostic behavior.
 
 The client worker may run frequently to reduce drain latency, but it claims only
 requests the daemon has made available. It holds no provider token on behalf of
@@ -515,8 +521,8 @@ missing capabilities without falling back to workgraph-owned OAuth.
 
 | Client | Required package | Automation requirement |
 |---|---|---|
-| Claude Code | Client plugin/skill plus local workgraph MCP registration | An explicitly enabled Claude-compatible scheduled worker drains the outbox and survives logout/login as supported by the client adapter |
-| Codex | Codex-local plugin/package containing the shared skill plus local workgraph MCP registration | An explicitly enabled Codex-compatible automation or macOS worker drains the outbox and survives logout/login as supported by the client adapter |
+| Claude Code | `workgraph` plugin with the shared skills and local workgraph MCP registration | An explicitly enabled Claude-compatible scheduled worker drains the outbox and survives logout/login as supported by the client adapter |
+| Codex | `workgraph` plugin with the shared skills and local workgraph MCP registration | An explicitly enabled Codex-compatible automation or macOS worker drains the outbox and survives logout/login as supported by the client adapter |
 
 Both integrations must use the same MCP schemas and normalized event contracts.
 Provider approvals do not transfer between clients: each integration discovers
@@ -525,12 +531,12 @@ reference integration may require an OpenAI or Anthropic API key when the
 installed client can run the approved workflow through its existing signed-in
 session.
 
-`workgraph bridge install` is idempotent. It installs or updates the local
+`workgraph plugin install` is idempotent. It installs or updates the local
 client package, registers the local MCP server, and configures the drain
 mechanism only after explicit approval. It must not overwrite unrelated client
-settings. `workgraph bridge doctor` verifies package version, MCP reachability,
-worker heartbeat, permission readiness, and a claim/empty-ingest round trip
-without contacting a provider.
+settings. `workgraph plugin doctor` verifies package version, every bundled
+skill, MCP reachability, worker heartbeat, permission readiness, and a
+claim/empty-ingest round trip without contacting a provider.
 
 Cowork and unknown clients are secondary compatibility targets. They can use the
 same MCP tools and shared skill manually or provide their own scheduled worker;
@@ -543,7 +549,7 @@ signed in, and already has at least one approved provider connector:
 
 ```sh
 workgraph init
-workgraph bridge install --client claude-code  # or: --client codex
+workgraph plugin install --client claude-code  # or: --client codex
 workgraph start
 ```
 
@@ -552,7 +558,7 @@ approves the proposed sources and scopes, and receives a successful first-sync
 report. Afterward, the daemon continues emitting source requests at configured
 cadences and the installed client worker drains them without repeated manual
 prompts. Capture resumes after daemon, client, or machine restart. `workgraph
-status` and `workgraph bridge doctor` explain any loss of provider capability,
+status` and `workgraph plugin doctor` explain any loss of provider capability,
 worker health, permission, claim, or ingestion failure.
 
 Success requires locally queryable events, connector recency, and any required
@@ -607,7 +613,9 @@ and connector id.
 8. Update list/status/doctor and `poll --once` behavior for bridged connectors.
 9. Add the provider-neutral bridge skill and configuration MCP tools.
 10. Add idempotent Claude Code and Codex packages, installation/doctor flows,
-    manual drain paths, heartbeat, and fully automated macOS workers.
+    manual drain paths, heartbeat, and fully automated macOS workers. Package
+    the bridge with memory and AI checkpoint under the one user-facing
+    `workgraph` plugin described in `specs/agent-plugin.md`.
 11. Pass all facts and cross off the corresponding roadmap item.
 
 ## Facts to add

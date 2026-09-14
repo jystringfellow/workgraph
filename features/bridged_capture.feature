@@ -68,8 +68,7 @@ Feature: Bridged connector capture
     And it verifies the first local capture without workgraph-managed provider OAuth
 
   Scenario: Install both reference integrations
-    When I install the Claude Code or Codex bridge integration on macOS
-    Then workgraph idempotently registers the same local MCP contract and shared skill
+    When I install the workgraph plugin for Claude Code or Codex on macOS
+    Then workgraph idempotently registers the same local MCP contract and canonical skills
     And it preserves unrelated client settings
     And bridge doctor verifies local operation without contacting a provider
-

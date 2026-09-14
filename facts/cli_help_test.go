@@ -91,6 +91,9 @@ var publicCommandPaths = []string{
 	"notion index",
 	"notion index list",
 	"notion index show",
+	"plugin",
+	"plugin doctor",
+	"plugin install",
 	"resume",
 	"review",
 	"security",
@@ -230,6 +233,8 @@ func TestLeafHelpListsAvailableOptions(t *testing.T) {
 		{"ai sessions", []string{"Options:", "--all", "--archived", "--status", "--limit"}},
 		{"llm add", []string{"Options:", "--provider", "--model", "--api-key-env"}},
 		{"llm connect", []string{"Options:", "--name", "--for", "--model"}},
+		{"plugin install", []string{"Options:", "--client", "--no-launchd"}},
+		{"plugin doctor", []string{"Options:", "--client", "--install-root"}},
 		{"bridge install", []string{"Options:", "--client", "--no-launchd"}},
 		{"capture requests", []string{"Options:", "--claim", "--renew", "--fail", "--claim-file"}},
 		{"calendar connect", []string{"Options:", "--client-id", "--no-browser", "--calendar-id"}},
@@ -251,14 +256,16 @@ func TestBridgeAndAIClientCommandsAreDocumented(t *testing.T) {
 		expected []string
 	}{
 		{filepath.Join(root, "docs", "commands.md"), []string{
-			"workgraph bridge install --client codex",
+			"workgraph plugin install --client codex",
+			"workgraph plugin install --client claude-code",
 			"workgraph capture requests --claim",
 			"workgraph capture ingest --request",
 			"workgraph llm connect codex --for summarize",
 			"workgraph llm connect claude-code",
 		}},
 		{filepath.Join(root, "README.md"), []string{
-			"workgraph bridge install --client codex",
+			"workgraph plugin install --client codex",
+			"workgraph plugin install --client claude-code",
 			"workgraph llm connect codex --for summarize",
 		}},
 	} {

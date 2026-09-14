@@ -30,14 +30,20 @@ overwrite stored tokens.
 
 When workgraph itself is not approved for a provider OAuth connection, a
 signed-in Codex or Claude Code installation can execute capture through provider
-connectors already approved in that client. Install one reference integration:
+connectors already approved in that client. Install the workgraph agent plugin:
 
 ```sh
-workgraph bridge install --client codex
+workgraph plugin install --client codex
 # or
-workgraph bridge install --client claude-code
-workgraph bridge doctor --client codex
+workgraph plugin install --client claude-code
+workgraph plugin doctor --client codex
 ```
+
+The plugin also contains the `workgraph-memory` and
+`workgraph-ai-checkpoint` skills alongside `workgraph-bridge`. Start a new
+client session after installation so all three skills and the local MCP are
+discovered. Rerunning the install command refreshes the complete plugin after a
+workgraph upgrade.
 
 Then ask that client to set up workgraph bridges. It discovers available
 read-only provider tools, proposes non-secret scopes and cadences, waits for

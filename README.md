@@ -105,16 +105,21 @@ workgraph notion connect
 workgraph azure boards connect --organization <org> --project <project> --team <team>
 ```
 
-If workgraph cannot receive OAuth approval but Codex or Claude Code already has
-approved provider connectors, install a credential-free capture bridge instead:
+Install the workgraph agent plugin for the AI client you use:
 
 ```sh
-workgraph bridge install --client codex
-workgraph bridge doctor --client codex
+workgraph plugin install --client codex
+# or
+workgraph plugin install --client claude-code
+workgraph plugin doctor --client codex
 ```
 
-The workgraph daemon still owns connector cadence and local storage; the signed-in
-client performs bounded provider reads without giving workgraph its OAuth token.
+The plugin bundles the local workgraph MCP plus the `workgraph-bridge`,
+`workgraph-memory`, and `workgraph-ai-checkpoint` skills. Start a new client
+session after installation so it discovers the plugin. If workgraph cannot
+receive provider OAuth approval, the bridge skill can use connectors already
+approved in that client; the daemon still owns cadence and local storage, and
+workgraph never receives the provider token.
 
 Start local capture:
 

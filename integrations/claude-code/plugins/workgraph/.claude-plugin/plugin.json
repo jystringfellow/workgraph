@@ -1,0 +1,6 @@
+{
+  "name": "workgraph",
+  "version": "0.2.0",
+  "description": "Use local workgraph capture, memory, and AI session continuity from Claude Code.",
+  "author": { "name": "workgraph" }
+}

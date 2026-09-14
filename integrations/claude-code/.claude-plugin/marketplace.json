@@ -1,12 +1,13 @@
 {
   "name": "workgraph",
+  "description": "Local workgraph integrations for Claude Code.",
   "owner": { "name": "workgraph" },
   "plugins": [
     {
-      "name": "workgraph-bridge",
-      "source": "./plugins/workgraph-bridge",
-      "description": "Drain locally scheduled workgraph capture through approved Claude Code connectors.",
-      "version": "0.1.0"
+      "name": "workgraph",
+      "source": "./plugins/workgraph",
+      "description": "Use workgraph capture, memory, and AI session continuity from Claude Code.",
+      "version": "0.2.0"
     }
   ]
 }

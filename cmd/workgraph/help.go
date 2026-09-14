@@ -39,9 +39,9 @@ var helpTopics = map[string]helpTopic{
 	"azure boards connect":    {"workgraph azure boards connect --organization <name> --project <name> --team <name> [options]", "Connect an Azure Boards account with OAuth."},
 	"azure boards disconnect": {"workgraph azure boards disconnect [options]", "Remove the locally stored Azure Boards connection."},
 	"bridge":                  {"workgraph bridge <subcommand>", "Install, diagnose, and run credential-free AI-client capture bridges."},
-	"bridge doctor":           {"workgraph bridge doctor --client <codex|claude-code> [options]", "Verify the client package, local MCP, worker, and heartbeat without provider access."},
+	"bridge doctor":           {"workgraph bridge doctor --client <codex|claude-code> [options]", "Compatibility alias for plugin doctor."},
 	"bridge drain":            {"workgraph bridge drain --client <codex|claude-code> [options]", "Drain active daemon requests through a signed-in reference client."},
-	"bridge install":          {"workgraph bridge install --client <codex|claude-code> [options]", "Install the reference client package, local MCP, and macOS worker."},
+	"bridge install":          {"workgraph bridge install --client <codex|claude-code> [options]", "Compatibility alias for plugin install."},
 	"bridge mcp":              {"workgraph bridge mcp [options]", "Serve local bridge tools over stdio MCP."},
 	"calendar":                {"workgraph calendar <subcommand>", "Connect, capture, or disconnect calendar providers."},
 	"calendar capture":        {"workgraph calendar capture [options]", "Capture normalized calendar events from a provider or JSON export."},
@@ -106,6 +106,9 @@ var helpTopics = map[string]helpTopic{
 	"notion index":            {"workgraph notion index <subcommand>", "Inspect the locally captured Notion object index."},
 	"notion index list":       {"workgraph notion index list [--limit <count>] [options]", "List locally indexed Notion objects."},
 	"notion index show":       {"workgraph notion index show <notion-id> [options]", "Show one locally indexed Notion object."},
+	"plugin":                  {"workgraph plugin <subcommand>", "Install and diagnose the workgraph agent plugin for supported AI clients."},
+	"plugin doctor":           {"workgraph plugin doctor --client <codex|claude-code> [options]", "Verify the workgraph plugin, bundled skills, local MCP, worker, and heartbeat."},
+	"plugin install":          {"workgraph plugin install --client <codex|claude-code> [options]", "Install or update the workgraph plugin, bundled skills, local MCP, and macOS bridge worker."},
 	"resume":                  {"workgraph resume [project] [--all] [--debug-relevance] [options]", "Restore context for recent work or a specific project."},
 	"review":                  {"workgraph review [--since week|7d|30d] [--format text|json] [options]", "Review local suggestion effectiveness over a time window."},
 	"security":                {"workgraph security <subcommand>", "Inspect local security posture."},
@@ -155,6 +158,10 @@ var helpExamples = map[string][]string{
 	"bridge install": {
 		"workgraph bridge install --client codex",
 		"workgraph bridge install --client claude-code",
+	},
+	"plugin install": {
+		"workgraph plugin install --client codex",
+		"workgraph plugin install --client claude-code",
 	},
 	"capture requests": {
 		"workgraph capture requests --list",
@@ -344,6 +351,8 @@ func runCommandForOptionHelp(args []string, stdout io.Writer, stderr io.Writer) 
 		return runCapture(args[1:], os.Stdin, stdout, stderr)
 	case "bridge":
 		return runBridge(args[1:], os.Stdin, stdout, stderr)
+	case "plugin":
+		return runPlugin(args[1:], stdout, stderr)
 	case "doctor":
 		return runDoctor(args[1:], stdout, stderr)
 	case "git":
