@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-	"unicode/utf8"
 )
 
 const maxBridgedIngestBytes = 16 << 20
@@ -260,8 +259,8 @@ func EmitBridgedCaptureRequest(config CaptureRequestEmitConfig) (CaptureRequestE
 	if err != nil {
 		return CaptureRequestEmitResult{}, err
 	}
-	if id == "git" {
-		return CaptureRequestEmitResult{}, fmt.Errorf("connector git only supports direct capture")
+	if err := validateBridgeableConnector(id); err != nil {
+		return CaptureRequestEmitResult{}, err
 	}
 	state, err := readConnectorRuntimeFile(status.HomeDir)
 	if err != nil {
@@ -633,7 +632,6 @@ type BridgedIngestResult struct {
 	EventsInserted   int
 	EventsDuplicate  int
 	WeakDedupe       int
-	NotionProjection int
 	RequestCompleted bool
 	Message          string
 }
@@ -657,21 +655,6 @@ type preparedBridgedEvent struct {
 	Actor       string
 	Summary     string
 	WeakDedupe  bool
-	Notion      *bridgedNotionProjection
-}
-
-type bridgedNotionProjection struct {
-	ID             string
-	ObjectType     string
-	Title          string
-	URL            string
-	ParentJSON     string
-	PropertiesJSON string
-	Preview        string
-	CreatedTime    string
-	CreatedBy      string
-	LastEditedTime string
-	LastEditedBy   string
 }
 
 // IngestBridgedCapture validates and atomically stores normalized bridged events.
@@ -743,6 +726,9 @@ func IngestBridgedCapture(config BridgedIngestConfig) (BridgedIngestResult, erro
 			return BridgedIngestResult{}, err
 		}
 	}
+	if err := validateBridgeableConnector(connectorID); err != nil {
+		return BridgedIngestResult{}, err
+	}
 	if !connectorEnabled(state, connectorID) || connectorCaptureMode(state, connectorID) != "bridged" {
 		return BridgedIngestResult{}, fmt.Errorf("connector %s is not enabled in bridged mode", connectorID)
 	}
@@ -799,12 +785,6 @@ func IngestBridgedCapture(config BridgedIngestConfig) (BridgedIngestResult, erro
 		if event.WeakDedupe {
 			result.WeakDedupe++
 		}
-		if event.Notion != nil {
-			if err := projectBridgedNotionEvent(tx, *event.Notion, createdAt); err != nil {
-				return BridgedIngestResult{}, err
-			}
-			result.NotionProjection++
-		}
 	}
 	if claimedRequest != nil {
 		if err := completeClaimedCaptureRequest(tx, *claimedRequest, config.ClaimToken, createdAt); err != nil {
@@ -829,7 +809,6 @@ func IngestBridgedCapture(config BridgedIngestConfig) (BridgedIngestResult, erro
 		fmt.Sprintf("Events read: %d", result.EventsRead),
 		fmt.Sprintf("Events inserted: %d", result.EventsInserted),
 		fmt.Sprintf("Events deduplicated: %d", result.EventsDuplicate),
-		fmt.Sprintf("Notion projections: %d", result.NotionProjection),
 	}
 	if result.RequestCompleted {
 		lines = append(lines, "Request completed: "+claimedRequest.ID)
@@ -839,10 +818,14 @@ func IngestBridgedCapture(config BridgedIngestConfig) (BridgedIngestResult, erro
 }
 
 func bridgedConnectorID(source string) (string, error) {
-	if source == "git" {
-		return "", fmt.Errorf("connector git only supports direct capture")
+	connectorID, err := normalizeConnectorID(source)
+	if err != nil {
+		return "", err
 	}
-	return normalizeConnectorID(source)
+	if err := validateBridgeableConnector(connectorID); err != nil {
+		return "", err
+	}
+	return connectorID, nil
 }
 
 func bridgedConnectorIDForEvents(source string, events []bridgedEventEnvelope) (string, error) {
@@ -958,13 +941,6 @@ func prepareBridgedEvent(source string, envelope bridgedEventEnvelope) (prepared
 		Summary:     strings.TrimSpace(envelope.Summary),
 		WeakDedupe:  weak,
 	}
-	if source == "notion" {
-		projection, err := prepareBridgedNotionProjection(eventType, json.RawMessage(payloadJSON))
-		if err != nil {
-			return preparedBridgedEvent{}, err
-		}
-		event.Notion = &projection
-	}
 	return event, nil
 }
 
@@ -986,141 +962,6 @@ func canonicalJSONObject(raw json.RawMessage) (string, error) {
 		return "", fmt.Errorf("encode canonical JSON: %w", err)
 	}
 	return string(canonical), nil
-}
-
-func prepareBridgedNotionProjection(eventType string, payload json.RawMessage) (bridgedNotionProjection, error) {
-	var page struct {
-		ID               string          `json:"id"`
-		URL              string          `json:"url"`
-		Title            string          `json:"title"`
-		Path             string          `json:"path"`
-		Properties       json.RawMessage `json:"properties"`
-		Preview          string          `json:"preview"`
-		CreatedTime      string          `json:"created_time"`
-		CreatedBy        string          `json:"created_by"`
-		PageLastEditedAt string          `json:"page_last_edited_at"`
-		LastEditedTime   string          `json:"last_edited_time"`
-		LastEditedBy     string          `json:"last_edited_by"`
-	}
-	if err := json.Unmarshal(payload, &page); err != nil {
-		return bridgedNotionProjection{}, fmt.Errorf("parse Notion projection: %w", err)
-	}
-	if strings.TrimSpace(page.ID) == "" {
-		return bridgedNotionProjection{}, fmt.Errorf("Notion payload id is required")
-	}
-	objectType := strings.TrimPrefix(eventType, "notion.")
-	if objectType == "" {
-		return bridgedNotionProjection{}, fmt.Errorf("Notion object type is required")
-	}
-	lastEdited := page.PageLastEditedAt
-	if strings.TrimSpace(lastEdited) == "" {
-		lastEdited = page.LastEditedTime
-	}
-	lastEdited, err := normalizeOptionalRFC3339(lastEdited, true)
-	if err != nil {
-		return bridgedNotionProjection{}, fmt.Errorf("Notion last edited time: %w", err)
-	}
-	createdTime, err := normalizeOptionalRFC3339(page.CreatedTime, false)
-	if err != nil {
-		return bridgedNotionProjection{}, fmt.Errorf("Notion created time: %w", err)
-	}
-	propertiesJSON := "{}"
-	if len(bytes.TrimSpace(page.Properties)) > 0 && string(bytes.TrimSpace(page.Properties)) != "null" {
-		propertiesJSON, err = canonicalJSONObject(page.Properties)
-		if err != nil {
-			return bridgedNotionProjection{}, fmt.Errorf("Notion properties: %w", err)
-		}
-	}
-	parentJSON, err := json.Marshal(map[string]string{"path": strings.TrimSpace(page.Path)})
-	if err != nil {
-		return bridgedNotionProjection{}, fmt.Errorf("encode Notion parent: %w", err)
-	}
-	return bridgedNotionProjection{
-		ID:             strings.TrimSpace(page.ID),
-		ObjectType:     objectType,
-		Title:          strings.TrimSpace(page.Title),
-		URL:            strings.TrimSpace(page.URL),
-		ParentJSON:     string(parentJSON),
-		PropertiesJSON: propertiesJSON,
-		Preview:        truncateUTF8(strings.TrimSpace(page.Preview), 4000),
-		CreatedTime:    createdTime,
-		CreatedBy:      strings.TrimSpace(page.CreatedBy),
-		LastEditedTime: lastEdited,
-		LastEditedBy:   strings.TrimSpace(page.LastEditedBy),
-	}, nil
-}
-
-func normalizeOptionalRFC3339(value string, required bool) (string, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		if required {
-			return "", fmt.Errorf("is required")
-		}
-		return "", nil
-	}
-	parsed, err := time.Parse(time.RFC3339Nano, value)
-	if err != nil {
-		return "", err
-	}
-	return parsed.UTC().Format(time.RFC3339Nano), nil
-}
-
-func truncateUTF8(value string, limit int) string {
-	if limit <= 0 || len(value) <= limit {
-		return value
-	}
-	value = value[:limit]
-	for !utf8.ValidString(value) {
-		value = value[:len(value)-1]
-	}
-	return strings.TrimSpace(value)
-}
-
-func projectBridgedNotionEvent(tx *sql.Tx, page bridgedNotionProjection, now string) error {
-	var existingLastEdited string
-	err := tx.QueryRow(`SELECT COALESCE(last_edited_time, '') FROM notion_index WHERE notion_id = ?`, page.ID).Scan(&existingLastEdited)
-	if err != nil && err != sql.ErrNoRows {
-		return fmt.Errorf("read bridged Notion page %s: %w", page.ID, err)
-	}
-	if err == nil && existingLastEdited != "" {
-		existingTime, parseErr := time.Parse(time.RFC3339Nano, existingLastEdited)
-		if parseErr != nil {
-			return fmt.Errorf("parse indexed Notion timestamp for %s: %w", page.ID, parseErr)
-		}
-		incomingTime, _ := time.Parse(time.RFC3339Nano, page.LastEditedTime)
-		if incomingTime.Before(existingTime) {
-			return nil
-		}
-	}
-	_, err = tx.Exec(`INSERT INTO notion_index (
-		notion_id, object_type, title, url, parent_json, properties_json,
-		content_preview, content_synced_at, created_time, created_by,
-		last_edited_time, last_edited_by, source, first_seen_at, last_seen_at, last_synced_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	ON CONFLICT(notion_id) DO UPDATE SET
-		object_type = excluded.object_type,
-		title = excluded.title,
-		url = excluded.url,
-		parent_json = excluded.parent_json,
-		properties_json = excluded.properties_json,
-		content_preview = excluded.content_preview,
-		content_synced_at = excluded.content_synced_at,
-		created_time = COALESCE(excluded.created_time, notion_index.created_time),
-		created_by = COALESCE(excluded.created_by, notion_index.created_by),
-		last_edited_time = excluded.last_edited_time,
-		last_edited_by = excluded.last_edited_by,
-		source = excluded.source,
-		last_seen_at = excluded.last_seen_at,
-		last_synced_at = excluded.last_synced_at`,
-		page.ID, page.ObjectType, emptyStringAsNull(page.Title), emptyStringAsNull(page.URL),
-		page.ParentJSON, page.PropertiesJSON, emptyStringAsNull(page.Preview), now,
-		emptyStringAsNull(page.CreatedTime), emptyStringAsNull(page.CreatedBy),
-		page.LastEditedTime, emptyStringAsNull(page.LastEditedBy), "bridged", now, now, now,
-	)
-	if err != nil {
-		return fmt.Errorf("project bridged Notion page %s: %w", page.ID, err)
-	}
-	return nil
 }
 
 func bridgedDefaultDatabasePath(homeDir string) string {

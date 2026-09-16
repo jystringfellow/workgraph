@@ -12,7 +12,8 @@ Feature: Agent plugin installation
     And unrelated client settings are preserved
     And Claude Code pre-approves only the workgraph MCP tools required to drain capture
     And optional provider tools require exact-name opt-in
-    And the unattended worker explicitly loads the isolated settings
+    And Claude Code trusts the workgraph home without replacing unrelated trust settings
+    And the unattended worker discovers project settings without a settings override
 
   Scenario: Update an existing plugin installation
     Given the workgraph plugin was already installed

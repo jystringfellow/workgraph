@@ -10,10 +10,10 @@ Feature: Bridged connector capture
     When I connect a supported remote connector in bridged mode with its approved non-secret scope
     Then workgraph enables it without requesting or storing provider credentials
     And missing or malformed required scope is rejected without changing connector state
-    And doctor identifies legacy bridged connectors that need scope
+    And status and doctor identify legacy bridged connectors that need scope
     And changing scope cancels active work created for the prior scope
     And direct credentials already stored for that connector are preserved
-    And git cannot be configured or ingested as bridged
+    And direct-only git and Notion cannot be configured or ingested as bridged
 
   Scenario: Emit durable work at the configured cadence
     Given a bridged connector is due
@@ -57,12 +57,12 @@ Feature: Bridged connector capture
     Then the event timestamp remains the calendar start in UTC
     And the capture cursor advances only to the request until time
 
-  Scenario: Project bridged Notion pages locally
-    Given a bridge returns a bounded normalized Notion page
-    When workgraph ingests the page
-    Then the event and notion index snapshot commit together
-    And an older revision cannot overwrite a newer snapshot
-    And no Notion network request is made by workgraph
+  Scenario: Reject an incomplete provider bridge
+    Given the reference Notion client cannot paginate search to exhaustion
+    When I try to configure Notion for bridged capture
+    Then workgraph rejects it as direct-only
+    And status and doctor flag any legacy bridged Notion configuration as unsupported
+    And the message points to direct Notion setup
 
   Scenario: Guide setup through a supported AI client
     Given Claude Code or Codex has approved provider connectors on macOS
@@ -76,10 +76,16 @@ Feature: Bridged connector capture
     Then workgraph idempotently registers the same local MCP contract and canonical skills
     And it preserves unrelated client settings
     And Claude Code receives only the unattended workgraph MCP permissions needed to drain capture
-    And the Claude worker explicitly loads its isolated settings file
+    And Claude Code trusts the workgraph home while preserving unrelated user configuration
+    And the Claude worker discovers its project settings without overriding the normal settings chain
     And provider read tools are added only through explicit exact-name opt-in
     And reinstall reloads an existing launchd worker idempotently
     And bridge doctor verifies local operation without contacting a provider
+
+  Scenario: Return MCP collections in valid structured content
+    When a client lists or claims bridge requests or inspects connector status over MCP
+    Then the successful structured content is an object
+    And requests, claims, and connectors are returned in named collection fields
 
   Scenario: Skip work that the unattended client cannot execute
     Given a healthy connector has pending bridged work

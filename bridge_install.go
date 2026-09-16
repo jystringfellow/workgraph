@@ -105,6 +105,9 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 		if err != nil {
 			return PluginInstallResult{}, err
 		}
+		if err := installClaudeBridgeTrust(homeDir); err != nil {
+			return PluginInstallResult{}, err
+		}
 	}
 	launchStatus := "launchd setup skipped"
 	if !config.SkipLaunchd {
@@ -128,6 +131,7 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 	}
 	if client == "claude-code" {
 		lines = append(lines, "Permissions: unattended workgraph MCP drain only")
+		lines = append(lines, "Workspace trust: ready")
 		lines = append(lines, fmt.Sprintf("Provider tools: %d explicitly allowed", providerToolCount))
 	}
 	lines = append(lines, "Worker: "+launchStatus, "Next: start a new "+clientLabel+" session to load the plugin.")
@@ -230,6 +234,79 @@ func installClaudeBridgePermissions(homeDir string, providerTools []string) (int
 		return 0, fmt.Errorf("secure Claude bridge settings: %w", err)
 	}
 	return countClaudeProviderPermissions(seen), nil
+}
+
+func installClaudeBridgeTrust(homeDir string) error {
+	configPath, err := claudeUserConfigPath()
+	if err != nil {
+		return err
+	}
+	document := map[string]any{}
+	if contents, err := os.ReadFile(configPath); err == nil {
+		if err := json.Unmarshal(contents, &document); err != nil {
+			return fmt.Errorf("parse Claude user config: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("read Claude user config: %w", err)
+	}
+	projects := map[string]any{}
+	if existing, found := document["projects"]; found {
+		var ok bool
+		projects, ok = existing.(map[string]any)
+		if !ok {
+			return fmt.Errorf("Claude user config projects must be an object")
+		}
+	}
+	project := map[string]any{}
+	if existing, found := projects[homeDir]; found {
+		var ok bool
+		project, ok = existing.(map[string]any)
+		if !ok {
+			return fmt.Errorf("Claude user config project %q must be an object", homeDir)
+		}
+	}
+	project["hasTrustDialogAccepted"] = true
+	projects[homeDir] = project
+	document["projects"] = projects
+	if err := writeJSONFile(configPath, document); err != nil {
+		return fmt.Errorf("write Claude user config: %w", err)
+	}
+	return nil
+}
+
+func claudeUserConfigPath() (string, error) {
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve user home for Claude workspace trust: %w", err)
+	}
+	userHome, err = filepath.Abs(userHome)
+	if err != nil {
+		return "", fmt.Errorf("resolve Claude user config directory: %w", err)
+	}
+	return filepath.Join(userHome, ".claude.json"), nil
+}
+
+func verifyClaudeBridgeTrust(homeDir string) error {
+	configPath, err := claudeUserConfigPath()
+	if err != nil {
+		return err
+	}
+	contents, err := os.ReadFile(configPath)
+	if err != nil {
+		return err
+	}
+	var document struct {
+		Projects map[string]struct {
+			Trusted bool `json:"hasTrustDialogAccepted"`
+		} `json:"projects"`
+	}
+	if err := json.Unmarshal(contents, &document); err != nil {
+		return err
+	}
+	if !document.Projects[homeDir].Trusted {
+		return fmt.Errorf("workgraph home %q is not trusted", homeDir)
+	}
+	return nil
 }
 
 func countClaudeProviderPermissions(allowed map[string]bool) int {
@@ -499,6 +576,9 @@ func DrainBridge(homeDir string, client string, clientCommand string) (string, e
 		if _, err := os.Stat(settingsPath); err != nil {
 			return "", fmt.Errorf("Claude bridge settings are unavailable; rerun workgraph plugin install --client claude-code: %w", err)
 		}
+		if err := verifyClaudeBridgeTrust(homeDir); err != nil {
+			return "", fmt.Errorf("Claude bridge workspace is not trusted; rerun workgraph plugin install --client claude-code: %w", err)
+		}
 		providerToolCount, err := claudeProviderPermissionCount(homeDir)
 		if err != nil {
 			return "", fmt.Errorf("inspect Claude provider permissions: %w", err)
@@ -507,7 +587,7 @@ func DrainBridge(homeDir string, client string, clientCommand string) (string, e
 			recordBridgeDrainHeartbeat(homeDir, client)
 			return "No Claude provider tools are explicitly allowed; active capture requests remain pending.", nil
 		}
-		args = []string{"-p", "--permission-mode", "dontAsk", "--settings", settingsPath, prompt}
+		args = []string{"-p", "--permission-mode", "dontAsk", prompt}
 	default:
 		return "", fmt.Errorf("bridge client must be codex or claude-code")
 	}
@@ -596,6 +676,9 @@ func DoctorPlugin(config PluginDoctorConfig) (string, error) {
 		if err := verifyClaudeBridgePermissions(homeDir); err != nil {
 			return "", fmt.Errorf("verify Claude bridge permissions: %w", err)
 		}
+		if err := verifyClaudeBridgeTrust(homeDir); err != nil {
+			return "", fmt.Errorf("verify Claude bridge workspace trust: %w", err)
+		}
 		permissionStatus = "ready"
 	}
 	providerToolCount := 0
@@ -624,6 +707,7 @@ func DoctorPlugin(config PluginDoctorConfig) (string, error) {
 		"Permissions: " + permissionStatus,
 	}
 	if client == "claude-code" {
+		lines = append(lines, "Workspace trust: ready")
 		lines = append(lines, fmt.Sprintf("Provider tools: %d explicitly allowed", providerToolCount))
 	}
 	lines = append(lines,

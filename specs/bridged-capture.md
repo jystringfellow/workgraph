@@ -24,8 +24,7 @@ Bridged capture adds a second backend behind the existing connector interface:
   through workgraph's local MCP or CLI interface.
 
 The event store, sessions, memory, associations, `today`, and `resume` consume
-the same normalized events in both modes. Provider-specific local projections,
-such as `notion_index`, are also maintained during bridged ingestion.
+the same normalized events in both modes.
 
 ```text
 workgraph daemon
@@ -40,7 +39,7 @@ approved agent client + bridge skill
     |
     | read-only provider MCP calls
     v
-Slack / Notion / GitHub / Microsoft / Azure DevOps
+Slack / GitHub / Microsoft / Azure DevOps
 ```
 
 ## Principles
@@ -81,7 +80,7 @@ bridged capture, or both, plus the event source and allowed event types.
 | `github` | `github` | yes | yes | PRs, issues, and related activity |
 | `slack` | `slack` | yes | yes | Messages and thread replies |
 | `slack.lists` | `slack` | yes | yes | Separate cadence; preserves existing `slack.list_item` source semantics |
-| `notion` | `notion` | yes | yes | Also projects current state into `notion_index` |
+| `notion` | `notion` | yes | **no** | Reference client search cannot prove exhaustive pagination; use direct OAuth or `notion connect-token` |
 | `mail.google` | `mail.google` | yes | yes | Provider recipe required |
 | `mail.microsoft` | `mail.microsoft` | yes | yes | Provider recipe required |
 | `calendar.google` | `calendar.google` | yes | yes | Uses a rolling occurrence window |
@@ -120,8 +119,6 @@ The user-facing bridge setup is generic:
 ```sh
 workgraph connectors connect slack --mode bridged \
   --params-json '{"channels":["C0DEMO123"],"include_dms":false}'
-workgraph connectors connect notion --mode bridged \
-  --params-json '{"roots":["engineering"],"preview_limit":500}'
 workgraph connectors connect azure.boards --mode bridged \
   --params-json '{"organization":"example-org","project":"Demo","area_path":"Demo"}'
 ```
@@ -134,8 +131,10 @@ connection commands continue to perform their existing OAuth or token setup.
 keys, and missing connector-required scope fail without changing connector
 state. The local MCP `connector_bridge_configure` tool applies the same
 validation.
-`workgraph connectors doctor` reports legacy bridged entries without valid
-scope as `needs scope` and points back to scoped connection setup.
+`workgraph connectors status` and `workgraph connectors doctor` report legacy
+bridged entries without valid scope as `needs scope` and point back to scoped
+connection setup. They report connectors that no longer support bridging as
+`unsupported bridge` and point to the supported direct setup path.
 Changing a connector's canonical bridge parameters cancels any pending or
 claimed request for the old scope. The next scheduler pass emits a replacement
 request carrying the new parameters, and the cancelled claim token cannot
@@ -148,7 +147,6 @@ The initial required parameter shapes are:
 | `github` | non-empty `repositories` array |
 | `slack` | non-empty `channels` array, `include_dms: true`, or participant scope with `identity` and `include` values from `authored`, `mentions`, and `thread_participation`; when present, `include_dms` is a boolean |
 | `slack.lists` | non-empty `lists` array |
-| `notion` | non-empty `roots` array and positive `preview_limit` |
 | `mail.google` / `mail.microsoft` | non-empty `mailboxes` or `folders` array and positive `preview_limit` |
 | `calendar.google` / `calendar.microsoft` | non-empty `calendars` array plus non-negative `past_days` and positive `future_days` |
 | `azure.boards` | non-empty `organization` plus either `project` and `area_path`, or participant scope with `identity` and `include` values from `authored` and `assigned` |
@@ -173,7 +171,9 @@ workgraph connectors mode slack direct
 
 Switching modes preserves direct credentials. Switching away from bridged mode
 cancels active requests for that connector and makes their claim tokens invalid.
-`git bridged` is rejected even if `connectors.json` was edited by hand.
+`git bridged` and `notion bridged` are rejected even if `connectors.json` was
+edited by hand. Notion uses direct OAuth or `workgraph notion connect-token`
+because the reference client search caps results without an exhaustion cursor.
 
 ## Daemon scheduling and outbox
 
@@ -307,9 +307,9 @@ file continues to contain only the capability and request id.
 
 For manual imports and deterministic troubleshooting, ingestion may instead use
 `--source <event-source>` without a request. Manual ingestion is allowed only
-for a known, enabled bridged connector mapped to that event source, never for
-`git`, and never completes a request or advances its cursor. It updates only
-`last_ingest_at` after a successful commit.
+for a known, enabled bridgeable connector mapped to that event source, never
+for direct-only `git` or `notion`, and never completes a request or advances its
+cursor. It updates only `last_ingest_at` after a successful commit.
 
 When connectors share an event source, connector metadata resolves the event
 type before enforcing mode and policy. For example, `slack.list_item` resolves
@@ -336,7 +336,11 @@ bridge_worker_heartbeat
 The MCP server is local-only and requires no provider credentials. A claimed
 request identifies its connector, event source, bounds, validated parameters,
 lease expiry, and claim token. Provider secrets and direct connector credentials
-are never returned.
+are never returned. Every successful MCP tool call returns object-shaped
+`structuredContent`, as required by the MCP contract. Collection results use
+named envelopes: `capture_requests_list` returns `requests`,
+`capture_requests_claim` returns `claims`, and `connector_status` returns
+`connectors`.
 
 ## Ingest contract
 
@@ -420,7 +424,6 @@ Each connector recipe translates the generic request into provider operations:
 | `github` | Fetch configured repositories updated in `[since, until]` | repository allowlist |
 | `slack` | Fetch configured channels over the overlapping message-time window, including replies and edit metadata | channel allowlist; DM inclusion policy |
 | `slack.lists` | Fetch configured lists and emit revision-aware list-item events | list allowlist |
-| `notion` | Search configured roots and retain pages whose last-edited time intersects the overlapping window | root/page/database allowlist; preview limit |
 | `mail.google` / `mail.microsoft` | Fetch received messages for configured mailboxes/folders in the overlapping window | mailbox/folder scope; bounded preview policy |
 | `calendar.google` / `calendar.microsoft` | Fetch a rolling occurrence window supplied in `params_json`; do not use event start as the cursor | calendar allowlist; past/future horizon |
 | `azure.boards` | Fetch items changed in the overlapping window within the explicit project and area path | organization, project, area path |
@@ -428,36 +431,6 @@ Each connector recipe translates the generic request into provider operations:
 Recipes must return all provider revisions visible in the requested window or
 report failure. They must not silently complete a request after truncation,
 pagination failure, permission denial, or an unsupported provider operation.
-
-## Notion projection
-
-Every successfully validated `notion.page` event is projected into
-`notion_index` in the same transaction as event insertion and request
-completion. Projection also runs for a deduplicated event so re-ingestion can
-repair a missing index row.
-
-The normalized payload maps as follows:
-
-| Payload field | `notion_index` column |
-|---|---|
-| `id` | `notion_id` |
-| literal `page` | `object_type` |
-| `title` | `title` |
-| `url` | `url` |
-| `path` | `parent_json` as `{ "path": ... }` |
-| optional `properties` | `properties_json`; `{}` when absent |
-| `preview` | `content_preview`, capped to the native 4,000-byte limit |
-| ingest time when preview exists | `content_synced_at` |
-| optional `created_time` | `created_time` |
-| optional `created_by` | `created_by` |
-| `page_last_edited_at` | `last_edited_time` |
-| optional `last_edited_by` | `last_edited_by` |
-| literal `bridged` | `source` |
-
-The first projection sets `first_seen_at`; later projections preserve it and
-update `last_seen_at` and `last_synced_at`. An older backfill may add its event
-but must not overwrite a newer index snapshot. Projection performs no Notion
-network request and stores only the supplied bounded preview, not the full page.
 
 ## Status and observability
 
@@ -574,8 +547,17 @@ settings. For Claude Code it merges project-local permission rules into
 `<workgraph-home>/.claude/settings.json` for only the workgraph MCP operations
 needed to list, claim, renew, ingest, fail, inspect, and heartbeat capture work.
 It does not pre-authorize connector configuration, disconnect, arbitrary Bash,
-or provider tools. The unattended Claude command passes this file explicitly
-with `--settings`; it does not rely on working-directory settings discovery.
+or provider tools. Installation also marks the absolute workgraph home as a
+trusted project in `$HOME/.claude.json`, preserving unrelated user and project
+configuration. Claude reads workspace trust from that file even when
+`CLAUDE_CONFIG_DIR` points elsewhere.
+
+The unattended Claude command runs with the workgraph home as its working
+directory so Claude discovers `.claude/settings.json` through its normal
+settings chain. It must not pass `--settings`: that override hides user- and
+project-registered provider MCP servers from the headless session. Drain and
+doctor verify both the permission file and workspace trust and fail with a
+setup error when either is unavailable.
 
 Provider tools remain explicit opt-in. Repeating
 `--allow-provider-tool <exact-mcp-tool-name>` during Claude plugin installation
@@ -670,20 +652,20 @@ and connector id.
 5. Add transactional ingest with strict validation, UTC timestamp
    normalization, strong/weak dedupe, explicit request binding, empty-batch
    completion, and stable result counts.
-6. Add the Notion projection with newest-snapshot protection.
-7. Add CLI commands and local MCP tools over the same library functions.
-8. Update list/status/doctor and `poll --once` behavior for bridged connectors.
-9. Add the provider-neutral bridge skill and configuration MCP tools.
-10. Add idempotent Claude Code and Codex packages, installation/doctor flows,
+6. Add CLI commands and local MCP tools over the same library functions.
+7. Update list/status/doctor and `poll --once` behavior for bridged connectors.
+8. Add the provider-neutral bridge skill and configuration MCP tools.
+9. Add idempotent Claude Code and Codex packages, installation/doctor flows,
     manual drain paths, heartbeat, and fully automated macOS workers. Package
     the bridge with memory and AI checkpoint under the one user-facing
     `workgraph` plugin described in `specs/agent-plugin.md`.
-11. Pass all facts and cross off the corresponding roadmap item.
+10. Pass all facts and cross off the corresponding roadmap item.
 
 ## Facts to add
 
-- Setting bridged mode works for every registered remote connector, preserves
-  direct credentials, and is rejected for `git` even after hand-edited config.
+- Setting bridged mode works for every bridgeable registered remote connector,
+  preserves direct credentials, and is rejected for direct-only `git` and
+  `notion` even after hand-edited config.
 - Direct or empty capture mode preserves existing provider polling exactly.
 - A due bridged connector makes no provider call and emits exactly one pending
   request; a second scheduler pass coalesces while it is pending or claimed.
@@ -706,10 +688,7 @@ and connector id.
   chronological project/time-range queries.
 - Invalid input rejects the whole batch without partial events, projections,
   cursor advancement, or request completion.
-- Mutable Notion and calendar revisions produce distinct event ids.
-- A Notion event atomically writes both its event and current `notion_index`
-  projection; duplicate ingestion repairs a missing projection, while an older
-  revision cannot overwrite a newer snapshot.
+- Mutable calendar revisions produce distinct event ids.
 - A bridged connector reports awaiting-ingest, pending, claimed, stale, retry,
   and successful recency states without exposing claim tokens.
 - CLI and MCP operations produce the same state transitions and validation
@@ -746,22 +725,13 @@ Unedited messages use `external_id = "<channel>:<ts>"`. Edited revisions append
 {"type":"slack.message","timestamp":"2026-09-13T12:00:37.767Z","external_id":"C0DEMO123:1789300837.767919","project":"demo-production","actor":"U0DEMO001","summary":"Kubernetes deployment demo-worker modified","payload":{"channel":"C0DEMO123","channel_name":"demo-changes","ts":"1789300837.767919","user":"U0DEMO001","is_bot":true,"bot_name":"Deployment Bot","text":"Kubernetes deployment change\ndemo/demo-worker modified"}}
 ```
 
-## A.2 — `notion` (`--source notion`)
-
-The external id includes `page_last_edited_at`; the payload carries metadata and
-a bounded preview rather than the complete page body.
-
-```json
-{"type":"notion.page","timestamp":"2026-06-23T11:58:22.726Z","external_id":"11111111111111111111111111111111:2026-06-23T11:58:22.726Z","project":"demo-documentation","actor":"alex@example.com","summary":"Local development authentication guide","payload":{"id":"11111111111111111111111111111111","url":"https://www.notion.so/11111111111111111111111111111111","title":"Local development authentication guide","icon":"🔄","path":"Engineering Home / Documentation","verification":"unverified","created_time":"2026-06-20T09:00:00Z","created_by":"author@example.com","page_last_edited_at":"2026-06-23T11:58:22.726Z","last_edited_by":"alex@example.com","preview":"A bounded example describing local credential refresh and recovery without containing production credentials or internal hostnames."}}
-```
-
-## A.3 — `github` (`--source github`)
+## A.2 — `github` (`--source github`)
 
 ```json
 {"type":"github.pull_request","timestamp":"2026-08-21T12:02:20Z","external_id":"example-org/workgraph-demo#pr:42:2026-08-21T12:02:20Z","project":"workgraph-demo","actor":"alex-demo","summary":"PR #42: add settings helper (merged)","payload":{"repo":"example-org/workgraph-demo","number":42,"state":"closed","merged_at":"2026-08-21T12:02:18Z","title":"Add settings helper","author":"alex-demo","url":"https://github.com/example-org/workgraph-demo/pull/42","head":"feature/settings-helper","base":"main","created_at":"2026-08-21T11:50:25Z","updated_at":"2026-08-21T12:02:20Z"}}
 ```
 
-## A.4 — `git` (native illustration only)
+## A.3 — `git` (native illustration only)
 
 This shape illustrates cross-source associations. `capture ingest --source git`
 must reject it because git remains direct.
@@ -770,7 +740,7 @@ must reject it because git remains direct.
 {"type":"git.commit","timestamp":"2026-08-21T11:48:08Z","external_id":"1111111111111111111111111111111111111111","project":"workgraph-demo","actor":"alex@example.com","summary":"Add settings helper","payload":{"sha":"1111111111111111111111111111111111111111","repo":"example-org/workgraph-demo","author_name":"Alex Example","author_email":"alex@example.com","committed_at":"2026-08-21T11:48:08Z","message":"Add settings helper","author_login":"alex-demo","html_url":"https://github.com/example-org/workgraph-demo/commit/1111111111111111111111111111111111111111"}}
 ```
 
-## A.5 — `mail.microsoft` (`--source mail.microsoft`)
+## A.4 — `mail.microsoft` (`--source mail.microsoft`)
 
 The stable message id represents receipt of the message. Only `bodyPreview`, not
 the full body, is stored.
@@ -779,7 +749,7 @@ the full body, is stored.
 {"type":"mail.microsoft.message","timestamp":"2026-09-11T15:26:40Z","external_id":"MSG-DEMO-001-LONG-OPAQUE-ID==","actor":"newsletter@example.com","summary":"Governing automated agents at enterprise scale","payload":{"id":"MSG-DEMO-001-LONG-OPAQUE-ID==","subject":"Governing automated agents at enterprise scale","from":"newsletter@example.com","recipients":["alex@example.com"],"receivedDateTime":"2026-09-11T15:26:40Z","isRead":true,"hasAttachments":false,"importance":"normal","internetMessageId":"<20260911152603.demo@example.com>","bodyPreview":"A bounded example about securely deploying automated agents while improving engineering workflows.","webLink":"https://outlook.office.com/mail/deeplink/read/MSG-DEMO-001"}}
 ```
 
-## A.6 — `calendar.microsoft` (`--source calendar.microsoft`)
+## A.5 — `calendar.microsoft` (`--source calendar.microsoft`)
 
 The envelope timestamp is the event start normalized to UTC. Event identity uses
 a provider change key, not the start time, so cancellation, attendee, title, and
@@ -790,7 +760,7 @@ from this timestamp.
 {"type":"calendar.microsoft.event","timestamp":"2026-09-14T16:00:00Z","external_id":"CAL-DEMO-001==:change:CQAAABYAA-DEMO-7","project":"demo-experience","actor":"team@example.com","summary":"Demo team standup","payload":{"id":"CAL-DEMO-001==","changeKey":"CQAAABYAA-DEMO-7","lastModifiedDateTime":"2026-09-13T18:30:00Z","subject":"Demo team standup","organizer":"team@example.com","attendees":["alex@example.com","sam@example.com"],"start":{"dateTime":"2026-09-14T09:00:00","timeZone":"Pacific Standard Time"},"end":{"dateTime":"2026-09-14T09:30:00","timeZone":"Pacific Standard Time"},"isAllDay":false,"isCancelled":false,"isOrganizer":false,"showAs":"busy","location":"https://meet.example/demo-room","webLink":"https://outlook.office.com/calendar/item/CAL-DEMO-001"}}
 ```
 
-## A.7 — `azure.boards` (`--source azure.boards`)
+## A.6 — `azure.boards` (`--source azure.boards`)
 
 ```json
 {"type":"azure.boards.workitem","timestamp":"2026-09-02T16:16:42.347Z","external_id":"azdo:example-org:424242:rev:8","project":"squad-demo","actor":"Alex Example","summary":"[Product Backlog Item #424242] Align on a demo product direction -> Implementation","payload":{"id":424242,"rev":8,"url":"https://dev.azure.com/example-org/DemoScrum/_workitems/edit/424242","fields":{"System.WorkItemType":"Product Backlog Item","System.Title":"Align on a demo product direction","System.State":"Implementation","System.Reason":"Moved to state Implementation","System.AssignedTo":"Alex Example","System.TeamProject":"DemoScrum","System.AreaPath":"DemoScrum\\Productivity Improvements\\squad-demo","System.IterationPath":"DemoScrum","System.Tags":"2026.Q3.H2","System.CreatedDate":"2026-08-21T22:15:02.07Z","System.ChangedBy":"Alex Example","System.ChangedDate":"2026-09-02T16:16:42.347Z","Microsoft.VSTS.Common.Priority":1}}}
@@ -807,7 +777,6 @@ These ids are computed from the sanitized Appendix A values using
 slack               34452d3e0dd72c3d120bd0399e0f69a9  deployment succeeded
 slack               9a418d4b61706335488aec9ee8ce2e14  demo-api modified
 slack               f15a79ac8cfaa21a9d6a0fa80db6280c  demo-worker modified
-notion              b4414bc559b981234e78ae5a3f7a697a  authentication guide revision
 github              483dc602ddb552727c97189cad90381f  PR #42
 git                 40d425285953aa11da47afa1cd621588  illustrative commit; bridge rejects it
 mail.microsoft      6db421950eeb9b77daebc3046e8d3ac7  enterprise agents message

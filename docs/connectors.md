@@ -65,20 +65,48 @@ mcp__azure-devops__core_list_projects
 Tool names are provider-version-specific. Approve only tools that are present,
 read-only, and needed for the selected scopes; do not copy the list blindly.
 
-The worker loads workgraph's isolated settings file with Claude's `--settings`
-flag. It preflights provider capability before claiming, so a missing provider
-permission leaves work pending rather than degrading connector health.
+A provider connector is bridgeable only if it can express the bounded window
+exactly, paginate to exhaustion with proof of completeness, and assign every
+item a stable identity plus revision (or a defined content-hash surrogate).
+The reference-client matrix is:
+
+| Connector | Bridged | Required scope / completeness rule |
+|---|---:|---|
+| `slack` | yes | Explicit channels or the approved `@Me` participant strategy; exhaust channel and thread pagination |
+| `slack.lists` | yes | Explicit list ids; use a canonical semantic-row content hash when no revision exists |
+| `mail.microsoft` | yes | Explicit mailboxes/folders; query a mailbox-local ±2-day pad, filter returned UTC `receivedDateTime`, and page contiguously past the lower bound |
+| `calendar.microsoft` | yes | Explicit calendars and horizons; map `Pacific Standard Time` to DST-aware `America/Los_Angeles`, emit occurrence start in UTC, and preserve provider start/end values |
+| `azure.boards` | yes | Explicit organization plus project/area path or the approved `@Me` participant strategy |
+| `notion` | **no** | Reference search caps results without an exhaustion cursor; use direct OAuth or `workgraph notion connect-token` |
+
+An empty batch is valid only after an exhaustive bounded query or an applicable
+control query proves emptiness. Never infer emptiness from one zero-result
+search when the provider search is indexed, capped, or partial.
+
+Installation records the workgraph home as a trusted project in
+`$HOME/.claude.json`. The worker starts in that directory, allowing Claude to
+discover `.claude/settings.json` through its normal settings chain while still
+loading user- and project-registered provider MCP servers. It deliberately does
+not pass `--settings`, because that override hides those provider servers in a
+headless session. The worker preflights provider capability before claiming, so
+a missing provider permission leaves work pending rather than degrading
+connector health.
 
 For Azure DevOps MCP configured with Azure CLI authentication, `az account
 show` proves only that a cached profile exists. Verify unattended readiness with
 `az account get-access-token`; consider a predictably expiring PAT when the
-client connector supports one and long-lived unattended behavior matters.
+client connector supports one and long-lived unattended behavior matters. For
+Azure DevOps-only identities, `az login` may report `No subscriptions found`;
+that message is not itself an Azure DevOps authentication failure, so use the
+token command and an actual read-only Azure DevOps discovery call as the check.
 
 The plugin also contains the `workgraph-memory` and
 `workgraph-ai-checkpoint` skills alongside `workgraph-bridge`. Start a new
 client session after installation so all three skills and the local MCP are
 discovered. Rerunning the install command refreshes the complete plugin after a
-workgraph upgrade.
+workgraph upgrade. An already running daemon still holds the previous binary in
+memory, so run `workgraph stop` followed by `workgraph start` after upgrading;
+plugin installation reloads the bridge worker but does not restart the daemon.
 
 Then ask that client to set up workgraph bridges. It discovers available
 read-only provider tools, proposes non-secret scopes and cadences, waits for
@@ -86,9 +114,9 @@ approval, and configures the local workgraph MCP. A connector can also be put in
 bridged mode explicitly:
 
 ```sh
-workgraph connectors connect notion --mode bridged \
-  --params-json '{"roots":["engineering"],"preview_limit":500}'
-workgraph connectors interval notion 30m
+workgraph connectors connect slack --mode bridged \
+  --params-json '{"scope":"participant","identity":"@Me","include":["authored","mentions","thread_participation"]}'
+workgraph connectors interval slack 15m
 workgraph start
 ```
 
@@ -98,17 +126,17 @@ provider token and never calls that provider directly. Inspect operation with:
 
 ```sh
 workgraph capture requests --list
-workgraph capture watermark --connector notion
+workgraph capture watermark --connector slack
 workgraph connectors status
 workgraph bridge drain --client codex
 ```
 
 Bridging is supported for registered remote connectors with event contracts.
-Local `git` capture cannot be bridged. Switching a connector back to `direct`
-preserves any direct credentials already stored by workgraph:
+Local `git` and Notion capture cannot be bridged. Switching a connector back to
+`direct` preserves any direct credentials already stored by workgraph:
 
 ```sh
-workgraph connectors mode notion direct
+workgraph connectors mode slack direct
 ```
 
 See the [bridged capture specification](../specs/bridged-capture.md) for the
@@ -159,6 +187,9 @@ workgraph slack disconnect
 ```
 
 ## Notion
+
+Notion capture is direct-only. The reference client search caps results without
+an exhaustion cursor, so it cannot prove that a bridged request is complete.
 
 Connect Notion:
 
