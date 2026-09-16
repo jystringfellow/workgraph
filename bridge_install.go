@@ -26,6 +26,7 @@ type PluginInstallConfig struct {
 	ClientCommand string
 	InstallRoot   string
 	SkipLaunchd   bool
+	ProviderTools []string
 }
 
 // PluginInstallResult describes an installed client plugin package.
@@ -58,6 +59,10 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 	client := strings.ToLower(strings.TrimSpace(config.Client))
 	if client != "codex" && client != "claude-code" {
 		return PluginInstallResult{}, fmt.Errorf("plugin client must be codex or claude-code")
+	}
+	providerTools, err := validateClaudeProviderTools(client, config.ProviderTools)
+	if err != nil {
+		return PluginInstallResult{}, err
 	}
 	commandName := strings.TrimSpace(config.ClientCommand)
 	if commandName == "" {
@@ -94,15 +99,17 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 	if err := registerAgentPlugin(client, commandName, installRoot); err != nil {
 		return PluginInstallResult{}, err
 	}
+	providerToolCount := 0
 	if client == "claude-code" {
-		if err := installClaudeBridgePermissions(homeDir); err != nil {
+		providerToolCount, err = installClaudeBridgePermissions(homeDir, providerTools)
+		if err != nil {
 			return PluginInstallResult{}, err
 		}
 	}
 	launchStatus := "launchd setup skipped"
 	if !config.SkipLaunchd {
 		if err := installBridgeLaunchAgent(client, commandName, executable, homeDir); err != nil {
-			return PluginInstallResult{}, err
+			return PluginInstallResult{}, fmt.Errorf("plugin files and settings were updated but launchd worker reload failed: %w", err)
 		}
 		launchStatus = "launchd worker installed"
 	}
@@ -121,6 +128,7 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 	}
 	if client == "claude-code" {
 		lines = append(lines, "Permissions: unattended workgraph MCP drain only")
+		lines = append(lines, fmt.Sprintf("Provider tools: %d explicitly allowed", providerToolCount))
 	}
 	lines = append(lines, "Worker: "+launchStatus, "Next: start a new "+clientLabel+" session to load the plugin.")
 	result.Message = strings.Join(lines, "\n")
@@ -138,29 +146,51 @@ var claudeBridgeDrainPermissions = []string{
 	"mcp__plugin_workgraph_workgraph__bridge_worker_heartbeat",
 }
 
-func installClaudeBridgePermissions(homeDir string) error {
+func validateClaudeProviderTools(client string, tools []string) ([]string, error) {
+	if len(tools) > 0 && client != "claude-code" {
+		return nil, fmt.Errorf("--allow-provider-tool is supported only for claude-code")
+	}
+	validated := make([]string, 0, len(tools))
+	seen := map[string]bool{}
+	for _, tool := range tools {
+		tool = strings.TrimSpace(tool)
+		if !strings.HasPrefix(tool, "mcp__") || strings.Contains(tool, "*") {
+			return nil, fmt.Errorf("provider tool permissions must use an exact MCP tool name")
+		}
+		if strings.HasPrefix(tool, "mcp__plugin_workgraph_workgraph__") {
+			return nil, fmt.Errorf("workgraph MCP permissions are managed by the installer")
+		}
+		if !seen[tool] {
+			validated = append(validated, tool)
+			seen[tool] = true
+		}
+	}
+	return validated, nil
+}
+
+func installClaudeBridgePermissions(homeDir string, providerTools []string) (int, error) {
 	settingsDir := filepath.Join(homeDir, ".claude")
 	if err := os.MkdirAll(settingsDir, 0o700); err != nil {
-		return fmt.Errorf("create Claude bridge settings directory: %w", err)
+		return 0, fmt.Errorf("create Claude bridge settings directory: %w", err)
 	}
 	if err := os.Chmod(settingsDir, 0o700); err != nil {
-		return fmt.Errorf("secure Claude bridge settings directory: %w", err)
+		return 0, fmt.Errorf("secure Claude bridge settings directory: %w", err)
 	}
 	settingsPath := filepath.Join(settingsDir, "settings.json")
 	document := map[string]any{}
 	if contents, err := os.ReadFile(settingsPath); err == nil {
 		if err := json.Unmarshal(contents, &document); err != nil {
-			return fmt.Errorf("parse Claude bridge settings: %w", err)
+			return 0, fmt.Errorf("parse Claude bridge settings: %w", err)
 		}
 	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("read Claude bridge settings: %w", err)
+		return 0, fmt.Errorf("read Claude bridge settings: %w", err)
 	}
 	permissions := map[string]any{}
 	if existing, found := document["permissions"]; found {
 		var ok bool
 		permissions, ok = existing.(map[string]any)
 		if !ok {
-			return fmt.Errorf("Claude bridge settings permissions must be an object")
+			return 0, fmt.Errorf("Claude bridge settings permissions must be an object")
 		}
 	}
 	allow := []any{}
@@ -168,14 +198,14 @@ func installClaudeBridgePermissions(homeDir string) error {
 		var ok bool
 		allow, ok = existing.([]any)
 		if !ok {
-			return fmt.Errorf("Claude bridge settings permissions.allow must be an array")
+			return 0, fmt.Errorf("Claude bridge settings permissions.allow must be an array")
 		}
 	}
 	seen := map[string]bool{}
 	for _, raw := range allow {
 		value, ok := raw.(string)
 		if !ok {
-			return fmt.Errorf("Claude bridge settings permissions.allow entries must be strings")
+			return 0, fmt.Errorf("Claude bridge settings permissions.allow entries must be strings")
 		}
 		seen[value] = true
 	}
@@ -185,15 +215,35 @@ func installClaudeBridgePermissions(homeDir string) error {
 			seen[permission] = true
 		}
 	}
+	for _, permission := range providerTools {
+		if !seen[permission] {
+			allow = append(allow, permission)
+			seen[permission] = true
+		}
+	}
 	permissions["allow"] = allow
 	document["permissions"] = permissions
 	if err := writeJSONFile(settingsPath, document); err != nil {
-		return fmt.Errorf("write Claude bridge settings: %w", err)
+		return 0, fmt.Errorf("write Claude bridge settings: %w", err)
 	}
 	if err := os.Chmod(settingsPath, 0o600); err != nil {
-		return fmt.Errorf("secure Claude bridge settings: %w", err)
+		return 0, fmt.Errorf("secure Claude bridge settings: %w", err)
 	}
-	return nil
+	return countClaudeProviderPermissions(seen), nil
+}
+
+func countClaudeProviderPermissions(allowed map[string]bool) int {
+	workgraph := map[string]bool{}
+	for _, permission := range claudeBridgeDrainPermissions {
+		workgraph[permission] = true
+	}
+	count := 0
+	for permission := range allowed {
+		if strings.HasPrefix(permission, "mcp__") && !workgraph[permission] {
+			count++
+		}
+	}
+	return count
 }
 
 func stampInstalledPluginVersion(client string, installRoot string, installedAt time.Time) (string, error) {
@@ -397,6 +447,7 @@ func installBridgeLaunchAgent(client string, clientCommand string, workgraphExec
 		return fmt.Errorf("write bridge launch agent: %w", err)
 	}
 	domain := "gui/" + strconv.Itoa(os.Getuid())
+	_ = exec.Command("launchctl", "bootout", domain+"/"+label).Run()
 	output, err := exec.Command("launchctl", "bootstrap", domain, plistPath).CombinedOutput()
 	if err != nil && !strings.Contains(strings.ToLower(string(output)), "already") && !strings.Contains(strings.ToLower(string(output)), "exists") {
 		return fmt.Errorf("load bridge launch agent: %s", strings.TrimSpace(string(output)))
@@ -438,13 +489,25 @@ func DrainBridge(homeDir string, client string, clientCommand string) (string, e
 			commandName = "claude"
 		}
 	}
-	prompt := "Use the workgraph-bridge skill and local workgraph MCP tools to drain all currently available capture requests. Fetch only the bounded approved scopes. Report failures through capture_request_fail."
+	prompt := "Use the workgraph-bridge skill and local workgraph MCP tools. List pending requests before claiming. For each connector, prove its required provider tools are present and authorized with a harmless read-only discovery call. Claim at most one request, filtered to a connector whose preflight succeeded. If provider capability is absent or denied, leave the request pending and do not report a connector failure. Never fall back to the CLI. Fetch only the bounded approved scope and report failures that occur after a successful capability preflight through capture_request_fail."
 	var args []string
 	switch client {
 	case "codex":
 		args = []string{"exec", "--ephemeral", "--skip-git-repo-check", prompt}
 	case "claude-code":
-		args = []string{"-p", "--permission-mode", "dontAsk", prompt}
+		settingsPath := filepath.Join(homeDir, ".claude", "settings.json")
+		if _, err := os.Stat(settingsPath); err != nil {
+			return "", fmt.Errorf("Claude bridge settings are unavailable; rerun workgraph plugin install --client claude-code: %w", err)
+		}
+		providerToolCount, err := claudeProviderPermissionCount(homeDir)
+		if err != nil {
+			return "", fmt.Errorf("inspect Claude provider permissions: %w", err)
+		}
+		if providerToolCount == 0 {
+			recordBridgeDrainHeartbeat(homeDir, client)
+			return "No Claude provider tools are explicitly allowed; active capture requests remain pending.", nil
+		}
+		args = []string{"-p", "--permission-mode", "dontAsk", "--settings", settingsPath, prompt}
 	default:
 		return "", fmt.Errorf("bridge client must be codex or claude-code")
 	}
@@ -459,12 +522,16 @@ func DrainBridge(homeDir string, client string, clientCommand string) (string, e
 	if err != nil {
 		return "", fmt.Errorf("drain bridge with %s: %s", client, strings.TrimSpace(string(output)))
 	}
+	recordBridgeDrainHeartbeat(homeDir, client)
+	return strings.TrimSpace(string(output)), nil
+}
+
+func recordBridgeDrainHeartbeat(homeDir string, client string) {
 	_, _ = RecordBridgeWorkerHeartbeat(homeDir, "", client)
 	stamp := filepath.Join(homeDir, "bridge", client+".heartbeat")
 	if err := os.MkdirAll(filepath.Dir(stamp), 0o700); err == nil {
 		_ = os.WriteFile(stamp, []byte(time.Now().UTC().Format(time.RFC3339Nano)+"\n"), 0o600)
 	}
-	return strings.TrimSpace(string(output)), nil
 }
 
 // DoctorPlugin verifies a package, skills, client binary, local MCP, and worker marker without provider access.
@@ -531,6 +598,13 @@ func DoctorPlugin(config PluginDoctorConfig) (string, error) {
 		}
 		permissionStatus = "ready"
 	}
+	providerToolCount := 0
+	if client == "claude-code" {
+		providerToolCount, err = claudeProviderPermissionCount(homeDir)
+		if err != nil {
+			return "", fmt.Errorf("inspect Claude provider permissions: %w", err)
+		}
+	}
 	worker := "not installed"
 	marker := filepath.Join(homeDir, "bridge", client+".launch-agent")
 	if _, err := os.Stat(marker); err == nil {
@@ -540,7 +614,7 @@ func DoctorPlugin(config PluginDoctorConfig) (string, error) {
 	if contents, err := os.ReadFile(filepath.Join(homeDir, "bridge", client+".heartbeat")); err == nil {
 		heartbeat = strings.TrimSpace(string(contents))
 	}
-	return strings.Join([]string{
+	lines := []string{
 		"workgraph plugin doctor",
 		"Client: ready",
 		"Package: ready",
@@ -548,10 +622,36 @@ func DoctorPlugin(config PluginDoctorConfig) (string, error) {
 		"Skills: 3/3 ready",
 		"MCP: ready",
 		"Permissions: " + permissionStatus,
+	}
+	if client == "claude-code" {
+		lines = append(lines, fmt.Sprintf("Provider tools: %d explicitly allowed", providerToolCount))
+	}
+	lines = append(lines,
 		"Round trip: ready",
-		"Worker: " + worker,
-		"Last heartbeat: " + heartbeat,
-	}, "\n"), nil
+		"Worker: "+worker,
+		"Last heartbeat: "+heartbeat,
+	)
+	return strings.Join(lines, "\n"), nil
+}
+
+func claudeProviderPermissionCount(homeDir string) (int, error) {
+	contents, err := os.ReadFile(filepath.Join(homeDir, ".claude", "settings.json"))
+	if err != nil {
+		return 0, err
+	}
+	var document struct {
+		Permissions struct {
+			Allow []string `json:"allow"`
+		} `json:"permissions"`
+	}
+	if err := json.Unmarshal(contents, &document); err != nil {
+		return 0, err
+	}
+	allowed := map[string]bool{}
+	for _, permission := range document.Permissions.Allow {
+		allowed[permission] = true
+	}
+	return countClaudeProviderPermissions(allowed), nil
 }
 
 func verifyClaudeBridgePermissions(homeDir string) error {

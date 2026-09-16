@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -67,6 +68,52 @@ func TestClaudePluginInstallMergesLeastPrivilegeDrainPermissions(t *testing.T) {
 		if strings.Contains(allowed, forbidden) {
 			t.Fatalf("Claude permissions were too broad (%q):\n%s", forbidden, contents)
 		}
+	}
+}
+
+func TestClaudePluginInstallAddsOnlyExplicitProviderTools(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	fixtureDir := t.TempDir()
+	clientPath := filepath.Join(fixtureDir, "claude")
+	if err := os.WriteFile(clientPath, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("write fake Claude: %v", err)
+	}
+	tools := []string{
+		"mcp__claude_ai_Slack__slack_read_channel",
+		"mcp__azure-devops__wit_query",
+	}
+	args := []string{"plugin", "install", "--home", homeDir, "--client", "claude-code",
+		"--client-command", clientPath, "--install-root", filepath.Join(fixtureDir, "installed"), "--no-launchd"}
+	for _, tool := range tools {
+		args = append(args, "--allow-provider-tool", tool)
+	}
+	output, err := runworkgraph(t, repoRoot(t), args...)
+	if err != nil {
+		t.Fatalf("install Claude plugin with provider tools: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Provider tools: 2 explicitly allowed") {
+		t.Fatalf("install did not report provider tool count:\n%s", output)
+	}
+	contents, err := os.ReadFile(filepath.Join(homeDir, ".claude", "settings.json"))
+	if err != nil {
+		t.Fatalf("read worker settings: %v", err)
+	}
+	for _, tool := range tools {
+		if !strings.Contains(string(contents), tool) {
+			t.Fatalf("worker settings omitted %q:\n%s", tool, contents)
+		}
+	}
+	output, err = runworkgraph(t, repoRoot(t), "plugin", "install", "--home", homeDir, "--client", "claude-code",
+		"--client-command", clientPath, "--install-root", filepath.Join(fixtureDir, "installed"), "--no-launchd")
+	if err != nil || !strings.Contains(string(output), "Provider tools: 2 explicitly allowed") {
+		t.Fatalf("reinstall did not preserve provider permissions: %v\n%s", err, output)
+	}
+
+	output, err = runworkgraph(t, repoRoot(t), "plugin", "install", "--home", homeDir, "--client", "claude-code",
+		"--client-command", clientPath, "--install-root", filepath.Join(fixtureDir, "wildcard"), "--no-launchd",
+		"--allow-provider-tool", "mcp__claude_ai_Slack__*")
+	if err == nil || !strings.Contains(string(output), "exact") {
+		t.Fatalf("expected wildcard provider permission rejection, got err=%v:\n%s", err, output)
 	}
 }
 
@@ -161,7 +208,7 @@ func TestBridgeDrainLaunchesClientOnlyForActiveDaemonWork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read drain invocation: %v", err)
 	}
-	for _, expected := range []string{"exec", "--ephemeral", "workgraph-bridge", "capture requests"} {
+	for _, expected := range []string{"exec", "--ephemeral", "workgraph-bridge", "List pending requests before claiming"} {
 		if !strings.Contains(string(contents), expected) {
 			t.Fatalf("drain invocation omitted %q:\n%s", expected, contents)
 		}
@@ -170,15 +217,21 @@ func TestBridgeDrainLaunchesClientOnlyForActiveDaemonWork(t *testing.T) {
 
 func TestClaudeBridgeDrainUsesNonInteractivePermissionMode(t *testing.T) {
 	homeDir := initBridgedCaptureHome(t)
-	connectBridgedConnector(t, repoRoot(t), homeDir, "slack")
-	if output, err := runworkgraph(t, repoRoot(t), "connectors", "poll", "--home", homeDir, "--once", "--connector", "slack"); err != nil {
-		t.Fatalf("emit request: %v\n%s", err, output)
-	}
 	fixtureDir := t.TempDir()
 	logPath := filepath.Join(fixtureDir, "drain.log")
 	clientPath := filepath.Join(fixtureDir, "claude")
 	if err := os.WriteFile(clientPath, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" > \""+logPath+"\"\n"), 0o700); err != nil {
 		t.Fatalf("write fake Claude: %v", err)
+	}
+	if output, err := runworkgraph(t, repoRoot(t), "plugin", "install", "--home", homeDir,
+		"--client", "claude-code", "--client-command", clientPath, "--install-root", filepath.Join(fixtureDir, "installed"),
+		"--no-launchd", "--allow-provider-tool", "mcp__claude_ai_Slack__slack_list_user_channels"); err != nil {
+		t.Fatalf("install Claude bridge permissions: %v\n%s", err, output)
+	}
+	_ = os.Remove(logPath)
+	connectBridgedConnector(t, repoRoot(t), homeDir, "slack")
+	if output, err := runworkgraph(t, repoRoot(t), "connectors", "poll", "--home", homeDir, "--once", "--connector", "slack"); err != nil {
+		t.Fatalf("emit request: %v\n%s", err, output)
 	}
 	if output, err := runworkgraph(t, repoRoot(t), "bridge", "drain", "--home", homeDir, "--client", "claude-code", "--client-command", clientPath); err != nil {
 		t.Fatalf("drain with Claude: %v\n%s", err, output)
@@ -187,10 +240,123 @@ func TestClaudeBridgeDrainUsesNonInteractivePermissionMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read Claude invocation: %v", err)
 	}
-	for _, expected := range []string{"-p", "--permission-mode dontAsk", "workgraph-bridge"} {
+	for _, expected := range []string{
+		"-p", "--permission-mode dontAsk", "--settings " + filepath.Join(homeDir, ".claude", "settings.json"),
+		"List pending requests before claiming", "leave the request pending", "Never fall back to the CLI",
+	} {
 		if !strings.Contains(string(contents), expected) {
 			t.Fatalf("Claude drain invocation omitted %q:\n%s", expected, contents)
 		}
+	}
+}
+
+func TestClaudeBridgeDrainLeavesRequestsPendingWithoutProviderPermissions(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	fixtureDir := t.TempDir()
+	logPath := filepath.Join(fixtureDir, "claude.log")
+	clientPath := filepath.Join(fixtureDir, "claude")
+	if err := os.WriteFile(clientPath, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \""+logPath+"\"\n"), 0o700); err != nil {
+		t.Fatalf("write fake Claude: %v", err)
+	}
+	if output, err := runworkgraph(t, repoRoot(t), "plugin", "install", "--home", homeDir,
+		"--client", "claude-code", "--client-command", clientPath, "--install-root", filepath.Join(fixtureDir, "installed"), "--no-launchd"); err != nil {
+		t.Fatalf("install Claude plugin: %v\n%s", err, output)
+	}
+	_ = os.Remove(logPath)
+	connectBridgedConnector(t, repoRoot(t), homeDir, "slack")
+	if output, err := runworkgraph(t, repoRoot(t), "connectors", "poll", "--home", homeDir, "--once", "--connector", "slack"); err != nil {
+		t.Fatalf("emit request: %v\n%s", err, output)
+	}
+	output, err := runworkgraph(t, repoRoot(t), "bridge", "drain", "--home", homeDir, "--client", "claude-code", "--client-command", clientPath)
+	if err != nil {
+		t.Fatalf("skip incapable Claude drain: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "remain pending") {
+		t.Fatalf("expected pending capability warning, got:\n%s", output)
+	}
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Fatalf("incapable drain launched Claude: %v", err)
+	}
+	db := openBridgedCaptureDatabase(t, homeDir)
+	var status string
+	if err := db.QueryRow(`SELECT status FROM capture_requests WHERE connector_id = 'slack'`).Scan(&status); err != nil {
+		t.Fatalf("read pending request: %v", err)
+	}
+	if status != "pending" {
+		t.Fatalf("expected request to remain pending, got %q", status)
+	}
+}
+
+func TestBridgeInstallReloadsExistingLaunchAgentBeforeBootstrap(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("launchd reload is macOS-specific")
+	}
+	homeDir := initBridgedCaptureHome(t)
+	fixtureDir := t.TempDir()
+	userHome := filepath.Join(fixtureDir, "user")
+	if err := os.MkdirAll(userHome, 0o700); err != nil {
+		t.Fatalf("create fake user home: %v", err)
+	}
+	t.Setenv("HOME", userHome)
+	logPath := filepath.Join(fixtureDir, "launchctl.log")
+	binDir := filepath.Join(fixtureDir, "bin")
+	if err := os.MkdirAll(binDir, 0o700); err != nil {
+		t.Fatalf("create fake bin: %v", err)
+	}
+	launchctlPath := filepath.Join(binDir, "launchctl")
+	if err := os.WriteFile(launchctlPath, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \""+logPath+"\"\n"), 0o700); err != nil {
+		t.Fatalf("write fake launchctl: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	clientPath := filepath.Join(fixtureDir, "claude")
+	if err := os.WriteFile(clientPath, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("write fake Claude: %v", err)
+	}
+	if output, err := runworkgraph(t, repoRoot(t), "plugin", "install", "--home", homeDir,
+		"--client", "claude-code", "--client-command", clientPath, "--install-root", filepath.Join(fixtureDir, "installed")); err != nil {
+		t.Fatalf("install with launchd reload: %v\n%s", err, output)
+	}
+	contents, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read launchctl log: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(contents)), "\n")
+	if len(lines) < 2 || !strings.HasPrefix(lines[0], "bootout gui/") || !strings.HasPrefix(lines[1], "bootstrap gui/") {
+		t.Fatalf("expected bootout before bootstrap, got:\n%s", contents)
+	}
+}
+
+func TestBridgeInstallReportsPartialStateWhenLaunchAgentReloadFails(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("launchd reload is macOS-specific")
+	}
+	homeDir := initBridgedCaptureHome(t)
+	fixtureDir := t.TempDir()
+	userHome := filepath.Join(fixtureDir, "user")
+	binDir := filepath.Join(fixtureDir, "bin")
+	if err := os.MkdirAll(userHome, 0o700); err != nil {
+		t.Fatalf("create fake user home: %v", err)
+	}
+	if err := os.MkdirAll(binDir, 0o700); err != nil {
+		t.Fatalf("create fake bin: %v", err)
+	}
+	t.Setenv("HOME", userHome)
+	launchctlPath := filepath.Join(binDir, "launchctl")
+	if err := os.WriteFile(launchctlPath, []byte("#!/bin/sh\nif [ \"$1\" = bootstrap ]; then echo reload-failed >&2; exit 1; fi\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("write failing launchctl: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	clientPath := filepath.Join(fixtureDir, "claude")
+	if err := os.WriteFile(clientPath, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("write fake Claude: %v", err)
+	}
+	output, err := runworkgraph(t, repoRoot(t), "plugin", "install", "--home", homeDir,
+		"--client", "claude-code", "--client-command", clientPath, "--install-root", filepath.Join(fixtureDir, "installed"))
+	if err == nil || !strings.Contains(string(output), "plugin files and settings were updated") {
+		t.Fatalf("expected explicit partial-install error, got err=%v:\n%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(homeDir, ".claude", "settings.json")); err != nil {
+		t.Fatalf("expected settings to remain after partial install: %v", err)
 	}
 }
 
@@ -222,6 +388,15 @@ func TestReferenceWorkersDrainFakeProviderRequestEndToEnd(t *testing.T) {
 	for _, client := range []string{"codex", "claude-code"} {
 		t.Run(client, func(t *testing.T) {
 			homeDir := initBridgedCaptureHome(t)
+			if client == "claude-code" {
+				settingsDir := filepath.Join(homeDir, ".claude")
+				if err := os.MkdirAll(settingsDir, 0o700); err != nil {
+					t.Fatalf("create Claude worker settings: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(settingsDir, "settings.json"), []byte(`{"permissions":{"allow":["mcp__fake_provider__read"]}}`), 0o600); err != nil {
+					t.Fatalf("write Claude worker settings: %v", err)
+				}
+			}
 			connectBridgedConnector(t, repoRoot(t), homeDir, "slack")
 			if output, err := runworkgraph(t, repoRoot(t), "connectors", "poll", "--home", homeDir, "--once", "--connector", "slack"); err != nil {
 				t.Fatalf("emit request: %v\n%s", err, output)

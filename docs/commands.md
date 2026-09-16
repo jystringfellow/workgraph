@@ -409,6 +409,19 @@ workgraph plugin install --client codex
 workgraph plugin install --client claude-code
 ```
 
+Claude's unattended worker loads its isolated settings file explicitly. Its
+workgraph drain tools are allowed automatically, while provider tools require
+exact-name opt-in. Repeat the flag for every approved read-only provider tool:
+
+```sh
+workgraph plugin install --client claude-code \
+  --allow-provider-tool mcp__claude_ai_Slack__slack_read_channel \
+  --allow-provider-tool mcp__claude_ai_Slack__slack_read_thread
+```
+
+Wildcards are rejected. Reinstalling preserves previously allowed provider
+tools and reloads an existing launchd worker.
+
 The host packages use their native manifest formats but bundle the same local
 MCP and three canonical skills: `workgraph-bridge`, `workgraph-memory`, and
 `workgraph-ai-checkpoint`. Verify the client executable, package, skills, MCP,
