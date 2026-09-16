@@ -10,7 +10,7 @@ Use these connector/source mappings and revision-aware identities:
 |---|---|---|
 | GitHub | `github`, `github.pull_request` or `github.issue` | `<repo>#<kind>:<number>:<updated-at>` |
 | Slack | `slack`, `slack.message`/`slack.reply` | `<channel>:<ts>`; append edited timestamp for edits |
-| Slack Lists | `slack`, `slack.list_item` | `<list>:<item>:<revision>` |
+| Slack Lists | `slack`, `slack.list_item` | `<list>:<row-key>:<revision-or-content-hash>` |
 | Notion | `notion`, `notion.page` | `<page-id>:<last-edited-at>` |
 | Google/Microsoft mail | `mail.google`/`mail.microsoft`, `<source>.message` | stable message id |
 | Google/Microsoft calendar | `calendar.google`/`calendar.microsoft`, `<source>.event` | `<event-id>:change:<change-key-or-last-modified>` |
@@ -29,3 +29,12 @@ values inside the payload.
 Return all pages in the requested bounded query. If a connector cannot express
 the bounds, cannot finish pagination, or lacks required permissions, report the
 request as failed rather than silently truncating it.
+
+When a Slack Lists connector exposes no stable revision, hash canonical JSON of
+the normalized semantic row fields and use the lowercase hex SHA-256 digest as
+the revision surrogate. Exclude field ordering and capture-time metadata. Use a
+provider item id as `row-key` when available; otherwise use a documented stable
+combination of configured columns. A renamed row may therefore appear new when
+the provider exposes no stable identity. A missing row is not a deletion unless
+the provider exposes deletion state or a later contract adds snapshot/tombstone
+comparison.

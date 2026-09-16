@@ -51,7 +51,8 @@ approval, and configures the local workgraph MCP. A connector can also be put in
 bridged mode explicitly:
 
 ```sh
-workgraph connectors connect notion --mode bridged
+workgraph connectors connect notion --mode bridged \
+  --params-json '{"roots":["engineering"],"preview_limit":500}'
 workgraph connectors interval notion 30m
 workgraph start
 ```

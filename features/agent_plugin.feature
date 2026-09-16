@@ -10,6 +10,7 @@ Feature: Agent plugin installation
     And the plugin contains the bridge, memory, and AI checkpoint skills
     And the plugin registers the local workgraph MCP
     And unrelated client settings are preserved
+    And Claude Code pre-approves only the workgraph MCP tools required to drain capture
 
   Scenario: Update an existing plugin installation
     Given the workgraph plugin was already installed

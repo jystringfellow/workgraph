@@ -18,12 +18,20 @@ change configuration until the user approves that proposal.
 After approval, initialize workgraph if needed and configure each remote source:
 
 ```sh
-workgraph connectors connect <connector> --mode bridged
+workgraph connectors connect <connector> --mode bridged --params-json '<approved-scope-json>'
 workgraph connectors interval <connector> <duration>
 ```
 
 Never bridge `git`. Preserve existing direct credentials and unrelated client
 configuration. Do not request a provider OAuth token for workgraph.
+
+Use connector-specific bounded parameters. Slack accepts explicit `channels`
+and `include_dms`, or a participant strategy such as
+`{"scope":"participant","identity":"@Me","include":["authored","mentions","thread_participation"]}`.
+Azure Boards accepts `organization` with `project` and `area_path`, or
+`{"organization":"example-org","scope":"participant","identity":"@Me","include":["authored","assigned"]}`.
+Do not broaden a scope when a provider query times out; return to setup and
+propose a narrower approved scope.
 
 ## Drain one request
 
@@ -66,6 +74,13 @@ printf '%s' '{"error":"bounded failure description"}' |
 Never print, log, or place the claim token in process arguments. Never invent a
 successful empty result: an empty batch is valid only after a complete provider
 query proves the requested window contains no matching items.
+
+For an installed unattended worker, prefer the local workgraph MCP tools for
+list, claim, renew, ingest, fail, status, watermark, and heartbeat. The bundled
+Claude Code permissions intentionally do not authorize configuration,
+disconnect, arbitrary Bash, or provider tools; provider read permissions remain
+under the user's existing client approvals. Use the CLI sequence above for a
+human-driven diagnostic session.
 
 ## Verification
 

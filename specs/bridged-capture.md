@@ -118,17 +118,47 @@ Each `connectors.json` entry may contain:
 The user-facing bridge setup is generic:
 
 ```sh
-workgraph connectors connect slack --mode bridged
-workgraph connectors connect notion --mode bridged
-workgraph connectors connect mail.microsoft --mode bridged
-workgraph connectors connect calendar.microsoft --mode bridged
-workgraph connectors connect azure.boards --mode bridged
+workgraph connectors connect slack --mode bridged \
+  --params-json '{"channels":["C0DEMO123"],"include_dms":false}'
+workgraph connectors connect notion --mode bridged \
+  --params-json '{"roots":["engineering"],"preview_limit":500}'
+workgraph connectors connect azure.boards --mode bridged \
+  --params-json '{"organization":"example-org","project":"Demo","area_path":"Demo"}'
 ```
 
 This command validates the connector id and managed policy, records bridged
 mode, enables the connector, validates required non-secret scope, performs no
 provider request, and reports `awaiting first ingest`. Direct provider-specific
 connection commands continue to perform their existing OAuth or token setup.
+`--params-json` accepts exactly one JSON object. Invalid JSON, secret-looking
+keys, and missing connector-required scope fail without changing connector
+state. The local MCP `connector_bridge_configure` tool applies the same
+validation.
+`workgraph connectors doctor` reports legacy bridged entries without valid
+scope as `needs scope` and points back to scoped connection setup.
+
+The initial required parameter shapes are:
+
+| Connector | Required parameters |
+|---|---|
+| `github` | non-empty `repositories` array |
+| `slack` | non-empty `channels` array, `include_dms: true`, or participant scope with `identity` and `include` values from `authored`, `mentions`, and `thread_participation`; when present, `include_dms` is a boolean |
+| `slack.lists` | non-empty `lists` array |
+| `notion` | non-empty `roots` array and positive `preview_limit` |
+| `mail.google` / `mail.microsoft` | non-empty `mailboxes` or `folders` array and positive `preview_limit` |
+| `calendar.google` / `calendar.microsoft` | non-empty `calendars` array plus non-negative `past_days` and positive `future_days` |
+| `azure.boards` | non-empty `organization` plus either `project` and `area_path`, or participant scope with `identity` and `include` values from `authored` and `assigned` |
+
+Participant scope is connector-specific rather than a universal provider
+query. For example, Azure Boards may use:
+
+```json
+{"organization":"example-org","scope":"participant","identity":"@Me","include":["authored","assigned"]}
+```
+
+The bridge must translate only the approved include values into provider
+filters and must fail the request if the provider cannot express or completely
+page that bounded query.
 
 The lower-level mode command supports deliberate switching:
 
@@ -268,6 +298,8 @@ claim token returned by claim, and is removed by the bridge after completion or
 failure. Claim tokens are not accepted as command-line values because process
 arguments may be visible to other local processes or retained in shell history.
 MCP clients carry the same token inside the local protocol rather than a file.
+Text CLI claim output includes canonical non-secret `Params` JSON. The claim
+file continues to contain only the capability and request id.
 
 For manual imports and deterministic troubleshooting, ingestion may instead use
 `--source <event-source>` without a request. Manual ingestion is allowed only
@@ -534,7 +566,11 @@ session.
 `workgraph plugin install` is idempotent. It installs or updates the local
 client package, registers the local MCP server, and configures the drain
 mechanism only after explicit approval. It must not overwrite unrelated client
-settings. `workgraph plugin doctor` verifies package version, every bundled
+settings. For Claude Code it merges project-local permission rules into
+`<workgraph-home>/.claude/settings.json` for only the workgraph MCP operations
+needed to list, claim, renew, ingest, fail, inspect, and heartbeat capture work.
+It does not pre-authorize connector configuration, disconnect, arbitrary Bash,
+or provider tools. `workgraph plugin doctor` verifies package version, every bundled
 skill, MCP reachability, worker heartbeat, permission readiness, and a
 claim/empty-ingest round trip without contacting a provider.
 

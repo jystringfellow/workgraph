@@ -458,7 +458,8 @@ client configures each source through the local MCP. The equivalent explicit
 CLI setup is:
 
 ```sh
-workgraph connectors connect slack --mode bridged
+workgraph connectors connect slack --mode bridged \
+  --params-json '{"channels":["C0DEMO123"],"include_dms":false}'
 workgraph connectors interval slack 15m
 workgraph start
 ```
@@ -485,6 +486,10 @@ workgraph capture requests --renew <request-id> \
 workgraph capture requests --fail <request-id> \
   --claim-file /private/path/claim.json --error-json -
 ```
+
+The claim output includes the canonical non-secret connector parameters as
+`Params`. The private claim file contains only the request id and short-lived
+claim token.
 
 Claim files contain short-lived local capabilities. Keep them private, never
 put their contents in process arguments or logs, and remove them after the

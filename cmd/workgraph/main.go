@@ -1142,6 +1142,7 @@ func runConnectorsConnect(args []string, stdout io.Writer, stderr io.Writer) int
 	flags.SetOutput(stderr)
 	homeDir := flags.String("home", "", "workgraph home directory")
 	mode := flags.String("mode", "direct", "capture mode: direct or bridged")
+	paramsJSON := flags.String("params-json", "", "non-secret bridged connector scope as a JSON object")
 	connectorArg := ""
 	connectorFirst := false
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
@@ -1163,10 +1164,10 @@ func runConnectorsConnect(args []string, stdout io.Writer, stderr io.Writer) int
 		fmt.Fprintln(stderr, "workgraph connectors connect: generic setup currently requires --mode bridged; use the provider-specific connect command for direct capture")
 		return 1
 	}
-	result, err := workgraph.ConnectBridgedConnector(workgraph.ConnectorModeConfig{
-		HomeDir: *homeDir,
-		ID:      connectorArg,
-		Mode:    *mode,
+	result, err := workgraph.ConfigureBridgedConnector(workgraph.ConnectorBridgeConfig{
+		HomeDir:      *homeDir,
+		ID:           connectorArg,
+		BridgeParams: json.RawMessage(*paramsJSON),
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph connectors connect: %v\n", err)
@@ -1361,8 +1362,8 @@ func runCaptureRequests(args []string, stdin io.Reader, stdout io.Writer, stderr
 		return 1
 	}
 	request := claimed[0].Request
-	fmt.Fprintf(stdout, "Capture request claimed\nRequest: %s\nConnector: %s\nSource: %s\nSince: %s\nUntil: %s\nLease expires: %s\nClaim file: %s\n",
-		request.ID, request.ConnectorID, request.Source, request.Since, request.Until, request.LeaseExpiresAt, *claimFile)
+	fmt.Fprintf(stdout, "Capture request claimed\nRequest: %s\nConnector: %s\nSource: %s\nSince: %s\nUntil: %s\nParams: %s\nLease expires: %s\nClaim file: %s\n",
+		request.ID, request.ConnectorID, request.Source, request.Since, request.Until, request.Params, request.LeaseExpiresAt, *claimFile)
 	return 0
 }
 

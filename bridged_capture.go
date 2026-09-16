@@ -317,7 +317,10 @@ func EmitBridgedCaptureRequest(config CaptureRequestEmitConfig) (CaptureRequestE
 	if err != nil {
 		return CaptureRequestEmitResult{}, fmt.Errorf("create capture request id: %w", err)
 	}
-	params := canonicalBridgeParams(state.entry(id).BridgeParams)
+	params, err := validatedBridgeParams(id, state.entry(id).BridgeParams)
+	if err != nil {
+		return CaptureRequestEmitResult{}, err
+	}
 	request := CaptureRequest{
 		ID:          requestID,
 		ConnectorID: id,
@@ -532,15 +535,15 @@ func scanCaptureRequest(row captureRequestScanner) (CaptureRequest, bool, error)
 	return request, true, nil
 }
 
-func canonicalBridgeParams(raw json.RawMessage) json.RawMessage {
+func canonicalBridgeParams(raw json.RawMessage) (json.RawMessage, error) {
 	if len(bytes.TrimSpace(raw)) == 0 || string(bytes.TrimSpace(raw)) == "null" {
-		return json.RawMessage(`{}`)
+		return json.RawMessage(`{}`), nil
 	}
 	canonical, err := canonicalJSONObject(raw)
 	if err != nil {
-		return json.RawMessage(`{}`)
+		return nil, err
 	}
-	return json.RawMessage(canonical)
+	return json.RawMessage(canonical), nil
 }
 
 func eventSourceForConnector(connectorID string) string {
