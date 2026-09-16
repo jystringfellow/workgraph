@@ -22,8 +22,19 @@ workgraph connectors connect <connector> --mode bridged --params-json '<approved
 workgraph connectors interval <connector> <duration>
 ```
 
-Never bridge `git`. Preserve existing direct credentials and unrelated client
+Never bridge `git` or `notion`. The reference Notion client search cannot
+paginate to exhaustion, so use direct Notion OAuth or `workgraph notion
+connect-token`. Preserve existing direct credentials and unrelated client
 configuration. Do not request a provider OAuth token for workgraph.
+
+Treat a provider connector as bridgeable only when all three answers are yes:
+
+1. Can it express the requested time window exactly?
+2. Can it paginate to exhaustion with proof that the bounded query is complete?
+3. Can every item receive a stable identity and revision, including a defined
+   content-hash surrogate when the provider exposes no revision?
+
+If any answer is no, do not configure or claim that connector as bridged.
 
 Use connector-specific bounded parameters. Slack accepts explicit `channels`
 and `include_dms`, or a participant strategy such as
@@ -100,7 +111,9 @@ printf '%s' '{"error":"bounded failure description"}' |
 
 Never print, log, or place the claim token in process arguments. Never invent a
 successful empty result: an empty batch is valid only after a complete provider
-query proves the requested window contains no matching items.
+query, including any required control query, proves the requested window
+contains no matching items. A zero-result search alone is not proof when the
+provider search is partial, indexed, capped, or otherwise non-exhaustive.
 
 The bundled Claude Code permissions authorize workgraph MCP drain operations,
 plus only provider tools explicitly approved during plugin installation. They

@@ -144,11 +144,13 @@ func callBridgeMCPTool(config BridgeMCPConfig, name string, raw json.RawMessage)
 	switch name {
 	case "capture_requests_list":
 		base.ConnectorID = stringArg("connector")
-		return ListCaptureRequests(base)
+		requests, err := ListCaptureRequests(base)
+		return map[string]any{"requests": requests}, err
 	case "capture_requests_claim":
 		var max int
 		_ = json.Unmarshal(args["max"], &max)
-		return ClaimCaptureRequests(CaptureRequestClaimConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, ConnectorID: stringArg("connector"), Worker: stringArg("worker"), Max: max})
+		claims, err := ClaimCaptureRequests(CaptureRequestClaimConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, ConnectorID: stringArg("connector"), Worker: stringArg("worker"), Max: max})
+		return map[string]any{"claims": claims}, err
 	case "capture_request_renew":
 		return RenewCaptureRequest(CaptureRequestCapabilityConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, RequestID: stringArg("request_id"), ClaimToken: stringArg("claim_token")})
 	case "capture_ingest":
@@ -165,7 +167,8 @@ func callBridgeMCPTool(config BridgeMCPConfig, name string, raw json.RawMessage)
 		watermark, err := CaptureWatermark(base)
 		return map[string]any{"connector": base.ConnectorID, "completed_through": watermark}, err
 	case "connector_status":
-		return StatusConnectors(ConnectorListConfig{HomeDir: config.HomeDir})
+		status, err := StatusConnectors(ConnectorListConfig{HomeDir: config.HomeDir})
+		return map[string]any{"connectors": status.Connectors}, err
 	case "connector_bridge_configure":
 		interval, err := time.ParseDuration(stringArg("interval"))
 		if err != nil || interval <= 0 {

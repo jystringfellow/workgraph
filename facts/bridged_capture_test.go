@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -56,16 +55,15 @@ func TestBridgedConnectorSetupNeedsNoProviderCredentials(t *testing.T) {
 		t.Fatalf("expected bridged setup not to create Slack credentials, stat error %v", err)
 	}
 
-	output, err = runworkgraph(t, repoRoot, "connectors", "mode", "--home", homeDir, "git", "bridged")
-	if err == nil {
-		t.Fatalf("expected git bridged mode to be rejected, got:\n%s", output)
-	}
-	if !strings.Contains(string(output), "git only supports direct capture") {
-		t.Fatalf("expected direct-only git error, got:\n%s", output)
-	}
-	output, err = runworkgraph(t, repoRoot, "connectors", "connect", "--home", homeDir, "--mode", "bridged", "--params-json", `{}`, "git")
-	if err == nil || !strings.Contains(string(output), "git only supports direct capture") {
-		t.Fatalf("expected bridged git connection to be rejected, got err=%v:\n%s", err, output)
+	for _, connector := range []string{"git", "notion"} {
+		output, err = runworkgraph(t, repoRoot, "connectors", "mode", "--home", homeDir, connector, "bridged")
+		if err == nil || !strings.Contains(string(output), connector+" only supports direct capture") {
+			t.Fatalf("expected direct-only %s mode error, got err=%v:\n%s", connector, err, output)
+		}
+		output, err = runworkgraph(t, repoRoot, "connectors", "connect", "--home", homeDir, "--mode", "bridged", "--params-json", bridgeParamsForFact(connector), connector)
+		if err == nil || !strings.Contains(string(output), connector+" only supports direct capture") {
+			t.Fatalf("expected bridged %s connection to be rejected, got err=%v:\n%s", connector, err, output)
+		}
 	}
 }
 
@@ -186,6 +184,43 @@ func TestConnectorDoctorExplainsLegacyUnscopedBridge(t *testing.T) {
 			t.Fatalf("connector doctor omitted %q:\n%s", expected, output)
 		}
 	}
+	statusOutput, err := runworkgraph(t, repoRoot(t), "connectors", "status", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("status legacy bridge: %v\n%s", err, statusOutput)
+	}
+	for _, expected := range []string{"azure.boards (bridged)", "setup needs scope", "polling not ready"} {
+		if !strings.Contains(string(statusOutput), expected) {
+			t.Fatalf("connector status omitted %q:\n%s", expected, statusOutput)
+		}
+	}
+}
+
+func TestConnectorStatusAndDoctorRejectLegacyBridgedNotion(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	if err := os.WriteFile(filepath.Join(homeDir, "connectors.json"), []byte(`{
+  "connectors": {
+    "notion": {
+      "enabled": true,
+      "capture_mode": "bridged",
+      "setup_state": "ready",
+      "bridge_params": {"roots":["demo-root"],"preview_limit":500}
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write legacy bridged Notion state: %v", err)
+	}
+	for _, command := range []string{"status", "doctor"} {
+		output, err := runworkgraph(t, repoRoot(t), "connectors", command, "--home", homeDir)
+		if err != nil {
+			t.Fatalf("%s legacy bridged Notion: %v\n%s", command, err, output)
+		}
+		for _, expected := range []string{"notion", "unsupported bridge", "notion connect-token"} {
+			if !strings.Contains(string(output), expected) {
+				t.Fatalf("connector %s omitted %q:\n%s", command, expected, output)
+			}
+		}
+	}
 }
 
 func TestBridgedCaptureSchemaIsDurable(t *testing.T) {
@@ -266,39 +301,32 @@ func TestManualBridgedIngestDeduplicatesSlackEvents(t *testing.T) {
 	}
 }
 
-func TestManualBridgedNotionIngestProjectsCurrentPage(t *testing.T) {
+func TestHandEditedBridgedNotionCannotScheduleOrIngest(t *testing.T) {
 	homeDir := initBridgedCaptureHome(t)
 	repoRoot := repoRoot(t)
-	connectBridgedConnector(t, repoRoot, homeDir, "notion")
+	if err := os.WriteFile(filepath.Join(homeDir, "connectors.json"), []byte(`{
+  "connectors": {
+    "notion": {
+      "enabled": true,
+      "capture_mode": "bridged",
+      "setup_state": "ready",
+      "bridge_params": {"roots":["demo-root"],"preview_limit":500}
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write legacy bridged Notion state: %v", err)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "connectors", "poll", "--home", homeDir, "--once", "--connector", "notion")
+	if err == nil || !strings.Contains(string(output), "notion only supports direct capture") {
+		t.Fatalf("expected direct-only Notion scheduler error, got err=%v:\n%s", err, output)
+	}
 
 	input := `[{"type":"notion.page","timestamp":"2026-06-23T04:58:22.726-07:00","external_id":"11111111111111111111111111111111:2026-06-23T11:58:22.726Z","project":"demo-documentation","actor":"alex@example.com","summary":"Local development authentication guide","payload":{"id":"11111111111111111111111111111111","url":"https://www.notion.so/11111111111111111111111111111111","title":"Local development authentication guide","path":"Engineering Home / Documentation","page_last_edited_at":"2026-06-23T11:58:22.726Z","last_edited_by":"alex@example.com","preview":"Bounded local development guidance."}}]`
-	output, err := runworkgraphInput(t, repoRoot, input, "capture", "ingest", "--home", homeDir, "--source", "notion", "--json", "-")
-	if err != nil {
-		t.Fatalf("ingest bridged Notion page: %v\n%s", err, output)
-	}
-	if !strings.Contains(string(output), "Notion projections: 1") {
-		t.Fatalf("expected projection count, got:\n%s", output)
-	}
-
-	db := openBridgedCaptureDatabase(t, homeDir)
-	var timestamp string
-	if err := db.QueryRow(`SELECT timestamp FROM events WHERE id = ?`, "b4414bc559b981234e78ae5a3f7a697a").Scan(&timestamp); err != nil {
-		t.Fatalf("read bridged Notion event: %v", err)
-	}
-	if timestamp != "2026-06-23T11:58:22.726Z" {
-		t.Fatalf("expected UTC-normalized timestamp, got %q", timestamp)
-	}
-
-	var title, preview, lastEdited, source, parentJSON string
-	if err := db.QueryRow(`SELECT title, content_preview, last_edited_time, source, parent_json
-		FROM notion_index WHERE notion_id = ?`, "11111111111111111111111111111111").Scan(&title, &preview, &lastEdited, &source, &parentJSON); err != nil {
-		t.Fatalf("read bridged Notion projection: %v", err)
-	}
-	if title != "Local development authentication guide" || preview != "Bounded local development guidance." || lastEdited != "2026-06-23T11:58:22.726Z" || source != "bridged" {
-		t.Fatalf("unexpected Notion projection: title=%q preview=%q lastEdited=%q source=%q", title, preview, lastEdited, source)
-	}
-	if parentJSON != `{"path":"Engineering Home / Documentation"}` {
-		t.Fatalf("expected projected Notion path, got %s", parentJSON)
+	output, err = runworkgraphInput(t, repoRoot, input, "capture", "ingest", "--home", homeDir, "--source", "notion", "--json", "-")
+	if err == nil || !strings.Contains(string(output), "notion only supports direct capture") {
+		t.Fatalf("expected direct-only Notion ingest error, got err=%v:\n%s", err, output)
 	}
 }
 
@@ -459,20 +487,22 @@ func TestDaemonSchedulesBridgedConnectorWithoutCallingProvider(t *testing.T) {
 		default:
 		}
 		response.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(response, `{"results":[],"has_more":false}`)
+		_, _ = response.Write([]byte(`{"ok":true,"messages":[],"response_metadata":{}}`))
 	}))
 	defer provider.Close()
-	if err := os.WriteFile(filepath.Join(homeDir, "notion.json"), []byte(fmt.Sprintf(`{
+	if err := os.WriteFile(filepath.Join(homeDir, "slack.json"), []byte(`{
   "access_token": "preserved-direct-token",
-  "api_base_url": %q
+  "channels": ["C0DEMO123"],
+  "user_scopes": [],
+  "api_base_url": "`+provider.URL+`"
 }
-`, provider.URL)), 0o600); err != nil {
+`), 0o600); err != nil {
 		t.Fatalf("write preserved direct credentials: %v", err)
 	}
 	if _, err := workgraph.ConfigureBridgedConnector(workgraph.ConnectorBridgeConfig{
-		HomeDir: homeDir, ID: "notion", BridgeParams: json.RawMessage(bridgeParamsForFact("notion")),
+		HomeDir: homeDir, ID: "slack", BridgeParams: json.RawMessage(bridgeParamsForFact("slack")),
 	}); err != nil {
-		t.Fatalf("connect bridged Notion: %v", err)
+		t.Fatalf("connect bridged Slack: %v", err)
 	}
 
 	capture, err := workgraph.StartRun(workgraph.RunConfig{
@@ -491,14 +521,14 @@ func TestDaemonSchedulesBridgedConnectorWithoutCallingProvider(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		var count int
-		err := db.QueryRow(`SELECT COUNT(*) FROM capture_requests WHERE connector_id = 'notion' AND status = 'pending'`).Scan(&count)
+		err := db.QueryRow(`SELECT COUNT(*) FROM capture_requests WHERE connector_id = 'slack' AND status = 'pending'`).Scan(&count)
 		if err == nil && count == 1 {
 			break
 		}
 		if time.Now().After(deadline) {
 			cancel()
 			<-done
-			t.Fatalf("daemon did not emit bridged Notion request: count=%d error=%v", count, err)
+			t.Fatalf("daemon did not emit bridged Slack request: count=%d error=%v", count, err)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -508,7 +538,7 @@ func TestDaemonSchedulesBridgedConnectorWithoutCallingProvider(t *testing.T) {
 	}
 	select {
 	case <-providerCalled:
-		t.Fatal("workgraph called the Notion provider for a bridged connector")
+		t.Fatal("workgraph called the Slack provider for a bridged connector")
 	default:
 	}
 }
@@ -634,6 +664,9 @@ func initBridgedCaptureHome(t *testing.T) string {
 	if output, err := runworkgraph(t, repoRoot(t), "init", "--home", homeDir); err != nil {
 		t.Fatalf("workgraph init failed: %v\n%s", err, output)
 	}
+	// Keep any client-global configuration written by plugin facts inside the
+	// same disposable user home as the synthetic workgraph home.
+	t.Setenv("HOME", filepath.Dir(homeDir))
 	return homeDir
 }
 
@@ -653,8 +686,6 @@ func bridgeParamsForFact(connector string) string {
 		return `{"channels":["C0DEMO123"],"include_dms":false}`
 	case "slack.lists":
 		return `{"lists":["F0DEMO123"]}`
-	case "notion":
-		return `{"preview_limit":500,"roots":["demo-root"]}`
 	case "mail.google", "mail.microsoft":
 		return `{"mailboxes":["inbox"],"preview_limit":500}`
 	case "calendar.google", "calendar.microsoft":

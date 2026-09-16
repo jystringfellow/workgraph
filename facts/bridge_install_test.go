@@ -14,6 +14,11 @@ import (
 
 func TestClaudePluginInstallMergesLeastPrivilegeDrainPermissions(t *testing.T) {
 	homeDir := initBridgedCaptureHome(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(t.TempDir(), ".claude-enterprise"))
+	claudeConfigPath := filepath.Join(filepath.Dir(homeDir), ".claude.json")
+	if err := os.WriteFile(claudeConfigPath, []byte(`{"theme":"dark","projects":{"/keep":{"hasTrustDialogAccepted":false}}}`), 0o600); err != nil {
+		t.Fatalf("write existing Claude user config: %v", err)
+	}
 	settingsDir := filepath.Join(homeDir, ".claude")
 	if err := os.MkdirAll(settingsDir, 0o700); err != nil {
 		t.Fatalf("create Claude settings directory: %v", err)
@@ -68,6 +73,26 @@ func TestClaudePluginInstallMergesLeastPrivilegeDrainPermissions(t *testing.T) {
 		if strings.Contains(allowed, forbidden) {
 			t.Fatalf("Claude permissions were too broad (%q):\n%s", forbidden, contents)
 		}
+	}
+
+	configContents, err := os.ReadFile(claudeConfigPath)
+	if err != nil {
+		t.Fatalf("read Claude user config: %v", err)
+	}
+	var userConfig struct {
+		Theme    string `json:"theme"`
+		Projects map[string]struct {
+			Trusted bool `json:"hasTrustDialogAccepted"`
+		} `json:"projects"`
+	}
+	if err := json.Unmarshal(configContents, &userConfig); err != nil {
+		t.Fatalf("parse Claude user config: %v", err)
+	}
+	if userConfig.Theme != "dark" || userConfig.Projects["/keep"].Trusted {
+		t.Fatalf("plugin install replaced unrelated Claude user config: %s", configContents)
+	}
+	if !userConfig.Projects[homeDir].Trusted {
+		t.Fatalf("plugin install did not trust workgraph home %q: %s", homeDir, configContents)
 	}
 }
 
@@ -241,12 +266,15 @@ func TestClaudeBridgeDrainUsesNonInteractivePermissionMode(t *testing.T) {
 		t.Fatalf("read Claude invocation: %v", err)
 	}
 	for _, expected := range []string{
-		"-p", "--permission-mode dontAsk", "--settings " + filepath.Join(homeDir, ".claude", "settings.json"),
+		"-p", "--permission-mode dontAsk",
 		"List pending requests before claiming", "leave the request pending", "Never fall back to the CLI",
 	} {
 		if !strings.Contains(string(contents), expected) {
 			t.Fatalf("Claude drain invocation omitted %q:\n%s", expected, contents)
 		}
+	}
+	if strings.Contains(string(contents), "--settings") {
+		t.Fatalf("Claude drain invocation overrode settings and hid provider MCP servers:\n%s", contents)
 	}
 }
 
@@ -284,6 +312,36 @@ func TestClaudeBridgeDrainLeavesRequestsPendingWithoutProviderPermissions(t *tes
 	}
 	if status != "pending" {
 		t.Fatalf("expected request to remain pending, got %q", status)
+	}
+}
+
+func TestClaudeBridgeDrainFailsLoudlyWhenWorkspaceTrustIsMissing(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	fixtureDir := t.TempDir()
+	logPath := filepath.Join(fixtureDir, "claude.log")
+	clientPath := filepath.Join(fixtureDir, "claude")
+	if err := os.WriteFile(clientPath, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \""+logPath+"\"\n"), 0o700); err != nil {
+		t.Fatalf("write fake Claude: %v", err)
+	}
+	if output, err := runworkgraph(t, repoRoot(t), "plugin", "install", "--home", homeDir,
+		"--client", "claude-code", "--client-command", clientPath, "--install-root", filepath.Join(fixtureDir, "installed"),
+		"--no-launchd", "--allow-provider-tool", "mcp__claude_ai_Slack__slack_list_user_channels"); err != nil {
+		t.Fatalf("install Claude plugin: %v\n%s", err, output)
+	}
+	_ = os.Remove(logPath)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(homeDir), ".claude.json"), []byte(`{"projects":{}}`), 0o600); err != nil {
+		t.Fatalf("remove Claude workspace trust: %v", err)
+	}
+	connectBridgedConnector(t, repoRoot(t), homeDir, "slack")
+	if output, err := runworkgraph(t, repoRoot(t), "connectors", "poll", "--home", homeDir, "--once", "--connector", "slack"); err != nil {
+		t.Fatalf("emit request: %v\n%s", err, output)
+	}
+	output, err := runworkgraph(t, repoRoot(t), "bridge", "drain", "--home", homeDir, "--client", "claude-code", "--client-command", clientPath)
+	if err == nil || !strings.Contains(string(output), "workspace is not trusted") || !strings.Contains(string(output), "rerun workgraph plugin install") {
+		t.Fatalf("expected explicit workspace trust error, got err=%v:\n%s", err, output)
+	}
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Fatalf("untrusted drain launched Claude: %v", err)
 	}
 }
 
@@ -395,6 +453,13 @@ func TestReferenceWorkersDrainFakeProviderRequestEndToEnd(t *testing.T) {
 				}
 				if err := os.WriteFile(filepath.Join(settingsDir, "settings.json"), []byte(`{"permissions":{"allow":["mcp__fake_provider__read"]}}`), 0o600); err != nil {
 					t.Fatalf("write Claude worker settings: %v", err)
+				}
+				trust, err := json.Marshal(map[string]any{"projects": map[string]any{homeDir: map[string]any{"hasTrustDialogAccepted": true}}})
+				if err != nil {
+					t.Fatalf("encode Claude workspace trust: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(filepath.Dir(homeDir), ".claude.json"), trust, 0o600); err != nil {
+					t.Fatalf("write Claude workspace trust: %v", err)
 				}
 			}
 			connectBridgedConnector(t, repoRoot(t), homeDir, "slack")

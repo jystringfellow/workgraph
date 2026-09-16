@@ -253,8 +253,8 @@ func ConfigureBridgedConnector(config ConnectorBridgeConfig) (ConnectorConnectRe
 }
 
 func validatedBridgeParams(connectorID string, raw json.RawMessage) (json.RawMessage, error) {
-	if connectorID == "git" {
-		return nil, fmt.Errorf("connector git only supports direct capture")
+	if err := validateBridgeableConnector(connectorID); err != nil {
+		return nil, err
 	}
 	params, err := canonicalBridgeParams(raw)
 	if err != nil {
@@ -337,10 +337,6 @@ func validatedBridgeParams(connectorID string, raw json.RawMessage) (json.RawMes
 		if !requireStrings("lists") {
 			return nil, fmt.Errorf("bridged slack.lists requires a non-empty lists array")
 		}
-	case "notion":
-		if !requireStrings("roots") || !requirePositiveInt("preview_limit", false) {
-			return nil, fmt.Errorf("bridged notion requires a non-empty roots array and positive preview_limit")
-		}
 	case "mail.google", "mail.microsoft":
 		if !requireStrings("mailboxes", "folders") || !requirePositiveInt("preview_limit", false) {
 			return nil, fmt.Errorf("bridged %s requires non-empty mailboxes or folders and positive preview_limit", connectorID)
@@ -357,6 +353,27 @@ func validatedBridgeParams(connectorID string, raw json.RawMessage) (json.RawMes
 		}
 	}
 	return params, nil
+}
+
+func validateBridgeableConnector(connectorID string) error {
+	switch connectorID {
+	case "git":
+		return fmt.Errorf("connector git only supports direct capture")
+	case "notion":
+		return fmt.Errorf("connector notion only supports direct capture; use workgraph notion connect or workgraph notion connect-token")
+	default:
+		return nil
+	}
+}
+
+func bridgeConfigurationIssue(connectorID string, params json.RawMessage) (string, string) {
+	if err := validateBridgeableConnector(connectorID); err != nil {
+		return "unsupported bridge", err.Error()
+	}
+	if _, err := validatedBridgeParams(connectorID, params); err != nil {
+		return "needs scope", err.Error() + "; rerun workgraph connectors connect with --mode bridged and --params-json"
+	}
+	return "", ""
 }
 
 func rejectBridgeSecrets(params json.RawMessage) error {
@@ -403,8 +420,10 @@ func SetConnectorMode(config ConnectorModeConfig) (ConnectorUpdateResult, error)
 	if mode != "direct" && mode != "bridged" {
 		return ConnectorUpdateResult{}, fmt.Errorf("capture mode must be direct or bridged")
 	}
-	if id == "git" && mode == "bridged" {
-		return ConnectorUpdateResult{}, fmt.Errorf("connector git only supports direct capture")
+	if mode == "bridged" {
+		if err := validateBridgeableConnector(id); err != nil {
+			return ConnectorUpdateResult{}, err
+		}
 	}
 	if err := enforceConnectorManagedSettings(id); err != nil {
 		return ConnectorUpdateResult{}, err
@@ -831,6 +850,11 @@ func pollConnectorIDs(homeDir string, state connectorRuntimeFile, requested stri
 		if !connectorEnabled(state, id) {
 			return nil, fmt.Errorf("connector %s is disabled", id)
 		}
+		if connectorCaptureMode(state, id) == "bridged" {
+			if _, details := bridgeConfigurationIssue(id, state.entry(id).BridgeParams); details != "" {
+				return nil, fmt.Errorf("%s", details)
+			}
+		}
 		if !connectorReadyForPolling(state, id) {
 			return nil, fmt.Errorf("connector %s is not ready", id)
 		}
@@ -937,15 +961,24 @@ func connectorStatuses(homeDir string, state connectorRuntimeFile) []ConnectorSt
 		connected := connectorConnected(homeDir, state, id)
 		entry := state.entry(id)
 		request := activeRequests[id]
+		captureMode := connectorCaptureMode(state, id)
+		setupState := connectorSetupState(id, connected, entry)
+		lastValidationError := entry.LastValidationError
+		if captureMode == "bridged" {
+			if issue, details := bridgeConfigurationIssue(id, entry.BridgeParams); issue != "" {
+				setupState = issue
+				lastValidationError = details
+			}
+		}
 		statuses = append(statuses, ConnectorStatus{
 			ID:                  id,
-			CaptureMode:         connectorCaptureMode(state, id),
+			CaptureMode:         captureMode,
 			Connected:           connected,
 			Enabled:             connectorEnabled(state, id),
 			Interval:            connectorInterval(state, id, defaultConnectorInterval(id)),
-			SetupState:          connectorSetupState(id, connected, entry),
+			SetupState:          setupState,
 			LastValidated:       entry.LastValidated,
-			LastValidationError: entry.LastValidationError,
+			LastValidationError: lastValidationError,
 			LastPoll:            entry.LastPoll,
 			LastSuccess:         entry.LastSuccess,
 			LastIngest:          entry.LastIngest,
@@ -1210,6 +1243,11 @@ func connectorSetupState(id string, connected bool, entry connectorRuntimeEntry)
 
 func connectorReadyForPolling(state connectorRuntimeFile, id string) bool {
 	entry := state.entry(id)
+	if connectorCaptureMode(state, id) == "bridged" {
+		if issue, _ := bridgeConfigurationIssue(id, entry.BridgeParams); issue != "" {
+			return false
+		}
+	}
 	if strings.TrimSpace(entry.SetupState) == "error" || strings.TrimSpace(entry.SetupState) == "draft" {
 		return false
 	}
@@ -1280,11 +1318,11 @@ func connectorHealthFindings(homeDir string, state connectorRuntimeFile) []Conne
 	for _, status := range statuses {
 		entry := state.entry(status.ID)
 		if status.CaptureMode == "bridged" {
-			if _, err := validatedBridgeParams(status.ID, entry.BridgeParams); err != nil {
+			if issue, details := bridgeConfigurationIssue(status.ID, entry.BridgeParams); issue != "" {
 				findings = append(findings, ConnectorHealthFinding{
 					ID:      status.ID,
-					Status:  "needs scope",
-					Details: err.Error() + "; rerun workgraph connectors connect with --mode bridged and --params-json",
+					Status:  issue,
+					Details: details,
 				})
 				continue
 			}

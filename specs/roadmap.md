@@ -101,7 +101,7 @@ Priority labels used below:
 - [ ] Configurable connector framework
    - [x] Connected services poll automatically from `workgraph start` with visible controls. [P0a, spec: `specs/connector-runtime.md`]
    - [x] Bridged connector capture through approved AI-client connectors, with daemon-owned cadence, durable outbox ingestion, and Claude Code/Codex macOS reference integrations. [P0a, spec: `specs/bridged-capture.md`]
-      - [x] Harden bridge connections with required non-secret scope, claim-visible parameters, explicitly loaded least-privilege Claude permissions, opt-in provider tools, capability-gated claims, Slack Lists hash revisions, scope replacement, and idempotent worker reload. [P0a, issue: #98]
+      - [x] Harden bridge connections with required non-secret scope, claim-visible parameters, trusted auto-discovered least-privilege Claude permissions, opt-in provider tools, capability-gated claims, object-shaped MCP results, direct-only Notion enforcement, Slack Lists hash revisions, scope replacement, and idempotent worker reload. [P0a, issue: #98]
    - [x] One-command `workgraph` agent plugin installation for Codex and Claude Code, bundling the local MCP plus bridge, memory, and AI checkpoint skills. [P0a, spec: `specs/agent-plugin.md`]
    - [x] Connector poll failures are isolated from the daemon, recorded in connector state, logged, and shown by `workgraph status`. Fatal local capture exits preserve their last error. [P0a, specs: `specs/connector-runtime.md` and `specs/capture-controls.md`]
    - [x] Bound connector polls with request deadlines and retry backoff so a stalled or failing provider cannot block the shared capture loop. [P0a, specs: `specs/connector-runtime.md` and `specs/architecture-improvements.md`]

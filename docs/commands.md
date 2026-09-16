@@ -31,6 +31,15 @@ go install github.com/jystringfellow/workgraph/cmd/workgraph@latest
 workgraph version
 ```
 
+Replacing the executable does not replace an already running daemon process.
+After an upgrade, restart it explicitly so connector polling uses the new
+binary:
+
+```sh
+workgraph stop
+workgraph start
+```
+
 When the Homebrew tap is enabled, install and upgrade with:
 
 ```sh
@@ -409,9 +418,12 @@ workgraph plugin install --client codex
 workgraph plugin install --client claude-code
 ```
 
-Claude's unattended worker loads its isolated settings file explicitly. Its
-workgraph drain tools are allowed automatically, while provider tools require
-exact-name opt-in. Repeat the flag for every approved read-only provider tool:
+Claude's unattended worker trusts the workgraph home and discovers its local
+`.claude/settings.json` through the normal settings chain. It does not pass a
+`--settings` override, so user- and project-registered provider MCP servers stay
+available. Its workgraph drain tools are allowed automatically, while provider
+tools require exact-name opt-in. Repeat the flag for every approved read-only
+provider tool:
 
 ```sh
 workgraph plugin install --client claude-code \
@@ -435,9 +447,11 @@ workgraph plugin doctor --client claude-code
 
 Rerun `plugin install` after upgrading workgraph to refresh the package. Start a
 new Codex or Claude Code session after installation so the client discovers the
-new skills and MCP tools. Installing the plugin does not create an LLM profile
-or enable hosted-model consent; `workgraph llm connect` remains an independent
-model-execution setup path.
+new skills and MCP tools. If the daemon was already running when its executable
+was upgraded, also run `workgraph stop` followed by `workgraph start`; plugin
+installation reloads the bridge worker, not the daemon. Installing the plugin
+does not create an LLM profile or enable hosted-model consent; `workgraph llm
+connect` remains an independent model-execution setup path.
 
 The older `workgraph bridge install` and `workgraph bridge doctor` commands are
 compatibility aliases that operate on this same broader plugin.

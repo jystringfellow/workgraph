@@ -16,7 +16,6 @@ func TestValidatedBridgeParamsRequireBoundedConnectorScope(t *testing.T) {
 		{"github", `{"repositories":["demo/repository"]}`, `{}`},
 		{"slack", `{"channels":["C0DEMO123"],"include_dms":false}`, `{"channels":[]}`},
 		{"slack.lists", `{"lists":["F0DEMO123"]}`, `{}`},
-		{"notion", `{"roots":["demo-root"],"preview_limit":500}`, `{"roots":["demo-root"]}`},
 		{"mail.microsoft", `{"folders":["inbox"],"preview_limit":500}`, `{"folders":[]}`},
 		{"calendar.microsoft", `{"calendars":["primary"],"past_days":7,"future_days":30}`, `{"calendars":["primary"],"past_days":7}`},
 		{"azure.boards", `{"organization":"example-org","project":"Demo","area_path":"Demo"}`, `{"organization":"example-org"}`},
@@ -54,6 +53,9 @@ func TestValidatedBridgeParamsRejectMalformedObjectsAndSecrets(t *testing.T) {
 	}
 	if _, err := validatedBridgeParams("git", json.RawMessage(`{}`)); err == nil {
 		t.Fatal("expected local git capture to reject bridged parameters")
+	}
+	if _, err := validatedBridgeParams("notion", json.RawMessage(`{"roots":["demo-root"],"preview_limit":500}`)); err == nil || !strings.Contains(err.Error(), "notion only supports direct capture") {
+		t.Fatalf("expected Notion to reject bridged parameters, got %v", err)
 	}
 }
 
