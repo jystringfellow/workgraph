@@ -70,3 +70,23 @@ func TestValidatedBridgeParamsAllowExplicitParticipantStrategies(t *testing.T) {
 		t.Fatal("expected unsupported Azure participant include to fail")
 	}
 }
+
+func TestClaudeProviderToolsRequireExactExplicitNames(t *testing.T) {
+	tools, err := validateClaudeProviderTools("claude-code", []string{"mcp__provider__read", "mcp__provider__read"})
+	if err != nil || len(tools) != 1 {
+		t.Fatalf("validate exact provider tool: tools=%v error=%v", tools, err)
+	}
+	for _, test := range []struct {
+		client string
+		tool   string
+	}{
+		{"claude-code", "mcp__provider__*"},
+		{"claude-code", "Bash(workgraph *)"},
+		{"claude-code", "mcp__plugin_workgraph_workgraph__capture_ingest"},
+		{"codex", "mcp__provider__read"},
+	} {
+		if _, err := validateClaudeProviderTools(test.client, []string{test.tool}); err == nil {
+			t.Fatalf("expected %s provider tool %q to fail", test.client, test.tool)
+		}
+	}
+}

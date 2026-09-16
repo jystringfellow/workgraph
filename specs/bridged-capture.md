@@ -136,6 +136,10 @@ state. The local MCP `connector_bridge_configure` tool applies the same
 validation.
 `workgraph connectors doctor` reports legacy bridged entries without valid
 scope as `needs scope` and points back to scoped connection setup.
+Changing a connector's canonical bridge parameters cancels any pending or
+claimed request for the old scope. The next scheduler pass emits a replacement
+request carrying the new parameters, and the cancelled claim token cannot
+ingest.
 
 The initial required parameter shapes are:
 
@@ -570,7 +574,29 @@ settings. For Claude Code it merges project-local permission rules into
 `<workgraph-home>/.claude/settings.json` for only the workgraph MCP operations
 needed to list, claim, renew, ingest, fail, inspect, and heartbeat capture work.
 It does not pre-authorize connector configuration, disconnect, arbitrary Bash,
-or provider tools. `workgraph plugin doctor` verifies package version, every bundled
+or provider tools. The unattended Claude command passes this file explicitly
+with `--settings`; it does not rely on working-directory settings discovery.
+
+Provider tools remain explicit opt-in. Repeating
+`--allow-provider-tool <exact-mcp-tool-name>` during Claude plugin installation
+adds exact, non-wildcard MCP permissions to the same isolated worker settings.
+Operators should add only the read operations required by their approved
+connector scopes. Install output and doctor report how many provider tools are
+configured; zero is a visible warning rather than an implied working provider
+connection.
+
+Before claiming, an unattended worker lists pending requests and proves that
+the required provider tools for a connector are present and authorized through
+a harmless read-only discovery operation. It claims only that connector. A
+missing or denied provider capability leaves work pending and does not overwrite
+healthy connector history with a capture failure. The unattended Claude worker
+must not fall back to the CLI, so it creates no temporary claim file.
+
+Plugin reinstall reloads an existing launchd service with an idempotent
+bootout-then-bootstrap sequence. A missing prior service is harmless; a failed
+bootstrap remains an installation error.
+
+`workgraph plugin doctor` verifies package version, every bundled
 skill, MCP reachability, worker heartbeat, permission readiness, and a
 claim/empty-ingest round trip without contacting a provider.
 

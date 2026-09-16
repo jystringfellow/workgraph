@@ -134,6 +134,8 @@ func runPluginInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 	clientCommand := flags.String("client-command", "", "client executable override")
 	installRoot := flags.String("install-root", "", "package installation root override")
 	noLaunchd := flags.Bool("no-launchd", false, "skip installing the macOS bridge drain worker")
+	var providerTools repeatedStringFlags
+	flags.Var(&providerTools, "allow-provider-tool", "exact provider MCP tool name to allow for the unattended Claude worker; repeatable")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -143,7 +145,7 @@ func runPluginInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 	result, err := workgraph.InstallPlugin(workgraph.PluginInstallConfig{
 		HomeDir: *homeDir, Client: *client, ClientCommand: *clientCommand,
-		InstallRoot: *installRoot, SkipLaunchd: *noLaunchd,
+		InstallRoot: *installRoot, SkipLaunchd: *noLaunchd, ProviderTools: providerTools,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph plugin install: %v\n", err)
@@ -271,6 +273,8 @@ func runBridgeInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 	clientCommand := flags.String("client-command", "", "client executable override")
 	installRoot := flags.String("install-root", "", "package installation root override")
 	noLaunchd := flags.Bool("no-launchd", false, "skip installing the macOS drain worker")
+	var providerTools repeatedStringFlags
+	flags.Var(&providerTools, "allow-provider-tool", "exact provider MCP tool name to allow for the unattended Claude worker; repeatable")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -280,7 +284,7 @@ func runBridgeInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 	result, err := workgraph.InstallBridge(workgraph.BridgeInstallConfig{
 		HomeDir: *homeDir, Client: *client, ClientCommand: *clientCommand,
-		InstallRoot: *installRoot, SkipLaunchd: *noLaunchd,
+		InstallRoot: *installRoot, SkipLaunchd: *noLaunchd, ProviderTools: providerTools,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph bridge install: %v\n", err)
@@ -3352,6 +3356,17 @@ func parseCaptureControlConfig(command string, args []string, stderr io.Writer) 
 }
 
 type watchDirFlags []string
+
+type repeatedStringFlags []string
+
+func (flags *repeatedStringFlags) String() string {
+	return fmt.Sprint([]string(*flags))
+}
+
+func (flags *repeatedStringFlags) Set(value string) error {
+	*flags = append(*flags, value)
+	return nil
+}
 
 func (flags *watchDirFlags) String() string {
 	return fmt.Sprint([]string(*flags))

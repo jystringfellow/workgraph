@@ -39,6 +39,41 @@ workgraph plugin install --client claude-code
 workgraph plugin doctor --client codex
 ```
 
+For Claude Code unattended capture, explicitly approve the exact read-only
+provider MCP tools used by the configured connector recipes:
+
+```sh
+workgraph plugin install --client claude-code \
+  --allow-provider-tool mcp__azure-devops__wit_query \
+  --allow-provider-tool mcp__azure-devops__wit_work_item
+```
+
+For the provider versions exercised by the reference verification, a complete
+Slack message/List plus Azure Boards read set is:
+
+```text
+mcp__claude_ai_Slack__slack_search_public_and_private
+mcp__claude_ai_Slack__slack_read_channel
+mcp__claude_ai_Slack__slack_read_thread
+mcp__claude_ai_Slack__slack_read_file
+mcp__claude_ai_Slack__slack_list_user_channels
+mcp__azure-devops__wit_query
+mcp__azure-devops__wit_work_item
+mcp__azure-devops__core_list_projects
+```
+
+Tool names are provider-version-specific. Approve only tools that are present,
+read-only, and needed for the selected scopes; do not copy the list blindly.
+
+The worker loads workgraph's isolated settings file with Claude's `--settings`
+flag. It preflights provider capability before claiming, so a missing provider
+permission leaves work pending rather than degrading connector health.
+
+For Azure DevOps MCP configured with Azure CLI authentication, `az account
+show` proves only that a cached profile exists. Verify unattended readiness with
+`az account get-access-token`; consider a predictably expiring PAT when the
+client connector supports one and long-lived unattended behavior matters.
+
 The plugin also contains the `workgraph-memory` and
 `workgraph-ai-checkpoint` skills alongside `workgraph-bridge`. Start a new
 client session after installation so all three skills and the local MCP are

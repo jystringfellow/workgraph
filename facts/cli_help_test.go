@@ -233,7 +233,7 @@ func TestLeafHelpListsAvailableOptions(t *testing.T) {
 		{"ai sessions", []string{"Options:", "--all", "--archived", "--status", "--limit"}},
 		{"llm add", []string{"Options:", "--provider", "--model", "--api-key-env"}},
 		{"llm connect", []string{"Options:", "--name", "--for", "--model"}},
-		{"plugin install", []string{"Options:", "--client", "--no-launchd"}},
+		{"plugin install", []string{"Options:", "--client", "--no-launchd", "--allow-provider-tool"}},
 		{"plugin doctor", []string{"Options:", "--client", "--install-root"}},
 		{"bridge install", []string{"Options:", "--client", "--no-launchd"}},
 		{"capture requests", []string{"Options:", "--claim", "--renew", "--fail", "--claim-file"}},

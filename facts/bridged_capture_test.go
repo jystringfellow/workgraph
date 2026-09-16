@@ -108,6 +108,41 @@ func TestBridgedConnectorRequiresScopeAndSurfacesItOnCLIClaim(t *testing.T) {
 	}
 }
 
+func TestChangingBridgeScopeCancelsAndReplacesActiveRequest(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+	connectBridgedConnector(t, repoRoot, homeDir, "slack")
+	if output, err := runworkgraph(t, repoRoot, "connectors", "poll", "--home", homeDir, "--once", "--connector", "slack"); err != nil {
+		t.Fatalf("emit original scoped request: %v\n%s", err, output)
+	}
+
+	replacement := `{"channels":["C0REPLACED"],"include_dms":false}`
+	if output, err := runworkgraph(t, repoRoot, "connectors", "connect", "--home", homeDir, "--mode", "bridged",
+		"--params-json", replacement, "slack"); err != nil {
+		t.Fatalf("replace Slack scope: %v\n%s", err, output)
+	} else if !strings.Contains(string(output), "cancelled after scope change") {
+		t.Fatalf("scope replacement did not report cancellation:\n%s", output)
+	}
+	db := openBridgedCaptureDatabase(t, homeDir)
+	var cancelled int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM capture_requests WHERE connector_id = 'slack' AND status = 'cancelled'`).Scan(&cancelled); err != nil {
+		t.Fatalf("count cancelled old-scope requests: %v", err)
+	}
+	if cancelled != 1 {
+		t.Fatalf("expected old-scope request cancellation, got %d", cancelled)
+	}
+	if output, err := runworkgraph(t, repoRoot, "connectors", "poll", "--home", homeDir, "--once", "--connector", "slack"); err != nil {
+		t.Fatalf("emit replacement scoped request: %v\n%s", err, output)
+	}
+	var params string
+	if err := db.QueryRow(`SELECT params_json FROM capture_requests WHERE connector_id = 'slack' AND status = 'pending'`).Scan(&params); err != nil {
+		t.Fatalf("read replacement request params: %v", err)
+	}
+	if params != replacement {
+		t.Fatalf("expected replacement scope %s, got %s", replacement, params)
+	}
+}
+
 func TestBridgedConnectorRejectsMalformedAndSecretScope(t *testing.T) {
 	homeDir := initBridgedCaptureHome(t)
 	repoRoot := repoRoot(t)

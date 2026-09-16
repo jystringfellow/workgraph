@@ -33,9 +33,36 @@ Azure Boards accepts `organization` with `project` and `area_path`, or
 Do not broaden a scope when a provider query times out; return to setup and
 propose a narrower approved scope.
 
+For an unattended Claude Code worker, provider MCP tools are not authorized by
+default. Ask the user to approve the exact read-only tools needed by the chosen
+recipes, then reinstall with one flag per tool:
+
+```sh
+workgraph plugin install --client claude-code \
+  --allow-provider-tool mcp__provider__exact_read_tool
+```
+
+Do not use wildcards or add write-capable provider tools.
+
 ## Drain one request
 
-Claim at most one request per invocation, using a private temporary claim file:
+An installed unattended worker uses MCP only:
+
+1. List pending requests before claiming.
+2. For a candidate connector, verify its required provider tools are present and
+   authorized with a harmless read-only discovery call.
+3. If capability is missing or denied, leave that request pending. Do not claim
+   it, report a connector failure, or infer capability from workgraph connector
+   status.
+4. Claim at most one request, filtered to a connector whose preflight succeeded.
+5. Fetch, normalize, and ingest through MCP. Report failures only when they
+   occur after successful capability preflight.
+
+Never fall back to the CLI in an unattended worker. That path is intentionally
+not authorized and would create claim files the worker cannot remove.
+
+For a human-driven diagnostic session, claim at most one request using a
+private temporary claim file:
 
 ```sh
 workgraph capture requests --claim --max 1 --worker <client-name> --claim-file <private-path>
@@ -75,12 +102,10 @@ Never print, log, or place the claim token in process arguments. Never invent a
 successful empty result: an empty batch is valid only after a complete provider
 query proves the requested window contains no matching items.
 
-For an installed unattended worker, prefer the local workgraph MCP tools for
-list, claim, renew, ingest, fail, status, watermark, and heartbeat. The bundled
-Claude Code permissions intentionally do not authorize configuration,
-disconnect, arbitrary Bash, or provider tools; provider read permissions remain
-under the user's existing client approvals. Use the CLI sequence above for a
-human-driven diagnostic session.
+The bundled Claude Code permissions authorize workgraph MCP drain operations,
+plus only provider tools explicitly approved during plugin installation. They
+do not authorize configuration, disconnect, arbitrary Bash, or provider tools
+by default.
 
 ## Verification
 

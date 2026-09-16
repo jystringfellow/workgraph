@@ -162,6 +162,7 @@ var helpExamples = map[string][]string{
 	"plugin install": {
 		"workgraph plugin install --client codex",
 		"workgraph plugin install --client claude-code",
+		"workgraph plugin install --client claude-code --allow-provider-tool mcp__provider__exact_read_tool",
 	},
 	"capture requests": {
 		"workgraph capture requests --list",

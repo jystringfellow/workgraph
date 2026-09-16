@@ -1,6 +1,7 @@
 package workgraph
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -218,6 +219,12 @@ func ConfigureBridgedConnector(config ConnectorBridgeConfig) (ConnectorConnectRe
 		return ConnectorConnectResult{}, err
 	}
 	entry := state.entry(id)
+	scopeChanged := entry.CaptureMode == "bridged" && !bytes.Equal(bytes.TrimSpace(entry.BridgeParams), bytes.TrimSpace(params))
+	if scopeChanged {
+		if err := cancelActiveCaptureRequests(homeDir, id, time.Now()); err != nil {
+			return ConnectorConnectResult{}, err
+		}
+	}
 	enabled := true
 	entry.Enabled = &enabled
 	entry.CaptureMode = "bridged"
@@ -234,10 +241,14 @@ func ConfigureBridgedConnector(config ConnectorBridgeConfig) (ConnectorConnectRe
 	if err := writeConnectorRuntimeFile(homeDir, state); err != nil {
 		return ConnectorConnectResult{}, err
 	}
+	message := fmt.Sprintf("Connector %s configured in bridged mode\nStatus: awaiting first ingest\nConfig: %s", id, connectorRuntimePath(homeDir))
+	if scopeChanged {
+		message += "\nPrevious active request: cancelled after scope change"
+	}
 	return ConnectorConnectResult{
 		HomeDir: homeDir,
 		ID:      id,
-		Message: fmt.Sprintf("Connector %s configured in bridged mode\nStatus: awaiting first ingest\nConfig: %s", id, connectorRuntimePath(homeDir)),
+		Message: message,
 	}, nil
 }
 

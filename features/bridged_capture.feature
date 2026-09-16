@@ -11,6 +11,7 @@ Feature: Bridged connector capture
     Then workgraph enables it without requesting or storing provider credentials
     And missing or malformed required scope is rejected without changing connector state
     And doctor identifies legacy bridged connectors that need scope
+    And changing scope cancels active work created for the prior scope
     And direct credentials already stored for that connector are preserved
     And git cannot be configured or ingested as bridged
 
@@ -75,7 +76,18 @@ Feature: Bridged connector capture
     Then workgraph idempotently registers the same local MCP contract and canonical skills
     And it preserves unrelated client settings
     And Claude Code receives only the unattended workgraph MCP permissions needed to drain capture
+    And the Claude worker explicitly loads its isolated settings file
+    And provider read tools are added only through explicit exact-name opt-in
+    And reinstall reloads an existing launchd worker idempotently
     And bridge doctor verifies local operation without contacting a provider
+
+  Scenario: Skip work that the unattended client cannot execute
+    Given a healthy connector has pending bridged work
+    And the unattended client lacks an authorized provider read tool for it
+    When the bridge worker inspects available work
+    Then it leaves that request pending without claiming it
+    And it does not overwrite the connector's prior success with a failure
+    And it does not fall back to a CLI claim file
 
   Scenario: Observe Slack List rows without provider revisions
     Given a bridged Slack List exposes stable row values but no item revision

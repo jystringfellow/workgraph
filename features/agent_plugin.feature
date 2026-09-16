@@ -11,12 +11,15 @@ Feature: Agent plugin installation
     And the plugin registers the local workgraph MCP
     And unrelated client settings are preserved
     And Claude Code pre-approves only the workgraph MCP tools required to drain capture
+    And optional provider tools require exact-name opt-in
+    And the unattended worker explicitly loads the isolated settings
 
   Scenario: Update an existing plugin installation
     Given the workgraph plugin was already installed
     When I run the same plugin install command again
     Then the canonical plugin files and skills are refreshed
     And the operation succeeds without duplicate configuration
+    And an already loaded launchd worker is reloaded
 
   Scenario: Diagnose the plugin locally
     Given the workgraph plugin is installed
