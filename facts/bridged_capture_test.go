@@ -23,7 +23,8 @@ func TestBridgedConnectorSetupNeedsNoProviderCredentials(t *testing.T) {
 	homeDir := initBridgedCaptureHome(t)
 	repoRoot := repoRoot(t)
 
-	output, err := runworkgraph(t, repoRoot, "connectors", "connect", "--home", homeDir, "--mode", "bridged", "slack")
+	output, err := runworkgraph(t, repoRoot, "connectors", "connect", "--home", homeDir, "--mode", "bridged",
+		"--params-json", bridgeParamsForFact("slack"), "slack")
 	if err != nil {
 		t.Fatalf("connect bridged Slack: %v\n%s", err, output)
 	}
@@ -61,6 +62,94 @@ func TestBridgedConnectorSetupNeedsNoProviderCredentials(t *testing.T) {
 	}
 	if !strings.Contains(string(output), "git only supports direct capture") {
 		t.Fatalf("expected direct-only git error, got:\n%s", output)
+	}
+	output, err = runworkgraph(t, repoRoot, "connectors", "connect", "--home", homeDir, "--mode", "bridged", "--params-json", `{}`, "git")
+	if err == nil || !strings.Contains(string(output), "git only supports direct capture") {
+		t.Fatalf("expected bridged git connection to be rejected, got err=%v:\n%s", err, output)
+	}
+}
+
+func TestBridgedConnectorRequiresScopeAndSurfacesItOnCLIClaim(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+
+	output, err := runworkgraph(t, repoRoot, "connectors", "connect", "--home", homeDir, "--mode", "bridged", "slack")
+	if err == nil {
+		t.Fatalf("expected unscoped bridged Slack setup to fail, got:\n%s", output)
+	}
+	if !strings.Contains(string(output), "requires") || !strings.Contains(string(output), "channels") {
+		t.Fatalf("expected actionable Slack scope error, got:\n%s", output)
+	}
+
+	params := `{"include_dms":false,"channels":["C0DEMO123"]}`
+	output, err = runworkgraph(t, repoRoot, "connectors", "connect", "--home", homeDir, "--mode", "bridged", "--params-json", params, "slack")
+	if err != nil {
+		t.Fatalf("connect scoped bridged Slack: %v\n%s", err, output)
+	}
+	if output, err = runworkgraph(t, repoRoot, "connectors", "poll", "--home", homeDir, "--once", "--connector", "slack"); err != nil {
+		t.Fatalf("emit scoped Slack request: %v\n%s", err, output)
+	}
+
+	claimFile := filepath.Join(t.TempDir(), "slack.claim.json")
+	output, err = runworkgraph(t, repoRoot, "capture", "requests", "--claim", "--home", homeDir,
+		"--connector", "slack", "--max", "1", "--worker", "facts", "--claim-file", claimFile)
+	if err != nil {
+		t.Fatalf("claim scoped Slack request: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), `Params: {"channels":["C0DEMO123"],"include_dms":false}`) {
+		t.Fatalf("claim omitted canonical non-secret parameters:\n%s", output)
+	}
+	claimContents, err := os.ReadFile(claimFile)
+	if err != nil {
+		t.Fatalf("read claim capability: %v", err)
+	}
+	if strings.Contains(string(claimContents), "channels") {
+		t.Fatalf("claim capability should not duplicate scope: %s", claimContents)
+	}
+}
+
+func TestBridgedConnectorRejectsMalformedAndSecretScope(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+
+	for _, params := range []string{`{"channels":`, `{"channels":["C0DEMO123"],"access_token":"secret"}`} {
+		output, err := runworkgraph(t, repoRoot, "connectors", "connect", "--home", homeDir,
+			"--mode", "bridged", "--params-json", params, "slack")
+		if err == nil {
+			t.Fatalf("expected params %q to fail, got:\n%s", params, output)
+		}
+	}
+	contents, err := os.ReadFile(filepath.Join(homeDir, "connectors.json"))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("read connector state: %v", err)
+	}
+	if strings.Contains(string(contents), `"slack"`) {
+		t.Fatalf("invalid scope changed connector state: %s", contents)
+	}
+}
+
+func TestConnectorDoctorExplainsLegacyUnscopedBridge(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	if err := os.WriteFile(filepath.Join(homeDir, "connectors.json"), []byte(`{
+  "connectors": {
+    "azure.boards": {
+      "enabled": true,
+      "capture_mode": "bridged",
+      "setup_state": "ready"
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write legacy bridge state: %v", err)
+	}
+	output, err := runworkgraph(t, repoRoot(t), "connectors", "doctor", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("doctor legacy bridge: %v\n%s", err, output)
+	}
+	for _, expected := range []string{"azure.boards", "needs scope", "--params-json"} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("connector doctor omitted %q:\n%s", expected, output)
+		}
 	}
 }
 
@@ -345,7 +434,9 @@ func TestDaemonSchedulesBridgedConnectorWithoutCallingProvider(t *testing.T) {
 `, provider.URL)), 0o600); err != nil {
 		t.Fatalf("write preserved direct credentials: %v", err)
 	}
-	if _, err := workgraph.ConnectBridgedConnector(workgraph.ConnectorModeConfig{HomeDir: homeDir, ID: "notion"}); err != nil {
+	if _, err := workgraph.ConfigureBridgedConnector(workgraph.ConnectorBridgeConfig{
+		HomeDir: homeDir, ID: "notion", BridgeParams: json.RawMessage(bridgeParamsForFact("notion")),
+	}); err != nil {
 		t.Fatalf("connect bridged Notion: %v", err)
 	}
 
@@ -433,6 +524,37 @@ func TestExpiredClaimRetriesSameRequestAndInvalidatesOldToken(t *testing.T) {
 	}
 }
 
+func TestSelectingDirectModeCancelsOrphanedBridgedRequest(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+	connectBridgedConnector(t, repoRoot, homeDir, "slack")
+	if output, err := runworkgraph(t, repoRoot, "connectors", "poll", "--home", homeDir, "--once", "--connector", "slack"); err != nil {
+		t.Fatalf("emit orphan candidate: %v\n%s", err, output)
+	}
+
+	path := filepath.Join(homeDir, "connectors.json")
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read connector state: %v", err)
+	}
+	contents = []byte(strings.Replace(string(contents), `"capture_mode": "bridged"`, `"capture_mode": "direct"`, 1))
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatalf("simulate stale direct state: %v", err)
+	}
+	if output, err := runworkgraph(t, repoRoot, "connectors", "mode", "--home", homeDir, "slack", "direct"); err != nil {
+		t.Fatalf("reselect direct mode: %v\n%s", err, output)
+	}
+
+	db := openBridgedCaptureDatabase(t, homeDir)
+	var status string
+	if err := db.QueryRow(`SELECT status FROM capture_requests WHERE connector_id = 'slack'`).Scan(&status); err != nil {
+		t.Fatalf("read orphaned request: %v", err)
+	}
+	if status != "cancelled" {
+		t.Fatalf("expected orphaned request cancellation, got %q", status)
+	}
+}
+
 func TestBridgeRenewsLeaseAndReportsRetryableFailure(t *testing.T) {
 	homeDir := initBridgedCaptureHome(t)
 	connectBridgedConnector(t, repoRoot(t), homeDir, "github")
@@ -482,8 +604,30 @@ func initBridgedCaptureHome(t *testing.T) string {
 
 func connectBridgedConnector(t *testing.T, repoRoot string, homeDir string, connector string) {
 	t.Helper()
-	if output, err := runworkgraph(t, repoRoot, "connectors", "connect", "--home", homeDir, "--mode", "bridged", connector); err != nil {
+	if output, err := runworkgraph(t, repoRoot, "connectors", "connect", "--home", homeDir, "--mode", "bridged",
+		"--params-json", bridgeParamsForFact(connector), connector); err != nil {
 		t.Fatalf("connect bridged %s: %v\n%s", connector, err, output)
+	}
+}
+
+func bridgeParamsForFact(connector string) string {
+	switch connector {
+	case "github":
+		return `{"repositories":["demo/repository"]}`
+	case "slack":
+		return `{"channels":["C0DEMO123"],"include_dms":false}`
+	case "slack.lists":
+		return `{"lists":["F0DEMO123"]}`
+	case "notion":
+		return `{"preview_limit":500,"roots":["demo-root"]}`
+	case "mail.google", "mail.microsoft":
+		return `{"mailboxes":["inbox"],"preview_limit":500}`
+	case "calendar.google", "calendar.microsoft":
+		return `{"calendars":["primary"],"future_days":30,"past_days":7}`
+	case "azure.boards":
+		return `{"area_path":"Demo","organization":"example-org","project":"Demo"}`
+	default:
+		return `{}`
 	}
 }
 

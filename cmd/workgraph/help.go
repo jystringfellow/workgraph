@@ -167,6 +167,10 @@ var helpExamples = map[string][]string{
 		"workgraph capture requests --list",
 		"workgraph capture requests --claim --connector slack --max 1 --worker manual --claim-file /private/path/claim.json",
 	},
+	"connectors connect": {
+		"workgraph connectors connect slack --mode bridged --params-json '{\"channels\":[\"C0DEMO123\"],\"include_dms\":false}'",
+		"workgraph connectors connect azure.boards --mode bridged --params-json '{\"organization\":\"example-org\",\"project\":\"Demo\",\"area_path\":\"Demo\"}'",
+	},
 	"llm connect": {
 		"workgraph llm connect codex --for summarize",
 		"workgraph llm connect claude-code --name work-claude --for summarize",

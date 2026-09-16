@@ -7,8 +7,10 @@ Feature: Bridged connector capture
     Given workgraph has been initialized locally
 
   Scenario: Configure a remote connector for bridged capture
-    When I connect a supported remote connector in bridged mode
+    When I connect a supported remote connector in bridged mode with its approved non-secret scope
     Then workgraph enables it without requesting or storing provider credentials
+    And missing or malformed required scope is rejected without changing connector state
+    And doctor identifies legacy bridged connectors that need scope
     And direct credentials already stored for that connector are preserved
     And git cannot be configured or ingested as bridged
 
@@ -24,6 +26,7 @@ Feature: Bridged connector capture
     Given a bridged capture request is pending
     When two bridge workers try to claim it
     Then only one worker receives a claim token
+    And each claimant receives the canonical non-secret scope
     And status never exposes the claim token
     And an expired claim is retried with its original request bounds
 
@@ -71,4 +74,11 @@ Feature: Bridged connector capture
     When I install the workgraph plugin for Claude Code or Codex on macOS
     Then workgraph idempotently registers the same local MCP contract and canonical skills
     And it preserves unrelated client settings
+    And Claude Code receives only the unattended workgraph MCP permissions needed to drain capture
     And bridge doctor verifies local operation without contacting a provider
+
+  Scenario: Observe Slack List rows without provider revisions
+    Given a bridged Slack List exposes stable row values but no item revision
+    When the bridge normalizes the current snapshot
+    Then canonical row content hashes may identify changed observations
+    And the contract does not claim that an absent row is a deletion

@@ -193,33 +193,159 @@ func ConnectBridgedConnector(config ConnectorModeConfig) (ConnectorConnectResult
 
 // ConfigureBridgedConnector records approved non-secret scope and cadence.
 func ConfigureBridgedConnector(config ConnectorBridgeConfig) (ConnectorConnectResult, error) {
-	result, err := ConnectBridgedConnector(ConnectorModeConfig{HomeDir: config.HomeDir, ID: config.ID, Mode: "bridged"})
+	homeDir, err := connectorHomeDir(config.HomeDir)
 	if err != nil {
 		return ConnectorConnectResult{}, err
 	}
-	if config.Interval > 0 {
-		if _, err := SetConnectorInterval(ConnectorUpdateConfig{HomeDir: result.HomeDir, ID: result.ID, Interval: config.Interval}); err != nil {
-			return ConnectorConnectResult{}, err
-		}
+	id, err := normalizeConnectorID(config.ID)
+	if err != nil {
+		return ConnectorConnectResult{}, err
 	}
-	params := canonicalBridgeParams(config.BridgeParams)
-	if err := rejectBridgeSecrets(params); err != nil {
+	params, err := validatedBridgeParams(id, config.BridgeParams)
+	if err != nil {
+		return ConnectorConnectResult{}, err
+	}
+	if config.Interval < 0 {
+		return ConnectorConnectResult{}, fmt.Errorf("connector interval must be positive")
+	}
+	if err := enforceConnectorManagedSettings(id); err != nil {
 		return ConnectorConnectResult{}, err
 	}
 	connectorPollStateMu.Lock()
 	defer connectorPollStateMu.Unlock()
-	state, err := readConnectorRuntimeFile(result.HomeDir)
+	state, err := readConnectorRuntimeFile(homeDir)
 	if err != nil {
 		return ConnectorConnectResult{}, err
 	}
-	entry := state.entry(result.ID)
+	entry := state.entry(id)
+	enabled := true
+	entry.Enabled = &enabled
+	entry.CaptureMode = "bridged"
 	entry.BridgeParams = params
-	state.Connectors[result.ID] = entry
-	if err := writeConnectorRuntimeFile(result.HomeDir, state); err != nil {
+	entry.SetupState = "ready"
+	entry.LastValidationError = ""
+	entry.LastError = ""
+	entry.NextPoll = ""
+	entry.ConsecutiveFailures = 0
+	if config.Interval > 0 {
+		entry.Interval = config.Interval.String()
+	}
+	state.Connectors[id] = entry
+	if err := writeConnectorRuntimeFile(homeDir, state); err != nil {
 		return ConnectorConnectResult{}, err
 	}
-	result.Message = fmt.Sprintf("Connector %s configured in bridged mode\nStatus: awaiting first ingest\nConfig: %s", result.ID, connectorRuntimePath(result.HomeDir))
-	return result, nil
+	return ConnectorConnectResult{
+		HomeDir: homeDir,
+		ID:      id,
+		Message: fmt.Sprintf("Connector %s configured in bridged mode\nStatus: awaiting first ingest\nConfig: %s", id, connectorRuntimePath(homeDir)),
+	}, nil
+}
+
+func validatedBridgeParams(connectorID string, raw json.RawMessage) (json.RawMessage, error) {
+	if connectorID == "git" {
+		return nil, fmt.Errorf("connector git only supports direct capture")
+	}
+	params, err := canonicalBridgeParams(raw)
+	if err != nil {
+		return nil, fmt.Errorf("bridge parameters must be a JSON object: %w", err)
+	}
+	if err := rejectBridgeSecrets(params); err != nil {
+		return nil, err
+	}
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal(params, &values); err != nil {
+		return nil, fmt.Errorf("decode bridge parameters: %w", err)
+	}
+	requireStrings := func(keys ...string) bool {
+		for _, key := range keys {
+			var items []string
+			if err := json.Unmarshal(values[key], &items); err == nil {
+				for _, item := range items {
+					if strings.TrimSpace(item) != "" {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}
+	requireString := func(key string) bool {
+		var value string
+		return json.Unmarshal(values[key], &value) == nil && strings.TrimSpace(value) != ""
+	}
+	stringValue := func(key string) string {
+		var value string
+		_ = json.Unmarshal(values[key], &value)
+		return strings.TrimSpace(value)
+	}
+	participantScope := func(allowedIncludes ...string) bool {
+		if stringValue("scope") != "participant" || !requireString("identity") {
+			return false
+		}
+		var includes []string
+		if json.Unmarshal(values["include"], &includes) != nil || len(includes) == 0 {
+			return false
+		}
+		allowed := map[string]bool{}
+		for _, include := range allowedIncludes {
+			allowed[include] = true
+		}
+		for _, include := range includes {
+			if !allowed[strings.TrimSpace(include)] {
+				return false
+			}
+		}
+		return true
+	}
+	requirePositiveInt := func(key string, allowZero bool) bool {
+		var value int
+		if json.Unmarshal(values[key], &value) != nil {
+			return false
+		}
+		if allowZero {
+			return value >= 0
+		}
+		return value > 0
+	}
+	switch connectorID {
+	case "github":
+		if !requireStrings("repositories") {
+			return nil, fmt.Errorf("bridged github requires a non-empty repositories array")
+		}
+	case "slack":
+		includeDMs := false
+		if rawValue, found := values["include_dms"]; found {
+			if err := json.Unmarshal(rawValue, &includeDMs); err != nil {
+				return nil, fmt.Errorf("bridged slack include_dms must be a boolean")
+			}
+		}
+		if !requireStrings("channels") && !includeDMs && !participantScope("authored", "mentions", "thread_participation") {
+			return nil, fmt.Errorf("bridged slack requires channels, include_dms true, or participant scope with identity and approved include values")
+		}
+	case "slack.lists":
+		if !requireStrings("lists") {
+			return nil, fmt.Errorf("bridged slack.lists requires a non-empty lists array")
+		}
+	case "notion":
+		if !requireStrings("roots") || !requirePositiveInt("preview_limit", false) {
+			return nil, fmt.Errorf("bridged notion requires a non-empty roots array and positive preview_limit")
+		}
+	case "mail.google", "mail.microsoft":
+		if !requireStrings("mailboxes", "folders") || !requirePositiveInt("preview_limit", false) {
+			return nil, fmt.Errorf("bridged %s requires non-empty mailboxes or folders and positive preview_limit", connectorID)
+		}
+	case "calendar.google", "calendar.microsoft":
+		if !requireStrings("calendars") || !requirePositiveInt("past_days", true) || !requirePositiveInt("future_days", false) {
+			return nil, fmt.Errorf("bridged %s requires non-empty calendars, non-negative past_days, and positive future_days", connectorID)
+		}
+	case "azure.boards":
+		projectScope := requireString("project") && requireString("area_path")
+		participant := participantScope("authored", "assigned")
+		if !requireString("organization") || (!projectScope && !participant) {
+			return nil, fmt.Errorf("bridged azure.boards requires organization plus project and area_path, or participant scope with identity and approved include values")
+		}
+	}
+	return params, nil
 }
 
 func rejectBridgeSecrets(params json.RawMessage) error {
@@ -280,7 +406,11 @@ func SetConnectorMode(config ConnectorModeConfig) (ConnectorUpdateResult, error)
 		return ConnectorUpdateResult{}, err
 	}
 	entry := state.entry(id)
-	previousMode := connectorCaptureMode(state, id)
+	if mode == "bridged" {
+		if _, err := validatedBridgeParams(id, entry.BridgeParams); err != nil {
+			return ConnectorUpdateResult{}, err
+		}
+	}
 	entry.CaptureMode = mode
 	if mode == "bridged" {
 		enabled := true
@@ -291,7 +421,7 @@ func SetConnectorMode(config ConnectorModeConfig) (ConnectorUpdateResult, error)
 		entry.NextPoll = ""
 		entry.ConsecutiveFailures = 0
 	}
-	if previousMode == "bridged" && mode == "direct" {
+	if mode == "direct" {
 		if err := cancelActiveCaptureRequests(homeDir, id, time.Now()); err != nil {
 			return ConnectorUpdateResult{}, err
 		}
@@ -1138,6 +1268,16 @@ func connectorHealthFindings(homeDir string, state connectorRuntimeFile) []Conne
 	findings := make([]ConnectorHealthFinding, 0, len(statuses))
 	for _, status := range statuses {
 		entry := state.entry(status.ID)
+		if status.CaptureMode == "bridged" {
+			if _, err := validatedBridgeParams(status.ID, entry.BridgeParams); err != nil {
+				findings = append(findings, ConnectorHealthFinding{
+					ID:      status.ID,
+					Status:  "needs scope",
+					Details: err.Error() + "; rerun workgraph connectors connect with --mode bridged and --params-json",
+				})
+				continue
+			}
+		}
 		switch {
 		case connectorAuthFailure(entry.LastError):
 			findings = append(findings, ConnectorHealthFinding{

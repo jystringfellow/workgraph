@@ -2,6 +2,7 @@ package facts
 
 import (
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,85 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 )
+
+func TestClaudePluginInstallMergesLeastPrivilegeDrainPermissions(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	settingsDir := filepath.Join(homeDir, ".claude")
+	if err := os.MkdirAll(settingsDir, 0o700); err != nil {
+		t.Fatalf("create Claude settings directory: %v", err)
+	}
+	settingsPath := filepath.Join(settingsDir, "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"theme":"dark","permissions":{"allow":["Read(./notes/**)"]}}`), 0o600); err != nil {
+		t.Fatalf("write existing Claude settings: %v", err)
+	}
+	fixtureDir := t.TempDir()
+	clientPath := filepath.Join(fixtureDir, "claude")
+	if err := os.WriteFile(clientPath, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("write fake Claude: %v", err)
+	}
+	if output, err := runworkgraph(t, repoRoot(t), "plugin", "install", "--home", homeDir,
+		"--client", "claude-code", "--client-command", clientPath, "--install-root", filepath.Join(fixtureDir, "installed"), "--no-launchd"); err != nil {
+		t.Fatalf("install Claude plugin: %v\n%s", err, output)
+	}
+
+	contents, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read merged Claude settings: %v", err)
+	}
+	var settings struct {
+		Theme       string `json:"theme"`
+		Permissions struct {
+			Allow []string `json:"allow"`
+		} `json:"permissions"`
+	}
+	if err := json.Unmarshal(contents, &settings); err != nil {
+		t.Fatalf("parse merged Claude settings: %v", err)
+	}
+	if settings.Theme != "dark" {
+		t.Fatalf("plugin install replaced unrelated settings: %s", contents)
+	}
+	allowed := strings.Join(settings.Permissions.Allow, "\n")
+	for _, expected := range []string{
+		"Read(./notes/**)",
+		"mcp__plugin_workgraph_workgraph__capture_requests_list",
+		"mcp__plugin_workgraph_workgraph__capture_requests_claim",
+		"mcp__plugin_workgraph_workgraph__capture_request_renew",
+		"mcp__plugin_workgraph_workgraph__capture_ingest",
+		"mcp__plugin_workgraph_workgraph__capture_request_fail",
+		"mcp__plugin_workgraph_workgraph__capture_watermark",
+		"mcp__plugin_workgraph_workgraph__connector_status",
+		"mcp__plugin_workgraph_workgraph__bridge_worker_heartbeat",
+	} {
+		if !strings.Contains(allowed, expected) {
+			t.Fatalf("Claude permissions omitted %q:\n%s", expected, contents)
+		}
+	}
+	for _, forbidden := range []string{"mcp__plugin_workgraph_workgraph__*", "connector_bridge_configure", "connector_bridge_disconnect", "Bash"} {
+		if strings.Contains(allowed, forbidden) {
+			t.Fatalf("Claude permissions were too broad (%q):\n%s", forbidden, contents)
+		}
+	}
+}
+
+func TestSlackListsBridgeContractAllowsContentHashWithoutClaimingDeletion(t *testing.T) {
+	root := repoRoot(t)
+	paths := []string{
+		filepath.Join(root, ".agents", "skills", "workgraph-bridge", "references", "event-contracts.md"),
+		filepath.Join(root, "integrations", "claude-code", "plugins", "workgraph", "skills", "workgraph-bridge", "references", "event-contracts.md"),
+		filepath.Join(root, "integrations", "codex", "plugins", "workgraph", "skills", "workgraph-bridge", "references", "event-contracts.md"),
+	}
+	for _, path := range paths {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read Slack Lists bridge contract %s: %v", path, err)
+		}
+		for _, expected := range []string{"<revision-or-content-hash>", "canonical JSON", "A missing row is not a deletion"} {
+			if !strings.Contains(string(contents), expected) {
+				t.Fatalf("Slack Lists bridge contract %s omitted %q", path, expected)
+			}
+		}
+	}
+}
 
 func TestBridgeInstallPackagesCodexAndClaudeCodeIdempotently(t *testing.T) {
 	for _, client := range []string{"codex", "claude-code"} {
@@ -88,6 +168,32 @@ func TestBridgeDrainLaunchesClientOnlyForActiveDaemonWork(t *testing.T) {
 	}
 }
 
+func TestClaudeBridgeDrainUsesNonInteractivePermissionMode(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	connectBridgedConnector(t, repoRoot(t), homeDir, "slack")
+	if output, err := runworkgraph(t, repoRoot(t), "connectors", "poll", "--home", homeDir, "--once", "--connector", "slack"); err != nil {
+		t.Fatalf("emit request: %v\n%s", err, output)
+	}
+	fixtureDir := t.TempDir()
+	logPath := filepath.Join(fixtureDir, "drain.log")
+	clientPath := filepath.Join(fixtureDir, "claude")
+	if err := os.WriteFile(clientPath, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" > \""+logPath+"\"\n"), 0o700); err != nil {
+		t.Fatalf("write fake Claude: %v", err)
+	}
+	if output, err := runworkgraph(t, repoRoot(t), "bridge", "drain", "--home", homeDir, "--client", "claude-code", "--client-command", clientPath); err != nil {
+		t.Fatalf("drain with Claude: %v\n%s", err, output)
+	}
+	contents, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read Claude invocation: %v", err)
+	}
+	for _, expected := range []string{"-p", "--permission-mode dontAsk", "workgraph-bridge"} {
+		if !strings.Contains(string(contents), expected) {
+			t.Fatalf("Claude drain invocation omitted %q:\n%s", expected, contents)
+		}
+	}
+}
+
 func TestBridgeDoctorVerifiesInstalledPackageAndLocalMCPWithoutProvider(t *testing.T) {
 	homeDir := initBridgedCaptureHome(t)
 	fixtureDir := t.TempDir()
@@ -105,7 +211,7 @@ func TestBridgeDoctorVerifiesInstalledPackageAndLocalMCPWithoutProvider(t *testi
 	if err != nil {
 		t.Fatalf("doctor bridge: %v\n%s", err, output)
 	}
-	for _, expected := range []string{"Package: ready", "MCP: ready", "Round trip: ready", "Client: ready", "Worker: not installed"} {
+	for _, expected := range []string{"Package: ready", "MCP: ready", "Permissions: ready", "Round trip: ready", "Client: ready", "Worker: not installed"} {
 		if !strings.Contains(string(output), expected) {
 			t.Fatalf("bridge doctor omitted %q:\n%s", expected, output)
 		}

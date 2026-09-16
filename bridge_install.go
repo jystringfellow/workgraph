@@ -94,6 +94,11 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 	if err := registerAgentPlugin(client, commandName, installRoot); err != nil {
 		return PluginInstallResult{}, err
 	}
+	if client == "claude-code" {
+		if err := installClaudeBridgePermissions(homeDir); err != nil {
+			return PluginInstallResult{}, err
+		}
+	}
 	launchStatus := "launchd setup skipped"
 	if !config.SkipLaunchd {
 		if err := installBridgeLaunchAgent(client, commandName, executable, homeDir); err != nil {
@@ -106,17 +111,89 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 		clientLabel = "Claude Code"
 	}
 	result := PluginInstallResult{Client: client, InstallRoot: installRoot, Version: pluginVersion}
-	result.Message = strings.Join([]string{
+	lines := []string{
 		"workgraph plugin installed",
 		"Client: " + client,
 		"Package: " + installRoot,
 		"Version: " + pluginVersion,
 		"Skills: 3",
 		"MCP: workgraph",
-		"Worker: " + launchStatus,
-		"Next: start a new " + clientLabel + " session to load the plugin.",
-	}, "\n")
+	}
+	if client == "claude-code" {
+		lines = append(lines, "Permissions: unattended workgraph MCP drain only")
+	}
+	lines = append(lines, "Worker: "+launchStatus, "Next: start a new "+clientLabel+" session to load the plugin.")
+	result.Message = strings.Join(lines, "\n")
 	return result, nil
+}
+
+var claudeBridgeDrainPermissions = []string{
+	"mcp__plugin_workgraph_workgraph__capture_requests_list",
+	"mcp__plugin_workgraph_workgraph__capture_requests_claim",
+	"mcp__plugin_workgraph_workgraph__capture_request_renew",
+	"mcp__plugin_workgraph_workgraph__capture_ingest",
+	"mcp__plugin_workgraph_workgraph__capture_request_fail",
+	"mcp__plugin_workgraph_workgraph__capture_watermark",
+	"mcp__plugin_workgraph_workgraph__connector_status",
+	"mcp__plugin_workgraph_workgraph__bridge_worker_heartbeat",
+}
+
+func installClaudeBridgePermissions(homeDir string) error {
+	settingsDir := filepath.Join(homeDir, ".claude")
+	if err := os.MkdirAll(settingsDir, 0o700); err != nil {
+		return fmt.Errorf("create Claude bridge settings directory: %w", err)
+	}
+	if err := os.Chmod(settingsDir, 0o700); err != nil {
+		return fmt.Errorf("secure Claude bridge settings directory: %w", err)
+	}
+	settingsPath := filepath.Join(settingsDir, "settings.json")
+	document := map[string]any{}
+	if contents, err := os.ReadFile(settingsPath); err == nil {
+		if err := json.Unmarshal(contents, &document); err != nil {
+			return fmt.Errorf("parse Claude bridge settings: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("read Claude bridge settings: %w", err)
+	}
+	permissions := map[string]any{}
+	if existing, found := document["permissions"]; found {
+		var ok bool
+		permissions, ok = existing.(map[string]any)
+		if !ok {
+			return fmt.Errorf("Claude bridge settings permissions must be an object")
+		}
+	}
+	allow := []any{}
+	if existing, found := permissions["allow"]; found {
+		var ok bool
+		allow, ok = existing.([]any)
+		if !ok {
+			return fmt.Errorf("Claude bridge settings permissions.allow must be an array")
+		}
+	}
+	seen := map[string]bool{}
+	for _, raw := range allow {
+		value, ok := raw.(string)
+		if !ok {
+			return fmt.Errorf("Claude bridge settings permissions.allow entries must be strings")
+		}
+		seen[value] = true
+	}
+	for _, permission := range claudeBridgeDrainPermissions {
+		if !seen[permission] {
+			allow = append(allow, permission)
+			seen[permission] = true
+		}
+	}
+	permissions["allow"] = allow
+	document["permissions"] = permissions
+	if err := writeJSONFile(settingsPath, document); err != nil {
+		return fmt.Errorf("write Claude bridge settings: %w", err)
+	}
+	if err := os.Chmod(settingsPath, 0o600); err != nil {
+		return fmt.Errorf("secure Claude bridge settings: %w", err)
+	}
+	return nil
 }
 
 func stampInstalledPluginVersion(client string, installRoot string, installedAt time.Time) (string, error) {
@@ -367,7 +444,7 @@ func DrainBridge(homeDir string, client string, clientCommand string) (string, e
 	case "codex":
 		args = []string{"exec", "--ephemeral", "--skip-git-repo-check", prompt}
 	case "claude-code":
-		args = []string{"-p", prompt}
+		args = []string{"-p", "--permission-mode", "dontAsk", prompt}
 	default:
 		return "", fmt.Errorf("bridge client must be codex or claude-code")
 	}
@@ -447,6 +524,13 @@ func DoctorPlugin(config PluginDoctorConfig) (string, error) {
 	if err := verifyBridgeLifecycleRoundTrip(); err != nil {
 		return "", fmt.Errorf("verify bridge lifecycle round trip: %w", err)
 	}
+	permissionStatus := "client-managed"
+	if client == "claude-code" {
+		if err := verifyClaudeBridgePermissions(homeDir); err != nil {
+			return "", fmt.Errorf("verify Claude bridge permissions: %w", err)
+		}
+		permissionStatus = "ready"
+	}
 	worker := "not installed"
 	marker := filepath.Join(homeDir, "bridge", client+".launch-agent")
 	if _, err := os.Stat(marker); err == nil {
@@ -463,10 +547,36 @@ func DoctorPlugin(config PluginDoctorConfig) (string, error) {
 		"Version: " + pluginVersion,
 		"Skills: 3/3 ready",
 		"MCP: ready",
+		"Permissions: " + permissionStatus,
 		"Round trip: ready",
 		"Worker: " + worker,
 		"Last heartbeat: " + heartbeat,
 	}, "\n"), nil
+}
+
+func verifyClaudeBridgePermissions(homeDir string) error {
+	contents, err := os.ReadFile(filepath.Join(homeDir, ".claude", "settings.json"))
+	if err != nil {
+		return err
+	}
+	var document struct {
+		Permissions struct {
+			Allow []string `json:"allow"`
+		} `json:"permissions"`
+	}
+	if err := json.Unmarshal(contents, &document); err != nil {
+		return err
+	}
+	allowed := map[string]bool{}
+	for _, permission := range document.Permissions.Allow {
+		allowed[permission] = true
+	}
+	for _, permission := range claudeBridgeDrainPermissions {
+		if !allowed[permission] {
+			return fmt.Errorf("missing %s", permission)
+		}
+	}
+	return nil
 }
 
 func readPluginVersion(manifest string) (string, error) {
@@ -506,7 +616,7 @@ func verifyBridgeLifecycleRoundTrip() error {
 	if err != nil {
 		return err
 	}
-	if _, err := ConnectBridgedConnector(ConnectorModeConfig{HomeDir: homeDir, ID: "slack"}); err != nil {
+	if _, err := ConfigureBridgedConnector(ConnectorBridgeConfig{HomeDir: homeDir, ID: "slack", BridgeParams: json.RawMessage(`{"channels":["C0DOCTOR"],"include_dms":false}`)}); err != nil {
 		return err
 	}
 	emitted, err := EmitBridgedCaptureRequest(CaptureRequestEmitConfig{HomeDir: homeDir, DatabasePath: initialized.DatabasePath, ConnectorID: "slack"})
