@@ -10,13 +10,20 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const maxGitHubReposPerPoll = 25
+const (
+	defaultGitHubBootstrapLookback = 168 * time.Hour
+	githubCaptureOverlap           = 5 * time.Minute
+	githubSearchResultCap          = 1000
+	githubMinBisectWindow          = time.Minute
+)
 
 // GitHubCaptureConfig controls GitHub event ingestion.
 type GitHubCaptureConfig struct {
@@ -37,27 +44,65 @@ type GitHubCaptureResult struct {
 }
 
 type githubExportEvent struct {
-	Kind       string `json:"kind"`
-	Repository string `json:"repository"`
-	Number     int    `json:"number"`
-	URL        string `json:"url"`
-	State      string `json:"state"`
-	Actor      string `json:"actor"`
-	Title      string `json:"title"`
-	Branch     string `json:"branch,omitempty"`
-	Commit     string `json:"commit,omitempty"`
-	UpdatedAt  string `json:"updated_at"`
+	Kind          string   `json:"kind"`
+	Repository    string   `json:"repository"`
+	Number        int      `json:"number"`
+	URL           string   `json:"url"`
+	State         string   `json:"state"`
+	Actor         string   `json:"actor"`
+	Title         string   `json:"title"`
+	Branch        string   `json:"branch,omitempty"`
+	Commit        string   `json:"commit,omitempty"`
+	UpdatedAt     string   `json:"updated_at"`
+	MatchedScopes []string `json:"matched_scopes,omitempty"`
+}
+
+// githubCaptureParams is the canonical participant capture scope shared by direct
+// and bridged GitHub capture.
+type githubCaptureParams struct {
+	Scope              string   `json:"scope"`
+	Identity           string   `json:"identity"`
+	Include            []string `json:"include"`
+	AlwaysRepositories []string `json:"always_repositories"`
+	BootstrapLookback  string   `json:"bootstrap_lookback"`
+}
+
+func parseGitHubCaptureParams(raw json.RawMessage) (githubCaptureParams, error) {
+	var params githubCaptureParams
+	if len(bytesTrimSpace(raw)) == 0 {
+		return githubCaptureParams{}, fmt.Errorf("github connector has no capture scope configured; reconnect with workgraph github connect")
+	}
+	if err := json.Unmarshal(raw, &params); err != nil {
+		return githubCaptureParams{}, fmt.Errorf("parse github capture params: %w", err)
+	}
+	if params.Scope != "participant" || strings.TrimSpace(params.Identity) == "" || len(params.Include) == 0 {
+		return githubCaptureParams{}, fmt.Errorf("github connector scope is not configured for participant capture; reconnect with workgraph github connect")
+	}
+	return params, nil
+}
+
+func bytesTrimSpace(raw json.RawMessage) json.RawMessage {
+	return json.RawMessage(strings.TrimSpace(string(raw)))
+}
+
+func githubBootstrapLookback(params githubCaptureParams) time.Duration {
+	duration, err := time.ParseDuration(strings.TrimSpace(params.BootstrapLookback))
+	if err != nil || duration <= 0 {
+		return defaultGitHubBootstrapLookback
+	}
+	return duration
 }
 
 type githubEventPayload struct {
-	Repository string `json:"repository"`
-	Number     int    `json:"number"`
-	URL        string `json:"url"`
-	State      string `json:"state"`
-	Actor      string `json:"actor"`
-	Title      string `json:"title"`
-	Branch     string `json:"branch,omitempty"`
-	Commit     string `json:"commit,omitempty"`
+	Repository    string   `json:"repository"`
+	Number        int      `json:"number"`
+	URL           string   `json:"url"`
+	State         string   `json:"state"`
+	Actor         string   `json:"actor"`
+	Title         string   `json:"title"`
+	Branch        string   `json:"branch,omitempty"`
+	Commit        string   `json:"commit,omitempty"`
+	MatchedScopes []string `json:"matched_scopes,omitempty"`
 }
 
 type githubRateLimit struct {
@@ -68,6 +113,9 @@ type githubRateLimit struct {
 	} `json:"resources"`
 }
 
+// githubSearchItem mirrors gh search prs/issues --json output. Fields such as
+// headRefName and headSha are not supported search JSON fields and must not be
+// requested; only fields gh search actually returns belong here.
 type githubSearchItem struct {
 	Number int    `json:"number"`
 	URL    string `json:"url"`
@@ -75,10 +123,11 @@ type githubSearchItem struct {
 	Author struct {
 		Login string `json:"login"`
 	} `json:"author"`
-	Title       string `json:"title"`
-	HeadRefName string `json:"headRefName"`
-	HeadSHA     string `json:"headSha"`
-	UpdatedAt   string `json:"updatedAt"`
+	Title      string `json:"title"`
+	UpdatedAt  string `json:"updatedAt"`
+	Repository struct {
+		NameWithOwner string `json:"nameWithOwner"`
+	} `json:"repository"`
 }
 
 // CaptureGitHubEvents stores GitHub events from a local export file.
@@ -157,6 +206,9 @@ func CaptureGitHubFromGH(config GitHubCaptureConfig) (GitHubCaptureResult, error
 	if err := db.Ping(); err != nil {
 		return GitHubCaptureResult{}, fmt.Errorf("open database: %w", err)
 	}
+	if err := createSchema(db); err != nil {
+		return GitHubCaptureResult{}, fmt.Errorf("prepare database schema: %w", err)
+	}
 
 	gh := config.GitHubCommand
 	if gh == "" {
@@ -173,25 +225,61 @@ func CaptureGitHubFromGH(config GitHubCaptureConfig) (GitHubCaptureResult, error
 		return GitHubCaptureResult{HomeDir: status.HomeDir, DatabasePath: status.DatabasePath}, nil
 	}
 
+	state, err := readConnectorRuntimeFile(status.HomeDir)
+	if err != nil {
+		return GitHubCaptureResult{}, err
+	}
+	params, err := parseGitHubCaptureParams(state.entry("github").BridgeParams)
+	if err != nil {
+		return GitHubCaptureResult{}, err
+	}
+
+	until := time.Now().UTC()
+	cursor, hasCursor, err := readGitHubCaptureCursor(db)
+	if err != nil {
+		return GitHubCaptureResult{}, err
+	}
+	since := until.Add(-githubBootstrapLookback(params))
+	if hasCursor {
+		since = cursor.Add(-githubCaptureOverlap)
+	}
+	if !since.Before(until) {
+		return GitHubCaptureResult{HomeDir: status.HomeDir, DatabasePath: status.DatabasePath}, nil
+	}
+
+	events, err := githubParticipantEvents(ctx, gh, params, since, until)
+	if err != nil {
+		return GitHubCaptureResult{}, err
+	}
+	if ctx.Err() != nil {
+		return GitHubCaptureResult{}, ctx.Err()
+	}
+
 	remoteProjects := githubRemoteProjects(ctx, status.WatchDirs, status.HomeDir, status.DatabasePath, status.IgnorePaths, status.IgnoreNames)
+
+	tx, err := db.Begin()
+	if err != nil {
+		return GitHubCaptureResult{}, fmt.Errorf("begin github capture: %w", err)
+	}
+	defer tx.Rollback()
 	stored := 0
-	for i, remote := range githubRemoteProjectEntries(ctx, status.WatchDirs, status.HomeDir, status.DatabasePath, status.IgnorePaths, status.IgnoreNames) {
-		if i >= maxGitHubReposPerPoll {
-			break
+	for _, event := range events {
+		inserted, err := storeGitHubEvent(tx, event, inferGitHubProject(tx, event, remoteProjects))
+		if err != nil {
+			return GitHubCaptureResult{}, err
 		}
-		events := githubEventsFromGH(ctx, gh, remote.Repository)
-		if ctx.Err() != nil {
-			return GitHubCaptureResult{}, ctx.Err()
+		if inserted {
+			stored++
 		}
-		for _, event := range events {
-			inserted, err := storeGitHubEvent(db, event, inferGitHubProject(db, event, remoteProjects))
-			if err != nil {
-				return GitHubCaptureResult{}, err
-			}
-			if inserted {
-				stored++
-			}
-		}
+	}
+	if _, err := tx.Exec(`INSERT INTO capture_cursors (connector_id, completed_through, updated_at)
+		VALUES ('github', ?, ?)
+		ON CONFLICT(connector_id) DO UPDATE SET completed_through = excluded.completed_through, updated_at = excluded.updated_at`,
+		until.Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		return GitHubCaptureResult{}, fmt.Errorf("advance github capture cursor: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return GitHubCaptureResult{}, fmt.Errorf("commit github capture: %w", err)
 	}
 
 	result := GitHubCaptureResult{
@@ -201,6 +289,22 @@ func CaptureGitHubFromGH(config GitHubCaptureConfig) (GitHubCaptureResult, error
 	}
 	result.Message = githubCaptureMessage(result)
 	return result, nil
+}
+
+func readGitHubCaptureCursor(db *sql.DB) (time.Time, bool, error) {
+	var value string
+	err := db.QueryRow(`SELECT completed_through FROM capture_cursors WHERE connector_id = 'github'`).Scan(&value)
+	if err == sql.ErrNoRows {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("read github capture cursor: %w", err)
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("parse github capture cursor: %w", err)
+	}
+	return parsed, true, nil
 }
 
 func githubRateLimitAllowsPolling(ctx context.Context, gh string) bool {
@@ -215,80 +319,183 @@ func githubRateLimitAllowsPolling(ctx context.Context, gh string) bool {
 	return limit.Resources.Core.Remaining >= 100
 }
 
-func githubEventsFromGH(ctx context.Context, gh string, repository string) []githubExportEvent {
-	var events []githubExportEvent
-	events = append(events, githubPullRequestsFromGH(ctx, gh, repository)...)
-	events = append(events, githubIssuesFromGH(ctx, gh, repository)...)
-	return events
+// githubParticipantEvents runs the base participant searches plus at most one
+// batched always_repositories PR search and one issue search, merging
+// duplicate objects and query provenance before storage.
+func githubParticipantEvents(ctx context.Context, gh string, params githubCaptureParams, since, until time.Time) ([]githubExportEvent, error) {
+	include := map[string]bool{}
+	for _, value := range params.Include {
+		include[strings.TrimSpace(value)] = true
+	}
+	var groups [][]githubExportEvent
+	if include["involves"] {
+		prs, err := githubSearchWindow(ctx, gh, "pull_request", []string{"--involves", params.Identity}, since, until, "involves")
+		if err != nil {
+			return nil, err
+		}
+		issues, err := githubSearchWindow(ctx, gh, "issue", []string{"--involves", params.Identity}, since, until, "involves")
+		if err != nil {
+			return nil, err
+		}
+		groups = append(groups, prs, issues)
+	}
+	if include["review_requested"] {
+		prs, err := githubSearchWindow(ctx, gh, "pull_request", []string{"--review-requested", params.Identity}, since, until, "review_requested")
+		if err != nil {
+			return nil, err
+		}
+		groups = append(groups, prs)
+	}
+	if len(params.AlwaysRepositories) > 0 {
+		var repoArgs []string
+		for _, repository := range params.AlwaysRepositories {
+			repoArgs = append(repoArgs, "--repo", repository)
+		}
+		prs, err := githubSearchWindow(ctx, gh, "pull_request", repoArgs, since, until, "always_repositories")
+		if err != nil {
+			return nil, err
+		}
+		issues, err := githubSearchWindow(ctx, gh, "issue", repoArgs, since, until, "always_repositories")
+		if err != nil {
+			return nil, err
+		}
+		groups = append(groups, prs, issues)
+	}
+	return mergeGitHubEvents(groups...), nil
 }
 
-func githubPullRequestsFromGH(ctx context.Context, gh string, repository string) []githubExportEvent {
-	output, err := exec.CommandContext(ctx, gh, "search", "prs", "--repo", repository, "--json", "number,url,state,author,title,headRefName,headSha,updatedAt", "--limit", "20").Output()
+// githubSearchWindow runs one bounded gh search query for the given window,
+// bisecting and retrying both halves when the 1,000-result search ceiling is
+// saturated, and failing visibly if a minimum slice still saturates.
+func githubSearchWindow(ctx context.Context, gh string, kind string, baseArgs []string, since, until time.Time, matchedScope string) ([]githubExportEvent, error) {
+	if !since.Before(until) {
+		return nil, nil
+	}
+	searchArgs := []string{"search", "prs"}
+	jsonFields := "number,url,state,author,title,updatedAt,repository"
+	if kind == "issue" {
+		searchArgs = []string{"search", "issues"}
+	}
+	args := append(append([]string{}, searchArgs...), baseArgs...)
+	args = append(args,
+		"--updated", since.UTC().Format(time.RFC3339)+".."+until.UTC().Format(time.RFC3339),
+		"--sort", "updated",
+		"--order", "asc",
+		"--json", jsonFields,
+		"--limit", strconv.Itoa(githubSearchResultCap),
+	)
+	output, err := exec.CommandContext(ctx, gh, args...).Output()
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("gh %s: %w", strings.Join(args, " "), err)
 	}
 	var items []githubSearchItem
 	if err := json.Unmarshal(output, &items); err != nil {
-		return nil
+		return nil, fmt.Errorf("parse gh %s output: %w", strings.Join(args, " "), err)
+	}
+	if len(items) >= githubSearchResultCap {
+		window := until.Sub(since)
+		if window <= githubMinBisectWindow {
+			return nil, fmt.Errorf("github search %s saturated the %d result cap for %s..%s and cannot be split further", kind, githubSearchResultCap, since.Format(time.RFC3339), until.Format(time.RFC3339))
+		}
+		mid := since.Add(window / 2)
+		first, err := githubSearchWindow(ctx, gh, kind, baseArgs, since, mid, matchedScope)
+		if err != nil {
+			return nil, err
+		}
+		second, err := githubSearchWindow(ctx, gh, kind, baseArgs, mid, until, matchedScope)
+		if err != nil {
+			return nil, err
+		}
+		return append(first, second...), nil
 	}
 	events := make([]githubExportEvent, 0, len(items))
 	for _, item := range items {
 		events = append(events, githubExportEvent{
-			Kind:       "pull_request",
-			Repository: repository,
-			Number:     item.Number,
-			URL:        item.URL,
-			State:      strings.ToLower(item.State),
-			Actor:      item.Author.Login,
-			Title:      item.Title,
-			Branch:     item.HeadRefName,
-			Commit:     item.HeadSHA,
-			UpdatedAt:  item.UpdatedAt,
+			Kind:          kind,
+			Repository:    item.Repository.NameWithOwner,
+			Number:        item.Number,
+			URL:           item.URL,
+			State:         strings.ToLower(item.State),
+			Actor:         item.Author.Login,
+			Title:         item.Title,
+			UpdatedAt:     item.UpdatedAt,
+			MatchedScopes: []string{matchedScope},
 		})
 	}
-	return events
+	return events, nil
 }
 
-func githubIssuesFromGH(ctx context.Context, gh string, repository string) []githubExportEvent {
-	output, err := exec.CommandContext(ctx, gh, "search", "issues", "--repo", repository, "--json", "number,url,state,author,title,updatedAt", "--limit", "20").Output()
-	if err != nil {
-		return nil
+// mergeGitHubEvents merges duplicate kind/repository/number objects returned by
+// overlapping queries, keeping the newest state and the union of provenance.
+func mergeGitHubEvents(groups ...[]githubExportEvent) []githubExportEvent {
+	index := map[string]int{}
+	var merged []githubExportEvent
+	for _, group := range groups {
+		for _, event := range group {
+			key := fmt.Sprintf("%s:%s:%d", event.Kind, strings.ToLower(event.Repository), event.Number)
+			if i, ok := index[key]; ok {
+				merged[i] = mergeGitHubEvent(merged[i], event)
+				continue
+			}
+			index[key] = len(merged)
+			merged = append(merged, event)
+		}
 	}
-	var items []githubSearchItem
-	if err := json.Unmarshal(output, &items); err != nil {
-		return nil
-	}
-	events := make([]githubExportEvent, 0, len(items))
-	for _, item := range items {
-		events = append(events, githubExportEvent{
-			Kind:       "issue",
-			Repository: repository,
-			Number:     item.Number,
-			URL:        item.URL,
-			State:      strings.ToLower(item.State),
-			Actor:      item.Author.Login,
-			Title:      item.Title,
-			UpdatedAt:  item.UpdatedAt,
-		})
-	}
-	return events
+	return merged
 }
 
-func storeGitHubEvent(db *sql.DB, event githubExportEvent, project string) (bool, error) {
+func mergeGitHubEvent(existing, incoming githubExportEvent) githubExportEvent {
+	winner := existing
+	if githubEventIsNewer(incoming, existing) {
+		winner = incoming
+	}
+	scopes := map[string]bool{}
+	for _, scope := range existing.MatchedScopes {
+		scopes[scope] = true
+	}
+	for _, scope := range incoming.MatchedScopes {
+		scopes[scope] = true
+	}
+	merged := make([]string, 0, len(scopes))
+	for scope := range scopes {
+		merged = append(merged, scope)
+	}
+	sort.Strings(merged)
+	winner.MatchedScopes = merged
+	return winner
+}
+
+func githubEventIsNewer(candidate, current githubExportEvent) bool {
+	candidateTime, candidateErr := time.Parse(time.RFC3339Nano, candidate.UpdatedAt)
+	currentTime, currentErr := time.Parse(time.RFC3339Nano, current.UpdatedAt)
+	if candidateErr != nil || currentErr != nil {
+		return candidate.UpdatedAt > current.UpdatedAt
+	}
+	return candidateTime.After(currentTime)
+}
+
+// githubExecQueryRower is satisfied by both *sql.DB and *sql.Tx.
+type githubExecQueryRower interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+func storeGitHubEvent(db githubExecQueryRower, event githubExportEvent, project string) (bool, error) {
 	eventType := githubEventType(event.Kind)
 	if eventType == "" {
 		return false, nil
 	}
 
 	payload, err := json.Marshal(githubEventPayload{
-		Repository: event.Repository,
-		Number:     event.Number,
-		URL:        event.URL,
-		State:      event.State,
-		Actor:      event.Actor,
-		Title:      event.Title,
-		Branch:     event.Branch,
-		Commit:     event.Commit,
+		Repository:    event.Repository,
+		Number:        event.Number,
+		URL:           event.URL,
+		State:         event.State,
+		Actor:         event.Actor,
+		Title:         event.Title,
+		Branch:        event.Branch,
+		Commit:        event.Commit,
+		MatchedScopes: event.MatchedScopes,
 	})
 	if err != nil {
 		return false, fmt.Errorf("encode github event: %w", err)
@@ -344,7 +551,7 @@ func githubEventType(kind string) string {
 	}
 }
 
-func inferGitHubProject(db *sql.DB, event githubExportEvent, remoteProjects map[string]string) string {
+func inferGitHubProject(db githubExecQueryRower, event githubExportEvent, remoteProjects map[string]string) string {
 	if project := remoteProjects[strings.ToLower(event.Repository)]; project != "" {
 		return project
 	}
@@ -360,7 +567,7 @@ func inferGitHubProject(db *sql.DB, event githubExportEvent, remoteProjects map[
 	return event.Repository
 }
 
-func projectForCommit(db *sql.DB, commit string) string {
+func projectForCommit(db githubExecQueryRower, commit string) string {
 	var project string
 	err := db.QueryRow(`
 		SELECT project

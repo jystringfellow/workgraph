@@ -14,7 +14,7 @@ func TestValidatedBridgeParamsRequireBoundedConnectorScope(t *testing.T) {
 		canonical string
 		invalid   string
 	}{
-		{"github", `{"repositories":["demo/repository"]}`, "", `{}`},
+		{"github", `{"scope":"participant","identity":"@me","include":["involves","review_requested"]}`, "", `{}`},
 		{"slack", `{"channels":["C0DEMO123"],"include_dms":false}`, "", `{"channels":[]}`},
 		{"slack.lists", `{"lists":["F0DEMO123"]}`, `{"lists":["F0DEMO123"],"row_key_candidates":[["Related Message"],["Title","Cycle"],["Title"]]}`, `{}`},
 		{"mail.microsoft", `{"folders":["inbox"],"preview_limit":500}`, "", `{"folders":[]}`},

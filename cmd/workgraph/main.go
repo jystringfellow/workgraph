@@ -2560,18 +2560,20 @@ func runGitHubConnect(args []string, stdout io.Writer, stderr io.Writer) int {
 
 	homeDir := flags.String("home", "", "workgraph home directory")
 	gh := flags.String("gh", "", "gh-compatible executable for GitHub auth validation")
+	paramsJSON := flags.String("params-json", "", "non-secret GitHub capture scope as a JSON object; defaults to participant scope for @me")
 
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
 	if flags.NArg() != 0 {
-		fmt.Fprintln(stderr, "usage: workgraph github connect")
+		fmt.Fprintln(stderr, "usage: workgraph github connect [--params-json '<scope-json>']")
 		return 2
 	}
 
 	result, err := workgraph.ConnectGitHub(workgraph.ConnectorConnectConfig{
 		HomeDir:       *homeDir,
 		GitHubCommand: *gh,
+		ParamsJSON:    json.RawMessage(*paramsJSON),
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph github connect: %v\n", err)
