@@ -79,7 +79,7 @@ bridged capture, or both, plus the event source and allowed event types.
 | `git` | `git` | yes | **no** | Always local/native |
 | `github` | `github` | yes | yes | PRs, issues, and related activity |
 | `slack` | `slack` | yes | yes | Messages and thread replies |
-| `slack.lists` | `slack` | yes | yes | Separate cadence; preserves existing `slack.list_item` source semantics |
+| `slack.lists` | `slack` | yes | yes | Exhaustive current-state snapshots through `slack_read_file`; preserves existing `slack.list_item` source semantics |
 | `notion` | `notion` | yes | **no** | Reference client search cannot prove exhaustive pagination; use direct OAuth or `notion connect-token` |
 | `mail.google` | `mail.google` | yes | yes | Provider recipe required |
 | `mail.microsoft` | `mail.microsoft` | yes | yes | Provider recipe required |
@@ -146,7 +146,7 @@ The initial required parameter shapes are:
 |---|---|
 | `github` | non-empty `repositories` array |
 | `slack` | non-empty `channels` array, `include_dms: true`, or participant scope with `identity` and `include` values from `authored`, `mentions`, and `thread_participation`; when present, `include_dms` is a boolean |
-| `slack.lists` | non-empty `lists` array |
+| `slack.lists` | non-empty `lists` array; optional `done_column` and ordered `row_key_candidates` |
 | `mail.google` / `mail.microsoft` | non-empty `mailboxes` or `folders` array and positive `preview_limit` |
 | `calendar.google` / `calendar.microsoft` | non-empty `calendars` array plus non-negative `past_days` and positive `future_days` |
 | `azure.boards` | non-empty `organization` plus either `project` and `area_path`, or participant scope with `identity` and `include` values from `authored` and `assigned` |
@@ -161,6 +161,16 @@ query. For example, Azure Boards may use:
 The bridge must translate only the approved include values into provider
 filters and must fail the request if the provider cannot express or completely
 page that bounded query.
+
+Slack Lists are an explicit exception to the incremental query model. The
+reference Slack MCP exposes a configured List through `slack_read_file` as a
+complete CSV snapshot, without provider item ids or per-row modification
+timestamps. A valid bridge configuration therefore declares
+`capture_semantics = complete_snapshot`. `done_column` defaults to `Done` and
+`row_key_candidates` defaults to `[["Related Message"],["Title","Cycle"],["Title"]]`.
+Each candidate is an ordered set of columns; workgraph selects the first
+candidate for which every value is present. Duplicate or missing row keys fail
+the entire snapshot rather than conflating work items.
 
 The lower-level mode command supports deliberate switching:
 
@@ -208,7 +218,8 @@ completed_at, cancelled_at
 ```
 
 - `status` is one of `pending`, `claimed`, `completed`, or `cancelled`.
-- `params_json` is valid JSON and contains only non-secret fetch scope.
+- `params_json` is valid JSON and contains only non-secret fetch scope and
+  snapshot normalization configuration.
 - A partial unique index permits at most one `pending` or `claimed` request per
   connector.
 - `attempts` increments on each successful claim.
@@ -228,7 +239,8 @@ that can be reconciled from completed requests after an interrupted write.
 
 ### Request lifecycle
 
-1. **Emit.** The daemon creates a `pending` request with `until = now`. For
+1. **Emit.** The daemon creates a `pending` request with `until = now` and a
+   declared `capture_semantics`. For
    incremental recipes, `since` is the stored cursor minus the connector's
    overlap. With no cursor, the default first window begins 24 hours before
    `until`. Connector-specific query bounds are placed in `params_json`.
@@ -237,9 +249,12 @@ that can be reconciled from completed requests after an interrupted write.
    worker identity and lease, and returns a claim token.
 3. **Renew.** A long-running bridge may extend its unexpired lease by presenting
    the request id and claim token.
-4. **Execute.** The bridge calls the approved provider connector using the
-   request bounds and parameters, then submits one normalized batch tied to the
-   request and claim token. An empty batch is a valid successful result.
+4. **Execute.** For `bounded_events`, the bridge calls the approved provider
+   connector using the request bounds and parameters. For `complete_snapshot`,
+   it reads the entire configured surface and submits every current row. It
+   then submits one normalized batch tied to the request and claim token. An
+   empty batch is valid only after the corresponding bounded query or snapshot
+   is proven complete.
 5. **Complete.** workgraph validates the entire batch, writes events and local
    projections, marks the request `completed`, and monotonically advances the
    cursor to the request's `until` in one transaction. It then records
@@ -275,6 +290,12 @@ window. Calendar recipes instead receive rolling occurrence bounds in
 `params_json` (for example, recent past through upcoming future) and use a
 provider revision marker for event identity. Completing a calendar request
 still advances only the control-plane cursor to `request.until`.
+
+Complete-snapshot recipes do not claim that `since` and `until` are provider
+change bounds. They mean that the current state was observed for that capture
+cycle, and `until` becomes the observation timestamp. Completing a snapshot
+advances the control-plane cursor for scheduling and recency only. It cannot
+reconstruct multiple edits, or an item created and removed, between snapshots.
 
 The initial implementation uses a five-minute overlap for incremental recipes
 and a five-minute default claim lease. Workers may renew an unexpired lease;
@@ -422,15 +443,27 @@ Each connector recipe translates the generic request into provider operations:
 | Connector | Fetch rule | Required bridge parameters |
 |---|---|---|
 | `github` | Fetch configured repositories updated in `[since, until]` | repository allowlist |
-| `slack` | Fetch configured channels over the overlapping message-time window, including replies and edit metadata | channel allowlist; DM inclusion policy |
-| `slack.lists` | Fetch configured lists and emit revision-aware list-item events | list allowlist |
+| `slack` | Fetch configured channels over the overlapping message-time window, including replies and edit metadata; read threads in detailed form and filter every reply against the request bounds client-side | channel allowlist; DM inclusion policy |
+| `slack.lists` | Read each configured List completely with `slack_read_file`, parse its CSV rows, and submit `{list_id, fields}` snapshot items for deterministic normalization by workgraph | list allowlist; optional done column and row-key candidates |
 | `mail.google` / `mail.microsoft` | Fetch received messages for configured mailboxes/folders in the overlapping window | mailbox/folder scope; bounded preview policy |
-| `calendar.google` / `calendar.microsoft` | Fetch a rolling occurrence window supplied in `params_json`; do not use event start as the cursor | calendar allowlist; past/future horizon |
-| `azure.boards` | Fetch items changed in the overlapping window within the explicit project and area path | organization, project, area path |
+| `calendar.google` / `calendar.microsoft` | Fetch a rolling occurrence window supplied in `params_json`; do not use event start as the cursor; preflight any secondary read required to obtain the revision marker | calendar allowlist; past/future horizon |
+| `azure.boards` | Fetch items changed in the overlapping window within the explicit project and area path or participant predicate; pass one accessible project as MCP routing context even when the WIQL predicate is collection-wide | organization plus project/area path or participant scope |
 
 Recipes must return all provider revisions visible in the requested window or
-report failure. They must not silently complete a request after truncation,
-pagination failure, permission denial, or an unsupported provider operation.
+the complete declared snapshot, or report failure. They must not silently
+complete a request after truncation, pagination failure, permission denial, or
+an unsupported provider operation.
+
+For a claimed Slack Lists snapshot, the bridge submits one event-shaped row per
+CSV record with `type = slack.list_item` and payload containing exactly the
+configured `list_id` and a `fields` object keyed by CSV column name. It omits
+`timestamp` and `external_id`. workgraph validates the List scope, derives the
+first complete row-key candidate, normalizes the configured Done value, hashes
+canonical semantic row content, assigns the request `until` as `observed_at`,
+and constructs `<list>:<row-key>:<content-hash>`. `Done` is revision state, not
+part of identity: completed rows remain evidence but can be excluded from
+future next-work projections. A missing row is absence from the observation,
+not proof that the item was completed or deleted.
 
 ## Status and observability
 
@@ -559,6 +592,15 @@ project-registered provider MCP servers from the headless session. Drain and
 doctor verify both the permission file and workspace trust and fail with a
 setup error when either is unavailable.
 
+The generated launch agent declares a minimal deterministic login environment:
+the user's `HOME`, an installation-time `PATH` augmented with the resolved
+client and workgraph executable directories plus standard macOS binary
+locations, and `CLAUDE_CONFIG_DIR` when the installer inherited one. It must
+not copy arbitrary or secret environment variables. Doctor verifies this
+static worker environment when a launch-agent marker is present; provider
+capability preflight remains the runtime proof that a configured connector is
+actually visible.
+
 Provider tools remain explicit opt-in. Repeating
 `--allow-provider-tool <exact-mcp-tool-name>` during Claude plugin installation
 adds exact, non-wildcard MCP permissions to the same isolated worker settings.
@@ -568,9 +610,11 @@ configured; zero is a visible warning rather than an implied working provider
 connection.
 
 Before claiming, an unattended worker lists pending requests and proves that
-the required provider tools for a connector are present and authorized through
-a harmless read-only discovery operation. It claims only that connector. A
-missing or denied provider capability leaves work pending and does not overwrite
+every provider tool required for both fetching and stable identity is present
+and authorized through a harmless read-only discovery operation. Microsoft
+calendar therefore preflights the resource read used to obtain a change key or
+last-modified revision, not only calendar search. It claims only that connector.
+A missing or denied provider capability leaves work pending and does not overwrite
 healthy connector history with a capture failure. The unattended Claude worker
 must not fall back to the CLI, so it creates no temporary claim file.
 

@@ -19,7 +19,7 @@ Feature: Bridged connector capture
     Given a bridged connector is due
     When the workgraph daemon schedules connector capture
     Then workgraph makes no provider call
-    And it emits one pending capture request with bounded scope
+    And it emits one pending capture request with declared capture semantics
     And another scheduler pass coalesces while that request is active
     And emission alone does not report capture success
 
@@ -96,7 +96,17 @@ Feature: Bridged connector capture
     And it does not fall back to a CLI claim file
 
   Scenario: Observe Slack List rows without provider revisions
-    Given a bridged Slack List exposes stable row values but no item revision
-    When the bridge normalizes the current snapshot
-    Then canonical row content hashes may identify changed observations
-    And the contract does not claim that an absent row is a deletion
+    Given a bridged Slack List is available as a complete CSV without item ids or row timestamps
+    When the worker reads the configured List with slack_read_file and submits every row
+    Then the request declares complete-snapshot semantics
+    And workgraph derives stable row keys, normalized Done state, observation time, and canonical content-hash revisions
+    And unchanged observations deduplicate while changed Done state creates a new revision
+    And duplicate or missing row keys reject the entire snapshot
+    And the contract does not claim that an absent row is completed or deleted
+
+  Scenario: Apply provider-specific recipe correctness
+    Given a bridged request needs secondary identity data or client-side filtering
+    When the worker preflights and executes the provider recipe
+    Then Microsoft calendar verifies the resource read needed for its revision marker
+    And Slack threads use detailed output and filter replies against exact bounds after reading
+    And Azure Boards supplies an accessible project as routing context for collection-wide participant WIQL

@@ -1314,7 +1314,7 @@ func runCaptureRequests(args []string, stdin io.Reader, stdout io.Writer, stderr
 			fmt.Fprintln(stdout, "No capture requests.")
 		}
 		for _, request := range requests {
-			line := fmt.Sprintf("- %s: %s, connector %s, %s to %s, attempts %d", request.ID, request.Status, request.ConnectorID, request.Since, request.Until, request.Attempts)
+			line := fmt.Sprintf("- %s: %s, connector %s, %s, %s to %s, attempts %d", request.ID, request.Status, request.ConnectorID, request.CaptureSemantics, request.Since, request.Until, request.Attempts)
 			if request.ClaimedBy != "" {
 				line += ", worker " + request.ClaimedBy + ", lease expires " + request.LeaseExpiresAt
 			}
@@ -1366,8 +1366,8 @@ func runCaptureRequests(args []string, stdin io.Reader, stdout io.Writer, stderr
 		return 1
 	}
 	request := claimed[0].Request
-	fmt.Fprintf(stdout, "Capture request claimed\nRequest: %s\nConnector: %s\nSource: %s\nSince: %s\nUntil: %s\nParams: %s\nLease expires: %s\nClaim file: %s\n",
-		request.ID, request.ConnectorID, request.Source, request.Since, request.Until, request.Params, request.LeaseExpiresAt, *claimFile)
+	fmt.Fprintf(stdout, "Capture request claimed\nRequest: %s\nConnector: %s\nSource: %s\nCapture semantics: %s\nSince: %s\nUntil: %s\nParams: %s\nLease expires: %s\nClaim file: %s\n",
+		request.ID, request.ConnectorID, request.Source, request.CaptureSemantics, request.Since, request.Until, request.Params, request.LeaseExpiresAt, *claimFile)
 	return 0
 }
 

@@ -106,6 +106,150 @@ func TestBridgedConnectorRequiresScopeAndSurfacesItOnCLIClaim(t *testing.T) {
 	}
 }
 
+func TestSlackListBridgeDeclaresCompleteSnapshotSemantics(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+	params := `{"lists":["F0DEMO123"],"done_column":"Done","row_key_candidates":[["Related Message"],["Title","Cycle"]]}`
+	if output, err := runworkgraph(t, repoRoot, "connectors", "connect", "--home", homeDir,
+		"--mode", "bridged", "--params-json", params, "slack.lists"); err != nil {
+		t.Fatalf("connect bridged Slack Lists snapshot: %v\n%s", err, output)
+	}
+	emitted, err := workgraph.EmitBridgedCaptureRequest(workgraph.CaptureRequestEmitConfig{
+		HomeDir: homeDir, ConnectorID: "slack.lists", Now: time.Date(2026, 9, 16, 18, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("emit Slack Lists snapshot: %v", err)
+	}
+	if emitted.Request.CaptureSemantics != "complete_snapshot" {
+		t.Fatalf("expected complete_snapshot request, got %#v", emitted.Request)
+	}
+	if !strings.Contains(string(emitted.Request.Params), `"done_column":"Done"`) ||
+		!strings.Contains(string(emitted.Request.Params), `"row_key_candidates":[["Related Message"],["Title","Cycle"]]`) {
+		t.Fatalf("snapshot request omitted normalization config: %s", emitted.Request.Params)
+	}
+	requests, err := workgraph.ListCaptureRequests(workgraph.CaptureRequestListConfig{HomeDir: homeDir, ConnectorID: "slack.lists"})
+	if err != nil || len(requests) != 1 || requests[0].CaptureSemantics != "complete_snapshot" {
+		t.Fatalf("listed snapshot semantics: requests=%#v error=%v", requests, err)
+	}
+}
+
+func TestSlackListSnapshotNormalizesDoneAndContentHashRevisions(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+	params := `{"lists":["F0DEMO123"],"done_column":"Done","row_key_candidates":[["Related Message"],["Title","Cycle"]]}`
+	if output, err := runworkgraph(t, repoRoot, "connectors", "connect", "--home", homeDir,
+		"--mode", "bridged", "--params-json", params, "slack.lists"); err != nil {
+		t.Fatalf("connect bridged Slack Lists snapshot: %v\n%s", err, output)
+	}
+	now := time.Now().UTC().Add(-time.Minute)
+	ingestSnapshot := func(at time.Time, done string) workgraph.BridgedIngestResult {
+		t.Helper()
+		emitted, err := workgraph.EmitBridgedCaptureRequest(workgraph.CaptureRequestEmitConfig{
+			HomeDir: homeDir, ConnectorID: "slack.lists", Now: at,
+		})
+		if err != nil {
+			t.Fatalf("emit Slack Lists snapshot: %v", err)
+		}
+		claims, err := workgraph.ClaimCaptureRequests(workgraph.CaptureRequestClaimConfig{
+			HomeDir: homeDir, ConnectorID: "slack.lists", Worker: "facts", Max: 1, Now: at, Lease: 10 * time.Minute,
+		})
+		if err != nil || len(claims) != 1 {
+			t.Fatalf("claim Slack Lists snapshot: claims=%d error=%v", len(claims), err)
+		}
+		input := `[{"type":"slack.list_item","summary":"Review the design","payload":{"list_id":"F0DEMO123","fields":{"Title":"Review the design","Cycle":"Today","Done":"` + done + `","Related Message":"https://example.slack.com/archives/C0DEMO/p1789"}}}]`
+		result, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{
+			HomeDir: homeDir, RequestID: emitted.Request.ID, ClaimToken: claims[0].ClaimToken, Input: strings.NewReader(input),
+		})
+		if err != nil {
+			t.Fatalf("ingest Slack Lists snapshot: %v", err)
+		}
+		return result
+	}
+
+	first := ingestSnapshot(now, "FALSE")
+	second := ingestSnapshot(now.Add(time.Minute), "FALSE")
+	third := ingestSnapshot(now.Add(2*time.Minute), "TRUE")
+	if first.EventsInserted != 1 || first.WeakDedupe != 0 || second.EventsDuplicate != 1 || third.EventsInserted != 1 {
+		t.Fatalf("unexpected snapshot revisions: first=%#v second=%#v third=%#v", first, second, third)
+	}
+
+	db := openBridgedCaptureDatabase(t, homeDir)
+	rows, err := db.Query(`SELECT timestamp, payload_json FROM events WHERE type = 'slack.list_item' ORDER BY timestamp`)
+	if err != nil {
+		t.Fatalf("read Slack Lists snapshot events: %v", err)
+	}
+	defer rows.Close()
+	var payloads []map[string]any
+	var timestamps []string
+	for rows.Next() {
+		var timestamp, payload string
+		if err := rows.Scan(&timestamp, &payload); err != nil {
+			t.Fatalf("scan Slack Lists snapshot event: %v", err)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+			t.Fatalf("decode Slack Lists snapshot payload: %v", err)
+		}
+		timestamps = append(timestamps, timestamp)
+		payloads = append(payloads, decoded)
+	}
+	if len(payloads) != 2 || payloads[0]["done"] != false || payloads[1]["done"] != true {
+		t.Fatalf("expected open and done revisions, got %#v", payloads)
+	}
+	for index, payload := range payloads {
+		for _, key := range []string{"row_key", "content_hash", "observed_at", "capture_semantics"} {
+			if strings.TrimSpace(payload[key].(string)) == "" {
+				t.Fatalf("snapshot payload %d omitted %s: %#v", index, key, payload)
+			}
+		}
+	}
+	if timestamps[0] != now.Format(time.RFC3339Nano) || timestamps[1] != now.Add(2*time.Minute).Format(time.RFC3339Nano) {
+		t.Fatalf("expected request observation timestamps, got %#v", timestamps)
+	}
+}
+
+func TestSlackListSnapshotRejectsAmbiguousOrOutOfScopeRowsAtomically(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	params := json.RawMessage(`{"lists":["F0DEMO123"],"row_key_candidates":[["Title"]]}`)
+	if _, err := workgraph.ConfigureBridgedConnector(workgraph.ConnectorBridgeConfig{
+		HomeDir: homeDir, ID: "slack.lists", BridgeParams: params,
+	}); err != nil {
+		t.Fatalf("connect Slack Lists snapshot: %v", err)
+	}
+	now := time.Now().UTC().Add(-time.Minute)
+	for name, input := range map[string]string{
+		"duplicate key": `[{"type":"slack.list_item","payload":{"list_id":"F0DEMO123","fields":{"Title":"Same","Done":"false"}}},{"type":"slack.list_item","payload":{"list_id":"F0DEMO123","fields":{"Title":"Same","Done":"true"}}}]`,
+		"out of scope":  `[{"type":"slack.list_item","payload":{"list_id":"F0OTHER","fields":{"Title":"Other","Done":"false"}}}]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			emitted, err := workgraph.EmitBridgedCaptureRequest(workgraph.CaptureRequestEmitConfig{HomeDir: homeDir, ConnectorID: "slack.lists", Now: now})
+			if err != nil {
+				t.Fatalf("emit snapshot: %v", err)
+			}
+			claims, err := workgraph.ClaimCaptureRequests(workgraph.CaptureRequestClaimConfig{HomeDir: homeDir, ConnectorID: "slack.lists", Worker: "facts", Max: 1, Now: now, Lease: 10 * time.Minute})
+			if err != nil || len(claims) != 1 {
+				t.Fatalf("claim snapshot: claims=%d error=%v", len(claims), err)
+			}
+			_, err = workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{HomeDir: homeDir, RequestID: emitted.Request.ID, ClaimToken: claims[0].ClaimToken, Input: strings.NewReader(input)})
+			if err == nil {
+				t.Fatal("expected invalid snapshot to fail")
+			}
+			db := openBridgedCaptureDatabase(t, homeDir)
+			var events int
+			if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type = 'slack.list_item'`).Scan(&events); err != nil {
+				t.Fatalf("count snapshot events: %v", err)
+			}
+			if events != 0 {
+				t.Fatalf("invalid snapshot stored %d partial event(s)", events)
+			}
+			if err := workgraph.FailCaptureRequest(workgraph.CaptureRequestCapabilityConfig{HomeDir: homeDir, RequestID: emitted.Request.ID, ClaimToken: claims[0].ClaimToken, Error: "invalid snapshot", Now: now.Add(time.Second)}); err != nil {
+				t.Fatalf("release invalid snapshot request: %v", err)
+			}
+			now = now.Add(time.Minute)
+		})
+	}
+}
+
 func TestChangingBridgeScopeCancelsAndReplacesActiveRequest(t *testing.T) {
 	homeDir := initBridgedCaptureHome(t)
 	repoRoot := repoRoot(t)

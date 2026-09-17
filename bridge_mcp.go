@@ -117,7 +117,7 @@ func bridgeMCPTools() []bridgeMCPTool {
 		{"capture_requests_list", "List non-secret bridged capture outbox metadata.", object(map[string]any{"connector": str})},
 		{"capture_requests_claim", "Atomically claim daemon-scheduled capture work.", object(map[string]any{"connector": str, "worker": str, "max": integer}, "worker")},
 		{"capture_request_renew", "Renew an unexpired capture claim.", object(map[string]any{"request_id": str, "claim_token": str}, "request_id", "claim_token")},
-		{"capture_ingest", "Validate and atomically ingest one normalized event batch.", object(map[string]any{"request_id": str, "claim_token": str, "source": str, "events": map[string]any{}}, "events")},
+		{"capture_ingest", "Validate and atomically ingest one normalized event batch, including deterministic complete-snapshot rows when requested.", object(map[string]any{"request_id": str, "claim_token": str, "source": str, "events": map[string]any{}}, "events")},
 		{"capture_request_fail", "Return claimed work for retry with bounded error details.", object(map[string]any{"request_id": str, "claim_token": str, "error": str}, "request_id", "claim_token")},
 		{"capture_watermark", "Read a connector completed-through cursor.", object(map[string]any{"connector": str}, "connector")},
 		{"connector_status", "Read connector capture mode and health.", object(map[string]any{})},

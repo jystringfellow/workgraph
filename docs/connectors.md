@@ -62,6 +62,16 @@ mcp__azure-devops__wit_work_item
 mcp__azure-devops__core_list_projects
 ```
 
+Microsoft calendar additionally needs the provider's read-only resource tool
+that returns a change key or last-modified revision, such as:
+
+```text
+mcp__claude_ai_Microsoft_365__read_resource
+```
+
+Preflight must cover identity and revision tools as well as the initial search
+tool. A proven-empty window does not exercise that identity path.
+
 Tool names are provider-version-specific. Approve only tools that are present,
 read-only, and needed for the selected scopes; do not copy the list blindly.
 
@@ -72,16 +82,21 @@ The reference-client matrix is:
 
 | Connector | Bridged | Required scope / completeness rule |
 |---|---:|---|
-| `slack` | yes | Explicit channels or the approved `@Me` participant strategy; exhaust channel and thread pagination |
-| `slack.lists` | yes | Explicit list ids; use a canonical semantic-row content hash when no revision exists |
+| `slack` | yes | Explicit channels or the approved `@Me` participant strategy; read threads in detailed form and filter replies to exact bounds client-side |
+| `slack.lists` | yes, snapshot | Explicit list ids; exhaustively read each List CSV with `slack_read_file`; workgraph derives row identity, Done state, observation time, and content-hash revisions |
 | `mail.microsoft` | yes | Explicit mailboxes/folders; query a mailbox-local ±2-day pad, filter returned UTC `receivedDateTime`, and page contiguously past the lower bound |
 | `calendar.microsoft` | yes | Explicit calendars and horizons; map `Pacific Standard Time` to DST-aware `America/Los_Angeles`, emit occurrence start in UTC, and preserve provider start/end values |
-| `azure.boards` | yes | Explicit organization plus project/area path or the approved `@Me` participant strategy |
+| `azure.boards` | yes | Explicit organization plus project/area path or the approved `@Me` participant strategy; participant WIQL still receives one accessible project as routing context |
 | `notion` | **no** | Reference search caps results without an exhaustion cursor; use direct OAuth or `workgraph notion connect-token` |
 
 An empty batch is valid only after an exhaustive bounded query or an applicable
 control query proves emptiness. Never infer emptiness from one zero-result
 search when the provider search is indexed, capped, or partial.
+
+Bridged connectors declare either `bounded_events` or `complete_snapshot`
+capture semantics. Slack Lists use complete snapshots because the reference MCP
+returns the full current List as CSV without per-row provider timestamps. The
+request bounds describe the observation cycle rather than historical changes.
 
 Installation records the workgraph home as a trusted project in
 `$HOME/.claude.json`. The worker starts in that directory, allowing Claude to
@@ -108,6 +123,13 @@ workgraph upgrade. An already running daemon still holds the previous binary in
 memory, so run `workgraph stop` followed by `workgraph start` after upgrading;
 plugin installation reloads the bridge worker but does not restart the daemon.
 
+The macOS launch agent records a minimal explicit environment containing the
+user's `HOME`, a `PATH` that includes the resolved client and workgraph binary
+directories plus standard macOS paths, and `CLAUDE_CONFIG_DIR` when configured.
+`plugin doctor` verifies this static environment for installed workers. Runtime
+provider preflight is still the proof that launchd can see the configured MCP
+server.
+
 Then ask that client to set up workgraph bridges. It discovers available
 read-only provider tools, proposes non-secret scopes and cadences, waits for
 approval, and configures the local workgraph MCP. A connector can also be put in
@@ -116,11 +138,14 @@ bridged mode explicitly:
 ```sh
 workgraph connectors connect slack --mode bridged \
   --params-json '{"scope":"participant","identity":"@Me","include":["authored","mentions","thread_participation"]}'
+workgraph connectors connect slack.lists --mode bridged \
+  --params-json '{"lists":["F123"],"done_column":"Done","row_key_candidates":[["Related Message"],["Title","Cycle"],["Title"]]}'
 workgraph connectors interval slack 15m
 workgraph start
 ```
 
-The daemon emits bounded capture requests on the configured cadence. The
+The daemon emits bounded-event or complete-snapshot capture requests on the
+configured cadence. The
 installed per-user worker drains those requests; workgraph never receives the
 provider token and never calls that provider directly. Inspect operation with:
 

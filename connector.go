@@ -318,6 +318,7 @@ func validatedBridgeParams(connectorID string, raw json.RawMessage) (json.RawMes
 		}
 		return value > 0
 	}
+	paramsChanged := false
 	switch connectorID {
 	case "github":
 		if !requireStrings("repositories") {
@@ -337,6 +338,38 @@ func validatedBridgeParams(connectorID string, raw json.RawMessage) (json.RawMes
 		if !requireStrings("lists") {
 			return nil, fmt.Errorf("bridged slack.lists requires a non-empty lists array")
 		}
+		doneColumn := stringValue("done_column")
+		if _, present := values["done_column"]; present && doneColumn == "" {
+			return nil, fmt.Errorf("bridged slack.lists done_column must be a non-empty string")
+		}
+		if doneColumn == "" {
+			values["done_column"] = json.RawMessage(`"Done"`)
+			paramsChanged = true
+		}
+		var rowKeyCandidates [][]string
+		if rawCandidates, present := values["row_key_candidates"]; present {
+			if err := json.Unmarshal(rawCandidates, &rowKeyCandidates); err != nil || len(rowKeyCandidates) == 0 {
+				return nil, fmt.Errorf("bridged slack.lists row_key_candidates must be a non-empty array of non-empty string arrays")
+			}
+			for candidateIndex, candidate := range rowKeyCandidates {
+				if len(candidate) == 0 {
+					return nil, fmt.Errorf("bridged slack.lists row_key_candidates must be a non-empty array of non-empty string arrays")
+				}
+				for columnIndex, column := range candidate {
+					column = strings.TrimSpace(column)
+					if column == "" {
+						return nil, fmt.Errorf("bridged slack.lists row_key_candidates must be a non-empty array of non-empty string arrays")
+					}
+					rowKeyCandidates[candidateIndex][columnIndex] = column
+				}
+			}
+			encoded, _ := json.Marshal(rowKeyCandidates)
+			values["row_key_candidates"] = encoded
+			paramsChanged = true
+		} else {
+			values["row_key_candidates"] = json.RawMessage(`[["Related Message"],["Title","Cycle"],["Title"]]`)
+			paramsChanged = true
+		}
 	case "mail.google", "mail.microsoft":
 		if !requireStrings("mailboxes", "folders") || !requirePositiveInt("preview_limit", false) {
 			return nil, fmt.Errorf("bridged %s requires non-empty mailboxes or folders and positive preview_limit", connectorID)
@@ -351,6 +384,13 @@ func validatedBridgeParams(connectorID string, raw json.RawMessage) (json.RawMes
 		if !requireString("organization") || (!projectScope && !participant) {
 			return nil, fmt.Errorf("bridged azure.boards requires organization plus project and area_path, or participant scope with identity and approved include values")
 		}
+	}
+	if paramsChanged {
+		encoded, err := json.Marshal(values)
+		if err != nil {
+			return nil, fmt.Errorf("encode bridge parameters: %w", err)
+		}
+		params = json.RawMessage(encoded)
 	}
 	return params, nil
 }

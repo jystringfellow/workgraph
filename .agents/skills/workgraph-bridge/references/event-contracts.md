@@ -1,8 +1,10 @@
 # Bridged event contracts
 
-Every event is an object with required `type`, RFC3339 `timestamp`, and object
-`payload`; `external_id`, `project`, `actor`, and `summary` are optional. Prefer
-`external_id` because it provides strong deterministic dedupe.
+Every bounded event is an object with required `type`, RFC3339 `timestamp`, and
+object `payload`; `external_id`, `project`, `actor`, and `summary` are optional.
+Claimed complete-snapshot rows may omit fields that workgraph explicitly derives
+under the connector-specific contract below. Prefer `external_id` for ordinary
+events because it provides strong deterministic dedupe.
 
 Use these connector/source mappings and revision-aware identities:
 
@@ -20,9 +22,15 @@ the occurrence start converted to UTC, but request completionâ€”not event startâ
 advances capture progress. Preserve the provider's timezone-bearing start/end
 values inside the payload.
 
-Return all pages in the requested bounded query. If a connector cannot express
-the bounds, cannot finish pagination, or lacks required permissions, report the
-request as failed rather than silently truncating it.
+Return all pages in the requested bounded query or every row in a declared
+complete snapshot. If a connector cannot express the bounds, cannot finish the
+query or snapshot, or lacks required permissions, report the request as failed
+rather than silently truncating it.
+
+For Slack messages, request `slack_read_thread` in detailed form because concise
+output omits per-message timestamps. Treat its `oldest` and `latest` arguments
+as advisory: filter every returned reply against the exact UTC request bounds
+during normalization.
 
 For Microsoft mail, express the provider date filter in the mailbox-local time
 zone over a two-day pad on each side of the requested window. Filter the
@@ -38,11 +46,22 @@ An empty batch requires an exhaustive bounded query or an applicable control
 query that proves emptiness. A zero-result search alone is not proof when the
 provider search is indexed, capped, or partial.
 
-When a Slack Lists connector exposes no stable revision, hash canonical JSON of
-the normalized semantic row fields and use the lowercase hex SHA-256 digest as
-the revision surrogate. Exclude field ordering and capture-time metadata. Use a
-provider item id as `row-key` when available; otherwise use a documented stable
-combination of configured columns. A renamed row may therefore appear new when
-the provider exposes no stable identity. A missing row is not a deletion unless
-the provider exposes deletion state or a later contract adds snapshot/tombstone
-comparison.
+Slack Lists use declared `complete_snapshot` semantics with `slack_read_file`.
+Submit every CSV record as `slack.list_item` with payload containing `list_id`
+and a `fields` object, and omit `timestamp` and `external_id`. workgraph selects
+the first complete configured row-key candidate, normalizes the configured Done
+column, assigns the request `until` as `observed_at`, hashes canonical JSON of
+the semantic row, and derives `<list>:<row-key>:<content-hash>`. Field order and
+observation metadata do not affect the content hash. Duplicate or missing row
+keys fail the complete batch. Done state is revision content, not identity, so
+completed rows remain evidence while future next-work views can exclude them.
+A renamed row may appear new when no stable related-message or other key is
+available. A missing row is not a deletion or proof of completion.
+
+For Microsoft calendar, preflight and use any secondary resource read required
+to obtain the change key or last-modified value. A proven-empty result does not
+verify this identity path.
+
+For Azure Boards participant scope, pass one accessible project as the MCP
+routing argument for `wit_query` while retaining the approved collection-wide
+participant predicate. The routing project is not an additional scope filter.

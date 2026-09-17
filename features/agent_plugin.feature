@@ -14,6 +14,7 @@ Feature: Agent plugin installation
     And optional provider tools require exact-name opt-in
     And Claude Code trusts the workgraph home without replacing unrelated trust settings
     And the unattended worker discovers project settings without a settings override
+    And the launchd worker receives an explicit non-secret HOME and executable PATH
 
   Scenario: Update an existing plugin installation
     Given the workgraph plugin was already installed
@@ -21,12 +22,14 @@ Feature: Agent plugin installation
     Then the canonical plugin files and skills are refreshed
     And the operation succeeds without duplicate configuration
     And an already loaded launchd worker is reloaded
+    And the regenerated worker environment preserves provider executable discovery
 
   Scenario: Diagnose the plugin locally
     Given the workgraph plugin is installed
     When I run plugin doctor
     Then workgraph verifies every bundled skill and the local MCP contract
     And it completes a disposable bridge lifecycle check
+    And it verifies the installed launchd environment when a worker is installed
     And it does not contact a provider
 
   Scenario: Preserve bridge command compatibility
