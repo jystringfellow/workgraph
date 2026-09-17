@@ -514,6 +514,13 @@ workgraph capture requests --fail <request-id> \
   --claim-file /private/path/claim.json --error-json -
 ```
 
+Claim output includes `Capture semantics`. Most connectors return
+`bounded_events`; `slack.lists` returns `complete_snapshot`. For Slack Lists,
+read every configured List with `slack_read_file` and submit every CSV row with
+only `type`, optional display fields, and payload `{list_id, fields}`. workgraph
+derives observation time, normalized Done state, row identity, and the content
+hash revision.
+
 The claim output includes the canonical non-secret connector parameters as
 `Params`. The private claim file contains only the request id and short-lived
 claim token.

@@ -11,14 +11,15 @@ func TestValidatedBridgeParamsRequireBoundedConnectorScope(t *testing.T) {
 	tests := []struct {
 		connector string
 		valid     string
+		canonical string
 		invalid   string
 	}{
-		{"github", `{"repositories":["demo/repository"]}`, `{}`},
-		{"slack", `{"channels":["C0DEMO123"],"include_dms":false}`, `{"channels":[]}`},
-		{"slack.lists", `{"lists":["F0DEMO123"]}`, `{}`},
-		{"mail.microsoft", `{"folders":["inbox"],"preview_limit":500}`, `{"folders":[]}`},
-		{"calendar.microsoft", `{"calendars":["primary"],"past_days":7,"future_days":30}`, `{"calendars":["primary"],"past_days":7}`},
-		{"azure.boards", `{"organization":"example-org","project":"Demo","area_path":"Demo"}`, `{"organization":"example-org"}`},
+		{"github", `{"repositories":["demo/repository"]}`, "", `{}`},
+		{"slack", `{"channels":["C0DEMO123"],"include_dms":false}`, "", `{"channels":[]}`},
+		{"slack.lists", `{"lists":["F0DEMO123"]}`, `{"done_column":"Done","lists":["F0DEMO123"],"row_key_candidates":[["Related Message"],["Title","Cycle"],["Title"]]}`, `{}`},
+		{"mail.microsoft", `{"folders":["inbox"],"preview_limit":500}`, "", `{"folders":[]}`},
+		{"calendar.microsoft", `{"calendars":["primary"],"past_days":7,"future_days":30}`, "", `{"calendars":["primary"],"past_days":7}`},
+		{"azure.boards", `{"organization":"example-org","project":"Demo","area_path":"Demo"}`, "", `{"organization":"example-org"}`},
 	}
 	for _, test := range tests {
 		t.Run(test.connector, func(t *testing.T) {
@@ -27,7 +28,11 @@ func TestValidatedBridgeParamsRequireBoundedConnectorScope(t *testing.T) {
 				t.Fatalf("validate bounded scope: %v", err)
 			}
 			var want, got any
-			if err := json.Unmarshal([]byte(test.valid), &want); err != nil {
+			canonical := test.canonical
+			if canonical == "" {
+				canonical = test.valid
+			}
+			if err := json.Unmarshal([]byte(canonical), &want); err != nil {
 				t.Fatalf("decode wanted scope: %v", err)
 			}
 			if err := json.Unmarshal(params, &got); err != nil {

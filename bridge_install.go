@@ -505,19 +505,28 @@ func installBridgeLaunchAgent(client string, clientCommand string, workgraphExec
 	for _, value := range values {
 		arguments += "\n      <string>" + html.EscapeString(value) + "</string>"
 	}
+	environment := bridgeLaunchEnvironment(userHome, clientPath, workgraphExecutable)
+	environmentXML := ""
+	for _, name := range []string{"HOME", "PATH", "CLAUDE_CONFIG_DIR"} {
+		if value := environment[name]; value != "" {
+			environmentXML += "\n    <key>" + name + "</key><string>" + html.EscapeString(value) + "</string>"
+		}
+	}
 	plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>%s</string>
   <key>ProgramArguments</key><array>%s
   </array>
+  <key>EnvironmentVariables</key><dict>%s
+  </dict>
   <key>RunAtLoad</key><true/>
   <key>StartInterval</key><integer>60</integer>
   <key>ProcessType</key><string>Background</string>
   <key>StandardOutPath</key><string>%s</string>
   <key>StandardErrorPath</key><string>%s</string>
 </dict></plist>
-`, html.EscapeString(label), arguments,
+`, html.EscapeString(label), arguments, environmentXML,
 		html.EscapeString(filepath.Join(logDir, client+".out.log")),
 		html.EscapeString(filepath.Join(logDir, client+".err.log")))
 	if err := os.WriteFile(plistPath, []byte(plist), 0o600); err != nil {
@@ -534,6 +543,49 @@ func installBridgeLaunchAgent(client string, clientCommand string, workgraphExec
 	marker := filepath.Join(homeDir, "bridge", client+".launch-agent")
 	if err := os.WriteFile(marker, []byte(plistPath+"\n"), 0o600); err != nil {
 		return fmt.Errorf("record bridge launch agent: %w", err)
+	}
+	return nil
+}
+
+func bridgeLaunchEnvironment(userHome string, clientPath string, workgraphExecutable string) map[string]string {
+	directories := []string{filepath.Dir(clientPath), filepath.Dir(workgraphExecutable)}
+	directories = append(directories, filepath.SplitList(os.Getenv("PATH"))...)
+	directories = append(directories, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin")
+	seen := map[string]bool{}
+	path := make([]string, 0, len(directories))
+	for _, directory := range directories {
+		directory = strings.TrimSpace(directory)
+		if directory == "" || seen[directory] {
+			continue
+		}
+		seen[directory] = true
+		path = append(path, directory)
+	}
+	environment := map[string]string{
+		"HOME": userHome,
+		"PATH": strings.Join(path, string(os.PathListSeparator)),
+	}
+	if configDir := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")); configDir != "" {
+		environment["CLAUDE_CONFIG_DIR"] = configDir
+	}
+	return environment
+}
+
+func verifyBridgeLaunchEnvironment(plistPath string, userHome string, clientPath string) error {
+	contents, err := os.ReadFile(plistPath)
+	if err != nil {
+		return err
+	}
+	text := string(contents)
+	for _, expected := range []string{
+		"<key>EnvironmentVariables</key>",
+		"<key>HOME</key><string>" + html.EscapeString(userHome) + "</string>",
+		"<key>PATH</key><string>",
+		html.EscapeString(filepath.Dir(clientPath)),
+	} {
+		if !strings.Contains(text, expected) {
+			return fmt.Errorf("launch agent omitted %s", expected)
+		}
 	}
 	return nil
 }
@@ -566,7 +618,7 @@ func DrainBridge(homeDir string, client string, clientCommand string) (string, e
 			commandName = "claude"
 		}
 	}
-	prompt := "Use the workgraph-bridge skill and local workgraph MCP tools. List pending requests before claiming. For each connector, prove its required provider tools are present and authorized with a harmless read-only discovery call. Claim at most one request, filtered to a connector whose preflight succeeded. If provider capability is absent or denied, leave the request pending and do not report a connector failure. Never fall back to the CLI. Fetch only the bounded approved scope and report failures that occur after a successful capability preflight through capture_request_fail."
+	prompt := "Use the workgraph-bridge skill and local workgraph MCP tools. List pending requests before claiming. For each connector, prove every provider tool needed for fetching and stable identity is present and authorized with a harmless read-only discovery call. Claim at most one request, filtered to a connector whose preflight succeeded. Follow the request capture_semantics: fetch only the bounded approved scope for bounded_events, or the exhaustive configured current state for complete_snapshot. If provider capability is absent or denied, leave the request pending and do not report a connector failure. Never fall back to the CLI. Report failures that occur after a successful capability preflight through capture_request_fail."
 	var args []string
 	switch client {
 	case "codex":
@@ -631,7 +683,8 @@ func DoctorPlugin(config PluginDoctorConfig) (string, error) {
 			commandName = "claude"
 		}
 	}
-	if _, err := exec.LookPath(commandName); err != nil {
+	clientPath, err := exec.LookPath(commandName)
+	if err != nil {
 		return "", fmt.Errorf("find %s client: %w", client, err)
 	}
 	installRoot := strings.TrimSpace(config.InstallRoot)
@@ -689,9 +742,19 @@ func DoctorPlugin(config PluginDoctorConfig) (string, error) {
 		}
 	}
 	worker := "not installed"
+	workerEnvironment := "not installed"
 	marker := filepath.Join(homeDir, "bridge", client+".launch-agent")
-	if _, err := os.Stat(marker); err == nil {
+	if contents, err := os.ReadFile(marker); err == nil {
 		worker = "installed"
+		plistPath := strings.TrimSpace(string(contents))
+		userHome, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("verify bridge worker environment: %w", err)
+		}
+		if err := verifyBridgeLaunchEnvironment(plistPath, userHome, clientPath); err != nil {
+			return "", fmt.Errorf("verify bridge worker environment: %w; rerun workgraph plugin install --client %s", err, client)
+		}
+		workerEnvironment = "ready"
 	}
 	heartbeat := "never"
 	if contents, err := os.ReadFile(filepath.Join(homeDir, "bridge", client+".heartbeat")); err == nil {
@@ -713,6 +776,7 @@ func DoctorPlugin(config PluginDoctorConfig) (string, error) {
 	lines = append(lines,
 		"Round trip: ready",
 		"Worker: "+worker,
+		"Worker environment: "+workerEnvironment,
 		"Last heartbeat: "+heartbeat,
 	)
 	return strings.Join(lines, "\n"), nil

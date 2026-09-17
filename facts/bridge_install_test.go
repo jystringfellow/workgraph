@@ -144,6 +144,31 @@ func TestClaudePluginInstallAddsOnlyExplicitProviderTools(t *testing.T) {
 
 func TestSlackListsBridgeContractAllowsContentHashWithoutClaimingDeletion(t *testing.T) {
 	root := repoRoot(t)
+	skillPaths := []string{
+		filepath.Join(root, ".agents", "skills", "workgraph-bridge", "SKILL.md"),
+		filepath.Join(root, "integrations", "claude-code", "plugins", "workgraph", "skills", "workgraph-bridge", "SKILL.md"),
+		filepath.Join(root, "integrations", "codex", "plugins", "workgraph", "skills", "workgraph-bridge", "SKILL.md"),
+	}
+	var canonicalSkill string
+	for _, path := range skillPaths {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read bridge skill %s: %v", path, err)
+		}
+		if canonicalSkill == "" {
+			canonicalSkill = string(contents)
+		} else if string(contents) != canonicalSkill {
+			t.Fatalf("packaged bridge skill drifted from canonical copy: %s", path)
+		}
+		for _, expected := range []string{
+			"complete_snapshot", "slack_read_file", `response_format: "detailed"`,
+			"resource read needed", "routing context",
+		} {
+			if !strings.Contains(string(contents), expected) {
+				t.Fatalf("bridge skill %s omitted %q", path, expected)
+			}
+		}
+	}
 	paths := []string{
 		filepath.Join(root, ".agents", "skills", "workgraph-bridge", "references", "event-contracts.md"),
 		filepath.Join(root, "integrations", "claude-code", "plugins", "workgraph", "skills", "workgraph-bridge", "references", "event-contracts.md"),
@@ -154,7 +179,7 @@ func TestSlackListsBridgeContractAllowsContentHashWithoutClaimingDeletion(t *tes
 		if err != nil {
 			t.Fatalf("read Slack Lists bridge contract %s: %v", path, err)
 		}
-		for _, expected := range []string{"<revision-or-content-hash>", "canonical JSON", "A missing row is not a deletion"} {
+		for _, expected := range []string{"<revision-or-content-hash>", "canonical JSON", "A missing row is not a deletion", "complete_snapshot", "slack_read_file"} {
 			if !strings.Contains(string(contents), expected) {
 				t.Fatalf("Slack Lists bridge contract %s omitted %q", path, expected)
 			}
@@ -356,6 +381,9 @@ func TestBridgeInstallReloadsExistingLaunchAgentBeforeBootstrap(t *testing.T) {
 		t.Fatalf("create fake user home: %v", err)
 	}
 	t.Setenv("HOME", userHome)
+	claudeConfigDir := filepath.Join(userHome, ".claude-enterprise")
+	t.Setenv("CLAUDE_CONFIG_DIR", claudeConfigDir)
+	t.Setenv("ACCESS_TOKEN", "must-not-enter-launch-agent")
 	logPath := filepath.Join(fixtureDir, "launchctl.log")
 	binDir := filepath.Join(fixtureDir, "bin")
 	if err := os.MkdirAll(binDir, 0o700); err != nil {
@@ -370,8 +398,9 @@ func TestBridgeInstallReloadsExistingLaunchAgentBeforeBootstrap(t *testing.T) {
 	if err := os.WriteFile(clientPath, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
 		t.Fatalf("write fake Claude: %v", err)
 	}
+	installRoot := filepath.Join(fixtureDir, "installed")
 	if output, err := runworkgraph(t, repoRoot(t), "plugin", "install", "--home", homeDir,
-		"--client", "claude-code", "--client-command", clientPath, "--install-root", filepath.Join(fixtureDir, "installed")); err != nil {
+		"--client", "claude-code", "--client-command", clientPath, "--install-root", installRoot); err != nil {
 		t.Fatalf("install with launchd reload: %v\n%s", err, output)
 	}
 	contents, err := os.ReadFile(logPath)
@@ -381,6 +410,33 @@ func TestBridgeInstallReloadsExistingLaunchAgentBeforeBootstrap(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(string(contents)), "\n")
 	if len(lines) < 2 || !strings.HasPrefix(lines[0], "bootout gui/") || !strings.HasPrefix(lines[1], "bootstrap gui/") {
 		t.Fatalf("expected bootout before bootstrap, got:\n%s", contents)
+	}
+	plistPath := filepath.Join(userHome, "Library", "LaunchAgents", "com.workgraph.bridge.claude.code.plist")
+	plist, err := os.ReadFile(plistPath)
+	if err != nil {
+		t.Fatalf("read bridge launch agent: %v", err)
+	}
+	for _, expected := range []string{
+		"<key>EnvironmentVariables</key>",
+		"<key>HOME</key><string>" + userHome + "</string>",
+		"<key>PATH</key><string>",
+		filepath.Dir(clientPath),
+		"<key>CLAUDE_CONFIG_DIR</key><string>" + claudeConfigDir + "</string>",
+	} {
+		if !strings.Contains(string(plist), expected) {
+			t.Fatalf("launch agent omitted %q:\n%s", expected, plist)
+		}
+	}
+	if strings.Contains(string(plist), "ACCESS_TOKEN") || strings.Contains(string(plist), "must-not-enter-launch-agent") {
+		t.Fatalf("launch agent copied unrelated environment secrets:\n%s", plist)
+	}
+	doctor, err := runworkgraph(t, repoRoot(t), "plugin", "doctor", "--home", homeDir,
+		"--client", "claude-code", "--client-command", clientPath, "--install-root", installRoot)
+	if err != nil {
+		t.Fatalf("doctor installed launch agent: %v\n%s", err, doctor)
+	}
+	if !strings.Contains(string(doctor), "Worker environment: ready") {
+		t.Fatalf("doctor did not verify launch environment:\n%s", doctor)
 	}
 }
 

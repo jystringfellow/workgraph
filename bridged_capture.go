@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -23,18 +24,19 @@ const (
 
 // CaptureRequest is one durable unit of provider work for an approved bridge.
 type CaptureRequest struct {
-	ID             string          `json:"id"`
-	ConnectorID    string          `json:"connector_id"`
-	Source         string          `json:"source"`
-	Since          string          `json:"since"`
-	Until          string          `json:"until"`
-	Params         json.RawMessage `json:"params"`
-	Status         string          `json:"status"`
-	Attempts       int             `json:"attempts"`
-	AvailableAt    string          `json:"available_at"`
-	ClaimedBy      string          `json:"claimed_by,omitempty"`
-	ClaimedAt      string          `json:"claimed_at,omitempty"`
-	LeaseExpiresAt string          `json:"lease_expires_at,omitempty"`
+	ID               string          `json:"id"`
+	ConnectorID      string          `json:"connector_id"`
+	Source           string          `json:"source"`
+	CaptureSemantics string          `json:"capture_semantics"`
+	Since            string          `json:"since"`
+	Until            string          `json:"until"`
+	Params           json.RawMessage `json:"params"`
+	Status           string          `json:"status"`
+	Attempts         int             `json:"attempts"`
+	AvailableAt      string          `json:"available_at"`
+	ClaimedBy        string          `json:"claimed_by,omitempty"`
+	ClaimedAt        string          `json:"claimed_at,omitempty"`
+	LeaseExpiresAt   string          `json:"lease_expires_at,omitempty"`
 }
 
 // CaptureRequestEmitConfig controls one daemon-owned bridged scheduling pass.
@@ -321,14 +323,15 @@ func EmitBridgedCaptureRequest(config CaptureRequestEmitConfig) (CaptureRequestE
 		return CaptureRequestEmitResult{}, err
 	}
 	request := CaptureRequest{
-		ID:          requestID,
-		ConnectorID: id,
-		Source:      eventSourceForConnector(id),
-		Since:       since.Format(time.RFC3339Nano),
-		Until:       now.Format(time.RFC3339Nano),
-		Params:      params,
-		Status:      "pending",
-		AvailableAt: now.Format(time.RFC3339Nano),
+		ID:               requestID,
+		ConnectorID:      id,
+		Source:           eventSourceForConnector(id),
+		CaptureSemantics: captureSemanticsForConnector(id),
+		Since:            since.Format(time.RFC3339Nano),
+		Until:            now.Format(time.RFC3339Nano),
+		Params:           params,
+		Status:           "pending",
+		AvailableAt:      now.Format(time.RFC3339Nano),
 	}
 	_, err = tx.Exec(`INSERT INTO capture_requests (
 		id, connector_id, since, until, params_json, status, attempts, available_at, created_at
@@ -530,6 +533,7 @@ func scanCaptureRequest(row captureRequestScanner) (CaptureRequest, bool, error)
 		return CaptureRequest{}, false, fmt.Errorf("read capture request: %w", err)
 	}
 	request.Source = eventSourceForConnector(request.ConnectorID)
+	request.CaptureSemantics = captureSemanticsForConnector(request.ConnectorID)
 	request.Params = json.RawMessage(params)
 	return request, true, nil
 }
@@ -550,6 +554,13 @@ func eventSourceForConnector(connectorID string) string {
 		return "slack"
 	}
 	return connectorID
+}
+
+func captureSemanticsForConnector(connectorID string) string {
+	if connectorID == "slack.lists" {
+		return "complete_snapshot"
+	}
+	return "bounded_events"
 }
 
 func cancelActiveCaptureRequests(homeDir string, connectorID string, when time.Time) error {
@@ -655,6 +666,7 @@ type preparedBridgedEvent struct {
 	Actor       string
 	Summary     string
 	WeakDedupe  bool
+	SnapshotKey string
 }
 
 // IngestBridgedCapture validates and atomically stores normalized bridged events.
@@ -737,10 +749,22 @@ func IngestBridgedCapture(config BridgedIngestConfig) (BridgedIngestResult, erro
 	}
 
 	prepared := make([]preparedBridgedEvent, 0, len(envelopes))
+	snapshotKeys := map[string]bool{}
 	for index, envelope := range envelopes {
-		event, err := prepareBridgedEvent(source, envelope)
+		var event preparedBridgedEvent
+		if claimedRequest != nil && claimedRequest.CaptureSemantics == "complete_snapshot" && connectorID == "slack.lists" {
+			event, err = prepareSlackListSnapshotEvent(*claimedRequest, envelope)
+		} else {
+			event, err = prepareBridgedEvent(source, envelope)
+		}
 		if err != nil {
 			return BridgedIngestResult{}, fmt.Errorf("event %d: %w", index+1, err)
+		}
+		if event.SnapshotKey != "" {
+			if snapshotKeys[event.SnapshotKey] {
+				return BridgedIngestResult{}, fmt.Errorf("event %d: duplicate Slack List snapshot row key", index+1)
+			}
+			snapshotKeys[event.SnapshotKey] = true
 		}
 		if !connectorAllowsBridgedEvent(connectorID, event.Type) {
 			return BridgedIngestResult{}, fmt.Errorf("event %d: type %q is not allowed for connector %s", index+1, event.Type, connectorID)
@@ -942,6 +966,169 @@ func prepareBridgedEvent(source string, envelope bridgedEventEnvelope) (prepared
 		WeakDedupe:  weak,
 	}
 	return event, nil
+}
+
+type slackListSnapshotParams struct {
+	Lists            []string   `json:"lists"`
+	DoneColumn       string     `json:"done_column"`
+	RowKeyCandidates [][]string `json:"row_key_candidates"`
+}
+
+type slackListSnapshotInput struct {
+	ListID string         `json:"list_id"`
+	Fields map[string]any `json:"fields"`
+}
+
+func prepareSlackListSnapshotEvent(request CaptureRequest, envelope bridgedEventEnvelope) (preparedBridgedEvent, error) {
+	if strings.TrimSpace(envelope.Type) != "slack.list_item" {
+		return preparedBridgedEvent{}, fmt.Errorf("complete Slack List snapshots require type %q", "slack.list_item")
+	}
+	if strings.TrimSpace(envelope.Timestamp) != "" || strings.TrimSpace(envelope.ExternalID) != "" {
+		return preparedBridgedEvent{}, fmt.Errorf("Slack List snapshot rows must omit timestamp and external_id; workgraph derives them")
+	}
+	var params slackListSnapshotParams
+	if err := decodeStrictJSON(request.Params, &params); err != nil {
+		return preparedBridgedEvent{}, fmt.Errorf("decode Slack List snapshot parameters: %w", err)
+	}
+	var input slackListSnapshotInput
+	if err := decodeStrictJSON(envelope.Payload, &input); err != nil {
+		return preparedBridgedEvent{}, fmt.Errorf("decode Slack List snapshot payload: %w", err)
+	}
+	input.ListID = strings.TrimSpace(input.ListID)
+	if input.ListID == "" || len(input.Fields) == 0 {
+		return preparedBridgedEvent{}, fmt.Errorf("Slack List snapshot payload requires list_id and fields")
+	}
+	allowed := false
+	for _, listID := range params.Lists {
+		if input.ListID == strings.TrimSpace(listID) {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return preparedBridgedEvent{}, fmt.Errorf("Slack List %q is outside the approved list scope", input.ListID)
+	}
+	rowKey, err := slackListSnapshotRowKey(input.Fields, params.RowKeyCandidates)
+	if err != nil {
+		return preparedBridgedEvent{}, err
+	}
+	doneValue, _ := slackListSnapshotField(input.Fields, params.DoneColumn)
+	done, err := normalizeSlackListDone(doneValue)
+	if err != nil {
+		return preparedBridgedEvent{}, fmt.Errorf("Done column %q: %w", params.DoneColumn, err)
+	}
+	semantic := map[string]any{"done": done, "fields": input.Fields, "list_id": input.ListID}
+	semanticJSON, err := json.Marshal(semantic)
+	if err != nil {
+		return preparedBridgedEvent{}, fmt.Errorf("encode Slack List semantic row: %w", err)
+	}
+	contentDigest := sha256.Sum256(semanticJSON)
+	contentHash := hex.EncodeToString(contentDigest[:])
+	observedAt, err := time.Parse(time.RFC3339Nano, request.Until)
+	if err != nil {
+		return preparedBridgedEvent{}, fmt.Errorf("parse Slack List snapshot observation time: %w", err)
+	}
+	payload := map[string]any{
+		"capture_semantics": "complete_snapshot",
+		"content_hash":      contentHash,
+		"done":              done,
+		"fields":            input.Fields,
+		"list_id":           input.ListID,
+		"observed_at":       observedAt.UTC().Format(time.RFC3339Nano),
+		"row_key":           rowKey,
+	}
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return preparedBridgedEvent{}, fmt.Errorf("encode Slack List snapshot payload: %w", err)
+	}
+	externalID := input.ListID + ":" + rowKey + ":" + contentHash
+	eventDigest := sha256.Sum256([]byte("slack\x00" + externalID))
+	summary := strings.TrimSpace(envelope.Summary)
+	if summary == "" {
+		if title, found := slackListSnapshotField(input.Fields, "Title"); found {
+			summary = snapshotFieldText(title)
+		}
+	}
+	project := strings.TrimSpace(envelope.Project)
+	if project == "" {
+		project = "slack-list:" + input.ListID
+	}
+	return preparedBridgedEvent{
+		ID:          hex.EncodeToString(eventDigest[:16]),
+		Type:        "slack.list_item",
+		Timestamp:   observedAt.UTC().Format(time.RFC3339Nano),
+		PayloadJSON: string(payloadJSON),
+		Project:     project,
+		Actor:       strings.TrimSpace(envelope.Actor),
+		Summary:     summary,
+		SnapshotKey: input.ListID + "\x00" + rowKey,
+	}, nil
+}
+
+func slackListSnapshotRowKey(fields map[string]any, candidates [][]string) (string, error) {
+	for _, candidate := range candidates {
+		selected := make(map[string]string, len(candidate))
+		complete := len(candidate) > 0
+		for _, column := range candidate {
+			value, found := slackListSnapshotField(fields, column)
+			text := snapshotFieldText(value)
+			if !found || text == "" {
+				complete = false
+				break
+			}
+			selected[column] = text
+		}
+		if complete {
+			encoded, _ := json.Marshal(selected)
+			digest := sha256.Sum256(encoded)
+			return hex.EncodeToString(digest[:16]), nil
+		}
+	}
+	return "", fmt.Errorf("Slack List row has no complete configured row-key candidate")
+}
+
+func slackListSnapshotField(fields map[string]any, name string) (any, bool) {
+	name = strings.TrimSpace(name)
+	for key, value := range fields {
+		if strings.EqualFold(strings.TrimSpace(key), name) {
+			return value, true
+		}
+	}
+	return nil, false
+}
+
+func snapshotFieldText(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(typed)
+	case json.Number:
+		return typed.String()
+	case bool:
+		return strconv.FormatBool(typed)
+	default:
+		encoded, _ := json.Marshal(typed)
+		return strings.TrimSpace(string(encoded))
+	}
+}
+
+func normalizeSlackListDone(value any) (bool, error) {
+	if value == nil {
+		return false, nil
+	}
+	if done, ok := value.(bool); ok {
+		return done, nil
+	}
+	normalized := strings.ToLower(strings.TrimSpace(snapshotFieldText(value)))
+	switch normalized {
+	case "", "0", "false", "no", "n", "open", "todo", "unchecked", "☐":
+		return false, nil
+	case "1", "true", "yes", "y", "done", "checked", "x", "✓", "☑":
+		return true, nil
+	default:
+		return false, fmt.Errorf("unsupported value %q", normalized)
+	}
 }
 
 func canonicalJSONObject(raw json.RawMessage) (string, error) {
