@@ -903,7 +903,7 @@ func connectBridgedConnector(t *testing.T, repoRoot string, homeDir string, conn
 func bridgeParamsForFact(connector string) string {
 	switch connector {
 	case "github":
-		return `{"repositories":["demo/repository"]}`
+		return `{"scope":"participant","identity":"@me","include":["involves","review_requested"]}`
 	case "slack":
 		return `{"channels":["C0DEMO123"],"include_dms":false}`
 	case "slack.lists":

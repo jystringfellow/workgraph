@@ -3,6 +3,7 @@ package workgraph
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -85,6 +86,7 @@ type ConnectorConnectConfig struct {
 	HomeDir       string
 	ID            string
 	GitHubCommand string
+	ParamsJSON    json.RawMessage
 }
 
 // ConnectorConnectResult describes local connector setup.
@@ -224,6 +226,9 @@ func ConfigureBridgedConnector(config ConnectorBridgeConfig) (ConnectorConnectRe
 		if err := cancelActiveCaptureRequests(homeDir, id, time.Now()); err != nil {
 			return ConnectorConnectResult{}, err
 		}
+		if err := resetCaptureCursor(homeDir, id); err != nil {
+			return ConnectorConnectResult{}, err
+		}
 	}
 	enabled := true
 	entry.Enabled = &enabled
@@ -321,8 +326,14 @@ func validatedBridgeParams(connectorID string, raw json.RawMessage) (json.RawMes
 	paramsChanged := false
 	switch connectorID {
 	case "github":
-		if !requireStrings("repositories") {
-			return nil, fmt.Errorf("bridged github requires a non-empty repositories array")
+		if !participantScope("involves", "review_requested") {
+			return nil, fmt.Errorf("bridged github requires participant scope with identity and approved include values (involves, review_requested)")
+		}
+		if err := validateGitHubAlwaysRepositories(values["always_repositories"]); err != nil {
+			return nil, err
+		}
+		if err := validateGitHubBootstrapLookback(values["bootstrap_lookback"]); err != nil {
+			return nil, err
 		}
 	case "slack":
 		includeDMs := false
@@ -420,6 +431,92 @@ func validateBridgeableConnector(connectorID string) error {
 	default:
 		return nil
 	}
+}
+
+func validateGitHubAlwaysRepositories(raw json.RawMessage) error {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil
+	}
+	var repositories []string
+	if err := json.Unmarshal(raw, &repositories); err != nil {
+		return fmt.Errorf("github always_repositories must be a string array")
+	}
+	for _, repository := range repositories {
+		parts := strings.Split(strings.TrimSpace(repository), "/")
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return fmt.Errorf("github always_repositories entries must be owner/repo, got %q", repository)
+		}
+	}
+	return nil
+}
+
+func validateGitHubBootstrapLookback(raw json.RawMessage) error {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return fmt.Errorf("github bootstrap_lookback must be a duration string")
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration <= 0 {
+		return fmt.Errorf("github bootstrap_lookback must be a positive duration string")
+	}
+	return nil
+}
+
+// defaultGitHubCaptureParamsJSON is the participant-scoped default for a new GitHub connection.
+func defaultGitHubCaptureParamsJSON() json.RawMessage {
+	return json.RawMessage(`{"scope":"participant","identity":"@me","include":["involves","review_requested"],"always_repositories":[],"bootstrap_lookback":"168h"}`)
+}
+
+// configureGitHubCaptureParams validates and persists the canonical GitHub capture
+// scope shared by direct and bridged capture, resetting the cursor only after an
+// explicitly approved scope change so the new scope receives a bootstrap window.
+func configureGitHubCaptureParams(homeDir string, raw json.RawMessage) (json.RawMessage, error) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		raw = defaultGitHubCaptureParamsJSON()
+	}
+	params, err := validatedBridgeParams("github", raw)
+	if err != nil {
+		return nil, err
+	}
+	connectorPollStateMu.Lock()
+	state, err := readConnectorRuntimeFile(homeDir)
+	if err != nil {
+		connectorPollStateMu.Unlock()
+		return nil, err
+	}
+	entry := state.entry("github")
+	scopeChanged := len(bytes.TrimSpace(entry.BridgeParams)) > 0 && !bytes.Equal(bytes.TrimSpace(entry.BridgeParams), bytes.TrimSpace(params))
+	entry.BridgeParams = params
+	state.Connectors["github"] = entry
+	writeErr := writeConnectorRuntimeFile(homeDir, state)
+	connectorPollStateMu.Unlock()
+	if writeErr != nil {
+		return nil, writeErr
+	}
+	if scopeChanged {
+		if err := cancelActiveCaptureRequests(homeDir, "github", time.Now()); err != nil {
+			return nil, err
+		}
+		if err := resetCaptureCursor(homeDir, "github"); err != nil {
+			return nil, err
+		}
+	}
+	return params, nil
+}
+
+func resetCaptureCursor(homeDir string, connectorID string) error {
+	db, err := sql.Open("sqlite3", bridgedDefaultDatabasePath(homeDir))
+	if err != nil {
+		return fmt.Errorf("open capture outbox: %w", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`DELETE FROM capture_cursors WHERE connector_id = ?`, connectorID); err != nil {
+		return fmt.Errorf("reset capture cursor for %s: %w", connectorID, err)
+	}
+	return nil
 }
 
 func bridgeConfigurationIssue(connectorID string, params json.RawMessage) (string, string) {
@@ -674,7 +771,8 @@ func ConnectGit(config ConnectorConnectConfig) (ConnectorConnectResult, error) {
 	return connectRuntimeConnector(config.HomeDir, "git", "")
 }
 
-// ConnectGitHub validates the GitHub CLI and enables GitHub polling.
+// ConnectGitHub validates the GitHub CLI, enables GitHub polling, and approves the
+// canonical GitHub participant capture scope shared by direct and bridged capture.
 func ConnectGitHub(config ConnectorConnectConfig) (ConnectorConnectResult, error) {
 	result, err := ValidateConnector(ConnectorValidateConfig{
 		HomeDir:       config.HomeDir,
@@ -682,6 +780,9 @@ func ConnectGitHub(config ConnectorConnectConfig) (ConnectorConnectResult, error
 		GitHubCommand: config.GitHubCommand,
 	})
 	if err != nil {
+		return ConnectorConnectResult{}, err
+	}
+	if _, err := configureGitHubCaptureParams(result.HomeDir, config.ParamsJSON); err != nil {
 		return ConnectorConnectResult{}, err
 	}
 	return ConnectorConnectResult{

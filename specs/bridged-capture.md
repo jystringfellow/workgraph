@@ -144,7 +144,7 @@ The initial required parameter shapes are:
 
 | Connector | Required parameters |
 |---|---|
-| `github` | non-empty `repositories` array |
+| `github` | `scope: "participant"` plus `identity` and `include` values from `involves` and `review_requested`; optional `always_repositories` (`owner/repo` array, batched into at most one PR and one issue search) and `bootstrap_lookback` (positive duration string, default `168h`) |
 | `slack` | non-empty `channels` array, `include_dms: true`, or participant scope with `identity` and `include` values from `authored`, `mentions`, and `thread_participation`; when present, `include_dms` is a boolean |
 | `slack.lists` | non-empty `lists` array; optional per-id `list_options` with `state`, `interest_columns`, and ordered `row_key_candidates`; legacy top-level `done_column` and `row_key_candidates` remain accepted |
 | `mail.google` / `mail.microsoft` | non-empty `mailboxes` or `folders` array and positive `preview_limit` |
@@ -157,6 +157,29 @@ query. For example, Azure Boards may use:
 ```json
 {"organization":"example-org","scope":"participant","identity":"@Me","include":["authored","assigned"]}
 ```
+
+GitHub's `bridge_params` is the same canonical scope used by direct polling
+(see `specs/github.md`):
+
+```json
+{
+  "scope": "participant",
+  "identity": "@me",
+  "include": ["involves", "review_requested"],
+  "always_repositories": [],
+  "bootstrap_lookback": "168h"
+}
+```
+
+Legacy `{"repositories": [...]}` bridge parameters are no longer sufficient
+scope and must be explicitly reconnected with `workgraph github connect` or
+`workgraph connectors connect github --mode bridged --params-json ...`.
+Automatically translating a repository list into participant scope would
+silently broaden capture beyond what was originally approved. Changing
+GitHub's approved scope resets the stored capture cursor so the new scope
+receives a fresh bootstrap window, in addition to cancelling any active
+capture request for the old scope.
+
 
 The bridge must translate only the approved include values into provider
 filters and must fail the request if the provider cannot express or completely
@@ -475,7 +498,7 @@ Each connector recipe translates the generic request into provider operations:
 
 | Connector | Fetch rule | Required bridge parameters |
 |---|---|---|
-| `github` | Fetch configured repositories updated in `[since, until]` | repository allowlist |
+| `github` | Run the three base participant searches (`involves` PRs, `review_requested` PRs, `involves` issues) plus at most one batched `always_repositories` PR search and one issue search, sorted by updated time, over the overlapping `[since, until]` window; bisect and retry any query that saturates the 1,000-result cap | participant scope: `identity`, `include`, optional `always_repositories`, optional `bootstrap_lookback` |
 | `slack` | Fetch configured channels over the overlapping message-time window, including replies and edit metadata; read threads in detailed form and filter every reply against the request bounds client-side | channel allowlist; DM inclusion policy |
 | `slack.lists` | Read each configured List completely with `slack_read_file`, parse its CSV rows, and submit `{list_id, fields}` snapshot items for deterministic normalization by workgraph | list allowlist; optional per-List state, interest columns, and row-key candidates |
 | `mail.google` / `mail.microsoft` | Fetch received messages for configured mailboxes/folders in the overlapping window | mailbox/folder scope; bounded preview policy |

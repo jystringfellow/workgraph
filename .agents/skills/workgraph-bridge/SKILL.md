@@ -157,6 +157,31 @@ For Microsoft calendar, preflight both calendar search and any secondary
 resource read needed to obtain the change key or last-modified revision. A
 proven-empty window does not prove the identity path works.
 
+For GitHub, `params` carries the canonical participant scope: `scope`,
+`identity`, `include` (`involves`, `review_requested`), optional
+`always_repositories`, and optional `bootstrap_lookback`. Run only the base
+searches selected by `include` — pull requests the identity is involved in,
+pull requests requesting the identity's review, and issues the identity is
+involved in — each bounded to `[since, until]` and sorted by updated time.
+When `always_repositories` is configured, add at most one additional batched
+pull request search and one batched issue search covering all listed
+repositories; do not issue one search pair per repository. Request each
+search's full result page (up to the provider's 1,000-result search ceiling)
+and detect saturation: if a query returns the full page, bisect its time
+window and retry both halves, deduplicating any inclusive-boundary overlap.
+If a minimum window still returns a full page, treat the request as a
+`{"error":"..."}` failure rather than silently truncating results — workgraph
+retries the same bounds without advancing its cursor. Only request JSON
+fields the provider's search actually returns (for example `number`, `url`,
+`state`, `author`, `title`, `updatedAt`, `repository`); branch and commit SHA
+are not supported search fields and must not be requested. Normalize the
+`repository.nameWithOwner` field as the event's repository even when no local
+clone exists for it. Merge duplicate pull requests or issues returned by more
+than one base search into a single event before submitting, recording the
+union of matched query names (for example `["involves","review_requested"]`)
+so workgraph can store honest participation provenance instead of inventing
+precision `involves` alone cannot support.
+
 For Azure Boards participant scope, `wit_query` still needs an accessible
 project argument as MCP routing context. Discover or use one accessible project
 but keep the approved collection-wide `@Me` WIQL predicate; do not fan out or
