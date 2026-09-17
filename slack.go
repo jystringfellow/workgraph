@@ -78,6 +78,7 @@ type SlackListCaptureConfig struct {
 	DatabasePath string
 	Token        string
 	ListID       string
+	Options      SlackListOptions
 	APIBaseURL   string
 	HTTPClient   *http.Client
 }
@@ -103,6 +104,7 @@ type SlackConnectConfig struct {
 	ExpectedState    string
 	Channels         []string
 	ListIDs          []string
+	ListOptions      map[string]SlackListOptions
 	IncludeDMs       bool
 	Scopes           []string
 	APIBaseURL       string
@@ -134,16 +136,17 @@ type SlackDisconnectResult struct {
 }
 
 type slackConnectorConfig struct {
-	AccessToken  string   `json:"access_token"`
-	AuthedUserID string   `json:"authed_user_id,omitempty"`
-	TeamID       string   `json:"team_id,omitempty"`
-	TeamName     string   `json:"team_name,omitempty"`
-	BotUserID    string   `json:"bot_user_id,omitempty"`
-	Channels     []string `json:"channels"`
-	ListIDs      []string `json:"list_ids,omitempty"`
-	IncludeDMs   bool     `json:"include_dms,omitempty"`
-	UserScopes   []string `json:"user_scopes"`
-	APIBaseURL   string   `json:"api_base_url,omitempty"`
+	AccessToken  string                      `json:"access_token"`
+	AuthedUserID string                      `json:"authed_user_id,omitempty"`
+	TeamID       string                      `json:"team_id,omitempty"`
+	TeamName     string                      `json:"team_name,omitempty"`
+	BotUserID    string                      `json:"bot_user_id,omitempty"`
+	Channels     []string                    `json:"channels"`
+	ListIDs      []string                    `json:"list_ids,omitempty"`
+	ListOptions  map[string]SlackListOptions `json:"list_options,omitempty"`
+	IncludeDMs   bool                        `json:"include_dms,omitempty"`
+	UserScopes   []string                    `json:"user_scopes"`
+	APIBaseURL   string                      `json:"api_base_url,omitempty"`
 }
 
 type slackExportEvent struct {
@@ -282,6 +285,8 @@ type slackListItem struct {
 	IsSubscribed     bool             `json:"is_subscribed"`
 	Saved            map[string]any   `json:"saved,omitempty"`
 	SavedFields      map[string]any   `json:"saved_fields,omitempty"`
+	Done             *bool            `json:"done,omitempty"`
+	InterestFields   map[string]any   `json:"interest_fields,omitempty"`
 }
 
 type slackListField struct {
@@ -367,18 +372,31 @@ func CaptureSlackList(config SlackListCaptureConfig) (SlackCaptureResult, error)
 	if config.DatabasePath == "" {
 		config.DatabasePath = status.DatabasePath
 	}
-	if config.Token == "" {
+	config.ListID = strings.TrimSpace(config.ListID)
+	optionsEmpty := config.Options.State == nil && len(config.Options.InterestColumns) == 0 && len(config.Options.RowKeyCandidates) == 0
+	if config.Token == "" || config.APIBaseURL == "" || optionsEmpty {
 		stored, err := readSlackConnectorConfig(status.HomeDir)
-		if err != nil {
+		if err != nil && config.Token == "" {
 			return SlackCaptureResult{}, err
 		}
-		config.Token = stored.AccessToken
-		if config.APIBaseURL == "" {
-			config.APIBaseURL = stored.APIBaseURL
+		if err == nil {
+			if config.Token == "" {
+				config.Token = stored.AccessToken
+			}
+			if config.APIBaseURL == "" {
+				config.APIBaseURL = stored.APIBaseURL
+			}
+			if optionsEmpty {
+				config.Options = slackListOptionsFor(stored.ListOptions, config.ListID)
+			}
 		}
 	}
 	if config.Token == "" || config.ListID == "" {
 		return SlackCaptureResult{}, errors.New("slack list token and list id are required")
+	}
+	options, err := normalizeSlackListOptions(config.Options)
+	if err != nil {
+		return SlackCaptureResult{}, fmt.Errorf("Slack List %q options: %w", config.ListID, err)
 	}
 	items, err := slackListItems(config)
 	if err != nil {
@@ -394,7 +412,7 @@ func CaptureSlackList(config SlackListCaptureConfig) (SlackCaptureResult, error)
 		if item.ListID == "" {
 			item.ListID = config.ListID
 		}
-		inserted, err := storeSlackListItem(db, item)
+		inserted, err := storeSlackListItem(db, item, options)
 		if err != nil {
 			return SlackCaptureResult{}, err
 		}
@@ -450,7 +468,14 @@ func slackListItems(config SlackListCaptureConfig) ([]slackListItem, error) {
 	return apiResponse.Items, nil
 }
 
-func storeSlackListItem(db *sql.DB, item slackListItem) (bool, error) {
+func storeSlackListItem(db *sql.DB, item slackListItem, options SlackListOptions) (bool, error) {
+	fields := slackListItemFieldMap(item)
+	done, interestFields, err := interpretSlackListFields(fields, options, "")
+	if err != nil {
+		return false, err
+	}
+	item.Done = done
+	item.InterestFields = interestFields
 	payload, err := json.Marshal(item)
 	if err != nil {
 		return false, fmt.Errorf("encode slack list item: %w", err)
@@ -459,14 +484,14 @@ func storeSlackListItem(db *sql.DB, item slackListItem) (bool, error) {
 	result, err := db.Exec(`INSERT OR IGNORE INTO events
 		(id, source, type, timestamp, payload_json, project, actor, summary, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		fmt.Sprintf("slack.list_item:%s:%s", item.ListID, item.ID),
+		fmt.Sprintf("slack.list_item:%s:%s:%s", item.ListID, item.ID, slackListItemRevision(item, payload)),
 		"slack",
 		"slack.list_item",
 		timestamp.UTC().Format(time.RFC3339Nano),
 		string(payload),
 		"slack-list:"+item.ListID,
 		slackListActor(item),
-		slackListSummary(item),
+		slackListSummary(item, options),
 		time.Now().UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -477,6 +502,31 @@ func storeSlackListItem(db *sql.DB, item slackListItem) (bool, error) {
 		return false, fmt.Errorf("store slack list item: %w", err)
 	}
 	return rows > 0, nil
+}
+
+func slackListItemRevision(item slackListItem, payload []byte) string {
+	if revision := strings.TrimSpace(item.UpdatedTimestamp); revision != "" {
+		return revision
+	}
+	digest := sha256.Sum256(payload)
+	return fmt.Sprintf("%x", digest[:16])
+}
+
+func slackListItemFieldMap(item slackListItem) map[string]any {
+	fields := make(map[string]any, len(item.Fields)*2)
+	for _, field := range item.Fields {
+		var value any = strings.TrimSpace(field.Text)
+		if value == "" {
+			value = field.Value
+		}
+		for _, name := range []string{field.Key, field.ColumnID} {
+			name = strings.TrimSpace(name)
+			if name != "" {
+				fields[name] = value
+			}
+		}
+	}
+	return fields
 }
 
 func slackListItemTimestamp(item slackListItem) time.Time {
@@ -506,7 +556,14 @@ func slackListActor(item slackListItem) string {
 	return ""
 }
 
-func slackListSummary(item slackListItem) string {
+func slackListSummary(item slackListItem, options SlackListOptions) string {
+	for _, column := range options.InterestColumns {
+		if value, found := slackListSnapshotField(slackListItemFieldMap(item), column); found {
+			if text := slackListFieldValueText(value); text != "" {
+				return text
+			}
+		}
+	}
 	for _, field := range item.Fields {
 		if strings.TrimSpace(field.Text) != "" {
 			return strings.TrimSpace(field.Text)
@@ -564,6 +621,12 @@ func ConnectSlack(config SlackConnectConfig) (SlackConnectResult, error) {
 			return SlackConnectResult{}, err
 		}
 	}
+	config.ListIDs = normalizeSlackListColumns(config.ListIDs)
+	listOptions, err := normalizeSlackListOptionsMap(config.ListOptions, config.ListIDs)
+	if err != nil {
+		return SlackConnectResult{}, fmt.Errorf("Slack List options: %w", err)
+	}
+	config.ListOptions = listOptions
 	config.ClientID = resolveSlackClientID(config.ClientID)
 	if config.ClientID == "" {
 		return SlackConnectResult{}, errors.New("slack client id is required")
@@ -621,6 +684,7 @@ func ConnectSlack(config SlackConnectConfig) (SlackConnectResult, error) {
 		BotUserID:    token.BotUserID,
 		Channels:     append([]string(nil), config.Channels...),
 		ListIDs:      append([]string(nil), config.ListIDs...),
+		ListOptions:  config.ListOptions,
 		IncludeDMs:   config.IncludeDMs && slackHasDMScopes(slackOAuthUserScopes(token)),
 		UserScopes:   slackOAuthUserScopes(token),
 		APIBaseURL:   config.APIBaseURL,
@@ -663,6 +727,12 @@ func ConnectSlackWithBrowser(ctx context.Context, config SlackConnectConfig) (Sl
 			return SlackConnectResult{}, err
 		}
 	}
+	config.ListIDs = normalizeSlackListColumns(config.ListIDs)
+	listOptions, err := normalizeSlackListOptionsMap(config.ListOptions, config.ListIDs)
+	if err != nil {
+		return SlackConnectResult{}, fmt.Errorf("Slack List options: %w", err)
+	}
+	config.ListOptions = listOptions
 	config.ClientID = resolveSlackClientID(config.ClientID)
 	if config.ClientID == "" {
 		return SlackConnectResult{}, errors.New("slack client id is required for browser connect")
@@ -762,6 +832,7 @@ func ConnectSlackWithBrowser(ctx context.Context, config SlackConnectConfig) (Sl
 		BotUserID:    token.BotUserID,
 		Channels:     append([]string(nil), config.Channels...),
 		ListIDs:      append([]string(nil), config.ListIDs...),
+		ListOptions:  config.ListOptions,
 		IncludeDMs:   config.IncludeDMs && slackHasDMScopes(slackOAuthUserScopes(token)),
 		UserScopes:   slackOAuthUserScopes(token),
 		APIBaseURL:   config.APIBaseURL,

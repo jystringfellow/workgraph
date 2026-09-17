@@ -1,10 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"runtime/debug"
 	"strings"
+
+	workgraph "github.com/jystringfellow/workgraph"
 )
 
 var (
@@ -22,6 +25,7 @@ type buildIdentity struct {
 func runVersion(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags := flag.NewFlagSet("version", flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	jsonOutput := flags.Bool("json", false, "print build identity as JSON")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -31,6 +35,13 @@ func runVersion(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	identity := currentBuildIdentity()
+	if *jsonOutput {
+		if err := json.NewEncoder(stdout).Encode(workgraph.BuildIdentity{Version: identity.Version, Commit: identity.Commit, Built: identity.BuildDate}); err != nil {
+			fmt.Fprintf(stderr, "workgraph version: %v\n", err)
+			return 1
+		}
+		return 0
+	}
 	fmt.Fprintf(stdout, "workgraph %s\ncommit: %s\nbuilt: %s\n", identity.Version, identity.Commit, identity.BuildDate)
 	return 0
 }

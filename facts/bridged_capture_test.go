@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -205,6 +206,69 @@ func TestSlackListSnapshotNormalizesDoneAndContentHashRevisions(t *testing.T) {
 	}
 	if timestamps[0] != now.Format(time.RFC3339Nano) || timestamps[1] != now.Add(2*time.Minute).Format(time.RFC3339Nano) {
 		t.Fatalf("expected request observation timestamps, got %#v", timestamps)
+	}
+}
+
+func TestSlackListSnapshotAppliesPerListInterpretationAndKeepsUnknownState(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	params := `{"lists":["FTEAM","FPERSONAL"],"done_column":"Done","list_options":{"FTEAM":{"state":{"column":"Status","done_values":["Complete","Done"]},"interest_columns":["Task","Priority"],"row_key_candidates":[["Task","Owner"]]},"FPERSONAL":{"interest_columns":["Title"],"row_key_candidates":[["Title"]]}}}`
+	if _, err := workgraph.ConfigureBridgedConnector(workgraph.ConnectorBridgeConfig{
+		HomeDir: homeDir, ID: "slack.lists", BridgeParams: json.RawMessage(params),
+	}); err != nil {
+		t.Fatalf("connect interpreted Slack Lists snapshot: %v", err)
+	}
+	now := time.Now().UTC().Add(-time.Minute)
+	emitted, err := workgraph.EmitBridgedCaptureRequest(workgraph.CaptureRequestEmitConfig{HomeDir: homeDir, ConnectorID: "slack.lists", Now: now})
+	if err != nil {
+		t.Fatalf("emit snapshot: %v", err)
+	}
+	claims, err := workgraph.ClaimCaptureRequests(workgraph.CaptureRequestClaimConfig{HomeDir: homeDir, ConnectorID: "slack.lists", Worker: "facts", Max: 1, Now: now, Lease: 10 * time.Minute})
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("claim snapshot: claims=%d error=%v", len(claims), err)
+	}
+	input := `[
+		{"type":"slack.list_item","payload":{"list_id":"FTEAM","fields":{"Task":"Ship the bridge","Owner":"Craig","Status":"Complete","Priority":"High","Private Notes":"preserve me"}}},
+		{"type":"slack.list_item","payload":{"list_id":"FPERSONAL","fields":{"Title":"Schedule design review","Done":"TRUE","Notes":"also preserve me"}}}
+	]`
+	result, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{HomeDir: homeDir, RequestID: emitted.Request.ID, ClaimToken: claims[0].ClaimToken, Input: strings.NewReader(input)})
+	if err != nil {
+		t.Fatalf("ingest interpreted snapshot: %v", err)
+	}
+	if result.EventsInserted != 2 {
+		t.Fatalf("expected completed and unknown-state rows to remain captured, got %#v", result)
+	}
+
+	db := openBridgedCaptureDatabase(t, homeDir)
+	rows, err := db.Query(`SELECT payload_json FROM events WHERE type = 'slack.list_item' ORDER BY project`)
+	if err != nil {
+		t.Fatalf("read interpreted events: %v", err)
+	}
+	defer rows.Close()
+	payloads := map[string]map[string]any{}
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			t.Fatalf("scan interpreted event: %v", err)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+			t.Fatalf("decode interpreted event: %v", err)
+		}
+		payloads[payload["list_id"].(string)] = payload
+	}
+	team := payloads["FTEAM"]
+	if team["done"] != true {
+		t.Fatalf("expected FTEAM configured state to be done, got %#v", team)
+	}
+	interest, ok := team["interest_fields"].(map[string]any)
+	if !ok || interest["Task"] != "Ship the bridge" || interest["Priority"] != "High" || len(interest) != 2 {
+		t.Fatalf("expected FTEAM interest projection, got %#v", team["interest_fields"])
+	}
+	if _, found := payloads["FPERSONAL"]["done"]; found {
+		t.Fatalf("expected unconfigured FPERSONAL state to remain unknown, got %#v", payloads["FPERSONAL"])
+	}
+	if !strings.Contains(fmt.Sprint(team["fields"]), "preserve me") || !strings.Contains(fmt.Sprint(payloads["FPERSONAL"]["fields"]), "also preserve me") {
+		t.Fatalf("expected complete raw fields, got %#v", payloads)
 	}
 }
 
@@ -764,7 +828,7 @@ func TestSelectingDirectModeCancelsOrphanedBridgedRequest(t *testing.T) {
 	}
 }
 
-func TestBridgeRenewsLeaseAndReportsRetryableFailure(t *testing.T) {
+func TestBridgeRenewsLeaseAndReportsRetryableFailureAfterExpiry(t *testing.T) {
 	homeDir := initBridgedCaptureHome(t)
 	connectBridgedConnector(t, repoRoot(t), homeDir, "github")
 	start := time.Now().UTC()
@@ -789,16 +853,30 @@ func TestBridgeRenewsLeaseAndReportsRetryableFailure(t *testing.T) {
 	}
 	if err := workgraph.FailCaptureRequest(workgraph.CaptureRequestCapabilityConfig{
 		HomeDir: homeDir, RequestID: emitted.Request.ID, ClaimToken: claimed[0].ClaimToken,
-		Error: "provider permission denied", Now: start.Add(time.Minute),
+		Error: "snapshot serialization exceeded the lease", Now: start.Add(6 * time.Minute),
 	}); err != nil {
-		t.Fatalf("report request failure: %v", err)
+		t.Fatalf("report request failure after lease expiry: %v", err)
 	}
 	requests, err := workgraph.ListCaptureRequests(workgraph.CaptureRequestListConfig{HomeDir: homeDir, ConnectorID: "github"})
 	if err != nil || len(requests) != 1 {
 		t.Fatalf("list retried request: requests=%d error=%v", len(requests), err)
 	}
-	if requests[0].Status != "pending" || requests[0].AvailableAt <= start.Add(time.Minute).Format(time.RFC3339Nano) {
+	if requests[0].Status != "pending" || requests[0].AvailableAt <= start.Add(6*time.Minute).Format(time.RFC3339Nano) {
 		t.Fatalf("expected pending request after persisted backoff, got %#v", requests[0])
+	}
+	db := openBridgedCaptureDatabase(t, homeDir)
+	var lastError string
+	if err := db.QueryRow(`SELECT last_error FROM capture_requests WHERE id = ?`, emitted.Request.ID).Scan(&lastError); err != nil {
+		t.Fatalf("read retained expired-claim failure: %v", err)
+	}
+	if lastError != "snapshot serialization exceeded the lease" {
+		t.Fatalf("expected expired claim failure to be retained, got %q", lastError)
+	}
+	if err := workgraph.FailCaptureRequest(workgraph.CaptureRequestCapabilityConfig{
+		HomeDir: homeDir, RequestID: emitted.Request.ID, ClaimToken: claimed[0].ClaimToken,
+		Error: "late duplicate failure", Now: start.Add(7 * time.Minute),
+	}); err == nil || !strings.Contains(err.Error(), "stale or invalid") {
+		t.Fatalf("expected released claim token to remain invalid, got %v", err)
 	}
 }
 

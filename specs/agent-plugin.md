@@ -50,7 +50,9 @@ workgraph plugin doctor --client <codex|claude-code>
 4. writes an absolute MCP command and explicit workgraph home;
 5. registers the local marketplace and installs or updates `workgraph`;
 6. installs the opt-in macOS bridge drain worker unless `--no-launchd` is set;
-7. reports the client, package location, skills, MCP, and worker state.
+7. reports the client, package location, skills, MCP, and worker state;
+8. tells the user that executable upgrades require a daemon restart and a new
+   client session, because neither long-lived process hot-reloads its binary.
 
 The command is idempotent and preserves unrelated client settings. Rerunning it
 is the supported plugin update path after upgrading the workgraph binary.

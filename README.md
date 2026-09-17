@@ -121,6 +121,12 @@ receive provider OAuth approval, the bridge skill can use connectors already
 approved in that client; the daemon still owns cadence and local storage, and
 workgraph never receives the provider token.
 
+After replacing or upgrading the workgraph executable, run `workgraph status`.
+It reports the daemon's running and on-disk builds and warns if capture still
+pins the old binary. Restart stale capture with `workgraph stop && workgraph
+start`, reinstall the plugin, and start a new client session so its MCP server
+also uses the new build.
+
 Start local capture:
 
 ```sh

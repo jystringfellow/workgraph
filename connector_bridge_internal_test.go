@@ -16,7 +16,7 @@ func TestValidatedBridgeParamsRequireBoundedConnectorScope(t *testing.T) {
 	}{
 		{"github", `{"repositories":["demo/repository"]}`, "", `{}`},
 		{"slack", `{"channels":["C0DEMO123"],"include_dms":false}`, "", `{"channels":[]}`},
-		{"slack.lists", `{"lists":["F0DEMO123"]}`, `{"done_column":"Done","lists":["F0DEMO123"],"row_key_candidates":[["Related Message"],["Title","Cycle"],["Title"]]}`, `{}`},
+		{"slack.lists", `{"lists":["F0DEMO123"]}`, `{"lists":["F0DEMO123"],"row_key_candidates":[["Related Message"],["Title","Cycle"],["Title"]]}`, `{}`},
 		{"mail.microsoft", `{"folders":["inbox"],"preview_limit":500}`, "", `{"folders":[]}`},
 		{"calendar.microsoft", `{"calendars":["primary"],"past_days":7,"future_days":30}`, "", `{"calendars":["primary"],"past_days":7}`},
 		{"azure.boards", `{"organization":"example-org","project":"Demo","area_path":"Demo"}`, "", `{"organization":"example-org"}`},
@@ -61,6 +61,37 @@ func TestValidatedBridgeParamsRejectMalformedObjectsAndSecrets(t *testing.T) {
 	}
 	if _, err := validatedBridgeParams("notion", json.RawMessage(`{"roots":["demo-root"],"preview_limit":500}`)); err == nil || !strings.Contains(err.Error(), "notion only supports direct capture") {
 		t.Fatalf("expected Notion to reject bridged parameters, got %v", err)
+	}
+}
+
+func TestValidatedSlackListBridgeParamsUsePerListInterpretation(t *testing.T) {
+	raw := json.RawMessage(`{"lists":["FTEAM"],"list_options":{"FTEAM":{"state":{"column":" Status ","done_values":[" Complete ","Done"]},"interest_columns":[" Task ","Priority"],"row_key_candidates":[[" Task ","Owner"]]}}}`)
+	params, err := validatedBridgeParams("slack.lists", raw)
+	if err != nil {
+		t.Fatalf("validate per-List options: %v", err)
+	}
+	var decoded slackListSnapshotParams
+	if err := json.Unmarshal(params, &decoded); err != nil {
+		t.Fatalf("decode canonical per-List options: %v", err)
+	}
+	options := decoded.ListOptions["FTEAM"]
+	if options.State == nil || options.State.Column != "Status" || !reflect.DeepEqual(options.State.DoneValues, []string{"Complete", "Done"}) {
+		t.Fatalf("expected canonical state options, got %#v", options.State)
+	}
+	if !reflect.DeepEqual(options.InterestColumns, []string{"Task", "Priority"}) || !reflect.DeepEqual(options.RowKeyCandidates, [][]string{{"Task", "Owner"}}) {
+		t.Fatalf("expected canonical per-List columns, got %#v", options)
+	}
+	if decoded.DoneColumn != "" {
+		t.Fatalf("expected no implicit Done column, got %q", decoded.DoneColumn)
+	}
+
+	for _, invalid := range []string{
+		`{"lists":["FTEAM"],"list_options":{"FOTHER":{"interest_columns":["Title"]}}}`,
+		`{"lists":["FTEAM"],"list_options":{"FTEAM":{"state":{"column":"Status","done_values":[]}}}}`,
+	} {
+		if _, err := validatedBridgeParams("slack.lists", json.RawMessage(invalid)); err == nil {
+			t.Fatalf("expected invalid per-List options to fail: %s", invalid)
+		}
 	}
 }
 

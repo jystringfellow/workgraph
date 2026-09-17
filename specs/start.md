@@ -6,6 +6,14 @@ capture is ready.
 `workgraph status` reports background capture state, and `workgraph stop` stops
 background capture explicitly.
 
+The daemon records the build identity and executable modification metadata it
+started with. While capture is running, `workgraph status` reports both the
+running build and the build currently available at that executable path. If the
+file was replaced after the daemon started, or if an older daemon predates this
+metadata, status emits a prominent stale-binary warning with
+`workgraph stop && workgraph start` recovery guidance. A live PID alone is not
+evidence that the running daemon picked up an executable upgrade.
+
 Capture control is responsible for:
 
 - refusing to start before `workgraph init`

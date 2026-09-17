@@ -45,8 +45,8 @@ and `include_dms`, or a participant strategy such as
 `{"scope":"participant","identity":"@Me","include":["authored","mentions","thread_participation"]}`.
 Azure Boards accepts `organization` with `project` and `area_path`, or
 `{"organization":"example-org","scope":"participant","identity":"@Me","include":["authored","assigned"]}`.
-Slack Lists accepts configured List ids plus optional snapshot normalization,
-for example `{"lists":["F123"],"done_column":"Done","row_key_candidates":[["Related Message"],["Title","Cycle"],["Title"]]}`.
+Slack Lists accepts configured List ids plus optional per-List snapshot
+interpretation, for example `{"lists":["F123"],"list_options":{"F123":{"state":{"column":"Status","done_values":["Done","Complete"]},"interest_columns":["Title","Priority","Related Message"],"row_key_candidates":[["Related Message"],["Title","Cycle"],["Title"]]}}}`.
 Do not broaden a scope when a provider query times out; return to setup and
 propose a narrower approved scope.
 
@@ -132,18 +132,23 @@ trust `oldest` or `latest` on `slack_read_thread`. Read the complete thread and
 filter every reply against the exact request bounds during normalization.
 
 For Slack Lists, preflight and use `slack_read_file` on every configured List
-id. It is a `complete_snapshot` recipe: parse the entire returned CSV, preserve
-each column as a value in `fields`, and submit every row through
-`capture_ingest` in this shape:
+id. It is a `complete_snapshot` recipe. When the request is scoped to exactly
+one List, pass the complete `slack_read_file` result to `capture_ingest`
+verbatim so workgraph parses it server-side:
 
 ```json
-{"type":"slack.list_item","summary":"Optional title","payload":{"list_id":"F123","fields":{"Title":"Review design","Done":"FALSE","Related Message":"https://example.slack.com/archives/C123/p123"}}}
+{"request_id":"...","claim_token":"...","list_id":"F123","snapshot_csv":"<verbatim CSV>"}
 ```
 
-Omit `timestamp` and `external_id`. workgraph validates List scope, chooses the
-first complete configured row-key candidate, normalizes the Done column,
-assigns the request `until` as observation time, and calculates the canonical
-content-hash revision. Submit no partial snapshot. The request bounds describe
+Do not transcribe CSV rows into nested JSON when raw mode applies. For a
+multi-List request, preserve the existing atomic contract by parsing every List
+and submitting all rows together as event-shaped compatibility input. Omit
+`timestamp` and `external_id`. workgraph validates List scope, chooses the
+first complete configured row-key candidate, applies optional per-List state
+and interest interpretation, assigns the request `until` as observation time,
+and calculates the canonical content-hash revision. State interpretation never
+filters rows; submit every row, including completed work, and submit no partial
+snapshot. The request bounds describe
 the observation cycle, not provider change history. Multiple edits between
 polls can collapse into one observation, and a row created and removed between
 polls can be missed. A missing row is not proof of completion or deletion.
@@ -157,6 +162,11 @@ project argument as MCP routing context. Discover or use one accessible project
 but keep the approved collection-wide `@Me` WIQL predicate; do not fan out or
 treat the routing project as an additional filter.
 
+Avoid a cold `npx -y @azure-devops/mcp` launch for an unattended worker when
+the client has a short MCP connection timeout. Install or pre-resolve the
+package and register its resolved executable so package download time cannot
+masquerade as a missing provider tool.
+
 The bundled Claude Code permissions authorize workgraph MCP drain operations,
 plus only provider tools explicitly approved during plugin installation. They
 do not authorize configuration, disconnect, arbitrary Bash, or provider tools
@@ -167,4 +177,9 @@ by default.
 Use `workgraph capture requests --list`, `workgraph capture watermark
 --connector <id>`, and `workgraph connectors status`. Verify at least one real
 or proven-empty request round trip for each configured connector. Provider calls
-must originate from the approved AI client connector, not workgraph.
+must originate from the approved AI client connector, not workgraph. Inspect
+the `runtime` object returned by capture and connector-status MCP tools. If it
+reports `stale: true`, do not treat that session as verification of the
+installed build; reinstall the plugin if needed and start a new client session.
+If `workgraph status` reports a stale daemon, run `workgraph stop && workgraph
+start` before verifying scheduled capture.

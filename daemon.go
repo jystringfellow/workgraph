@@ -50,6 +50,7 @@ type DaemonStatus struct {
 	WatchLimitPath      string                   `json:"watch_limit_path"`
 	RegisteredWatchDirs []string                 `json:"registered_watch_dirs"`
 	MonitoredConnectors []string                 `json:"monitored_connectors,omitempty"`
+	Runtime             ProcessRuntimeStatus     `json:"runtime,omitempty"`
 	ConnectorErrors     []ConnectorHealthFinding `json:"-"`
 	LastError           string                   `json:"last_error,omitempty"`
 	Message             string                   `json:"-"`
@@ -220,6 +221,7 @@ func DaemonStatusForHome(homeDir string) (DaemonStatus, error) {
 	}
 
 	status.Running = true
+	status.Runtime = inspectProcessRuntimeStatus(status.Runtime, "daemon")
 	status.ConnectorErrors = activeConnectorPollErrors(resolvedHome)
 	status.Message = daemonRunningMessage(status)
 	return status, nil
@@ -281,6 +283,7 @@ func daemonStatusFromRun(status RunStatus, pid int) DaemonStatus {
 		WatchLimitPath:      status.WatchLimitPath,
 		RegisteredWatchDirs: append([]string(nil), status.RegisteredWatchDirs...),
 		MonitoredConnectors: append([]string(nil), status.MonitoredConnectors...),
+		Runtime:             captureProcessRuntimeStatus(),
 	}
 }
 
@@ -394,8 +397,9 @@ func daemonStartedMessage(status DaemonStatus) string {
 		"PID: " + strconv.Itoa(status.PID),
 		"Home: " + status.HomeDir,
 		"Database: " + status.DatabasePath,
-		daemonWatchSummaryLine(status),
 	}
+	appendProcessRuntimeLines(&lines, status.Runtime)
+	lines = append(lines, daemonWatchSummaryLine(status))
 	if len(status.MonitoredConnectors) > 0 {
 		lines = append(lines, "Monitoring: "+strings.Join(status.MonitoredConnectors, ", "))
 	}
@@ -409,8 +413,9 @@ func daemonRunningMessage(status DaemonStatus) string {
 		"PID: " + strconv.Itoa(status.PID),
 		"Home: " + status.HomeDir,
 		"Database: " + status.DatabasePath,
-		daemonWatchSummaryLine(status),
 	}
+	appendProcessRuntimeLines(&lines, status.Runtime)
+	lines = append(lines, daemonWatchSummaryLine(status))
 	if len(status.MonitoredConnectors) > 0 {
 		lines = append(lines, "Monitoring: "+strings.Join(status.MonitoredConnectors, ", "))
 	}
@@ -423,6 +428,21 @@ func daemonRunningMessage(status DaemonStatus) string {
 	}
 	appendDaemonWatchLimitLine(&lines, status)
 	return strings.Join(lines, "\n")
+}
+
+func appendProcessRuntimeLines(lines *[]string, runtime ProcessRuntimeStatus) {
+	*lines = append(*lines,
+		"Running build: "+formatBuildIdentity(runtime.Running),
+		"On-disk build: "+formatBuildIdentity(runtime.OnDisk),
+	)
+	if strings.TrimSpace(runtime.Warning) != "" {
+		*lines = append(*lines, "WARNING: "+runtime.Warning)
+	}
+}
+
+func formatBuildIdentity(identity BuildIdentity) string {
+	identity = normalizeBuildIdentity(identity)
+	return fmt.Sprintf("%s (commit %s, built %s)", identity.Version, identity.Commit, identity.Built)
 }
 
 func activeConnectorPollErrors(homeDir string) []ConnectorHealthFinding {

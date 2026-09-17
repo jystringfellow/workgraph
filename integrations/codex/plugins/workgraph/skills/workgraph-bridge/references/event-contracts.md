@@ -47,14 +47,19 @@ query that proves emptiness. A zero-result search alone is not proof when the
 provider search is indexed, capped, or partial.
 
 Slack Lists use declared `complete_snapshot` semantics with `slack_read_file`.
-Submit every CSV record as `slack.list_item` with payload containing `list_id`
-and a `fields` object, and omit `timestamp` and `external_id`. workgraph selects
-the first complete configured row-key candidate, normalizes the configured Done
-column, assigns the request `until` as `observed_at`, hashes canonical JSON of
-the semantic row, and derives `<list>:<row-key>:<content-hash>`. Field order and
-observation metadata do not affect the content hash. Duplicate or missing row
-keys fail the complete batch. Done state is revision content, not identity, so
-completed rows remain evidence while future next-work views can exclude them.
+For a one-List request, submit the complete provider output verbatim as
+`snapshot_csv` with `list_id`; workgraph parses it server-side. Multi-List
+compatibility batches submit every CSV record as `slack.list_item` with payload
+containing `list_id` and a `fields` object, and omit `timestamp` and
+`external_id`. workgraph selects
+the first complete per-List row-key candidate, applies optional state and
+interest-column interpretation, assigns the request `until` as `observed_at`,
+hashes canonical JSON of the semantic row, and derives
+`<list>:<row-key>:<content-hash>`. Field order and observation metadata do not
+affect the content hash. Duplicate or missing row keys fail the complete batch.
+State is revision content, not identity, and never filters capture, so completed
+rows remain evidence while future next-work views can exclude them. Without a
+state mapping, `done` remains absent/unknown.
 A renamed row may appear new when no stable related-message or other key is
 available. A missing row is not a deletion or proof of completion.
 

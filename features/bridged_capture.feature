@@ -31,6 +31,12 @@ Feature: Bridged connector capture
     And status never exposes the claim token
     And an expired claim is retried with its original request bounds
 
+  Scenario: Preserve a worker failure after its lease expires
+    Given a bridge worker still holds the matching token for an expired claim
+    When it reports why the request failed
+    Then workgraph records the bounded error and releases the claim for retry
+    And a different or previously reaped token remains invalid
+
   Scenario: Complete one bridged capture transaction
     Given an approved bridge worker has claimed a request
     When it ingests a valid normalized event batch
@@ -86,6 +92,8 @@ Feature: Bridged connector capture
     When a client lists or claims bridge requests or inspects connector status over MCP
     Then the successful structured content is an object
     And requests, claims, and connectors are returned in named collection fields
+    And capture and connector status results report running and on-disk MCP builds
+    And a client session whose executable changed reports that its MCP server is stale
 
   Scenario: Skip work that the unattended client cannot execute
     Given a healthy connector has pending bridged work
@@ -97,12 +105,20 @@ Feature: Bridged connector capture
 
   Scenario: Observe Slack List rows without provider revisions
     Given a bridged Slack List is available as a complete CSV without item ids or row timestamps
-    When the worker reads the configured List with slack_read_file and submits every row
+    When the worker reads the configured List with slack_read_file and submits its raw CSV
     Then the request declares complete-snapshot semantics
+    And workgraph parses quoted CSV fields into complete rows server-side
     And workgraph derives stable row keys, normalized Done state, observation time, and canonical content-hash revisions
     And unchanged observations deduplicate while changed Done state creates a new revision
     And duplicate or missing row keys reject the entire snapshot
     And the contract does not claim that an absent row is completed or deleted
+
+  Scenario: Interpret bridged Slack Lists per List
+    Given bridged Slack Lists use different state and identity columns
+    When the worker submits each complete List snapshot
+    Then workgraph applies state, interest columns, and row keys per List
+    And all CSV fields and completed rows remain captured evidence
+    And Lists without state configuration leave completion unknown
 
   Scenario: Apply provider-specific recipe correctness
     Given a bridged request needs secondary identity data or client-side filtering

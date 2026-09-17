@@ -21,6 +21,12 @@ func main() {
 }
 
 func run(args []string, stdout io.Writer, stderr io.Writer) int {
+	identity := currentBuildIdentity()
+	workgraph.SetProcessBuildIdentity(workgraph.BuildIdentity{
+		Version: identity.Version,
+		Commit:  identity.Commit,
+		Built:   identity.BuildDate,
+	})
 	if len(args) > 0 && args[0] == "help" {
 		if len(args) == 2 && (args[1] == "-h" || args[1] == "--help") {
 			return runHelp([]string{"help"}, false, stdout, stderr)
@@ -2435,17 +2441,28 @@ func runSlackListsCapture(args []string, stdout io.Writer, stderr io.Writer) int
 	databasePath := flags.String("database", "", "workgraph SQLite database path")
 	token := flags.String("token", os.Getenv("WORKGRAPH_SLACK_TOKEN"), "Slack API token")
 	listID := flags.String("list-id", "", "Slack List id to capture")
+	optionsJSON := flags.String("options-json", "", "non-secret interpretation options for this Slack List")
 	slackAPIBaseURL := flags.String("slack-api-base", "", "Slack API base URL")
 
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
 
+	var options workgraph.SlackListOptions
+	if strings.TrimSpace(*optionsJSON) != "" {
+		decoder := json.NewDecoder(strings.NewReader(*optionsJSON))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&options); err != nil {
+			fmt.Fprintf(stderr, "workgraph slack lists capture: options-json must be a Slack List options object: %v\n", err)
+			return 1
+		}
+	}
 	result, err := workgraph.CaptureSlackList(workgraph.SlackListCaptureConfig{
 		HomeDir:      *homeDir,
 		DatabasePath: *databasePath,
 		Token:        *token,
 		ListID:       *listID,
+		Options:      options,
 		APIBaseURL:   *slackAPIBaseURL,
 	})
 	if err != nil {
@@ -2473,12 +2490,22 @@ func runSlackConnect(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags.Var(&channels, "channel", "Slack channel id to collect after connecting")
 	listIDs := watchDirFlags{}
 	flags.Var(&listIDs, "list", "Slack List id to collect after connecting")
+	listOptionsJSON := flags.String("list-options-json", "", "non-secret per-List interpretation options keyed by List id")
 	includeDMs := flags.Bool("include-dms", false, "Opt into collecting Slack direct and group direct messages")
 
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
 
+	var listOptions map[string]workgraph.SlackListOptions
+	if strings.TrimSpace(*listOptionsJSON) != "" {
+		decoder := json.NewDecoder(strings.NewReader(*listOptionsJSON))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&listOptions); err != nil {
+			fmt.Fprintf(stderr, "workgraph slack connect: list-options-json must be an object keyed by List id: %v\n", err)
+			return 1
+		}
+	}
 	config := workgraph.SlackConnectConfig{
 		HomeDir:          *homeDir,
 		ClientID:         *clientID,
@@ -2490,6 +2517,7 @@ func runSlackConnect(args []string, stdout io.Writer, stderr io.Writer) int {
 		ExpectedState:    *state,
 		Channels:         channels,
 		ListIDs:          listIDs,
+		ListOptions:      listOptions,
 		IncludeDMs:       *includeDMs,
 		APIBaseURL:       *slackAPIBaseURL,
 	}

@@ -26,6 +26,13 @@ Scenario: Report capture status
   And I see the PID
   And I see watched directories
   And I see ignored paths and names
+  And I see the daemon's running and on-disk build identities
+
+Scenario: Warn when a running daemon pins an older executable
+  Given workgraph background capture started before its executable was replaced
+  When I run "workgraph status"
+  Then I see that the running daemon binary is stale
+  And I see how to stop and restart capture
 
 Scenario: Commit background readiness state
   Given workgraph starts or restarts background capture
