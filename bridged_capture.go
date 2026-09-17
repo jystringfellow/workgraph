@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -199,6 +200,8 @@ func RenewCaptureRequest(config CaptureRequestCapabilityConfig) (CaptureRequest,
 }
 
 // FailCaptureRequest returns claimed work to pending after persisted backoff.
+// A matching token may report failure after lease expiry while the request is
+// still claimed, preserving the real failure before the daemon reaps it.
 func FailCaptureRequest(config CaptureRequestCapabilityConfig) error {
 	status, err := prepareRunStatus(RunConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath})
 	if err != nil {
@@ -216,19 +219,15 @@ func FailCaptureRequest(config CaptureRequestCapabilityConfig) error {
 	defer db.Close()
 	var connectorID string
 	var attempts int
-	var storedToken, requestStatus, leaseExpires string
-	err = db.QueryRow(`SELECT connector_id, attempts, COALESCE(claim_token, ''), status, COALESCE(lease_expires_at, '')
+	var storedToken, requestStatus string
+	err = db.QueryRow(`SELECT connector_id, attempts, COALESCE(claim_token, ''), status
 		FROM capture_requests WHERE id = ?`, strings.TrimSpace(config.RequestID)).Scan(
-		&connectorID, &attempts, &storedToken, &requestStatus, &leaseExpires)
+		&connectorID, &attempts, &storedToken, &requestStatus)
 	if err != nil {
 		return fmt.Errorf("read capture request: %w", err)
 	}
 	if requestStatus != "claimed" || storedToken != config.ClaimToken {
 		return fmt.Errorf("capture request claim token is stale or invalid")
-	}
-	leaseTime, err := time.Parse(time.RFC3339Nano, leaseExpires)
-	if err != nil || !leaseTime.After(now) {
-		return fmt.Errorf("capture request claim lease has expired")
 	}
 	delay := connectorRetryDelay(defaultConnectorRetryInitial, defaultConnectorRetryMax, attempts)
 	availableAt := now.Add(delay)
@@ -626,12 +625,13 @@ func completeClaimedCaptureRequest(tx *sql.Tx, request CaptureRequest, claimToke
 
 // BridgedIngestConfig controls an explicit local bridged capture ingest.
 type BridgedIngestConfig struct {
-	HomeDir      string
-	DatabasePath string
-	Source       string
-	RequestID    string
-	ClaimToken   string
-	Input        io.Reader
+	HomeDir        string
+	DatabasePath   string
+	Source         string
+	RequestID      string
+	ClaimToken     string
+	SnapshotListID string
+	Input          io.Reader
 }
 
 // BridgedIngestResult describes one local bridged capture ingest.
@@ -740,6 +740,14 @@ func IngestBridgedCapture(config BridgedIngestConfig) (BridgedIngestResult, erro
 	}
 	if err := validateBridgeableConnector(connectorID); err != nil {
 		return BridgedIngestResult{}, err
+	}
+	if strings.TrimSpace(config.SnapshotListID) != "" {
+		if claimedRequest == nil || connectorID != "slack.lists" || claimedRequest.CaptureSemantics != "complete_snapshot" {
+			return BridgedIngestResult{}, fmt.Errorf("snapshot_csv requires a claimed Slack Lists complete-snapshot request")
+		}
+		if err := validateSlackListRawSnapshotScope(*claimedRequest, config.SnapshotListID); err != nil {
+			return BridgedIngestResult{}, err
+		}
 	}
 	if !connectorEnabled(state, connectorID) || connectorCaptureMode(state, connectorID) != "bridged" {
 		return BridgedIngestResult{}, fmt.Errorf("connector %s is not enabled in bridged mode", connectorID)
@@ -918,6 +926,58 @@ func decodeBridgedEvents(input io.Reader) ([]bridgedEventEnvelope, error) {
 	return events, nil
 }
 
+func slackListSnapshotEnvelopesFromCSV(listID string, contents string) ([]bridgedEventEnvelope, error) {
+	listID = strings.TrimSpace(listID)
+	if listID == "" {
+		return nil, fmt.Errorf("list_id is required with snapshot_csv")
+	}
+	if len(contents) > maxBridgedIngestBytes {
+		return nil, fmt.Errorf("snapshot_csv exceeds %d bytes", maxBridgedIngestBytes)
+	}
+	reader := csv.NewReader(strings.NewReader(contents))
+	header, err := reader.Read()
+	if err == io.EOF {
+		return nil, fmt.Errorf("snapshot_csv is empty")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("parse Slack List CSV header: %w", err)
+	}
+	seen := map[string]bool{}
+	for index, column := range header {
+		column = strings.TrimSpace(strings.TrimPrefix(column, "\ufeff"))
+		key := strings.ToLower(column)
+		if column == "" {
+			return nil, fmt.Errorf("Slack List CSV column %d has an empty header", index+1)
+		}
+		if seen[key] {
+			return nil, fmt.Errorf("Slack List CSV has duplicate column %q", column)
+		}
+		seen[key] = true
+		header[index] = column
+	}
+
+	events := make([]bridgedEventEnvelope, 0)
+	for recordNumber := 2; ; recordNumber++ {
+		record, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("parse Slack List CSV record %d: %w", recordNumber, err)
+		}
+		fields := make(map[string]any, len(header))
+		for index, column := range header {
+			fields[column] = record[index]
+		}
+		payload, err := json.Marshal(slackListSnapshotInput{ListID: listID, Fields: fields})
+		if err != nil {
+			return nil, fmt.Errorf("encode Slack List CSV record %d: %w", recordNumber, err)
+		}
+		events = append(events, bridgedEventEnvelope{Type: "slack.list_item", Payload: payload})
+	}
+	return events, nil
+}
+
 func decodeStrictJSON(contents []byte, destination any) error {
 	decoder := json.NewDecoder(bytes.NewReader(contents))
 	decoder.DisallowUnknownFields()
@@ -969,14 +1029,27 @@ func prepareBridgedEvent(source string, envelope bridgedEventEnvelope) (prepared
 }
 
 type slackListSnapshotParams struct {
-	Lists            []string   `json:"lists"`
-	DoneColumn       string     `json:"done_column"`
-	RowKeyCandidates [][]string `json:"row_key_candidates"`
+	Lists            []string                    `json:"lists"`
+	DoneColumn       string                      `json:"done_column,omitempty"`
+	RowKeyCandidates [][]string                  `json:"row_key_candidates"`
+	ListOptions      map[string]SlackListOptions `json:"list_options,omitempty"`
 }
 
 type slackListSnapshotInput struct {
 	ListID string         `json:"list_id"`
 	Fields map[string]any `json:"fields"`
+}
+
+func validateSlackListRawSnapshotScope(request CaptureRequest, listID string) error {
+	var params slackListSnapshotParams
+	if err := decodeStrictJSON(request.Params, &params); err != nil {
+		return fmt.Errorf("decode Slack List snapshot parameters: %w", err)
+	}
+	listID = strings.TrimSpace(listID)
+	if len(params.Lists) != 1 || strings.TrimSpace(params.Lists[0]) != listID {
+		return fmt.Errorf("snapshot_csv list_id must be the request's sole configured Slack List")
+	}
+	return nil
 }
 
 func prepareSlackListSnapshotEvent(request CaptureRequest, envelope bridgedEventEnvelope) (preparedBridgedEvent, error) {
@@ -1008,16 +1081,30 @@ func prepareSlackListSnapshotEvent(request CaptureRequest, envelope bridgedEvent
 	if !allowed {
 		return preparedBridgedEvent{}, fmt.Errorf("Slack List %q is outside the approved list scope", input.ListID)
 	}
-	rowKey, err := slackListSnapshotRowKey(input.Fields, params.RowKeyCandidates)
+	options, hasListOptions := findSlackListOptions(params.ListOptions, input.ListID)
+	rowKeyCandidates := options.RowKeyCandidates
+	if len(rowKeyCandidates) == 0 {
+		rowKeyCandidates = params.RowKeyCandidates
+	}
+	rowKey, err := slackListSnapshotRowKey(input.Fields, rowKeyCandidates)
 	if err != nil {
 		return preparedBridgedEvent{}, err
 	}
-	doneValue, _ := slackListSnapshotField(input.Fields, params.DoneColumn)
-	done, err := normalizeSlackListDone(doneValue)
-	if err != nil {
-		return preparedBridgedEvent{}, fmt.Errorf("Done column %q: %w", params.DoneColumn, err)
+	legacyDoneColumn := params.DoneColumn
+	if hasListOptions {
+		legacyDoneColumn = ""
 	}
-	semantic := map[string]any{"done": done, "fields": input.Fields, "list_id": input.ListID}
+	done, interestFields, err := interpretSlackListFields(input.Fields, options, legacyDoneColumn)
+	if err != nil {
+		return preparedBridgedEvent{}, err
+	}
+	semantic := map[string]any{"fields": input.Fields, "list_id": input.ListID}
+	if done != nil {
+		semantic["done"] = *done
+	}
+	if len(interestFields) > 0 {
+		semantic["interest_fields"] = interestFields
+	}
 	semanticJSON, err := json.Marshal(semantic)
 	if err != nil {
 		return preparedBridgedEvent{}, fmt.Errorf("encode Slack List semantic row: %w", err)
@@ -1031,11 +1118,16 @@ func prepareSlackListSnapshotEvent(request CaptureRequest, envelope bridgedEvent
 	payload := map[string]any{
 		"capture_semantics": "complete_snapshot",
 		"content_hash":      contentHash,
-		"done":              done,
 		"fields":            input.Fields,
 		"list_id":           input.ListID,
 		"observed_at":       observedAt.UTC().Format(time.RFC3339Nano),
 		"row_key":           rowKey,
+	}
+	if done != nil {
+		payload["done"] = *done
+	}
+	if len(interestFields) > 0 {
+		payload["interest_fields"] = interestFields
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
@@ -1045,8 +1137,15 @@ func prepareSlackListSnapshotEvent(request CaptureRequest, envelope bridgedEvent
 	eventDigest := sha256.Sum256([]byte("slack\x00" + externalID))
 	summary := strings.TrimSpace(envelope.Summary)
 	if summary == "" {
-		if title, found := slackListSnapshotField(input.Fields, "Title"); found {
-			summary = snapshotFieldText(title)
+		if len(options.InterestColumns) > 0 {
+			if value, found := slackListSnapshotField(input.Fields, options.InterestColumns[0]); found {
+				summary = snapshotFieldText(value)
+			}
+		}
+		if summary == "" {
+			if title, found := slackListSnapshotField(input.Fields, "Title"); found {
+				summary = snapshotFieldText(title)
+			}
 		}
 	}
 	project := strings.TrimSpace(envelope.Project)

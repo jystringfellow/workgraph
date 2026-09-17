@@ -16,6 +16,7 @@ type BridgeMCPConfig struct {
 	DatabasePath string
 	Input        io.Reader
 	Output       io.Writer
+	runtime      ProcessRuntimeStatus
 }
 
 type bridgeMCPRequest struct {
@@ -35,6 +36,9 @@ type bridgeMCPTool struct {
 func ServeBridgeMCP(config BridgeMCPConfig) error {
 	if config.Input == nil || config.Output == nil {
 		return fmt.Errorf("bridge MCP requires input and output")
+	}
+	if strings.TrimSpace(config.runtime.Executable) == "" {
+		config.runtime = captureProcessRuntimeStatus()
 	}
 	scanner := bufio.NewScanner(config.Input)
 	scanner.Buffer(make([]byte, 64*1024), maxBridgedIngestBytes)
@@ -77,7 +81,7 @@ func handleBridgeMCPRequest(config BridgeMCPConfig, request bridgeMCPRequest) (a
 		return map[string]any{
 			"protocolVersion": "2024-11-05",
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
-			"serverInfo":      map[string]any{"name": "workgraph-bridge", "version": "1"},
+			"serverInfo":      map[string]any{"name": "workgraph-bridge", "version": config.runtime.Running.Version},
 		}, nil
 	case "tools/list":
 		return map[string]any{"tools": bridgeMCPTools()}, nil
@@ -93,6 +97,9 @@ func handleBridgeMCPRequest(config BridgeMCPConfig, request bridgeMCPRequest) (a
 		if err != nil {
 			return map[string]any{"content": []any{map[string]any{"type": "text", "text": err.Error()}}, "isError": true}, nil
 		}
+		if strings.HasPrefix(call.Name, "capture_") || call.Name == "connector_status" {
+			value = bridgeMCPResultWithRuntime(value, inspectProcessRuntimeStatus(config.runtime, "MCP server"))
+		}
 		encoded, _ := json.Marshal(value)
 		return map[string]any{
 			"content":           []any{map[string]any{"type": "text", "text": string(encoded)}},
@@ -101,6 +108,18 @@ func handleBridgeMCPRequest(config BridgeMCPConfig, request bridgeMCPRequest) (a
 	default:
 		return nil, bridgeMCPErrorData(-32601, "method not found")
 	}
+}
+
+func bridgeMCPResultWithRuntime(value any, runtime ProcessRuntimeStatus) map[string]any {
+	result := map[string]any{}
+	if encoded, err := json.Marshal(value); err == nil {
+		_ = json.Unmarshal(encoded, &result)
+	}
+	if result == nil {
+		result = map[string]any{}
+	}
+	result["runtime"] = runtime
+	return result
 }
 
 func bridgeMCPTools() []bridgeMCPTool {
@@ -113,11 +132,19 @@ func bridgeMCPTools() []bridgeMCPTool {
 	}
 	str := map[string]any{"type": "string"}
 	integer := map[string]any{"type": "integer", "minimum": 1, "maximum": 100}
+	captureIngest := object(map[string]any{
+		"request_id": str, "claim_token": str, "source": str, "events": map[string]any{},
+		"list_id": str, "snapshot_csv": str,
+	})
+	captureIngest["oneOf"] = []any{
+		map[string]any{"required": []string{"events"}},
+		map[string]any{"required": []string{"request_id", "claim_token", "list_id", "snapshot_csv"}},
+	}
 	return []bridgeMCPTool{
 		{"capture_requests_list", "List non-secret bridged capture outbox metadata.", object(map[string]any{"connector": str})},
 		{"capture_requests_claim", "Atomically claim daemon-scheduled capture work.", object(map[string]any{"connector": str, "worker": str, "max": integer}, "worker")},
 		{"capture_request_renew", "Renew an unexpired capture claim.", object(map[string]any{"request_id": str, "claim_token": str}, "request_id", "claim_token")},
-		{"capture_ingest", "Validate and atomically ingest one normalized event batch, including deterministic complete-snapshot rows when requested.", object(map[string]any{"request_id": str, "claim_token": str, "source": str, "events": map[string]any{}}, "events")},
+		{"capture_ingest", "Validate and atomically ingest one normalized event batch, or parse one claimed Slack List snapshot from raw CSV server-side.", captureIngest},
 		{"capture_request_fail", "Return claimed work for retry with bounded error details.", object(map[string]any{"request_id": str, "claim_token": str, "error": str}, "request_id", "claim_token")},
 		{"capture_watermark", "Read a connector completed-through cursor.", object(map[string]any{"connector": str}, "connector")},
 		{"connector_status", "Read connector capture mode and health.", object(map[string]any{})},
@@ -135,10 +162,13 @@ func callBridgeMCPTool(config BridgeMCPConfig, name string, raw json.RawMessage)
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, fmt.Errorf("decode %s arguments: %w", name, err)
 	}
-	stringArg := func(key string) string {
+	rawStringArg := func(key string) string {
 		var value string
 		_ = json.Unmarshal(args[key], &value)
-		return strings.TrimSpace(value)
+		return value
+	}
+	stringArg := func(key string) string {
+		return strings.TrimSpace(rawStringArg(key))
 	}
 	base := CaptureRequestListConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath}
 	switch name {
@@ -155,10 +185,26 @@ func callBridgeMCPTool(config BridgeMCPConfig, name string, raw json.RawMessage)
 		return RenewCaptureRequest(CaptureRequestCapabilityConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, RequestID: stringArg("request_id"), ClaimToken: stringArg("claim_token")})
 	case "capture_ingest":
 		events := args["events"]
+		snapshotCSV := rawStringArg("snapshot_csv")
+		snapshotListID := ""
+		if len(events) > 0 && snapshotCSV != "" {
+			return nil, fmt.Errorf("specify events or snapshot_csv, not both")
+		}
+		if snapshotCSV != "" {
+			snapshotListID = stringArg("list_id")
+			envelopes, err := slackListSnapshotEnvelopesFromCSV(snapshotListID, snapshotCSV)
+			if err != nil {
+				return nil, err
+			}
+			events, err = json.Marshal(envelopes)
+			if err != nil {
+				return nil, fmt.Errorf("encode Slack List snapshot rows: %w", err)
+			}
+		}
 		if len(events) == 0 {
 			return nil, fmt.Errorf("events are required")
 		}
-		return IngestBridgedCapture(BridgedIngestConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, Source: stringArg("source"), RequestID: stringArg("request_id"), ClaimToken: stringArg("claim_token"), Input: strings.NewReader(string(events))})
+		return IngestBridgedCapture(BridgedIngestConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, Source: stringArg("source"), RequestID: stringArg("request_id"), ClaimToken: stringArg("claim_token"), SnapshotListID: snapshotListID, Input: strings.NewReader(string(events))})
 	case "capture_request_fail":
 		err := FailCaptureRequest(CaptureRequestCapabilityConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, RequestID: stringArg("request_id"), ClaimToken: stringArg("claim_token"), Error: stringArg("error")})
 		return map[string]any{"failed": err == nil}, err

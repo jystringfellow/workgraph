@@ -2,6 +2,7 @@ package facts
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -150,9 +151,55 @@ func TestStatusReportsRunningCaptureState(t *testing.T) {
 	defer runWorkgraphCommand(t, nil, "stop", "--home", homeDir)
 
 	output := runWorkgraphCommand(t, nil, "status", "--home", homeDir)
-	for _, expected := range []string{"running", "PID:", "Watching: 1 configured directory", ignoredDir, "node_modules"} {
+	for _, expected := range []string{"running", "PID:", "Running build:", "On-disk build:", "Watching: 1 configured directory", ignoredDir, "node_modules"} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("expected capture status to include %q, got:\n%s", expected, output)
+		}
+	}
+}
+
+func TestStatusWarnsWhenRunningDaemonExecutableChanged(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	runWorkgraphCommand(t, nil, "start", "--home", homeDir, "--database", initResult.DatabasePath)
+	defer runWorkgraphCommand(t, nil, "stop", "--home", homeDir)
+
+	statePath := filepath.Join(homeDir, "daemon.json")
+	contents, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read daemon state: %v", err)
+	}
+	var state map[string]any
+	if err := json.Unmarshal(contents, &state); err != nil {
+		t.Fatalf("decode daemon state: %v", err)
+	}
+	state["runtime"] = map[string]any{
+		"running":                        map[string]any{"version": "v0.3.2", "commit": "old-build", "built": "2026-09-16T11:14:00Z"},
+		"executable":                     workgraphFactsBinary,
+		"started_executable_modified_at": "2026-09-16T11:14:00Z",
+		"started_executable_size":        1,
+	}
+	encoded, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		t.Fatalf("encode stale daemon state: %v", err)
+	}
+	if err := os.WriteFile(statePath, append(encoded, '\n'), 0o600); err != nil {
+		t.Fatalf("write stale daemon state: %v", err)
+	}
+
+	output := runWorkgraphCommand(t, nil, "status", "--home", homeDir)
+	for _, expected := range []string{
+		"Running build: v0.3.2",
+		"On-disk build:",
+		"WARNING: running daemon binary is stale",
+		"workgraph stop && workgraph start",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("expected stale daemon status to include %q, got:\n%s", expected, output)
 		}
 	}
 }

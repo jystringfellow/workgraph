@@ -146,7 +146,7 @@ The initial required parameter shapes are:
 |---|---|
 | `github` | non-empty `repositories` array |
 | `slack` | non-empty `channels` array, `include_dms: true`, or participant scope with `identity` and `include` values from `authored`, `mentions`, and `thread_participation`; when present, `include_dms` is a boolean |
-| `slack.lists` | non-empty `lists` array; optional `done_column` and ordered `row_key_candidates` |
+| `slack.lists` | non-empty `lists` array; optional per-id `list_options` with `state`, `interest_columns`, and ordered `row_key_candidates`; legacy top-level `done_column` and `row_key_candidates` remain accepted |
 | `mail.google` / `mail.microsoft` | non-empty `mailboxes` or `folders` array and positive `preview_limit` |
 | `calendar.google` / `calendar.microsoft` | non-empty `calendars` array plus non-negative `past_days` and positive `future_days` |
 | `azure.boards` | non-empty `organization` plus either `project` and `area_path`, or participant scope with `identity` and `include` values from `authored` and `assigned` |
@@ -166,11 +166,23 @@ Slack Lists are an explicit exception to the incremental query model. The
 reference Slack MCP exposes a configured List through `slack_read_file` as a
 complete CSV snapshot, without provider item ids or per-row modification
 timestamps. A valid bridge configuration therefore declares
-`capture_semantics = complete_snapshot`. `done_column` defaults to `Done` and
-`row_key_candidates` defaults to `[["Related Message"],["Title","Cycle"],["Title"]]`.
-Each candidate is an ordered set of columns; workgraph selects the first
-candidate for which every value is present. Duplicate or missing row keys fail
-the entire snapshot rather than conflating work items.
+`capture_semantics = complete_snapshot`. `list_options` is keyed by configured
+List id. Each entry may specify `state` with a column and explicit
+`done_values`, `interest_columns`, and `row_key_candidates`. Row-key candidates
+fall back to the connector-wide `row_key_candidates`, then to
+`[["Related Message"],["Title","Cycle"],["Title"]]`. Each candidate is an
+ordered set of columns; workgraph selects the first candidate for which every
+value is present. Duplicate or missing row keys fail the entire snapshot rather
+than conflating work items.
+
+State interpretation is optional and never filters the snapshot. A present,
+non-empty configured state value produces `done = true` when it matches a
+configured done value case-insensitively and `done = false` otherwise. Missing
+configuration or a missing/empty state value leaves `done` absent/unknown.
+`interest_columns` produces `interest_fields` while the complete CSV row stays
+in `fields`. For compatibility, a legacy connector-wide `done_column` uses the
+historical truthy-value normalization, but new configurations do not default to
+a column named `Done`.
 
 The lower-level mode command supports deliberate switching:
 
@@ -263,8 +275,11 @@ that can be reconciled from completed requests after an interrupted write.
 6. **Retry.** A reported failure or expired lease clears claim data and returns
    the same request, with the same bounds, to `pending` at a backoff-controlled
    `available_at`. It updates `last_poll_at`, `last_error`,
-   `consecutive_failures`, and `next_poll_at`. A stale claim token cannot ingest
-   or complete the retried request.
+   `consecutive_failures`, and `next_poll_at`. A worker may report failure after
+   its lease expires while the request is still claimed by the same token, so
+   the real error is retained and the claim is released. A mismatched token
+   cannot fail, ingest, or complete the request, and no expired token can ingest
+   or complete it.
 
 The daemon coalesces while a request is pending or claimed, so an unavailable
 bridge cannot create an unbounded backlog. After a retried request succeeds, the
@@ -363,9 +378,27 @@ named envelopes: `capture_requests_list` returns `requests`,
 `capture_requests_claim` returns `claims`, and `connector_status` returns
 `connectors`.
 
+Every successful `capture_*` and `connector_status` result also includes a
+`runtime` object containing the MCP process's running build identity, the build
+currently present at its executable path, executable timestamps, a `stale`
+boolean, and restart guidance when they differ. The MCP process snapshots its
+executable when the server starts and checks the path again for every reported
+runtime record. This makes a long-lived client session visibly stale after an
+in-place executable upgrade instead of presenting old tool behavior as current.
+
 ## Ingest contract
 
-Ingestion accepts NDJSON or a JSON array. A scheduled batch derives its
+Ingestion accepts NDJSON or a JSON array. The MCP `capture_ingest` tool also
+accepts a claimed Slack Lists snapshot as raw `snapshot_csv` plus `list_id`;
+workgraph parses the header and records server-side and feeds the resulting
+rows through the same atomic validation and normalization path. Raw CSV mode
+is accepted only for a `slack.lists` complete-snapshot request, and its List id
+must be that request's sole configured List. Multi-List requests continue to
+use the event-shaped compatibility batch so all Lists complete atomically. This keeps provider output as one
+opaque string instead of requiring a worker to generate one nested JSON object
+per row while holding a short lease.
+
+A scheduled batch derives its
 connector and event source from the claimed request; callers cannot override
 them. A manual batch supplies `--source`.
 
@@ -444,7 +477,7 @@ Each connector recipe translates the generic request into provider operations:
 |---|---|---|
 | `github` | Fetch configured repositories updated in `[since, until]` | repository allowlist |
 | `slack` | Fetch configured channels over the overlapping message-time window, including replies and edit metadata; read threads in detailed form and filter every reply against the request bounds client-side | channel allowlist; DM inclusion policy |
-| `slack.lists` | Read each configured List completely with `slack_read_file`, parse its CSV rows, and submit `{list_id, fields}` snapshot items for deterministic normalization by workgraph | list allowlist; optional done column and row-key candidates |
+| `slack.lists` | Read each configured List completely with `slack_read_file`, parse its CSV rows, and submit `{list_id, fields}` snapshot items for deterministic normalization by workgraph | list allowlist; optional per-List state, interest columns, and row-key candidates |
 | `mail.google` / `mail.microsoft` | Fetch received messages for configured mailboxes/folders in the overlapping window | mailbox/folder scope; bounded preview policy |
 | `calendar.google` / `calendar.microsoft` | Fetch a rolling occurrence window supplied in `params_json`; do not use event start as the cursor; preflight any secondary read required to obtain the revision marker | calendar allowlist; past/future horizon |
 | `azure.boards` | Fetch items changed in the overlapping window within the explicit project and area path or participant predicate; pass one accessible project as MCP routing context even when the WIQL predicate is collection-wide | organization plus project/area path or participant scope |
@@ -454,16 +487,19 @@ the complete declared snapshot, or report failure. They must not silently
 complete a request after truncation, pagination failure, permission denial, or
 an unsupported provider operation.
 
-For a claimed Slack Lists snapshot, the bridge submits one event-shaped row per
-CSV record with `type = slack.list_item` and payload containing exactly the
-configured `list_id` and a `fields` object keyed by CSV column name. It omits
-`timestamp` and `external_id`. workgraph validates the List scope, derives the
-first complete row-key candidate, normalizes the configured Done value, hashes
-canonical semantic row content, assigns the request `until` as `observed_at`,
-and constructs `<list>:<row-key>:<content-hash>`. `Done` is revision state, not
-part of identity: completed rows remain evidence but can be excluded from
-future next-work projections. A missing row is absence from the observation,
-not proof that the item was completed or deleted.
+For a claimed Slack Lists snapshot, the bridge preferably submits the complete
+provider CSV as `snapshot_csv` with its configured `list_id`. The compatibility
+path may submit one event-shaped row per CSV record with `type =
+slack.list_item` and payload containing exactly the configured `list_id` and a
+`fields` object keyed by CSV column name. Both paths omit
+`timestamp` and `external_id`. workgraph validates the List scope, applies that
+List's optional state and interest interpretation, derives the first complete
+row-key candidate, hashes canonical semantic row content, assigns the request
+`until` as `observed_at`, and constructs
+`<list>:<row-key>:<content-hash>`. State is revision content, not identity:
+completed rows remain evidence but can be excluded from future next-work
+projections. A missing row is absence from the observation, not proof that the
+item was completed or deleted.
 
 ## Status and observability
 
@@ -659,6 +695,10 @@ the approved client. Some clients do not support form elicitation, so every
 Boards tool call must pass `project` explicitly. Project discovery may use the
 provider's project-list operation, after which requests stay scoped to the
 configured project and area path rather than enumerating an organization.
+An unattended installation should not depend on a cold
+`npx -y @azure-devops/mcp` resolution within the client's connection timeout. Operators
+install or pre-resolve the package and register its resolved executable so a
+download delay is not reported as a missing provider capability.
 
 The sanitized Appendix example represents an organization `example-org`,
 project `DemoScrum`, and area path

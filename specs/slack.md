@@ -173,6 +173,34 @@ quarter`, `prioritized`, and `backlog` into supplemental labels when they appear
 in fields or text fallbacks. The raw field values and column ids remain the
 source of truth because Slack List schemas can vary across workspaces.
 
+Each configured List may declare a non-secret interpretation without changing
+the captured evidence:
+
+```json
+{
+  "LTODO": {
+    "state": {"column":"Status","done_values":["Done","Complete"]},
+    "interest_columns": ["Task","Priority","Related Message"]
+  }
+}
+```
+
+`workgraph slack connect --list-options-json '<json>'` stores this map for
+daemon capture. `workgraph slack lists capture --options-json '<json>'` accepts
+one List's options for a manual capture. Column matching is case-insensitive and
+may use a Slack field key or column id. When a configured state value is
+present, capture adds a normalized `done` boolean. If state is not configured,
+or its column is absent or empty, capture omits `done` rather than assuming the
+item is open. Configured interest columns are copied into `interest_fields` for
+planning and ranking, while the complete raw provider item remains in the
+payload.
+
+Interpretation never filters capture. Completed rows remain event evidence so
+workgraph can observe the transition and retain shift-to-shift context. Direct
+capture identifies a revision by List id, provider item id, and the provider's
+updated timestamp, falling back to a canonical content hash when a revision is
+unavailable. An unchanged poll deduplicates; a changed revision is retained.
+
 Slack Lists capture must not create, update, archive, reorder, or comment on
 List items. Any future Slack List actions must follow suggest -> draft ->
 approve -> act.

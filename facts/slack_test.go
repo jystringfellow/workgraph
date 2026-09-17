@@ -143,7 +143,7 @@ func TestSlackListCaptureStoresTodoItemsReadOnly(t *testing.T) {
 		}
 		requestedListID = r.PostForm.Get("list_id")
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"ok":true,"items":[{"id":"I123","list_id":"LTODO","date_created":1780934400,"updated_timestamp":"1780938000.000000","updated_by":"U123","created_by":"U456","fields":[{"key":"task","column_id":"Ctask","text":"Finish workgraph Azure Boards slice","value":"Finish workgraph Azure Boards slice"},{"key":"bucket","column_id":"Cbucket","text":"today","value":"today"}]}]}`))
+		w.Write([]byte(`{"ok":true,"items":[{"id":"I123","list_id":"LTODO","date_created":1780934400,"updated_timestamp":"1780938000.000000","updated_by":"U123","created_by":"U456","fields":[{"key":"task","column_id":"Ctask","text":"Finish workgraph Azure Boards slice","value":"Finish workgraph Azure Boards slice"},{"key":"bucket","column_id":"Cbucket","text":"today","value":"today"},{"key":"Done","column_id":"Cdone","text":"TRUE","value":"TRUE"}]}]}`))
 	}))
 	defer slackAPI.Close()
 
@@ -182,6 +182,82 @@ func TestSlackListCaptureStoresTodoItemsReadOnly(t *testing.T) {
 		if !strings.Contains(event.PayloadJSON, expected) {
 			t.Fatalf("expected payload to include %s, got %s", expected, event.PayloadJSON)
 		}
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+		t.Fatalf("decode Slack List payload: %v", err)
+	}
+	if _, found := payload["done"]; found {
+		t.Fatalf("expected an unconfigured Done field to remain raw rather than become normalized state: %#v", payload)
+	}
+}
+
+func TestSlackListCaptureAppliesPerListStateAndInterestWithoutFiltering(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	responses := []string{
+		`{"ok":true,"items":[{"id":"I123","list_id":"LTODO","updated_timestamp":"1780938000.000000","fields":[{"key":"Task","column_id":"CTASK","text":"Book design review","value":"Book design review"},{"key":"Status","column_id":"CSTATUS","text":"In progress","value":"CSTATUS_IN_PROGRESS"},{"key":"Priority","column_id":"CPRIORITY","text":"High","value":"CPRIORITY_HIGH"},{"key":"Private Notes","column_id":"CPRIVATE","text":"raw evidence","value":"raw evidence"}]}]}`,
+		`{"ok":true,"items":[{"id":"I123","list_id":"LTODO","updated_timestamp":"1780938060.000000","fields":[{"key":"Task","column_id":"CTASK","text":"Book design review","value":"Book design review"},{"key":"Status","column_id":"CSTATUS","text":"Complete","value":"CSTATUS_COMPLETE"},{"key":"Priority","column_id":"CPRIORITY","text":"High","value":"CPRIORITY_HIGH"},{"key":"Private Notes","column_id":"CPRIVATE","text":"raw evidence","value":"raw evidence"}]}]}`,
+	}
+	requestIndex := 0
+	slackAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(responses[requestIndex]))
+		requestIndex++
+	}))
+	defer slackAPI.Close()
+
+	options := `{"state":{"column":"Status","done_values":["Complete","Done"]},"interest_columns":["Task","Priority"]}`
+	for range responses {
+		output, err := runworkgraph(t, repoRoot, "slack", "lists", "capture",
+			"--home", homeDir,
+			"--token", "slack-token",
+			"--list-id", "LTODO",
+			"--options-json", options,
+			"--slack-api-base", slackAPI.URL,
+		)
+		if err != nil {
+			t.Fatalf("capture interpreted Slack List: %v\n%s", err, output)
+		}
+	}
+
+	db, err := sql.Open("sqlite3", filepath.Join(homeDir, "workgraph.db"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	rows, err := db.Query(`SELECT payload_json FROM events WHERE type = 'slack.list_item' ORDER BY timestamp`)
+	if err != nil {
+		t.Fatalf("query Slack List revisions: %v", err)
+	}
+	defer rows.Close()
+	var payloads []map[string]any
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			t.Fatalf("scan Slack List revision: %v", err)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+			t.Fatalf("decode Slack List revision: %v", err)
+		}
+		payloads = append(payloads, payload)
+	}
+	if len(payloads) != 2 || payloads[0]["done"] != false || payloads[1]["done"] != true {
+		t.Fatalf("expected open and completed revisions, got %#v", payloads)
+	}
+	interest, ok := payloads[1]["interest_fields"].(map[string]any)
+	if !ok || interest["Task"] != "Book design review" || interest["Priority"] != "High" || len(interest) != 2 {
+		t.Fatalf("expected compact configured interest fields, got %#v", payloads[1]["interest_fields"])
+	}
+	encoded, _ := json.Marshal(payloads[1])
+	if !strings.Contains(string(encoded), "Private Notes") || !strings.Contains(string(encoded), "raw evidence") {
+		t.Fatalf("expected unselected raw fields to remain evidence, got %s", encoded)
 	}
 }
 
@@ -1139,8 +1215,14 @@ func TestSlackConnectExchangesCodeAndStoresConnectorConfig(t *testing.T) {
 		ExpectedState: "fixed-state",
 		Channels:      []string{"C123", "C456"},
 		ListIDs:       []string{"LTODO"},
-		APIBaseURL:    "https://slack.test/api",
-		HTTPClient:    client,
+		ListOptions: map[string]workgraph.SlackListOptions{
+			"LTODO": {
+				State:           &workgraph.SlackListStateOptions{Column: "Status", DoneValues: []string{"Complete"}},
+				InterestColumns: []string{"Task", "Priority"},
+			},
+		},
+		APIBaseURL: "https://slack.test/api",
+		HTTPClient: client,
 	})
 	if err != nil {
 		t.Fatalf("slack connect exchange failed: %v", err)
@@ -1168,14 +1250,15 @@ func TestSlackConnectExchangesCodeAndStoresConnectorConfig(t *testing.T) {
 		t.Fatalf("read slack config: %v", err)
 	}
 	var stored struct {
-		AccessToken  string   `json:"access_token"`
-		AuthedUserID string   `json:"authed_user_id"`
-		TeamID       string   `json:"team_id"`
-		TeamName     string   `json:"team_name"`
-		Channels     []string `json:"channels"`
-		ListIDs      []string `json:"list_ids"`
-		UserScopes   []string `json:"user_scopes"`
-		APIBaseURL   string   `json:"api_base_url"`
+		AccessToken  string                                `json:"access_token"`
+		AuthedUserID string                                `json:"authed_user_id"`
+		TeamID       string                                `json:"team_id"`
+		TeamName     string                                `json:"team_name"`
+		Channels     []string                              `json:"channels"`
+		ListIDs      []string                              `json:"list_ids"`
+		ListOptions  map[string]workgraph.SlackListOptions `json:"list_options"`
+		UserScopes   []string                              `json:"user_scopes"`
+		APIBaseURL   string                                `json:"api_base_url"`
 	}
 	if err := json.Unmarshal(contents, &stored); err != nil {
 		t.Fatalf("parse slack config: %v", err)
@@ -1191,6 +1274,9 @@ func TestSlackConnectExchangesCodeAndStoresConnectorConfig(t *testing.T) {
 	}
 	if strings.Join(stored.ListIDs, ",") != "LTODO" {
 		t.Fatalf("expected stored Slack List ids, got %#v", stored.ListIDs)
+	}
+	if stored.ListOptions["LTODO"].State == nil || stored.ListOptions["LTODO"].State.Column != "Status" || strings.Join(stored.ListOptions["LTODO"].InterestColumns, ",") != "Task,Priority" {
+		t.Fatalf("expected stored per-List interpretation, got %#v", stored.ListOptions)
 	}
 	if strings.Join(stored.UserScopes, ",") != "channels:history,channels:read,groups:history,groups:read,users:read,team:read" {
 		t.Fatalf("expected stored OAuth user scopes, got %#v", stored.UserScopes)
@@ -1470,8 +1556,10 @@ func slackListEvent(t *testing.T, dbPath, listID, itemID string) storedSlackEven
 		FROM events
 		WHERE source = 'slack'
 			AND type = 'slack.list_item'
-			AND id = ?
-	`, "slack.list_item:"+listID+":"+itemID).Scan(&event.Project, &event.Actor, &event.Summary, &event.PayloadJSON)
+			AND id LIKE ?
+		ORDER BY timestamp DESC
+		LIMIT 1
+	`, "slack.list_item:"+listID+":"+itemID+"%").Scan(&event.Project, &event.Actor, &event.Summary, &event.PayloadJSON)
 	if err != nil {
 		t.Fatalf("query slack list event: %v", err)
 	}

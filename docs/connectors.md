@@ -83,7 +83,7 @@ The reference-client matrix is:
 | Connector | Bridged | Required scope / completeness rule |
 |---|---:|---|
 | `slack` | yes | Explicit channels or the approved `@Me` participant strategy; read threads in detailed form and filter replies to exact bounds client-side |
-| `slack.lists` | yes, snapshot | Explicit list ids; exhaustively read each List CSV with `slack_read_file`; workgraph derives row identity, Done state, observation time, and content-hash revisions |
+| `slack.lists` | yes, snapshot | Explicit list ids; exhaustively read each List CSV with `slack_read_file`; workgraph derives row identity, optional per-List state/interest projections, observation time, and content-hash revisions |
 | `mail.microsoft` | yes | Explicit mailboxes/folders; query a mailbox-local ±2-day pad, filter returned UTC `receivedDateTime`, and page contiguously past the lower bound |
 | `calendar.microsoft` | yes | Explicit calendars and horizons; map `Pacific Standard Time` to DST-aware `America/Los_Angeles`, emit occurrence start in UTC, and preserve provider start/end values |
 | `azure.boards` | yes | Explicit organization plus project/area path or the approved `@Me` participant strategy; participant WIQL still receives one accessible project as routing context |
@@ -114,6 +114,11 @@ client connector supports one and long-lived unattended behavior matters. For
 Azure DevOps-only identities, `az login` may report `No subscriptions found`;
 that message is not itself an Azure DevOps authentication failure, so use the
 token command and an actual read-only Azure DevOps discovery call as the check.
+If the MCP server is registered through `npx -y @azure-devops/mcp`, its first
+launch may spend longer than a client's connection timeout resolving or
+downloading the package. For unattended capture, install or pre-resolve the
+package and register the resolved executable instead; otherwise a cold start
+can appear as an absent provider tool.
 
 The plugin also contains the `workgraph-memory` and
 `workgraph-ai-checkpoint` skills alongside `workgraph-bridge`. Start a new
@@ -122,6 +127,9 @@ discovered. Rerunning the install command refreshes the complete plugin after a
 workgraph upgrade. An already running daemon still holds the previous binary in
 memory, so run `workgraph stop` followed by `workgraph start` after upgrading;
 plugin installation reloads the bridge worker but does not restart the daemon.
+`workgraph status` and MCP capture/status results compare their running build
+with the executable currently on disk and warn when either long-lived process
+is stale.
 
 The macOS launch agent records a minimal explicit environment containing the
 user's `HOME`, a `PATH` that includes the resolved client and workgraph binary
@@ -139,7 +147,7 @@ bridged mode explicitly:
 workgraph connectors connect slack --mode bridged \
   --params-json '{"scope":"participant","identity":"@Me","include":["authored","mentions","thread_participation"]}'
 workgraph connectors connect slack.lists --mode bridged \
-  --params-json '{"lists":["F123"],"done_column":"Done","row_key_candidates":[["Related Message"],["Title","Cycle"],["Title"]]}'
+  --params-json '{"lists":["F123"],"list_options":{"F123":{"state":{"column":"Status","done_values":["Done","Complete"]},"interest_columns":["Title","Priority","Related Message"],"row_key_candidates":[["Related Message"],["Title","Cycle"],["Title"]]}}}'
 workgraph connectors interval slack 15m
 workgraph start
 ```
@@ -199,10 +207,22 @@ workgraph slack connect --list <list-id>
 
 `workgraph start` then monitors that List as connector `slack.lists`.
 
+List schemas differ, so completion and planning fields are configured per List:
+
+```sh
+workgraph slack connect --list F123 \
+  --list-options-json '{"F123":{"state":{"column":"Status","done_values":["Done","Complete"]},"interest_columns":["Title","Priority","Related Message"]}}'
+```
+
+The state mapping does not filter capture. Completed items and all raw fields
+remain evidence; `interest_columns` only adds a compact `interest_fields`
+projection. Without a state mapping, workgraph leaves completion unknown.
+
 Run a one-off Slack List capture for debugging:
 
 ```sh
-workgraph slack lists capture --list-id <list-id>
+workgraph slack lists capture --list-id F123 \
+  --options-json '{"state":{"column":"Status","done_values":["Done","Complete"]},"interest_columns":["Title","Priority"]}'
 ```
 
 Disconnect Slack:

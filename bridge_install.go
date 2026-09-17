@@ -134,7 +134,11 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 		lines = append(lines, "Workspace trust: ready")
 		lines = append(lines, fmt.Sprintf("Provider tools: %d explicitly allowed", providerToolCount))
 	}
-	lines = append(lines, "Worker: "+launchStatus, "Next: start a new "+clientLabel+" session to load the plugin.")
+	lines = append(lines,
+		"Worker: "+launchStatus,
+		"Daemon: after an executable upgrade, run workgraph stop && workgraph start.",
+		"Next: start a new "+clientLabel+" session to load the plugin and MCP server.",
+	)
 	result.Message = strings.Join(lines, "\n")
 	return result, nil
 }

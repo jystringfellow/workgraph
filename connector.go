@@ -338,36 +338,52 @@ func validatedBridgeParams(connectorID string, raw json.RawMessage) (json.RawMes
 		if !requireStrings("lists") {
 			return nil, fmt.Errorf("bridged slack.lists requires a non-empty lists array")
 		}
+		var listIDs []string
+		if err := json.Unmarshal(values["lists"], &listIDs); err != nil {
+			return nil, fmt.Errorf("bridged slack.lists requires a non-empty lists array")
+		}
+		listIDs = normalizeSlackListColumns(listIDs)
+		encodedListIDs, _ := json.Marshal(listIDs)
+		values["lists"] = encodedListIDs
+		paramsChanged = true
 		doneColumn := stringValue("done_column")
 		if _, present := values["done_column"]; present && doneColumn == "" {
 			return nil, fmt.Errorf("bridged slack.lists done_column must be a non-empty string")
 		}
-		if doneColumn == "" {
-			values["done_column"] = json.RawMessage(`"Done"`)
+		if doneColumn != "" {
+			encodedDoneColumn, _ := json.Marshal(doneColumn)
+			values["done_column"] = encodedDoneColumn
 			paramsChanged = true
 		}
 		var rowKeyCandidates [][]string
 		if rawCandidates, present := values["row_key_candidates"]; present {
-			if err := json.Unmarshal(rawCandidates, &rowKeyCandidates); err != nil || len(rowKeyCandidates) == 0 {
+			if err := json.Unmarshal(rawCandidates, &rowKeyCandidates); err != nil {
 				return nil, fmt.Errorf("bridged slack.lists row_key_candidates must be a non-empty array of non-empty string arrays")
 			}
-			for candidateIndex, candidate := range rowKeyCandidates {
-				if len(candidate) == 0 {
-					return nil, fmt.Errorf("bridged slack.lists row_key_candidates must be a non-empty array of non-empty string arrays")
-				}
-				for columnIndex, column := range candidate {
-					column = strings.TrimSpace(column)
-					if column == "" {
-						return nil, fmt.Errorf("bridged slack.lists row_key_candidates must be a non-empty array of non-empty string arrays")
-					}
-					rowKeyCandidates[candidateIndex][columnIndex] = column
-				}
+			rowKeyCandidates, err = normalizeSlackListRowKeyCandidates(rowKeyCandidates)
+			if err != nil {
+				return nil, fmt.Errorf("bridged slack.lists %w", err)
 			}
 			encoded, _ := json.Marshal(rowKeyCandidates)
 			values["row_key_candidates"] = encoded
 			paramsChanged = true
 		} else {
-			values["row_key_candidates"] = json.RawMessage(`[["Related Message"],["Title","Cycle"],["Title"]]`)
+			rowKeyCandidates = defaultSlackListRowKeyCandidates()
+			encoded, _ := json.Marshal(rowKeyCandidates)
+			values["row_key_candidates"] = encoded
+			paramsChanged = true
+		}
+		if rawOptions, present := values["list_options"]; present {
+			var options map[string]SlackListOptions
+			if err := decodeStrictJSON(rawOptions, &options); err != nil {
+				return nil, fmt.Errorf("bridged slack.lists list_options must be an object keyed by configured List id: %w", err)
+			}
+			normalized, err := normalizeSlackListOptionsMap(options, listIDs)
+			if err != nil {
+				return nil, fmt.Errorf("bridged slack.lists %w", err)
+			}
+			encoded, _ := json.Marshal(normalized)
+			values["list_options"] = encoded
 			paramsChanged = true
 		}
 	case "mail.google", "mail.microsoft":
@@ -948,6 +964,7 @@ func pollConnectorOnce(homeDir string, databasePath string, id string) error {
 		capture.slackEnabled = true
 		capture.slackToken = config.AccessToken
 		capture.slackListIDs = append([]string(nil), config.ListIDs...)
+		capture.slackListOptions = config.ListOptions
 		capture.slackAPIBaseURL = config.APIBaseURL
 		pollErr = capture.captureSlackListItems(ctx)
 	case "calendar.google":

@@ -40,6 +40,11 @@ workgraph stop
 workgraph start
 ```
 
+`workgraph status` shows both the running daemon build and the build currently
+at its executable path. It prints a warning and this restart command when they
+differ. A daemon created by an older release without startup-build metadata is
+also treated as potentially stale.
+
 When the Homebrew tap is enabled, install and upgrade with:
 
 ```sh
@@ -453,6 +458,11 @@ installation reloads the bridge worker, not the daemon. Installing the plugin
 does not create an LLM profile or enable hosted-model consent; `workgraph llm
 connect` remains an independent model-execution setup path.
 
+Successful capture and connector-status MCP results contain a `runtime` record
+with running and on-disk build identities. `stale: true` means the current
+client session still owns an MCP process started from the previous executable;
+start a new client session after reinstalling the plugin.
+
 The older `workgraph bridge install` and `workgraph bridge doctor` commands are
 compatibility aliases that operate on this same broader plugin.
 
@@ -516,10 +526,14 @@ workgraph capture requests --fail <request-id> \
 
 Claim output includes `Capture semantics`. Most connectors return
 `bounded_events`; `slack.lists` returns `complete_snapshot`. For Slack Lists,
-read every configured List with `slack_read_file` and submit every CSV row with
-only `type`, optional display fields, and payload `{list_id, fields}`. workgraph
-derives observation time, normalized Done state, row identity, and the content
-hash revision.
+read every configured List with `slack_read_file`. An MCP worker handling a
+request scoped to one List passes that result verbatim as `snapshot_csv` with
+`list_id`; workgraph parses the CSV server-side, derives observation time,
+applies the configured state and interest columns, derives row identity, and
+calculates the content-hash revision. Multi-List and manual CLI batches retain
+the event-shaped `{list_id, fields}` compatibility path. State configuration
+never filters completed rows, and Lists without state configuration leave
+`done` absent.
 
 The claim output includes the canonical non-secret connector parameters as
 `Params`. The private claim file contains only the request id and short-lived

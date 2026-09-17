@@ -35,7 +35,7 @@ func TestAgentPluginInstallPackagesEveryCanonicalSkillForBothClients(t *testing.
 				if err != nil {
 					t.Fatalf("install %s attempt %d: %v\n%s", client, attempt+1, err, output)
 				}
-				for _, expected := range []string{"workgraph plugin installed", "Skills: 3", "MCP: workgraph", "Next: start a new"} {
+				for _, expected := range []string{"workgraph plugin installed", "Skills: 3", "MCP: workgraph", "Daemon: after an executable upgrade, run workgraph stop && workgraph start.", "Next: start a new"} {
 					if !strings.Contains(string(output), expected) {
 						t.Fatalf("install %s omitted %q:\n%s", client, expected, output)
 					}

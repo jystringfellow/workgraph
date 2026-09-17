@@ -72,3 +72,13 @@ Scenario: Capture a Slack List manually for debugging
   Then workgraph stores one event per visible List item
   And each event preserves item fields, column ids, reminders, creator, updater, and archived state
   And workgraph does not create, update, archive, or reorder Slack List items
+
+Scenario: Interpret each Slack List without discarding raw evidence
+  Given two Slack Lists use different columns to represent completion
+  And each List has configured state values and columns of interest
+  When workgraph captures the Lists directly
+  Then each item uses its List-specific completion interpretation
+  And configured columns of interest are available as a compact projection
+  And every raw provider field is preserved
+  And completed items are retained as revision evidence
+  And a List without state configuration does not assume a Done column

@@ -68,6 +68,8 @@ type RunConfig struct {
 	SlackChannels []string
 	// SlackListIDs are explicit Slack List ids to poll.
 	SlackListIDs []string
+	// SlackListOptions interpret state and planning fields per Slack List.
+	SlackListOptions map[string]SlackListOptions
 	// SlackIncludeDMs opts into Slack IM and MPIM discovery.
 	SlackIncludeDMs bool
 	// SlackSelfUserID is the authorized Slack user id for self-authored events.
@@ -150,6 +152,7 @@ type RunCapture struct {
 	slackToken              string
 	slackChannels           []string
 	slackListIDs            []string
+	slackListOptions        map[string]SlackListOptions
 	slackIncludeDMs         bool
 	slackSelfUserID         string
 	slackAPIBaseURL         string
@@ -239,10 +242,11 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 	slackToken := config.SlackToken
 	slackChannels := append([]string(nil), config.SlackChannels...)
 	slackListIDs := append([]string(nil), config.SlackListIDs...)
+	slackListOptions := config.SlackListOptions
 	slackIncludeDMs := config.SlackIncludeDMs
 	slackSelfUserID := config.SlackSelfUserID
 	slackAPIBaseURL := config.SlackAPIBaseURL
-	if slackToken == "" || len(slackChannels) == 0 || len(slackListIDs) == 0 {
+	if slackToken == "" || len(slackChannels) == 0 || len(slackListIDs) == 0 || len(slackListOptions) == 0 {
 		if slackConfig, err := readSlackConnectorConfig(status.HomeDir); err == nil {
 			if slackToken == "" {
 				slackToken = slackConfig.AccessToken
@@ -252,6 +256,9 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 			}
 			if len(slackListIDs) == 0 {
 				slackListIDs = append([]string(nil), slackConfig.ListIDs...)
+			}
+			if len(slackListOptions) == 0 {
+				slackListOptions = slackConfig.ListOptions
 			}
 			slackIncludeDMs = slackConfig.IncludeDMs
 			slackSelfUserID = slackConfig.AuthedUserID
@@ -315,6 +322,7 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 		slackToken:            slackToken,
 		slackChannels:         slackChannels,
 		slackListIDs:          slackListIDs,
+		slackListOptions:      slackListOptions,
 		slackIncludeDMs:       slackIncludeDMs,
 		slackSelfUserID:       slackSelfUserID,
 		slackAPIBaseURL:       slackAPIBaseURL,
@@ -745,6 +753,7 @@ func (capture *RunCapture) captureSlackListItems(ctx context.Context) error {
 			DatabasePath: capture.databasePath,
 			Token:        capture.slackToken,
 			ListID:       listID,
+			Options:      slackListOptionsFor(capture.slackListOptions, listID),
 			APIBaseURL:   capture.slackAPIBaseURL,
 			HTTPClient:   connectorHTTPClient(ctx, capture.slackHTTPClient),
 		})

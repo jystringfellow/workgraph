@@ -128,7 +128,7 @@ var helpTopics = map[string]helpTopic{
 	"slack connect":        {"workgraph slack connect [options]", "Connect a Slack workspace with OAuth."},
 	"slack disconnect":     {"workgraph slack disconnect [options]", "Remove the locally stored Slack connection."},
 	"slack lists":          {"workgraph slack lists <subcommand>", "Capture Slack Lists."},
-	"slack lists capture":  {"workgraph slack lists capture --list-id <id> [options]", "Capture items from one Slack List."},
+	"slack lists capture":  {"workgraph slack lists capture --list-id <id> [--options-json <json>] [options]", "Capture items from one Slack List."},
 	"start":                {"workgraph start [--foreground] [--watch <path>] [options]", "Start background or foreground work capture."},
 	"status":               {"workgraph status [options]", "Show capture daemon and connector polling status."},
 	"stop":                 {"workgraph stop [options]", "Stop the background capture daemon."},

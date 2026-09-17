@@ -15,6 +15,8 @@ Feature: Agent plugin installation
     And Claude Code trusts the workgraph home without replacing unrelated trust settings
     And the unattended worker discovers project settings without a settings override
     And the launchd worker receives an explicit non-secret HOME and executable PATH
+    And install output says to restart the daemon after an executable upgrade
+    And install output says to start a new client session for the MCP server
 
   Scenario: Update an existing plugin installation
     Given the workgraph plugin was already installed
