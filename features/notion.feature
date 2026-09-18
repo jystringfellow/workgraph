@@ -22,7 +22,7 @@ Scenario: A failed Notion capture leaves partial progress instead of nothing
   Given Notion is connected
   When "workgraph notion capture" fails partway through pagination
   Then objects from already-fetched pages remain stored in notion_index and events
-  And the capture cursor does not advance until a full run succeeds
+  And the capture cursor advances through the last fully processed page
 
 Scenario: Connect Notion with OAuth
   Given workgraph has been initialized

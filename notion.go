@@ -296,6 +296,7 @@ func CaptureNotion(config NotionCaptureConfig) (NotionCaptureResult, error) {
 	stored := 0
 	previewBudget := notionPreviewFetchCap
 	searchErr := notionSearchAll(config, since, func(page []notionSearchResult) (bool, error) {
+		var pageCompletedThrough time.Time
 		for _, object := range page {
 			if object.Object != "page" && object.Object != "database" {
 				continue
@@ -311,6 +312,12 @@ func CaptureNotion(config NotionCaptureConfig) (NotionCaptureResult, error) {
 					return true, nil
 				}
 			}
+			if edited != "" {
+				editedTime, timeErr := time.Parse(time.RFC3339Nano, edited)
+				if timeErr == nil && (pageCompletedThrough.IsZero() || editedTime.Before(pageCompletedThrough)) {
+					pageCompletedThrough = editedTime
+				}
+			}
 			inserted, err := storeNotionEvent(db, object)
 			if err != nil {
 				return false, err
@@ -324,6 +331,11 @@ func CaptureNotion(config NotionCaptureConfig) (NotionCaptureResult, error) {
 			}
 			if indexed {
 				stored++
+			}
+		}
+		if !pageCompletedThrough.IsZero() {
+			if err := advanceNotionCaptureCursor(db, pageCompletedThrough); err != nil {
+				return false, err
 			}
 		}
 		return false, nil

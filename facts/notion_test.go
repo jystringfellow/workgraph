@@ -506,12 +506,12 @@ func TestNotionCaptureLeavesPartialProgressOnPaginationFailure(t *testing.T) {
 		t.Fatalf("open database: %v", err)
 	}
 	defer db.Close()
-	var count int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM capture_cursors WHERE connector_id = 'notion'`).Scan(&count); err != nil {
-		t.Fatalf("count notion capture cursors: %v", err)
+	var completedThrough string
+	if err := db.QueryRow(`SELECT completed_through FROM capture_cursors WHERE connector_id = 'notion'`).Scan(&completedThrough); err != nil {
+		t.Fatalf("expected a partial notion capture cursor after a failed run: %v", err)
 	}
-	if count != 0 {
-		t.Fatalf("expected no notion capture cursor after a failed run, got %d rows", count)
+	if completedThrough != "2026-06-07T16:00:00Z" {
+		t.Fatalf("expected partial notion capture cursor at the oldest completed page object, got %q", completedThrough)
 	}
 }
 
