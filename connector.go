@@ -411,6 +411,13 @@ func validatedBridgeParams(connectorID string, raw json.RawMessage) (json.RawMes
 		if !requireString("organization") || (!projectScope && !participant) {
 			return nil, fmt.Errorf("bridged azure.boards requires organization plus project and area_path, or participant scope with identity and approved include values")
 		}
+	case "notion.activity":
+		if !participantScope("edited", "created") {
+			return nil, fmt.Errorf("bridged notion.activity requires participant scope with identity and approved include values (edited, created)")
+		}
+		if err := validateNotionActivityBootstrapLookback(values["bootstrap_lookback"]); err != nil {
+			return nil, err
+		}
 	}
 	if paramsChanged {
 		encoded, err := json.Marshal(values)
@@ -428,6 +435,18 @@ func validateBridgeableConnector(connectorID string) error {
 		return fmt.Errorf("connector git only supports direct capture")
 	case "notion":
 		return fmt.Errorf("connector notion only supports direct capture; use workgraph notion connect or workgraph notion connect-token")
+	default:
+		return nil
+	}
+}
+
+// validateDirectableConnector rejects direct-mode setup for connectors that
+// only support bridged capture, mirroring validateBridgeableConnector's
+// symmetric direct-only rejections.
+func validateDirectableConnector(connectorID string) error {
+	switch connectorID {
+	case "notion.activity":
+		return fmt.Errorf("connector notion.activity only supports bridged capture; the public Notion API cannot express workspace-wide participant scope, use workgraph connectors connect notion.activity --mode bridged")
 	default:
 		return nil
 	}
@@ -461,6 +480,21 @@ func validateGitHubBootstrapLookback(raw json.RawMessage) error {
 	duration, err := time.ParseDuration(value)
 	if err != nil || duration <= 0 {
 		return fmt.Errorf("github bootstrap_lookback must be a positive duration string")
+	}
+	return nil
+}
+
+func validateNotionActivityBootstrapLookback(raw json.RawMessage) error {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return fmt.Errorf("notion.activity bootstrap_lookback must be a duration string")
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration <= 0 {
+		return fmt.Errorf("notion.activity bootstrap_lookback must be a positive duration string")
 	}
 	return nil
 }
@@ -572,6 +606,11 @@ func SetConnectorMode(config ConnectorModeConfig) (ConnectorUpdateResult, error)
 	mode := strings.ToLower(strings.TrimSpace(config.Mode))
 	if mode != "direct" && mode != "bridged" {
 		return ConnectorUpdateResult{}, fmt.Errorf("capture mode must be direct or bridged")
+	}
+	if mode == "direct" {
+		if err := validateDirectableConnector(id); err != nil {
+			return ConnectorUpdateResult{}, err
+		}
 	}
 	if mode == "bridged" {
 		if err := validateBridgeableConnector(id); err != nil {
@@ -1104,6 +1143,7 @@ func connectorStatuses(homeDir string, state connectorRuntimeFile) []ConnectorSt
 		"mail.google",
 		"mail.microsoft",
 		"notion",
+		"notion.activity",
 		"azure.boards",
 	}
 	statuses := make([]ConnectorStatus, 0, len(ids))
@@ -1319,7 +1359,7 @@ func connectorHomeDir(homeDir string) (string, error) {
 func normalizeConnectorID(id string) (string, error) {
 	id = strings.ToLower(strings.TrimSpace(id))
 	switch id {
-	case "git", "github", "slack", "slack.lists", "calendar.google", "calendar.microsoft", "mail.google", "mail.microsoft", "notion", "azure.boards":
+	case "git", "github", "slack", "slack.lists", "calendar.google", "calendar.microsoft", "mail.google", "mail.microsoft", "notion", "notion.activity", "azure.boards":
 		return id, nil
 	case "calendar":
 		return "", fmt.Errorf("connector %q is ambiguous: use calendar.google or calendar.microsoft", id)
@@ -1463,6 +1503,8 @@ func defaultConnectorInterval(id string) time.Duration {
 		return mailPollInterval(0)
 	case "notion":
 		return notionPollInterval(0)
+	case "notion.activity":
+		return 30 * time.Minute
 	case "azure.boards":
 		return azureBoardsPollInterval(0)
 	default:

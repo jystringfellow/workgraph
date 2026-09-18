@@ -14,6 +14,7 @@ Feature: Bridged connector capture
     And changing scope cancels active work created for the prior scope
     And direct credentials already stored for that connector are preserved
     And direct-only git and Notion cannot be configured or ingested as bridged
+    And bridged-only notion.activity cannot be configured or polled as direct
 
   Scenario: Emit durable work at the configured cadence
     Given a bridged connector is due
@@ -126,3 +127,13 @@ Feature: Bridged connector capture
     Then Microsoft calendar verifies the resource read needed for its revision marker
     And Slack threads use detailed output and filter replies against exact bounds after reading
     And Azure Boards supplies an accessible project as routing context for collection-wide participant WIQL
+
+  Scenario: Bridge Notion participant activity that the public API cannot express
+    Given the public Notion API cannot filter search by editor or creator workspace-wide
+    When I configure notion.activity with participant scope and edited/created includes
+    Then workgraph rejects notion.activity in direct mode with an explanatory message
+    And the worker queries Notion MCP edited_by_user_ids and created_by_user_ids for the identity
+    And a date-only provider filter is padded to the enclosing day and filtered client-side to exact bounds
+    And a response of exactly 50 results is treated as truncated and reported as a failure, never ingested
+    And emitted events reuse the direct notion connector's page_updated/database_updated types and external id shape
+    And overlapping capture between notion and notion.activity deduplicates instead of double-counting

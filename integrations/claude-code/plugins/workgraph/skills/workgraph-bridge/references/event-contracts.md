@@ -16,6 +16,7 @@ Use these connector/source mappings and revision-aware identities:
 | Google/Microsoft mail | `mail.google`/`mail.microsoft`, `<source>.message` | stable message id |
 | Google/Microsoft calendar | `calendar.google`/`calendar.microsoft`, `<source>.event` | `<event-id>:change:<change-key-or-last-modified>` |
 | Azure Boards | `azure.boards`, `azure.boards.workitem` | `azdo:<org>:<id>:rev:<revision>` |
+| Notion activity | `notion`, `notion.page_updated`/`notion.database_updated` | `<page-id>:<last-edited-time>` |
 
 Mail stores a bounded body preview, not a full body. Calendar envelope time is
 the occurrence start converted to UTC, but request completion—not event start—
@@ -70,3 +71,10 @@ verify this identity path.
 For Azure Boards participant scope, pass one accessible project as the MCP
 routing argument for `wit_query` while retaining the approved collection-wide
 participant predicate. The routing project is not an additional scope filter.
+
+For Notion activity, `last_edited_date_range` accepts dates, not timestamps;
+query the enclosing day(s) and filter each result's returned timestamp
+client-side against the exact request bounds, the same padding technique used
+for Microsoft mail. The provider result ceiling is 50 with no cursor, so a
+response of exactly 50 rows must be treated as truncated and reported as a
+failure rather than ingested as if it were complete.

@@ -272,6 +272,70 @@ func TestSlackListSnapshotAppliesPerListInterpretationAndKeepsUnknownState(t *te
 	}
 }
 
+func TestNotionActivityIsBridgedOnlyAndRejectsDirectMode(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+
+	output, err := runworkgraph(t, repoRoot, "connectors", "mode", "--home", homeDir, "notion.activity", "direct")
+	if err == nil || !strings.Contains(string(output), "notion.activity only supports bridged capture") {
+		t.Fatalf("expected notion.activity to reject direct mode, got err=%v:\n%s", err, output)
+	}
+
+	connectBridgedConnector(t, repoRoot, homeDir, "notion.activity")
+	contents, err := os.ReadFile(filepath.Join(homeDir, "connectors.json"))
+	if err != nil {
+		t.Fatalf("read connectors config: %v", err)
+	}
+	if !strings.Contains(string(contents), `"capture_mode": "bridged"`) {
+		t.Fatalf("expected notion.activity to be configured bridged, got:\n%s", contents)
+	}
+}
+
+func TestNotionActivityBridgedIngestDedupesAgainstDirectNotionIdentity(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+	connectBridgedConnector(t, repoRoot, homeDir, "notion.activity")
+
+	now := time.Now().UTC().Add(-time.Minute)
+	emitted, err := workgraph.EmitBridgedCaptureRequest(workgraph.CaptureRequestEmitConfig{HomeDir: homeDir, ConnectorID: "notion.activity", Now: now})
+	if err != nil {
+		t.Fatalf("emit notion.activity request: %v", err)
+	}
+	if emitted.Request.Source != "notion" {
+		t.Fatalf("expected notion.activity events to share the notion source, got %#v", emitted.Request)
+	}
+	claims, err := workgraph.ClaimCaptureRequests(workgraph.CaptureRequestClaimConfig{HomeDir: homeDir, ConnectorID: "notion.activity", Worker: "facts", Max: 1, Now: now, Lease: 10 * time.Minute})
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("claim notion.activity request: claims=%d error=%v", len(claims), err)
+	}
+	input := `[{"type":"notion.page_updated","timestamp":"2026-06-07T16:30:00Z","external_id":"page-1:2026-06-07T16:30:00Z","summary":"Updated launch plan","payload":{"object":"page","id":"page-1"}}]`
+	result, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{HomeDir: homeDir, RequestID: emitted.Request.ID, ClaimToken: claims[0].ClaimToken, Input: strings.NewReader(input)})
+	if err != nil {
+		t.Fatalf("ingest notion.activity: %v", err)
+	}
+	if result.EventsInserted != 1 {
+		t.Fatalf("expected one inserted event, got %#v", result)
+	}
+
+	db := openBridgedCaptureDatabase(t, homeDir)
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE id = 'notion.page_updated:page-1:2026-06-07T16:30:00Z'`).Scan(&count); err != nil {
+		t.Fatalf("count notion event: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected bridged event id to match the direct notion connector's identity scheme, got %d rows", count)
+	}
+
+	// A second ingest of the same edit (as the direct notion connector would produce) must de-duplicate.
+	second, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{HomeDir: homeDir, Source: "notion.activity", Input: strings.NewReader(input)})
+	if err != nil {
+		t.Fatalf("re-ingest notion.activity: %v", err)
+	}
+	if second.EventsDuplicate != 1 || second.EventsInserted != 0 {
+		t.Fatalf("expected the repeated edit to de-duplicate, got %#v", second)
+	}
+}
+
 func TestSlackListSnapshotRejectsAmbiguousOrOutOfScopeRowsAtomically(t *testing.T) {
 	homeDir := initBridgedCaptureHome(t)
 	params := json.RawMessage(`{"lists":["F0DEMO123"],"row_key_candidates":[["Title"]]}`)
@@ -914,6 +978,8 @@ func bridgeParamsForFact(connector string) string {
 		return `{"calendars":["primary"],"future_days":30,"past_days":7}`
 	case "azure.boards":
 		return `{"area_path":"Demo","organization":"example-org","project":"Demo"}`
+	case "notion.activity":
+		return `{"scope":"participant","identity":"@me","include":["edited","created"]}`
 	default:
 		return `{}`
 	}

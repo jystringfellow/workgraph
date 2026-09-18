@@ -20,6 +20,7 @@ func TestValidatedBridgeParamsRequireBoundedConnectorScope(t *testing.T) {
 		{"mail.microsoft", `{"folders":["inbox"],"preview_limit":500}`, "", `{"folders":[]}`},
 		{"calendar.microsoft", `{"calendars":["primary"],"past_days":7,"future_days":30}`, "", `{"calendars":["primary"],"past_days":7}`},
 		{"azure.boards", `{"organization":"example-org","project":"Demo","area_path":"Demo"}`, "", `{"organization":"example-org"}`},
+		{"notion.activity", `{"scope":"participant","identity":"@me","include":["edited","created"]}`, "", `{}`},
 	}
 	for _, test := range tests {
 		t.Run(test.connector, func(t *testing.T) {
@@ -61,6 +62,26 @@ func TestValidatedBridgeParamsRejectMalformedObjectsAndSecrets(t *testing.T) {
 	}
 	if _, err := validatedBridgeParams("notion", json.RawMessage(`{"roots":["demo-root"],"preview_limit":500}`)); err == nil || !strings.Contains(err.Error(), "notion only supports direct capture") {
 		t.Fatalf("expected Notion to reject bridged parameters, got %v", err)
+	}
+}
+
+func TestSetConnectorModeRejectsDirectForBridgedOnlyConnectors(t *testing.T) {
+	homeDir := t.TempDir()
+	if _, err := Init(InitConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, err := SetConnectorMode(ConnectorModeConfig{HomeDir: homeDir, ID: "notion.activity", Mode: "direct"}); err == nil || !strings.Contains(err.Error(), "notion.activity only supports bridged capture") {
+		t.Fatalf("expected notion.activity to reject direct mode, got %v", err)
+	}
+	if _, err := SetConnectorMode(ConnectorModeConfig{HomeDir: homeDir, ID: "notion.activity", Mode: "bridged"}); err == nil {
+		t.Fatalf("expected notion.activity bridged mode to require scope, got nil error")
+	}
+	if _, err := ConfigureBridgedConnector(ConnectorBridgeConfig{
+		HomeDir:      homeDir,
+		ID:           "notion.activity",
+		BridgeParams: json.RawMessage(`{"scope":"participant","identity":"@me","include":["edited","created"]}`),
+	}); err != nil {
+		t.Fatalf("expected notion.activity bridged setup to succeed: %v", err)
 	}
 }
 

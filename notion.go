@@ -35,6 +35,13 @@ var DefaultNotionAPIBaseURL = "https://api.notion.com"
 // DefaultNotionAPIVersion is pinned to the API shape where search returns pages and databases.
 const DefaultNotionAPIVersion = "2022-06-28"
 
+// notionCaptureOverlap re-checks a small window before the stored cursor to absorb clock skew.
+const notionCaptureOverlap = 5 * time.Minute
+
+// notionPreviewFetchCap bounds block-content fetches per capture call so preview
+// enrichment cannot gate the index pass on a large workspace.
+const notionPreviewFetchCap = 25
+
 // NotionCaptureConfig controls Notion page and database metadata capture.
 type NotionCaptureConfig struct {
 	HomeDir      string
@@ -265,11 +272,6 @@ func CaptureNotion(config NotionCaptureConfig) (NotionCaptureResult, error) {
 		return NotionCaptureResult{}, errors.New("notion token is required")
 	}
 
-	objects, err := notionSearchAll(config)
-	if err != nil {
-		return NotionCaptureResult{}, err
-	}
-
 	db, err := sql.Open("sqlite3", status.DatabasePath)
 	if err != nil {
 		return NotionCaptureResult{}, fmt.Errorf("open database: %w", err)
@@ -282,25 +284,57 @@ func CaptureNotion(config NotionCaptureConfig) (NotionCaptureResult, error) {
 		return NotionCaptureResult{}, fmt.Errorf("create database schema: %w", err)
 	}
 
+	now := time.Now().UTC()
+	since, err := readNotionCaptureCursor(db)
+	if err != nil {
+		return NotionCaptureResult{}, err
+	}
+	if !since.IsZero() {
+		since = since.Add(-notionCaptureOverlap)
+	}
+
 	stored := 0
-	for _, object := range objects {
-		if object.Object != "page" && object.Object != "database" {
-			continue
+	previewBudget := notionPreviewFetchCap
+	searchErr := notionSearchAll(config, since, func(page []notionSearchResult) (bool, error) {
+		for _, object := range page {
+			if object.Object != "page" && object.Object != "database" {
+				continue
+			}
+			edited, err := normalizeNotionTimestamp(object.LastEditedTime)
+			if err != nil {
+				return false, err
+			}
+			if !since.IsZero() && edited != "" {
+				editedTime, timeErr := time.Parse(time.RFC3339Nano, edited)
+				if timeErr == nil && editedTime.Before(since) {
+					// Descending sort means everything after this point is older still.
+					return true, nil
+				}
+			}
+			inserted, err := storeNotionEvent(db, object)
+			if err != nil {
+				return false, err
+			}
+			if inserted {
+				stored++
+			}
+			indexed, err := updateNotionIndexAndStoreActivity(db, object, currentUserID, config, &previewBudget)
+			if err != nil {
+				return false, err
+			}
+			if indexed {
+				stored++
+			}
 		}
-		inserted, err := storeNotionEvent(db, object)
-		if err != nil {
-			return NotionCaptureResult{}, err
-		}
-		if inserted {
-			stored++
-		}
-		indexed, err := updateNotionIndexAndStoreActivity(db, object, currentUserID, config)
-		if err != nil {
-			return NotionCaptureResult{}, err
-		}
-		if indexed {
-			stored++
-		}
+		return false, nil
+	})
+	if searchErr != nil {
+		return NotionCaptureResult{}, searchErr
+	}
+	// The walk reached either the watermark or the end of the workspace, so
+	// everything through this poll's start time is now covered.
+	if err := advanceNotionCaptureCursor(db, now); err != nil {
+		return NotionCaptureResult{}, err
 	}
 
 	result := NotionCaptureResult{
@@ -310,6 +344,33 @@ func CaptureNotion(config NotionCaptureConfig) (NotionCaptureResult, error) {
 	}
 	result.Message = notionCaptureMessage(result)
 	return result, nil
+}
+
+func readNotionCaptureCursor(db *sql.DB) (time.Time, error) {
+	var value string
+	err := db.QueryRow(`SELECT completed_through FROM capture_cursors WHERE connector_id = 'notion'`).Scan(&value)
+	if err == sql.ErrNoRows {
+		return time.Time{}, nil
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("read notion capture cursor: %w", err)
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse notion capture cursor: %w", err)
+	}
+	return parsed, nil
+}
+
+func advanceNotionCaptureCursor(db *sql.DB, completedThrough time.Time) error {
+	_, err := db.Exec(`INSERT INTO capture_cursors (connector_id, completed_through, updated_at)
+		VALUES ('notion', ?, ?)
+		ON CONFLICT(connector_id) DO UPDATE SET completed_through = excluded.completed_through, updated_at = excluded.updated_at`,
+		completedThrough.UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return fmt.Errorf("advance notion capture cursor: %w", err)
+	}
+	return nil
 }
 
 // ConnectNotion prepares or completes Notion OAuth setup.
@@ -598,26 +659,29 @@ func ShowNotionIndex(config NotionIndexShowConfig) (NotionIndexResult, error) {
 	return result, nil
 }
 
-func notionSearchAll(config NotionCaptureConfig) ([]notionSearchResult, error) {
+func notionSearchAll(config NotionCaptureConfig, since time.Time, onPage func([]notionSearchResult) (bool, error)) error {
 	baseURL := resolveNotionAPIBaseURL(config.APIBaseURL)
 	client := config.HTTPClient
 	if client == nil {
 		client = http.DefaultClient
 	}
-	var results []notionSearchResult
+	_ = since // watermark comparison happens in onPage, which sees each object's last_edited_time
 	cursor := ""
 	for {
-		body := map[string]any{"page_size": 100}
+		body := map[string]any{
+			"page_size": 100,
+			"sort":      map[string]any{"direction": "descending", "timestamp": "last_edited_time"},
+		}
 		if cursor != "" {
 			body["start_cursor"] = cursor
 		}
 		requestBody, err := json.Marshal(body)
 		if err != nil {
-			return nil, fmt.Errorf("encode Notion search request: %w", err)
+			return fmt.Errorf("encode Notion search request: %w", err)
 		}
 		request, err := http.NewRequest(http.MethodPost, strings.TrimRight(baseURL, "/")+"/v1/search", bytes.NewReader(requestBody))
 		if err != nil {
-			return nil, fmt.Errorf("build Notion search request: %w", err)
+			return fmt.Errorf("build Notion search request: %w", err)
 		}
 		request.Header.Set("Authorization", "Bearer "+config.Token)
 		request.Header.Set("Content-Type", "application/json")
@@ -625,30 +689,34 @@ func notionSearchAll(config NotionCaptureConfig) ([]notionSearchResult, error) {
 
 		response, err := client.Do(request)
 		if err != nil {
-			return nil, fmt.Errorf("search Notion: %w", err)
+			return fmt.Errorf("search Notion: %w", err)
 		}
 		responseBody, readErr := io.ReadAll(response.Body)
 		closeErr := response.Body.Close()
 		if readErr != nil {
-			return nil, fmt.Errorf("read Notion search response: %w", readErr)
+			return fmt.Errorf("read Notion search response: %w", readErr)
 		}
 		if closeErr != nil {
-			return nil, fmt.Errorf("close Notion search response: %w", closeErr)
+			return fmt.Errorf("close Notion search response: %w", closeErr)
 		}
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
-			return nil, fmt.Errorf("search Notion: status %d: %s", response.StatusCode, strings.TrimSpace(string(responseBody)))
+			return fmt.Errorf("search Notion: status %d: %s", response.StatusCode, strings.TrimSpace(string(responseBody)))
 		}
 		var parsed notionSearchResponse
 		if err := json.Unmarshal(responseBody, &parsed); err != nil {
-			return nil, fmt.Errorf("parse Notion search response: %w", err)
+			return fmt.Errorf("parse Notion search response: %w", err)
 		}
-		results = append(results, parsed.Results...)
-		if !parsed.HasMore || parsed.NextCursor == "" {
+		// Store this page immediately so a later page's failure or deadline leaves progress behind.
+		stop, err := onPage(parsed.Results)
+		if err != nil {
+			return err
+		}
+		if stop || !parsed.HasMore || parsed.NextCursor == "" {
 			break
 		}
 		cursor = parsed.NextCursor
 	}
-	return results, nil
+	return nil
 }
 
 func validateNotionToken(token string, apiBaseURL string, client *http.Client) error {
@@ -860,7 +928,7 @@ func storeNotionEvent(db *sql.DB, object notionSearchResult) (bool, error) {
 	return rows > 0, nil
 }
 
-func updateNotionIndexAndStoreActivity(db *sql.DB, object notionSearchResult, currentUserID string, config NotionCaptureConfig) (bool, error) {
+func updateNotionIndexAndStoreActivity(db *sql.DB, object notionSearchResult, currentUserID string, config NotionCaptureConfig, previewBudget *int) (bool, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	title := notionTitle(object)
 	propertiesJSON, err := json.Marshal(object.Properties)
@@ -887,12 +955,13 @@ func updateNotionIndexAndStoreActivity(db *sql.DB, object notionSearchResult, cu
 	contentPreview := ""
 	contentSyncedAt := ""
 	shouldStoreActivity := existed && currentUserID != "" && object.LastEditedBy.ID == currentUserID && previous.LastEditedTime != lastEditedTime
-	if shouldStoreActivity && object.Object == "page" {
+	if shouldStoreActivity && object.Object == "page" && previewBudget != nil && *previewBudget > 0 {
 		contentPreview, err = notionPageContentPreview(config, object.ID)
 		if err != nil {
 			return false, err
 		}
 		contentSyncedAt = now
+		*previewBudget--
 	}
 	_, err = db.Exec(`INSERT INTO notion_index (
 			notion_id, object_type, title, url, parent_json, properties_json,
