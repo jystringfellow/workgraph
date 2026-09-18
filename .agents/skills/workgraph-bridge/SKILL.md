@@ -187,6 +187,21 @@ project argument as MCP routing context. Discover or use one accessible project
 but keep the approved collection-wide `@Me` WIQL predicate; do not fan out or
 treat the routing project as an additional filter.
 
+For `notion.activity`, `params` carries participant scope: `scope`, `identity`,
+`include` (`edited`, `created`), and optional `bootstrap_lookback`. This
+connector is bridged-only; it does not accept `--mode direct`. Use the Notion
+MCP search tool's `edited_by_user_ids` / `created_by_user_ids` filters for the
+identity, scoped to `[since, until]`. Notion's `last_edited_date_range` filter
+accepts dates, not timestamps: query the enclosing day(s) and filter each
+result's returned timestamp client-side against the exact request bounds.
+There is no cursor and the result ceiling is 50: a query returning exactly 50
+results must be treated as truncated, never ingested — narrow the window and
+retry, or report a `{"error":"..."}` failure rather than silently dropping the
+tail. Emit `notion.page_updated` or `notion.database_updated` events with
+`external_id` set to `<page-id>:<last-edited-time>`, matching the direct
+`notion` connector's identity so overlapping capture between `notion` and
+`notion.activity` de-duplicates instead of double-counting.
+
 Avoid a cold `npx -y @azure-devops/mcp` launch for an unattended worker when
 the client has a short MCP connection timeout. Install or pre-resolve the
 package and register its resolved executable so package download time cannot

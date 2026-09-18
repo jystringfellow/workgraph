@@ -67,6 +67,24 @@ Notion capture keeps one stored event per Notion object id. Recapturing the same
 page or database updates the stored event when Notion metadata changes without
 creating duplicates.
 
+Notion search is requested sorted descending by `last_edited_time`. Capture
+stores each fetched page of results immediately rather than waiting for
+pagination to finish, so a mid-poll error or deadline leaves already-fetched
+objects durably indexed instead of discarding the whole run. Capture also
+maintains a `notion` row in `capture_cursors`. On the first capture there is no
+stored cursor, so the walk enumerates the whole workspace once. On later polls,
+capture stops paginating as soon as it reaches an object older than the stored
+cursor (minus a small overlap), bounding the work to what changed since the
+last successful poll rather than the size of the whole workspace. The cursor
+only advances to the poll's start time when the walk completes without error;
+a failed poll leaves the cursor unchanged so the next poll retries the same
+bounds.
+
+Preview fetches (`/v1/blocks/{id}/children`) for changed-by-me pages are capped
+per capture call so a large batch of changes cannot delay the index pass
+itself; pages beyond the cap are still indexed and get a personal activity
+event, just without a content preview until a later poll catches up.
+
 Notion capture also maintains a local `notion_index` table. The index tracks
 each discovered object id, object type, title, URL, parent JSON, properties
 JSON, a capped content preview when fetched, created time/by, last edited
@@ -91,6 +109,13 @@ and it does not fetch block contents for other-user edits.
 Future Notion capture should add tracked roots/databases, recursive or targeted
 block previews for high-value pages, and comments/mentions when the connection
 has comment read capability.
+
+A separate bridged-only `notion.activity` connector captures participant-scoped
+edited/created activity workspace-wide, which the public REST API used above
+cannot express. See `specs/bridged-capture.md` for its scope, recipe, and
+event-identity contract; its events share this connector's `notion.page_updated`
+and `notion.database_updated` event types so overlapping capture between the
+two connectors de-duplicates rather than double-counting.
 
 The first Notion OAuth slice is a narrow Cloudflare Worker token relay:
 

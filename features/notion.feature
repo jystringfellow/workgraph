@@ -8,6 +8,22 @@ Scenario: Capture shared Notion pages and databases
   And the records preserve object id, title, URL, created time, last edited time, and parent metadata
   And recapturing the same page or database updates the existing event instead of creating duplicates
 
+Scenario: Notion capture bootstraps a cursor and resumes incrementally
+  Given Notion is connected
+  When I run "workgraph notion capture"
+  Then the search request is sorted descending by last edited time
+  And workgraph writes each fetched page's objects immediately instead of waiting for full pagination
+  And workgraph stores a notion capture cursor after a complete run
+  When a later capture only needs to catch up since the stored cursor
+  Then pagination stops once it reaches an object older than the cursor
+  And the work is bounded by elapsed time rather than total workspace size
+
+Scenario: A failed Notion capture leaves partial progress instead of nothing
+  Given Notion is connected
+  When "workgraph notion capture" fails partway through pagination
+  Then objects from already-fetched pages remain stored in notion_index and events
+  And the capture cursor does not advance until a full run succeeds
+
 Scenario: Connect Notion with OAuth
   Given workgraph has been initialized
   When I run "workgraph notion connect"

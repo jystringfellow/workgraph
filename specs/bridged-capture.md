@@ -81,6 +81,7 @@ bridged capture, or both, plus the event source and allowed event types.
 | `slack` | `slack` | yes | yes | Messages and thread replies |
 | `slack.lists` | `slack` | yes | yes | Exhaustive current-state snapshots through `slack_read_file`; preserves existing `slack.list_item` source semantics |
 | `notion` | `notion` | yes | **no** | Reference client search cannot prove exhaustive pagination; use direct OAuth or `notion connect-token` |
+| `notion.activity` | `notion` | **no** | **yes** | Bridged-only; the public API cannot express workspace-wide participant scope, so MCP search (`edited_by_user_ids`/`created_by_user_ids`) is used instead |
 | `mail.google` | `mail.google` | yes | yes | Provider recipe required |
 | `mail.microsoft` | `mail.microsoft` | yes | yes | Provider recipe required |
 | `calendar.google` | `calendar.google` | yes | yes | Uses a rolling occurrence window |
@@ -150,6 +151,7 @@ The initial required parameter shapes are:
 | `mail.google` / `mail.microsoft` | non-empty `mailboxes` or `folders` array and positive `preview_limit` |
 | `calendar.google` / `calendar.microsoft` | non-empty `calendars` array plus non-negative `past_days` and positive `future_days` |
 | `azure.boards` | non-empty `organization` plus either `project` and `area_path`, or participant scope with `identity` and `include` values from `authored` and `assigned` |
+| `notion.activity` | participant scope with `identity` and `include` values from `edited` and `created`; optional `bootstrap_lookback` (positive duration string, default `168h`) |
 
 Participant scope is connector-specific rather than a universal provider
 query. For example, Azure Boards may use:
@@ -728,6 +730,42 @@ project `DemoScrum`, and area path
 `DemoScrum\\Productivity Improvements\\squad-demo`. Production values belong in
 non-secret `bridge_params`. Azure Pipelines requires a separate future recipe
 and connector id.
+
+### Notion activity recipe notes
+
+`notion.activity` exists because the public Notion REST API cannot express
+participant scope workspace-wide (its `POST /v1/search` filter accepts only
+`object-type`/`in_trash`), while Notion's MCP search exposes
+`edited_by_user_ids` and `created_by_user_ids` workspace-wide. This makes
+`notion.activity` bridged-only: `workgraph connectors mode notion.activity
+direct` fails with an explanatory error, and `workgraph connectors connect
+notion.activity --mode bridged` is the only supported setup path.
+
+Two correctness requirements apply to this recipe:
+
+1. **Date granularity.** Notion's `last_edited_date_range` filter accepts
+   dates, not timestamps, so a request window narrower than a day cannot be
+   expressed exactly. The bridge queries the enclosing day(s) and filters each
+   result's returned timestamp client-side against the exact request bounds,
+   the same padding technique the Microsoft mail recipe uses.
+2. **Cap detection.** There is no cursor and the provider ceiling is 50
+   results. A query returning exactly 50 results must be treated as truncated
+   and reported as a `{"error":"..."}` failure rather than ingested — an
+   unscoped query can look like a complete, small result set while actually
+   being silently cut off.
+
+Events reuse the direct `notion` connector's `notion.page_updated` /
+`notion.database_updated` types and `notion` event source, with `external_id`
+set to `<page-id>:<last-edited-time>` — the same identity the direct connector
+derives internally. Overlapping capture between `notion` and `notion.activity`
+therefore de-duplicates in the events table rather than double-counting the
+same edit.
+
+A first cut of this connector supports only `edited` and `created` includes.
+Comments and mentions have no enumerable-by-actor surface in either Notion API
+and are a known gap rather than a near-term TODO; `viewed` activity needs
+snapshot-plus-content-hash handling like `slack.lists` and is deferred to a
+later increment.
 
 ## Security and privacy
 

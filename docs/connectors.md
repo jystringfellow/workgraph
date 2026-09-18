@@ -88,6 +88,7 @@ The reference-client matrix is:
 | `calendar.microsoft` | yes | Explicit calendars and horizons; map `Pacific Standard Time` to DST-aware `America/Los_Angeles`, emit occurrence start in UTC, and preserve provider start/end values |
 | `azure.boards` | yes | Explicit organization plus project/area path or the approved `@Me` participant strategy; participant WIQL still receives one accessible project as routing context |
 | `notion` | **no** | Reference search caps results without an exhaustion cursor; use direct OAuth or `workgraph notion connect-token` |
+| `notion.activity` | **only** | Bridged-only; the public API cannot express workspace-wide participant scope. Approved `@Me` participant strategy using MCP `edited_by_user_ids`/`created_by_user_ids`; pad date-only filters to enclosing days and treat a 50-result response as truncated |
 
 An empty batch is valid only after an exhaustive bounded query or an applicable
 control query proves emptiness. Never infer emptiness from one zero-result
@@ -165,8 +166,10 @@ workgraph bridge drain --client codex
 ```
 
 Bridging is supported for registered remote connectors with event contracts.
-Local `git` and Notion capture cannot be bridged. Switching a connector back to
-`direct` preserves any direct credentials already stored by workgraph:
+Local `git` and direct Notion capture cannot be bridged; conversely,
+`notion.activity` is bridged-only and rejects `--mode direct`. Switching a
+connector back to `direct` preserves any direct credentials already stored by
+workgraph:
 
 ```sh
 workgraph connectors mode slack direct
@@ -267,6 +270,26 @@ Run a one-off Notion capture for debugging:
 ```sh
 workgraph notion capture
 ```
+
+### Notion activity (bridged, participant scope)
+
+`notion.activity` is a separate, bridged-only connector for personal activity
+(pages edited or created by the connected identity) that the public REST API
+cannot express workspace-wide. It requires an approved MCP-capable client:
+
+```sh
+workgraph connectors connect notion.activity --mode bridged \
+  --params-json '{"scope":"participant","identity":"@me","include":["edited","created"],"bootstrap_lookback":"168h"}'
+workgraph start
+```
+
+Its events reuse the direct connector's `notion.page_updated` /
+`notion.database_updated` types and `notion` event source, with
+`external_id` set to `<page-id>:<last-edited-time>`. This means capture from
+`notion` and `notion.activity` de-duplicates in the events table instead of
+double-counting the same edit. `notion.activity` only supports bridged mode;
+`workgraph connectors mode notion.activity direct` fails with an explanatory
+error.
 
 ## Azure Boards
 

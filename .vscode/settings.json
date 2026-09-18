@@ -1,0 +1,5 @@
+"chat.tools.terminal.autoApprove": {
+  "/^go (test|build|vet)\\b/": true,
+  "/^git (status|diff|log|pull)\\b/": true,
+  "/^ls\\b/": true
+}

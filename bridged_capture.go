@@ -552,6 +552,9 @@ func eventSourceForConnector(connectorID string) string {
 	if connectorID == "slack.lists" {
 		return "slack"
 	}
+	if connectorID == "notion.activity" {
+		return "notion"
+	}
 	return connectorID
 }
 
@@ -760,9 +763,12 @@ func IngestBridgedCapture(config BridgedIngestConfig) (BridgedIngestResult, erro
 	snapshotKeys := map[string]bool{}
 	for index, envelope := range envelopes {
 		var event preparedBridgedEvent
-		if claimedRequest != nil && claimedRequest.CaptureSemantics == "complete_snapshot" && connectorID == "slack.lists" {
+		switch {
+		case claimedRequest != nil && claimedRequest.CaptureSemantics == "complete_snapshot" && connectorID == "slack.lists":
 			event, err = prepareSlackListSnapshotEvent(*claimedRequest, envelope)
-		} else {
+		case connectorID == "notion.activity":
+			event, err = prepareNotionActivityEvent(envelope)
+		default:
 			event, err = prepareBridgedEvent(source, envelope)
 		}
 		if err != nil {
@@ -882,6 +888,8 @@ func connectorAllowsBridgedEvent(connectorID string, eventType string) bool {
 		return eventType == "slack.message" || eventType == "slack.reply" || eventType == "slack.thread_reply"
 	case "slack.lists":
 		return eventType == "slack.list_item"
+	case "notion.activity":
+		return eventType == "notion.page_updated" || eventType == "notion.database_updated"
 	default:
 		return strings.HasPrefix(eventType, eventSourceForConnector(connectorID)+".")
 	}
@@ -1026,6 +1034,38 @@ func prepareBridgedEvent(source string, envelope bridgedEventEnvelope) (prepared
 		WeakDedupe:  weak,
 	}
 	return event, nil
+}
+
+// prepareNotionActivityEvent mirrors the direct notion connector's event
+// identity (eventType:externalID, unhashed) so overlapping capture between
+// notion and notion.activity de-duplicates in the events table instead of
+// storing the same edit twice.
+func prepareNotionActivityEvent(envelope bridgedEventEnvelope) (preparedBridgedEvent, error) {
+	eventType := strings.TrimSpace(envelope.Type)
+	if eventType != "notion.page_updated" && eventType != "notion.database_updated" {
+		return preparedBridgedEvent{}, fmt.Errorf("notion.activity requires type notion.page_updated or notion.database_updated")
+	}
+	externalID := strings.TrimSpace(envelope.ExternalID)
+	if externalID == "" {
+		return preparedBridgedEvent{}, fmt.Errorf("notion.activity requires external_id in the form <page-id>:<last-edited-time>")
+	}
+	parsedTimestamp, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(envelope.Timestamp))
+	if err != nil {
+		return preparedBridgedEvent{}, fmt.Errorf("timestamp must be valid RFC3339: %w", err)
+	}
+	payloadJSON, err := canonicalJSONObject(envelope.Payload)
+	if err != nil {
+		return preparedBridgedEvent{}, fmt.Errorf("payload: %w", err)
+	}
+	return preparedBridgedEvent{
+		ID:          notionEventID(eventType, externalID),
+		Type:        eventType,
+		Timestamp:   parsedTimestamp.UTC().Format(time.RFC3339Nano),
+		PayloadJSON: payloadJSON,
+		Project:     strings.TrimSpace(envelope.Project),
+		Actor:       strings.TrimSpace(envelope.Actor),
+		Summary:     strings.TrimSpace(envelope.Summary),
+	}, nil
 }
 
 type slackListSnapshotParams struct {

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -386,6 +387,131 @@ func TestNotionCaptureFetchesPreviewForChangedByMePages(t *testing.T) {
 	index := notionIndexRow(t, dbPath, "page-1")
 	if !strings.Contains(index.ContentPreview, "Launch checklist") || !strings.Contains(index.ContentPreview, "Confirm Notion polling preview") {
 		t.Fatalf("expected content preview in notion index, got %#v", index)
+	}
+}
+
+func TestNotionCaptureSortsSearchAndAdvancesCursor(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	var gotSort string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		var decoded map[string]any
+		_ = json.Unmarshal(body, &decoded)
+		if sort, ok := decoded["sort"].(map[string]any); ok {
+			gotSort = fmt.Sprintf("%v", sort)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{
+  "object": "list",
+  "results": [
+    {
+      "object": "page",
+      "id": "page-1",
+      "created_time": "2026-06-07T15:00:00.000Z",
+      "last_edited_time": "2026-06-07T16:00:00.000Z",
+      "url": "https://www.notion.so/page-1",
+      "properties": {"title": {"type": "title", "title": [{"plain_text": "Launch plan"}]}}
+    }
+  ],
+  "next_cursor": null,
+  "has_more": false
+}`))
+	}))
+	defer server.Close()
+
+	if output, err := runworkgraph(t, repoRoot, "notion", "capture",
+		"--home", homeDir,
+		"--token", "notion-token",
+		"--notion-api-base", server.URL,
+	); err != nil {
+		t.Fatalf("workgraph notion capture failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(gotSort, "descending") || !strings.Contains(gotSort, "last_edited_time") {
+		t.Fatalf("expected search request sorted by descending last_edited_time, got %q", gotSort)
+	}
+
+	db, err := sql.Open("sqlite3", filepath.Join(homeDir, "workgraph.db"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	var completedThrough string
+	if err := db.QueryRow(`SELECT completed_through FROM capture_cursors WHERE connector_id = 'notion'`).Scan(&completedThrough); err != nil {
+		t.Fatalf("expected a notion capture cursor after capture: %v", err)
+	}
+	if strings.TrimSpace(completedThrough) == "" {
+		t.Fatalf("expected a non-empty notion capture cursor")
+	}
+}
+
+func TestNotionCaptureLeavesPartialProgressOnPaginationFailure(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests++
+		response.Header().Set("Content-Type", "application/json")
+		if requests == 1 {
+			_, _ = response.Write([]byte(`{
+  "object": "list",
+  "results": [
+    {
+      "object": "page",
+      "id": "page-1",
+      "created_time": "2026-06-07T14:00:00.000Z",
+      "last_edited_time": "2026-06-07T16:00:00.000Z",
+      "url": "https://www.notion.so/page-1",
+      "properties": {"title": {"type": "title", "title": [{"plain_text": "Launch plan"}]}}
+    }
+  ],
+  "next_cursor": "page-2-cursor",
+  "has_more": true
+}`))
+			return
+		}
+		http.Error(response, "deadline exceeded", http.StatusGatewayTimeout)
+	}))
+	defer server.Close()
+
+	if output, err := runworkgraph(t, repoRoot, "notion", "capture",
+		"--home", homeDir,
+		"--token", "notion-token",
+		"--notion-api-base", server.URL,
+	); err == nil {
+		t.Fatalf("expected notion capture to fail on the second page, got:\n%s", output)
+	}
+	if requests != 2 {
+		t.Fatalf("expected exactly two search requests, got %d", requests)
+	}
+
+	// The first page's object must be stored even though the run ultimately failed.
+	page := notionEvent(t, filepath.Join(homeDir, "workgraph.db"), "notion.page", "page-1")
+	if page.Summary != "Launch plan" {
+		t.Fatalf("expected page-1 to be stored despite the later page failing, got %#v", page)
+	}
+
+	db, err := sql.Open("sqlite3", filepath.Join(homeDir, "workgraph.db"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM capture_cursors WHERE connector_id = 'notion'`).Scan(&count); err != nil {
+		t.Fatalf("count notion capture cursors: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no notion capture cursor after a failed run, got %d rows", count)
 	}
 }
 
