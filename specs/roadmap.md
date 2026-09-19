@@ -110,6 +110,7 @@ Priority labels used below:
       - [x] Schedule ready `notion.activity` connectors from daemon startup so their configured cadence emits capture requests. [P0a, issue: #114, spec: `specs/bridged-capture.md`]
    - [x] One-command `workgraph` agent plugin installation for Codex and Claude Code, bundling the local MCP plus bridge, memory, and AI checkpoint skills. [P0a, spec: `specs/agent-plugin.md`]
    - [x] Connector poll failures are isolated from the daemon, recorded in connector state, logged, and shown by `workgraph status`. Fatal local capture exits preserve their last error. [P0a, specs: `specs/connector-runtime.md` and `specs/capture-controls.md`]
+   - [x] Preserve replacement daemon state when a prior worker exits late so `workgraph status` cannot report a healthy replacement as stopped. [P0a, issue: #109, spec: `specs/capture-controls.md`]
    - [x] Detect and report stale daemon and MCP binaries after executable upgrades, with explicit daemon/client restart guidance. [P0a, issue: #98, specs: `specs/start.md`, `specs/bridged-capture.md`, and `specs/agent-plugin.md`]
    - [x] Bound connector polls with request deadlines and retry backoff so a stalled or failing provider cannot block the shared capture loop. [P0a, specs: `specs/connector-runtime.md` and `specs/architecture-improvements.md`]
    - [ ] Memory routing/index file for loading relevant context by task.

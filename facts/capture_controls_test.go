@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -155,6 +156,49 @@ func TestStatusReportsRunningCaptureState(t *testing.T) {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("expected capture status to include %q, got:\n%s", expected, output)
 		}
+	}
+}
+
+func TestRestartKeepsReplacementDaemonStateWhenPriorWorkerExitsLate(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	watchDir := filepath.Join(tempDir, "project")
+	if err := os.MkdirAll(watchDir, 0o755); err != nil {
+		t.Fatalf("create watch dir: %v", err)
+	}
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	runWorkgraphCommand(t, nil, "start", "--home", homeDir, "--database", initResult.DatabasePath, "--watch", watchDir)
+	priorPID := captureDaemonPID(t, homeDir)
+	defer signalProcess(priorPID)
+
+	for _, name := range []string{"daemon.json", "daemon.pid"} {
+		if err := os.Remove(filepath.Join(homeDir, name)); err != nil {
+			t.Fatalf("remove prior %s: %v", name, err)
+		}
+	}
+	runWorkgraphCommand(t, nil, "start", "--home", homeDir, "--database", initResult.DatabasePath, "--watch", watchDir)
+	replacementPID := captureDaemonPID(t, homeDir)
+	defer signalProcess(replacementPID)
+	if replacementPID == priorPID {
+		t.Fatalf("expected a replacement worker, still pid %d", priorPID)
+	}
+
+	signalProcess(priorPID)
+	waitForProcessExit(t, priorPID)
+
+	if got := captureDaemonPID(t, homeDir); got != replacementPID {
+		t.Fatalf("expected daemon pid %d to remain owned by replacement, got %d", replacementPID, got)
+	}
+	status, err := workgraph.DaemonStatusForHome(homeDir)
+	if err != nil {
+		t.Fatalf("read replacement daemon status: %v", err)
+	}
+	if !status.Running || status.PID != replacementPID {
+		t.Fatalf("expected replacement pid %d to be running, got pid %d running=%t:\n%s", replacementPID, status.PID, status.Running, status.Message)
 	}
 }
 
@@ -434,4 +478,36 @@ func assertCaptureNotRunning(t *testing.T, homeDir string) {
 	}
 
 	t.Fatalf("expected daemon pid file to be removed")
+}
+
+func captureDaemonPID(t *testing.T, homeDir string) int {
+	t.Helper()
+	contents, err := os.ReadFile(filepath.Join(homeDir, "daemon.pid"))
+	if err != nil {
+		t.Fatalf("read daemon pid: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(contents)))
+	if err != nil {
+		t.Fatalf("parse daemon pid %q: %v", strings.TrimSpace(string(contents)), err)
+	}
+	return pid
+}
+
+func signalProcess(pid int) {
+	process, err := os.FindProcess(pid)
+	if err == nil {
+		_ = process.Signal(syscall.SIGTERM)
+	}
+}
+
+func waitForProcessExit(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(pid, 0); err != nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("expected daemon process %d to exit", pid)
 }

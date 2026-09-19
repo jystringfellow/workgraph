@@ -39,6 +39,12 @@ Scenario: Commit background readiness state
   When the command reports that capture is ready
   Then daemon state and the PID file identify the same running worker
 
+Scenario: Preserve replacement state during a delayed shutdown
+  Given a replacement capture worker becomes ready before the prior worker exits
+  When the prior worker finishes shutting down
+  Then daemon state and the PID file still identify the replacement worker
+  And "workgraph status" reports that replacement capture is running
+
 Scenario: Stop background capture
   Given workgraph background capture is running
   When I run "workgraph stop"
