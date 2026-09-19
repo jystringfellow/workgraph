@@ -239,6 +239,10 @@ request rather than pretending that a provider poll succeeded. Completion sets
 the next due time to `completed_at + interval`; failure or lease expiry makes
 the same request available after the computed backoff.
 
+Every registered bridged-capable connector is included in daemon scheduling.
+In particular, a ready `notion.activity` connector starts its scheduler on
+daemon startup and emits a due request just like the other bridged connectors.
+
 `workgraph connectors poll --once --connector <id>` performs the native poll for
 a direct connector and emits one inspectable request for a bridged connector.
 It reports the request id and `pending`; it does not report capture success.

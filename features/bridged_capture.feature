@@ -132,6 +132,7 @@ Feature: Bridged connector capture
     Given the public Notion API cannot filter search by editor or creator workspace-wide
     When I configure notion.activity with participant scope and edited/created includes
     Then workgraph rejects notion.activity in direct mode with an explanatory message
+    And the daemon schedules notion.activity capture requests at its configured cadence
     And the worker queries Notion MCP edited_by_user_ids and created_by_user_ids for the identity
     And a date-only provider filter is padded to the enclosing day and filtered client-side to exact bounds
     And a response of exactly 50 results is treated as truncated and reported as a failure, never ingested
