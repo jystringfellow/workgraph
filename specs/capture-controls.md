@@ -15,6 +15,12 @@ If background capture exits because of a fatal local watcher or event-store
 error, `workgraph status` preserves and reports the last failure. Starting
 capture again clears the prior failure after the new worker becomes ready.
 
+Daemon state belongs to the worker PID recorded in it. A retiring worker must
+only remove or replace state that still identifies that worker. In particular,
+if a replacement worker becomes ready before the prior worker finishes shutting
+down, the prior worker must not erase the replacement's `daemon.json` or
+`daemon.pid` files.
+
 On macOS, the detached capture worker must retain a live workgraph supervisor
 as its parent. This avoids a Go/macOS platform-verifier failure where HTTPS
 requests from an orphaned child fail with `SecPolicyCreateSSL error: 0` after

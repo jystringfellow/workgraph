@@ -169,12 +169,15 @@ func RunDaemon(config DaemonConfig) error {
 	if runErr != nil {
 		status.Running = false
 		status.LastError = runErr.Error()
-		if err := writeDaemonState(status); err != nil {
+		if err := writeDaemonStateUnlessReplaced(status); err != nil {
 			return fmt.Errorf("%v; record daemon failure: %w", runErr, err)
 		}
 		return runErr
 	}
-	return removeDaemonState(capture.Status.HomeDir)
+	// The controlling stop/status path removes state after observing this worker.
+	// A worker must not remove shared state here because a replacement may have
+	// become ready while this process was still shutting down.
+	return nil
 }
 
 // DaemonStatusForConfig reports whether background capture is running.
@@ -326,6 +329,17 @@ func writeDaemonState(status DaemonStatus) error {
 	}
 
 	return nil
+}
+
+func writeDaemonStateUnlessReplaced(status DaemonStatus) error {
+	current, err := readDaemonState(status.HomeDir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err == nil && current.PID != status.PID {
+		return nil
+	}
+	return writeDaemonState(status)
 }
 
 func waitForDaemonReady(homeDir string) (DaemonStatus, error) {
