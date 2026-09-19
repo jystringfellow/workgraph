@@ -815,6 +815,52 @@ func TestDaemonSchedulesBridgedConnectorWithoutCallingProvider(t *testing.T) {
 	}
 }
 
+func TestDaemonSchedulesNotionActivityConnector(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("initialize workgraph: %v", err)
+	}
+	if _, err := workgraph.ConfigureBridgedConnector(workgraph.ConnectorBridgeConfig{
+		HomeDir: homeDir, ID: "notion.activity", BridgeParams: json.RawMessage(bridgeParamsForFact("notion.activity")),
+	}); err != nil {
+		t.Fatalf("connect bridged notion.activity: %v", err)
+	}
+
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:      homeDir,
+		DatabasePath: initResult.DatabasePath,
+		WatchDirs:    []string{tempDir},
+	})
+	if err != nil {
+		t.Fatalf("start capture daemon: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- capture.Run(ctx) }()
+
+	db := openBridgedCaptureDatabase(t, homeDir)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var count int
+		err := db.QueryRow(`SELECT COUNT(*) FROM capture_requests WHERE connector_id = 'notion.activity' AND status = 'pending'`).Scan(&count)
+		if err == nil && count == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			<-done
+			t.Fatalf("daemon did not emit bridged notion.activity request: count=%d error=%v", count, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("stop capture daemon: %v", err)
+	}
+}
+
 func TestExpiredClaimRetriesSameRequestAndInvalidatesOldToken(t *testing.T) {
 	homeDir := initBridgedCaptureHome(t)
 	connectBridgedConnector(t, repoRoot(t), homeDir, "slack")
