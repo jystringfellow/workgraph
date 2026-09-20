@@ -5,7 +5,6 @@ import (
 	"strings"
 )
 
-// ProviderToolRequirement describes one logical read-only provider operation.
 type ProviderToolRequirement struct {
 	Operation    string   `json:"operation"`
 	Capabilities []string `json:"capabilities"`
@@ -13,19 +12,16 @@ type ProviderToolRequirement struct {
 	Detail       string   `json:"detail"`
 }
 
-// ConnectorToolRequirements groups provider operations for one connector.
 type ConnectorToolRequirements struct {
 	Connector string                    `json:"connector"`
 	Tools     []ProviderToolRequirement `json:"tools"`
 }
 
-// ConnectorRequiredToolsResult is the shared CLI and MCP requirement view.
 type ConnectorRequiredToolsResult struct {
 	Connectors []ConnectorToolRequirements `json:"connectors"`
 	Message    string                      `json:"-"`
 }
 
-// RequiredConnectorTools returns canonical bridged provider requirements.
 func RequiredConnectorTools(connectorID string) (ConnectorRequiredToolsResult, error) {
 	connectorID = strings.TrimSpace(connectorID)
 	if connectorID != "" {

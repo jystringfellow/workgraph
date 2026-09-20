@@ -6,15 +6,11 @@ import (
 	"time"
 )
 
-// MicrosoftMailRecipeBounds is the mailbox-local provider query window for one
-// exact UTC capture request.
 type MicrosoftMailRecipeBounds struct {
 	Since time.Time
 	Until time.Time
 }
 
-// MicrosoftMailRecipeWindow returns a two-calendar-day padded window in the
-// mailbox timezone. Results still require exact UTC filtering after fetching.
 func MicrosoftMailRecipeWindow(since, until time.Time, location *time.Location) (MicrosoftMailRecipeBounds, error) {
 	if location == nil {
 		return MicrosoftMailRecipeBounds{}, errors.New("Microsoft Mail mailbox timezone is required")
@@ -34,15 +30,11 @@ func localCalendarShift(value time.Time, days int) time.Time {
 	return time.Date(value.Year(), value.Month(), value.Day(), value.Hour(), value.Minute(), value.Second(), value.Nanosecond(), value.Location()).AddDate(0, 0, days)
 }
 
-// MicrosoftMailRecipeMessage is the sanitized provider-shaped subset needed
-// to prove bounded mail pagination and normalization.
 type MicrosoftMailRecipeMessage struct {
 	ID               string
 	ReceivedDateTime string
 }
 
-// MicrosoftMailRecipePage is one ordered provider response page. URL and
-// NextURL make offset pagination continuity explicit in executable facts.
 type MicrosoftMailRecipePage struct {
 	URL       string
 	NextURL   string
@@ -51,8 +43,6 @@ type MicrosoftMailRecipePage struct {
 	Truncated bool
 }
 
-// NormalizeMicrosoftMailRecipe follows contiguous pages and filters provider
-// results against the exact UTC request bounds.
 func NormalizeMicrosoftMailRecipe(pages []MicrosoftMailRecipePage, since, until time.Time) ([]MicrosoftMailRecipeMessage, error) {
 	if len(pages) == 0 {
 		return nil, errors.New("Microsoft Mail recipe returned no pages")
@@ -114,15 +104,11 @@ func NormalizeMicrosoftMailRecipe(pages []MicrosoftMailRecipePage, since, until 
 	return nil, errors.New("Microsoft Mail recipe pagination ended before completion")
 }
 
-// BridgedEmptyProof records why a bounded provider query may safely return no
-// events. A control query is an explicit provider-specific exhaustion proof.
 type BridgedEmptyProof struct {
 	ExhaustiveQuery    bool `json:"exhaustive_query"`
 	ControlQueryPassed bool `json:"control_query_passed"`
 }
 
-// ValidateBridgedEmptyProof rejects empty bounded captures without a provider
-// proof that the requested scope was fully examined.
 func ValidateBridgedEmptyProof(proof BridgedEmptyProof) error {
 	if proof.ExhaustiveQuery || proof.ControlQueryPassed {
 		return nil

@@ -19,7 +19,6 @@ import (
 //go:embed all:integrations/codex all:integrations/claude-code all:.agents/skills/workgraph-bridge all:.agents/skills/workgraph-memory all:.agents/skills/workgraph-ai-checkpoint
 var agentPluginAssets embed.FS
 
-// PluginInstallConfig controls one client plugin installation.
 type PluginInstallConfig struct {
 	HomeDir       string
 	Client        string
@@ -31,7 +30,6 @@ type PluginInstallConfig struct {
 	ClearModel    bool
 }
 
-// PluginInstallResult describes an installed client plugin package.
 type PluginInstallResult struct {
 	Client      string
 	InstallRoot string
@@ -40,7 +38,6 @@ type PluginInstallResult struct {
 	Message     string
 }
 
-// PluginDoctorConfig controls provider-free client plugin diagnostics.
 type PluginDoctorConfig struct {
 	HomeDir       string
 	Client        string
@@ -48,12 +45,10 @@ type PluginDoctorConfig struct {
 	InstallRoot   string
 }
 
-// Compatibility aliases retain the public bridge install API.
 type BridgeInstallConfig = PluginInstallConfig
 type BridgeInstallResult = PluginInstallResult
 type BridgeDoctorConfig = PluginDoctorConfig
 
-// InstallPlugin installs and registers one reference client package idempotently.
 func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 	homeDir, err := connectorHomeDir(config.HomeDir)
 	if err != nil {
@@ -411,7 +406,6 @@ func writeJSONFile(path string, document any) error {
 	return nil
 }
 
-// InstallBridge is a compatibility wrapper around InstallPlugin.
 func InstallBridge(config BridgeInstallConfig) (BridgeInstallResult, error) {
 	return InstallPlugin(config)
 }
@@ -606,7 +600,6 @@ func verifyBridgeLaunchEnvironment(plistPath string, userHome string, clientPath
 	return nil
 }
 
-// DrainBridge launches a signed-in reference client only when bridged work is active.
 func DrainBridge(homeDir string, client string, clientCommand string) (string, error) {
 	homeDir, err := connectorHomeDir(homeDir)
 	if err != nil {
@@ -695,7 +688,6 @@ func recordBridgeDrainHeartbeat(homeDir string, client string) {
 	}
 }
 
-// DoctorPlugin verifies a package, skills, client binary, local MCP, and worker marker without provider access.
 func DoctorPlugin(config PluginDoctorConfig) (string, error) {
 	homeDir, err := connectorHomeDir(config.HomeDir)
 	if err != nil {
@@ -882,7 +874,6 @@ func readPluginVersion(manifest string) (string, error) {
 	return document.Version, nil
 }
 
-// DoctorBridge is a compatibility wrapper around DoctorPlugin.
 func DoctorBridge(config BridgeDoctorConfig) (string, error) {
 	return DoctorPlugin(config)
 }

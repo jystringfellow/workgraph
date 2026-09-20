@@ -10,7 +10,6 @@ import (
 	"time"
 )
 
-// EffectivenessReviewConfig controls the local suggestion effectiveness review.
 type EffectivenessReviewConfig struct {
 	HomeDir      string
 	DatabasePath string
@@ -19,7 +18,6 @@ type EffectivenessReviewConfig struct {
 	Now          time.Time
 }
 
-// ReviewWindow is the deterministic, inclusive-start/exclusive-end metric window.
 type ReviewWindow struct {
 	Kind     string    `json:"kind"`
 	Start    time.Time `json:"start"`
@@ -27,7 +25,6 @@ type ReviewWindow struct {
 	Timezone string    `json:"timezone"`
 }
 
-// ReviewRateMetric describes one disposition rate and its shared denominator.
 type ReviewRateMetric struct {
 	Status      string   `json:"status"`
 	Count       int      `json:"count"`
@@ -35,20 +32,17 @@ type ReviewRateMetric struct {
 	RatePercent *float64 `json:"rate_percent"`
 }
 
-// ReviewDismissalReason is one stable dismissal reason count.
 type ReviewDismissalReason struct {
 	Code  string `json:"code"`
 	Count int    `json:"count"`
 }
 
-// ReviewDurationMetric describes the median time to a suggestion's first useful event.
 type ReviewDurationMetric struct {
 	Status        string   `json:"status"`
 	SampleSize    int      `json:"sample_size"`
 	MedianSeconds *float64 `json:"median_seconds"`
 }
 
-// ReviewConnectorState describes freshness from current local connector state.
 type ReviewConnectorState struct {
 	ID                  string `json:"id"`
 	Freshness           string `json:"freshness"`
@@ -62,7 +56,6 @@ type ReviewConnectorState struct {
 	ConsecutiveFailures int    `json:"consecutive_failures"`
 }
 
-// EffectivenessReviewResult contains local-only review metrics and rendered output.
 type EffectivenessReviewResult struct {
 	Window           ReviewWindow
 	Acceptance       ReviewRateMetric
@@ -84,7 +77,6 @@ type effectivenessReviewPayload struct {
 	Connectors       []ReviewConnectorState  `json:"connectors"`
 }
 
-// EffectivenessReview computes suggestion and connector metrics entirely from local state.
 func EffectivenessReview(config EffectivenessReviewConfig) (EffectivenessReviewResult, error) {
 	window, err := resolveReviewWindow(config.Since, config.Now)
 	if err != nil {

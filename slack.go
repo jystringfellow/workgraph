@@ -25,18 +25,12 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// DefaultSlackClientID is set by official workgraph builds for Slack PKCE OAuth.
-// Local development builds can pass a client id explicitly.
 var DefaultSlackClientID = "11231908244708.11230550498913"
 
-// DefaultSlackRedirectURI is the public HTTPS relay URL used for Slack PKCE OAuth.
-// Official builds should set this to a workgraph-controlled HTTPS endpoint.
 var DefaultSlackRedirectURI = "https://workgraph.pages.dev/slack/callback"
 
-// DefaultSlackLocalCallbackURI is where the HTTPS relay returns the browser.
 const DefaultSlackLocalCallbackURI = "http://localhost:2727/slack/callback"
 
-// SlackCaptureConfig controls Slack event ingestion.
 type SlackCaptureConfig struct {
 	HomeDir      string
 	DatabasePath string
@@ -44,7 +38,6 @@ type SlackCaptureConfig struct {
 	EventsFile   string
 }
 
-// SlackCaptureResult describes a Slack capture run.
 type SlackCaptureResult struct {
 	HomeDir      string
 	DatabasePath string
@@ -52,7 +45,6 @@ type SlackCaptureResult struct {
 	Message      string
 }
 
-// SlackAPICaptureConfig controls read-only Slack API polling.
 type SlackAPICaptureConfig struct {
 	HomeDir       string
 	DatabasePath  string
@@ -66,7 +58,6 @@ type SlackAPICaptureConfig struct {
 	ThreadCursors map[string]string
 }
 
-// SlackAPICaptureResult describes a Slack API capture run.
 type SlackAPICaptureResult struct {
 	EventsStored  int
 	Cursors       map[string]string
@@ -92,7 +83,6 @@ type SlackChannel struct {
 	User    string `json:"user"`
 }
 
-// SlackConnectConfig controls Slack OAuth setup.
 type SlackConnectConfig struct {
 	HomeDir          string
 	ClientID         string
@@ -112,7 +102,6 @@ type SlackConnectConfig struct {
 	OpenBrowser      func(string) error
 }
 
-// SlackConnectResult describes Slack OAuth setup.
 type SlackConnectResult struct {
 	ConfigPath       string
 	AuthorizationURL string
@@ -308,7 +297,6 @@ func (field *slackListField) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// CaptureSlackEvents stores Slack events from a local export file.
 func CaptureSlackEvents(config SlackCaptureConfig) (SlackCaptureResult, error) {
 	status, err := prepareRunStatus(RunConfig{
 		HomeDir:      config.HomeDir,
@@ -597,7 +585,6 @@ func slackListFieldValueText(value any) string {
 	return ""
 }
 
-// ConnectSlack prepares or completes Slack OAuth setup.
 func ConnectSlack(config SlackConnectConfig) (SlackConnectResult, error) {
 	homeDir, err := resolveHomeDir(config.HomeDir)
 	if err != nil {
@@ -703,7 +690,6 @@ func ConnectSlack(config SlackConnectConfig) (SlackConnectResult, error) {
 	return result, nil
 }
 
-// ConnectSlackWithBrowser completes Slack OAuth with a local callback and PKCE.
 func ConnectSlackWithBrowser(ctx context.Context, config SlackConnectConfig) (SlackConnectResult, error) {
 	homeDir, err := resolveHomeDir(config.HomeDir)
 	if err != nil {
@@ -901,7 +887,6 @@ func DisconnectSlack(config SlackDisconnectConfig) (SlackDisconnectResult, error
 	}, nil
 }
 
-// CaptureSlackFromAPI stores Slack messages from configured or discovered channels.
 func CaptureSlackFromAPI(config SlackAPICaptureConfig) (SlackAPICaptureResult, error) {
 	if config.Token == "" {
 		return SlackAPICaptureResult{}, errors.New("slack token is required")

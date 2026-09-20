@@ -416,7 +416,6 @@ func TestNotionActivityBridgedIngestDedupesAgainstDirectNotionIdentity(t *testin
 		t.Fatalf("expected notion.activity bridge to preserve personal edit involvement, got %q", involvement)
 	}
 
-	// A second ingest of the same edit (as the direct notion connector would produce) must de-duplicate.
 	second, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{HomeDir: homeDir, Source: "notion.activity", Input: strings.NewReader(input)})
 	if err != nil {
 		t.Fatalf("re-ingest notion.activity: %v", err)
@@ -1224,8 +1223,6 @@ func initBridgedCaptureHome(t *testing.T) string {
 	if output, err := runworkgraph(t, repoRoot(t), "init", "--home", homeDir); err != nil {
 		t.Fatalf("workgraph init failed: %v\n%s", err, output)
 	}
-	// Keep any client-global configuration written by plugin facts inside the
-	// same disposable user home as the synthetic workgraph home.
 	t.Setenv("HOME", filepath.Dir(homeDir))
 	return homeDir
 }

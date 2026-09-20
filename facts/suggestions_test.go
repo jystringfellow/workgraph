@@ -348,7 +348,6 @@ func TestSnoozedSuggestionResurfacesAfterExpiryWindow(t *testing.T) {
 		t.Fatalf("snooze suggestion: %v", err)
 	}
 
-	// Add a suppression with an until_at already in the past.
 	pastTime := time.Now().UTC().Add(-1 * time.Hour).Format(time.RFC3339)
 	if _, err := workgraph.AddSuggestionSuppression(workgraph.SuggestionSuppressionChange{
 		DatabasePath: result.DatabasePath,
@@ -360,7 +359,6 @@ func TestSnoozedSuggestionResurfacesAfterExpiryWindow(t *testing.T) {
 		t.Fatalf("add suppression: %v", err)
 	}
 
-	// Listing should expire the snooze and return the suggestion as proposed.
 	listed, err := workgraph.ListSuggestions(workgraph.SuggestionListConfig{
 		DatabasePath: result.DatabasePath,
 	})
@@ -411,7 +409,6 @@ func TestSnoozedSuggestionStaysHiddenBeforeExpiryWindow(t *testing.T) {
 		t.Fatalf("snooze suggestion: %v", err)
 	}
 
-	// Add a suppression with an until_at in the future.
 	futureTime := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
 	if _, err := workgraph.AddSuggestionSuppression(workgraph.SuggestionSuppressionChange{
 		DatabasePath: result.DatabasePath,

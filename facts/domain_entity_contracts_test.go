@@ -9,8 +9,6 @@ import (
 	workgraph "github.com/jystringfellow/workgraph"
 )
 
-// Domain entity facts cover workgraph concepts before storage.
-
 func TestEventRequiresIDSourceTypeTimestampPayload(t *testing.T) {
 	t.Skip("TBD: event requires id, source, type, timestamp, and payload_json")
 }

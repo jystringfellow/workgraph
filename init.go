@@ -12,7 +12,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// InitConfig controls where workgraph stores local state.
 type InitConfig struct {
 	HomeDir      string
 	DatabasePath string
@@ -20,7 +19,6 @@ type InitConfig struct {
 	Force        bool
 }
 
-// InitResult describes the local paths initialized by workgraph.
 type InitResult struct {
 	HomeDir      string
 	DatabasePath string
@@ -36,7 +34,6 @@ type settingsFile struct {
 	IgnoreNames           []string `json:"ignore_names"`
 }
 
-// Init creates the local workgraph home, settings, SQLite database, and memory repo.
 func Init(config InitConfig) (InitResult, error) {
 	homeDir, err := resolveHomeDir(config.HomeDir)
 	if err != nil {

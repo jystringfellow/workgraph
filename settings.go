@@ -9,13 +9,11 @@ import (
 	"strings"
 )
 
-// SettingsWatchConfig controls updates to settings watch roots.
 type SettingsWatchConfig struct {
 	HomeDir string
 	Path    string
 }
 
-// SettingsWatchResult describes a watch root added to the settings.
 type SettingsWatchResult struct {
 	SettingsPath string
 	AddedPath    string
@@ -23,14 +21,12 @@ type SettingsWatchResult struct {
 	Message      string
 }
 
-// SettingsIgnoreConfig controls updates to settings ignore rules.
 type SettingsIgnoreConfig struct {
 	HomeDir string
 	Path    string
 	Name    string
 }
 
-// SettingsIgnoreResult describes an ignore rule settings update.
 type SettingsIgnoreResult struct {
 	SettingsPath string
 	Path         string
@@ -39,25 +35,21 @@ type SettingsIgnoreResult struct {
 	Message      string
 }
 
-// SettingsGetConfig controls effective settings reporting.
 type SettingsGetConfig struct {
 	HomeDir string
 	Format  string
 }
 
-// SettingsGetResult describes effective settings visible to users/admins.
 type SettingsGetResult struct {
 	SettingsPath        string
 	ManagedSettingsPath string
 	Message             string
 }
 
-// SettingsDoctorConfig controls settings validation.
 type SettingsDoctorConfig struct {
 	HomeDir string
 }
 
-// SettingsDoctorResult describes settings validation output.
 type SettingsDoctorResult struct {
 	SettingsPath        string
 	ManagedSettingsPath string
@@ -65,7 +57,6 @@ type SettingsDoctorResult struct {
 	OK                  bool
 }
 
-// GetSettings reports effective local settings without exposing secrets.
 func GetSettings(config SettingsGetConfig) (SettingsGetResult, error) {
 	homeDir, err := resolvedSettingsHome(config.HomeDir)
 	if err != nil {
@@ -335,7 +326,6 @@ func bedrockInferenceProfileScopeText(scopes []managedBedrockInferenceProfileSco
 	return strings.Join(labels, ", ")
 }
 
-// DoctorSettings validates local and managed settings without printing secrets.
 func DoctorSettings(config SettingsDoctorConfig) (SettingsDoctorResult, error) {
 	homeDir, err := resolvedSettingsHome(config.HomeDir)
 	if err != nil {
@@ -382,7 +372,6 @@ func managedSettingSource(locked bool) string {
 	return "managed settings default"
 }
 
-// AddWatchDir prepends a resolved watch directory to workgraph settings.
 func AddWatchDir(config SettingsWatchConfig) (SettingsWatchResult, error) {
 	homeDir, err := resolveHomeDir(config.HomeDir)
 	if err != nil {
@@ -458,12 +447,10 @@ func removePath(path string, paths []string) []string {
 	return result
 }
 
-// AddIgnorePath appends a normalized path to the local ignore rules.
 func AddIgnorePath(config SettingsIgnoreConfig) (SettingsIgnoreResult, error) {
 	return updateIgnorePath(config, false)
 }
 
-// RemoveIgnorePath removes a normalized path from the local ignore rules.
 func RemoveIgnorePath(config SettingsIgnoreConfig) (SettingsIgnoreResult, error) {
 	return updateIgnorePath(config, true)
 }
@@ -510,12 +497,10 @@ func updateIgnorePath(config SettingsIgnoreConfig, remove bool) (SettingsIgnoreR
 	return result, nil
 }
 
-// AddIgnoreName appends a basename to the local ignore rules.
 func AddIgnoreName(config SettingsIgnoreConfig) (SettingsIgnoreResult, error) {
 	return updateIgnoreName(config, false)
 }
 
-// RemoveIgnoreName removes a basename from the local ignore rules.
 func RemoveIgnoreName(config SettingsIgnoreConfig) (SettingsIgnoreResult, error) {
 	return updateIgnoreName(config, true)
 }

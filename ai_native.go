@@ -18,7 +18,6 @@ import (
 	"unicode/utf8"
 )
 
-// AINativeSessionConfig controls one tool-native identity binding callback.
 type AINativeSessionConfig struct {
 	HomeDir      string
 	DatabasePath string
@@ -27,14 +26,12 @@ type AINativeSessionConfig struct {
 	Input        io.Reader
 }
 
-// AINativeSessionResult identifies the immutable native binding event.
 type AINativeSessionResult struct {
 	SessionID       string
 	NativeSessionID string
 	EventID         string
 }
 
-// AIResumeConfig controls one explicit native continuation launch.
 type AIResumeConfig struct {
 	HomeDir          string
 	DatabasePath     string
@@ -45,7 +42,6 @@ type AIResumeConfig struct {
 	Stderr           io.Writer
 }
 
-// AIResumeResult reports the newly wrapped continuation lifetime.
 type AIResumeResult struct {
 	PredecessorSessionID string
 	SessionID            string
@@ -74,7 +70,6 @@ var aiNativeAdapters = map[string]aiNativeAdapter{
 	"opencode": {Tool: "opencode", ResumePrefix: []string{"--session"}, BindingStrategy: "opencode-plugin"},
 }
 
-// BindAINativeSession stores only adapter-allowlisted identity metadata.
 func BindAINativeSession(config AINativeSessionConfig) (AINativeSessionResult, error) {
 	tool := strings.TrimSpace(config.Tool)
 	adapter, supported := aiNativeAdapters[tool]
@@ -161,7 +156,6 @@ func BindAINativeSession(config AINativeSessionConfig) (AINativeSessionResult, e
 	return AINativeSessionResult{SessionID: sessionID, NativeSessionID: callback.SessionID, EventID: eventID}, nil
 }
 
-// ResumeAISession launches the verified native continuation as a new lifetime.
 func ResumeAISession(config AIResumeConfig) (AIResumeResult, error) {
 	projections, _, err := loadAISessionProjections(config.HomeDir, config.DatabasePath, config.ProcessInspector)
 	if err != nil {
@@ -595,7 +589,6 @@ const aiOpenCodePlugin = `export const WorkgraphSessionPlugin = async () => {
         child.stdin.end()
         if (await child.exited === 0) boundSessionID = sessionID
       } catch {
-        // Native identity binding is best-effort and must not break OpenCode.
       }
     }
   }

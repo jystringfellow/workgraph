@@ -16,19 +16,16 @@ import (
 	"time"
 )
 
-// ConnectorListConfig controls connector status listing.
 type ConnectorListConfig struct {
 	HomeDir string
 }
 
-// ConnectorListResult describes configured connector polling.
 type ConnectorListResult struct {
 	HomeDir    string
 	Connectors []ConnectorStatus
 	Message    string
 }
 
-// ConnectorStatus describes one connector's polling state.
 type ConnectorStatus struct {
 	ID                  string
 	SupportedModes      []string
@@ -54,14 +51,12 @@ type ConnectorStatus struct {
 	CaptureAvailableAt  string
 }
 
-// ConnectorModeConfig controls how a connector captures provider data.
 type ConnectorModeConfig struct {
 	HomeDir string
 	ID      string
 	Mode    string
 }
 
-// ConnectorBridgeConfig controls one approved bridged connector setup.
 type ConnectorBridgeConfig struct {
 	HomeDir      string
 	ID           string
@@ -69,7 +64,6 @@ type ConnectorBridgeConfig struct {
 	BridgeParams json.RawMessage
 }
 
-// ConnectorUpdateConfig controls connector polling updates.
 type ConnectorUpdateConfig struct {
 	HomeDir  string
 	ID       string
@@ -77,14 +71,12 @@ type ConnectorUpdateConfig struct {
 	Interval time.Duration
 }
 
-// ConnectorUpdateResult describes a connector polling update.
 type ConnectorUpdateResult struct {
 	HomeDir string
 	ID      string
 	Message string
 }
 
-// ConnectorConnectConfig controls local connector setup.
 type ConnectorConnectConfig struct {
 	HomeDir       string
 	ID            string
@@ -92,28 +84,24 @@ type ConnectorConnectConfig struct {
 	ParamsJSON    json.RawMessage
 }
 
-// ConnectorConnectResult describes local connector setup.
 type ConnectorConnectResult struct {
 	HomeDir string
 	ID      string
 	Message string
 }
 
-// ConnectorValidateConfig controls connector setup validation.
 type ConnectorValidateConfig struct {
 	HomeDir       string
 	ID            string
 	GitHubCommand string
 }
 
-// ConnectorValidateResult describes connector setup validation.
 type ConnectorValidateResult struct {
 	HomeDir string
 	ID      string
 	Message string
 }
 
-// ConnectorPollConfig controls one-shot connector polling.
 type ConnectorPollConfig struct {
 	HomeDir      string
 	DatabasePath string
@@ -121,35 +109,30 @@ type ConnectorPollConfig struct {
 	Once         bool
 }
 
-// ConnectorPollResult describes a one-shot connector polling run.
 type ConnectorPollResult struct {
 	HomeDir string
 	Results []ConnectorPollConnectorResult
 	Message string
 }
 
-// ConnectorPollConnectorResult describes one connector's one-shot poll result.
 type ConnectorPollConnectorResult struct {
 	ID     string
 	Status string
 	Error  string
 }
 
-// ConnectorDoctorResult describes connector setup health findings.
 type ConnectorDoctorResult struct {
 	HomeDir  string
 	Findings []ConnectorHealthFinding
 	Message  string
 }
 
-// ConnectorUpgradeResult describes local connector runtime migrations.
 type ConnectorUpgradeResult struct {
 	HomeDir string
 	Changes []string
 	Message string
 }
 
-// ConnectorHealthFinding describes one connector setup issue or status.
 type ConnectorHealthFinding struct {
 	ID      string
 	Status  string
@@ -178,7 +161,6 @@ type connectorRuntimeEntry struct {
 
 var connectorPollStateMu sync.Mutex
 
-// ConnectBridgedConnector enables a provider connector without requiring local credentials.
 func ConnectBridgedConnector(config ConnectorModeConfig) (ConnectorConnectResult, error) {
 	config.Mode = "bridged"
 	result, err := SetConnectorMode(config)
@@ -197,7 +179,6 @@ func ConnectBridgedConnector(config ConnectorModeConfig) (ConnectorConnectResult
 	}, nil
 }
 
-// ConfigureBridgedConnector records approved non-secret scope and cadence.
 func ConfigureBridgedConnector(config ConnectorBridgeConfig) (ConnectorConnectResult, error) {
 	homeDir, err := connectorHomeDir(config.HomeDir)
 	if err != nil {
@@ -470,9 +451,6 @@ func validateBridgeableConnector(connectorID string) error {
 	return fmt.Errorf("connector %s only supports direct capture", connectorID)
 }
 
-// validateDirectableConnector rejects direct-mode setup for connectors that
-// only support bridged capture, mirroring validateBridgeableConnector's
-// symmetric direct-only rejections.
 func validateDirectableConnector(connectorID string) error {
 	definition, found := registeredConnector(connectorID)
 	if !found {
@@ -534,14 +512,10 @@ func validateNotionActivityBootstrapLookback(raw json.RawMessage) error {
 	return nil
 }
 
-// defaultGitHubCaptureParamsJSON is the participant-scoped default for a new GitHub connection.
 func defaultGitHubCaptureParamsJSON() json.RawMessage {
 	return json.RawMessage(`{"scope":"participant","identity":"@me","include":["involves","review_requested"],"always_repositories":[],"bootstrap_lookback":"168h"}`)
 }
 
-// configureGitHubCaptureParams validates and persists the canonical GitHub capture
-// scope shared by direct and bridged capture, resetting the cursor only after an
-// explicitly approved scope change so the new scope receives a bootstrap window.
 func configureGitHubCaptureParams(homeDir string, raw json.RawMessage) (json.RawMessage, error) {
 	if len(bytes.TrimSpace(raw)) == 0 {
 		raw = defaultGitHubCaptureParamsJSON()
@@ -628,7 +602,6 @@ func rejectBridgeSecrets(params json.RawMessage) error {
 	return inspect(value)
 }
 
-// SetConnectorMode selects direct or bridged capture for one connector.
 func SetConnectorMode(config ConnectorModeConfig) (ConnectorUpdateResult, error) {
 	homeDir, err := connectorHomeDir(config.HomeDir)
 	if err != nil {
@@ -694,7 +667,6 @@ func SetConnectorMode(config ConnectorModeConfig) (ConnectorUpdateResult, error)
 	}, nil
 }
 
-// ListConnectors reports known connector polling state.
 func ListConnectors(config ConnectorListConfig) (ConnectorListResult, error) {
 	homeDir, err := connectorHomeDir(config.HomeDir)
 	if err != nil {
@@ -713,7 +685,6 @@ func ListConnectors(config ConnectorListConfig) (ConnectorListResult, error) {
 	return result, nil
 }
 
-// StatusConnectors reports setup and polling state for known connectors.
 func StatusConnectors(config ConnectorListConfig) (ConnectorListResult, error) {
 	homeDir, err := connectorHomeDir(config.HomeDir)
 	if err != nil {
@@ -731,7 +702,6 @@ func StatusConnectors(config ConnectorListConfig) (ConnectorListResult, error) {
 	return result, nil
 }
 
-// DoctorConnectors reports local connector setup health and upgrade hints.
 func DoctorConnectors(config ConnectorListConfig) (ConnectorDoctorResult, error) {
 	homeDir, err := connectorHomeDir(config.HomeDir)
 	if err != nil {
@@ -749,7 +719,6 @@ func DoctorConnectors(config ConnectorListConfig) (ConnectorDoctorResult, error)
 	return result, nil
 }
 
-// UpgradeConnectors reconciles legacy local connector runtime state.
 func UpgradeConnectors(config ConnectorListConfig) (ConnectorUpgradeResult, error) {
 	homeDir, err := connectorHomeDir(config.HomeDir)
 	if err != nil {
@@ -773,7 +742,6 @@ func UpgradeConnectors(config ConnectorListConfig) (ConnectorUpgradeResult, erro
 	return result, nil
 }
 
-// SetConnectorEnabled changes connector polling without disconnecting credentials.
 func SetConnectorEnabled(config ConnectorUpdateConfig) (ConnectorUpdateResult, error) {
 	homeDir, err := connectorHomeDir(config.HomeDir)
 	if err != nil {
@@ -810,7 +778,6 @@ func SetConnectorEnabled(config ConnectorUpdateConfig) (ConnectorUpdateResult, e
 	}, nil
 }
 
-// SetConnectorInterval changes connector polling interval without disconnecting credentials.
 func SetConnectorInterval(config ConnectorUpdateConfig) (ConnectorUpdateResult, error) {
 	homeDir, err := connectorHomeDir(config.HomeDir)
 	if err != nil {
@@ -840,13 +807,10 @@ func SetConnectorInterval(config ConnectorUpdateConfig) (ConnectorUpdateResult, 
 	}, nil
 }
 
-// ConnectGit enables local git capture in the shared connector runtime.
 func ConnectGit(config ConnectorConnectConfig) (ConnectorConnectResult, error) {
 	return connectRuntimeConnector(config.HomeDir, "git", "")
 }
 
-// ConnectGitHub validates the GitHub CLI, enables GitHub polling, and approves the
-// canonical GitHub participant capture scope shared by direct and bridged capture.
 func ConnectGitHub(config ConnectorConnectConfig) (ConnectorConnectResult, error) {
 	result, err := ValidateConnector(ConnectorValidateConfig{
 		HomeDir:       config.HomeDir,

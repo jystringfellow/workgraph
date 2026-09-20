@@ -5,15 +5,11 @@ import (
 	"strings"
 )
 
-// SlackListStateOptions maps one provider field to workgraph's completed/open
-// interpretation. Values not listed in DoneValues are considered open.
 type SlackListStateOptions struct {
 	Column     string   `json:"column"`
 	DoneValues []string `json:"done_values"`
 }
 
-// SlackListOptions controls non-destructive interpretation of one Slack List.
-// Raw provider fields are always retained.
 type SlackListOptions struct {
 	State            *SlackListStateOptions `json:"state,omitempty"`
 	InterestColumns  []string               `json:"interest_columns,omitempty"`

@@ -9,18 +9,15 @@ import (
 	"strings"
 )
 
-// DoctorConfig controls local readiness diagnostics.
 type DoctorConfig struct {
 	HomeDir string
 }
 
-// DoctorResult describes local readiness diagnostics.
 type DoctorResult struct {
 	HomeDir string
 	Message string
 }
 
-// Doctor reports local workgraph readiness without contacting provider APIs.
 func Doctor(config DoctorConfig) (DoctorResult, error) {
 	homeDir, err := resolveHomeDir(config.HomeDir)
 	if err != nil {

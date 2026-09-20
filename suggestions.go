@@ -50,7 +50,6 @@ type SuggestionStatusUpdate struct {
 	FeedbackNote string
 }
 
-// SuggestionSnoozeUpdate controls an atomic suggestion snooze and suppression.
 type SuggestionSnoozeUpdate struct {
 	HomeDir      string
 	DatabasePath string
@@ -195,8 +194,6 @@ func UpdateSuggestionStatus(config SuggestionStatusUpdate) error {
 	return nil
 }
 
-// SnoozeSuggestion atomically updates lifecycle state, appends feedback, and
-// stores the expiring suppression used to resurface the suggestion.
 func SnoozeSuggestion(config SuggestionSnoozeUpdate) (Suggestion, error) {
 	id := strings.TrimSpace(config.ID)
 	if id == "" {
@@ -258,8 +255,6 @@ func SnoozeSuggestion(config SuggestionSnoozeUpdate) (Suggestion, error) {
 	return readSuggestionByID(db, id)
 }
 
-// CompleteSuggestion records that an approved suggestion was useful without
-// repeating the action performed during approval.
 func CompleteSuggestion(config SuggestionStatusUpdate) (Suggestion, error) {
 	id := strings.TrimSpace(config.ID)
 	if id == "" {
@@ -478,8 +473,6 @@ func ApproveSuggestion(config SuggestionStatusUpdate) (Suggestion, error) {
 			return Suggestion{}, err
 		}
 	case "association":
-		// Association approval is lifecycle-only. Raw events remain the source
-		// of truth and the suggestion row is the complete derived record.
 	default:
 		return Suggestion{}, fmt.Errorf("approval is not implemented for suggestion type %q", suggestion.Type)
 	}
@@ -657,20 +650,17 @@ func suggestionsListMessage(result SuggestionListResult) string {
 	return strings.Join(lines, "\n")
 }
 
-// SuggestionShowConfig controls retrieving a single suggestion with full evidence detail.
 type SuggestionShowConfig struct {
 	HomeDir      string
 	DatabasePath string
 	ID           string
 }
 
-// SuggestionShowResult describes a single suggestion with full evidence detail.
 type SuggestionShowResult struct {
 	Suggestion Suggestion
 	Message    string
 }
 
-// ShowSuggestion returns full detail for one suggestion, including rendered evidence.
 func ShowSuggestion(config SuggestionShowConfig) (SuggestionShowResult, error) {
 	if strings.TrimSpace(config.ID) == "" {
 		return SuggestionShowResult{}, errors.New("suggestion id is required")
@@ -722,7 +712,6 @@ func suggestionShowMessage(s Suggestion) string {
 	return strings.Join(lines, "\n")
 }
 
-// evidenceSummary returns a compact one-line description of evidence_json for list output.
 func evidenceSummary(evidenceJSON string) string {
 	var ev struct {
 		EventIDs []string `json:"event_ids"`
@@ -748,7 +737,6 @@ func evidenceSummary(evidenceJSON string) string {
 	return strings.Join(parts, ", ")
 }
 
-// evidenceDetail returns human-readable lines for the full evidence display in show output.
 func evidenceDetail(evidenceJSON string) []string {
 	var ev struct {
 		EventIDs       []string `json:"event_ids"`

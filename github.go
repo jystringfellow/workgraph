@@ -25,7 +25,6 @@ const (
 	githubMinBisectWindow          = time.Minute
 )
 
-// GitHubCaptureConfig controls GitHub event ingestion.
 type GitHubCaptureConfig struct {
 	HomeDir       string
 	DatabasePath  string
@@ -35,7 +34,6 @@ type GitHubCaptureConfig struct {
 	Context       context.Context
 }
 
-// GitHubCaptureResult describes a GitHub capture run.
 type GitHubCaptureResult struct {
 	HomeDir      string
 	DatabasePath string
@@ -57,8 +55,6 @@ type githubExportEvent struct {
 	MatchedScopes []string `json:"matched_scopes,omitempty"`
 }
 
-// githubCaptureParams is the canonical participant capture scope shared by direct
-// and bridged GitHub capture.
 type githubCaptureParams struct {
 	Scope              string   `json:"scope"`
 	Identity           string   `json:"identity"`
@@ -113,9 +109,6 @@ type githubRateLimit struct {
 	} `json:"resources"`
 }
 
-// githubSearchItem mirrors gh search prs/issues --json output. Fields such as
-// headRefName and headSha are not supported search JSON fields and must not be
-// requested; only fields gh search actually returns belong here.
 type githubSearchItem struct {
 	Number int    `json:"number"`
 	URL    string `json:"url"`
@@ -130,7 +123,6 @@ type githubSearchItem struct {
 	} `json:"repository"`
 }
 
-// CaptureGitHubEvents stores GitHub events from a local export file.
 func CaptureGitHubEvents(config GitHubCaptureConfig) (GitHubCaptureResult, error) {
 	status, err := prepareRunStatus(RunConfig{
 		HomeDir:      config.HomeDir,
@@ -187,7 +179,6 @@ func CaptureGitHubEvents(config GitHubCaptureConfig) (GitHubCaptureResult, error
 	return result, nil
 }
 
-// CaptureGitHubFromGH stores GitHub events discovered through the GitHub CLI.
 func CaptureGitHubFromGH(config GitHubCaptureConfig) (GitHubCaptureResult, error) {
 	status, err := prepareRunStatus(RunConfig{
 		HomeDir:      config.HomeDir,
@@ -319,9 +310,6 @@ func githubRateLimitAllowsPolling(ctx context.Context, gh string) bool {
 	return limit.Resources.Core.Remaining >= 100
 }
 
-// githubParticipantEvents runs the base participant searches plus at most one
-// batched always_repositories PR search and one issue search, merging
-// duplicate objects and query provenance before storage.
 func githubParticipantEvents(ctx context.Context, gh string, params githubCaptureParams, since, until time.Time) ([]githubExportEvent, error) {
 	include := map[string]bool{}
 	for _, value := range params.Include {
@@ -364,9 +352,6 @@ func githubParticipantEvents(ctx context.Context, gh string, params githubCaptur
 	return mergeGitHubEvents(groups...), nil
 }
 
-// githubSearchWindow runs one bounded gh search query for the given window,
-// bisecting and retrying both halves when the 1,000-result search ceiling is
-// saturated, and failing visibly if a minimum slice still saturates.
 func githubSearchWindow(ctx context.Context, gh string, kind string, baseArgs []string, since, until time.Time, matchedScope string) ([]githubExportEvent, error) {
 	if !since.Before(until) {
 		return nil, nil
@@ -425,8 +410,6 @@ func githubSearchWindow(ctx context.Context, gh string, kind string, baseArgs []
 	return events, nil
 }
 
-// mergeGitHubEvents merges duplicate kind/repository/number objects returned by
-// overlapping queries, keeping the newest state and the union of provenance.
 func mergeGitHubEvents(groups ...[]githubExportEvent) []githubExportEvent {
 	index := map[string]int{}
 	var merged []githubExportEvent
@@ -474,7 +457,6 @@ func githubEventIsNewer(candidate, current githubExportEvent) bool {
 	return candidateTime.After(currentTime)
 }
 
-// githubExecQueryRower is satisfied by both *sql.DB and *sql.Tx.
 type githubExecQueryRower interface {
 	Exec(query string, args ...any) (sql.Result, error)
 	QueryRow(query string, args ...any) *sql.Row

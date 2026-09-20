@@ -18,7 +18,6 @@ const (
 	maxAIClientResponseBytes = 1 << 20
 )
 
-// ConnectLLMClient records a supported signed-in AI client as an LLM profile.
 func ConnectLLMClient(config LLMConnectClientConfig) (LLMResult, error) {
 	homeDir, err := resolveLLMHomeDir(config.HomeDir)
 	if err != nil {

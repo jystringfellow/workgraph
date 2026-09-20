@@ -467,7 +467,6 @@ func TestInitCreatesDatabaseIndices(t *testing.T) {
 func TestInitAppliesIndicesToExistingDatabase(t *testing.T) {
 	homeDir := filepath.Join(t.TempDir(), ".workgraph")
 
-	// Create the database manually without indices to simulate a pre-index install.
 	if err := os.MkdirAll(homeDir, 0o700); err != nil {
 		t.Fatalf("create home dir: %v", err)
 	}

@@ -9,8 +9,6 @@ import (
 	workgraph "github.com/jystringfellow/workgraph"
 )
 
-// Database contract facts cover durable SQLite tables, constraints, and queries.
-
 func TestEventsTableExists(t *testing.T) {
 	db := openContractDatabase(t)
 

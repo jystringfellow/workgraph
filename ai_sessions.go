@@ -24,7 +24,6 @@ import (
 const aiSchemaVersion = 1
 const aiDirtyPathLimit = 500
 
-// AIRunConfig controls one wrapped CLI AI child-process lifetime.
 type AIRunConfig struct {
 	HomeDir              string
 	DatabasePath         string
@@ -36,13 +35,11 @@ type AIRunConfig struct {
 	Stderr               io.Writer
 }
 
-// AIRunResult reports the shell exit status selected for the wrapped child.
 type AIRunResult struct {
 	SessionID string
 	ExitCode  int
 }
 
-// AIObservedState is repository state collected by workgraph.
 type AIObservedState struct {
 	ObservedAt          string   `json:"observed_at"`
 	CWD                 string   `json:"cwd"`
@@ -91,7 +88,6 @@ type aiEndedPayload struct {
 	Observed          *AIObservedState `json:"observed,omitempty"`
 }
 
-// AICheckpointConfig controls one explicit structured checkpoint append.
 type AICheckpointConfig struct {
 	HomeDir          string
 	DatabasePath     string
@@ -102,7 +98,6 @@ type AICheckpointConfig struct {
 	Input            io.Reader
 }
 
-// AICheckpointResult identifies the session and immutable event that were stored.
 type AICheckpointResult struct {
 	SessionID string
 	EventID   string
@@ -115,19 +110,16 @@ type aiCheckpointPayload struct {
 	AgentStated   map[string]any  `json:"agent_stated"`
 }
 
-// AIProcessInspection describes current evidence for one PID.
 type AIProcessInspection struct {
 	Exists        bool
 	StartIdentity string
 }
 
-// AIProcessInspector isolates platform process evidence for deterministic facts.
 type AIProcessInspector interface {
 	CurrentBootIdentity() (string, error)
 	InspectProcess(pid int) (AIProcessInspection, error)
 }
 
-// AISessionsConfig controls read-only AI session listing.
 type AISessionsConfig struct {
 	HomeDir          string
 	DatabasePath     string
@@ -139,7 +131,6 @@ type AISessionsConfig struct {
 	Limit            int
 }
 
-// AISessionsResult contains the derived local session overview.
 type AISessionsResult struct {
 	Sessions []AISessionSummary
 	Warnings []string
@@ -148,7 +139,6 @@ type AISessionsResult struct {
 	Matched  int
 }
 
-// AISessionSummary is one event-derived AI session row.
 type AISessionSummary struct {
 	SessionID            string
 	Tool                 string
@@ -162,14 +152,12 @@ type AISessionSummary struct {
 	Archived             bool
 }
 
-// AIArchiveConfig selects one local AI session for a visibility transition.
 type AIArchiveConfig struct {
 	HomeDir      string
 	DatabasePath string
 	SessionID    string
 }
 
-// AIArchiveResult describes an archive transition or idempotent success.
 type AIArchiveResult struct {
 	SessionID string
 	EventID   string
@@ -177,7 +165,6 @@ type AIArchiveResult struct {
 	Changed   bool
 }
 
-// AIArchiveBatchConfig selects explicit sessions or an unarchived archive cohort.
 type AIArchiveBatchConfig struct {
 	HomeDir          string
 	DatabasePath     string
@@ -190,14 +177,12 @@ type AIArchiveBatchConfig struct {
 	Location         *time.Location
 }
 
-// AIArchiveBatchResult contains deterministic matches and their transitions.
 type AIArchiveBatchResult struct {
 	Matches     []AISessionSummary
 	Transitions []AIArchiveResult
 	Message     string
 }
 
-// AIShowConfig controls deterministic rendering for one stored session.
 type AIShowConfig struct {
 	HomeDir          string
 	DatabasePath     string
@@ -206,7 +191,6 @@ type AIShowConfig struct {
 	Location         *time.Location
 }
 
-// AIShowResult contains one stored session handoff.
 type AIShowResult struct {
 	Session AISessionSummary
 	Message string
@@ -238,7 +222,6 @@ type aiEventEnvelope struct {
 	SessionID     string `json:"session_id"`
 }
 
-// RunAISession launches a child directly and records its local lifecycle.
 func RunAISession(config AIRunConfig) (AIRunResult, error) {
 	if len(config.Command) == 0 {
 		return AIRunResult{}, errors.New("agent command is required")
@@ -371,7 +354,6 @@ func RunAISession(config AIRunConfig) (AIRunResult, error) {
 	return AIRunResult{SessionID: sessionID, ExitCode: exitCode}, nil
 }
 
-// CheckpointAISession validates agent-stated input and appends observed state.
 func CheckpointAISession(config AICheckpointConfig) (AICheckpointResult, error) {
 	if config.HomeExplicit {
 		if injected := os.Getenv("WORKGRAPH_AI_HOME"); injected != "" && !sameAIPath(config.HomeDir, injected) {
@@ -483,7 +465,6 @@ func CheckpointAISession(config AICheckpointConfig) (AICheckpointResult, error) 
 	return AICheckpointResult{SessionID: sessionID, EventID: eventID}, nil
 }
 
-// ListAISessions projects every known local AI session from append-only events.
 func ListAISessions(config AISessionsConfig) (AISessionsResult, error) {
 	if config.IncludeArchived && config.ArchivedOnly {
 		return AISessionsResult{}, errors.New("--all and --archived cannot be combined")
@@ -530,7 +511,6 @@ func ListAISessions(config AISessionsConfig) (AISessionsResult, error) {
 	return result, nil
 }
 
-// ArchiveAISession hides a known session from the default list without deleting evidence.
 func ArchiveAISession(config AIArchiveConfig) (AIArchiveResult, error) {
 	result, err := ArchiveAISessions(AIArchiveBatchConfig{
 		HomeDir: config.HomeDir, DatabasePath: config.DatabasePath,
@@ -542,7 +522,6 @@ func ArchiveAISession(config AIArchiveConfig) (AIArchiveResult, error) {
 	return result.Transitions[0], nil
 }
 
-// UnarchiveAISession restores a known session to the default list.
 func UnarchiveAISession(config AIArchiveConfig) (AIArchiveResult, error) {
 	result, err := UnarchiveAISessions(AIArchiveBatchConfig{
 		HomeDir: config.HomeDir, DatabasePath: config.DatabasePath,
@@ -554,12 +533,10 @@ func UnarchiveAISession(config AIArchiveConfig) (AIArchiveResult, error) {
 	return result.Transitions[0], nil
 }
 
-// ArchiveAISessions previews or applies one explicit or selector-based archive batch.
 func ArchiveAISessions(config AIArchiveBatchConfig) (AIArchiveBatchResult, error) {
 	return updateAIArchiveStates(config, true)
 }
 
-// UnarchiveAISessions applies one explicit unarchive batch.
 func UnarchiveAISessions(config AIArchiveBatchConfig) (AIArchiveBatchResult, error) {
 	return updateAIArchiveStates(config, false)
 }
@@ -741,7 +718,6 @@ func aiArchivePreviewMessage(matches []AISessionSummary, location *time.Location
 	return strings.Join(lines, "\n")
 }
 
-// ShowAISession renders only supported evidence already stored in events.
 func ShowAISession(config AIShowConfig) (AIShowResult, error) {
 	projections, _, err := loadAISessionProjections(config.HomeDir, config.DatabasePath, config.ProcessInspector)
 	if err != nil {

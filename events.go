@@ -6,7 +6,6 @@ import (
 	"time"
 )
 
-// EventsTodayConfig controls read-only inspection of today's captured events.
 type EventsTodayConfig struct {
 	HomeDir      string
 	DatabasePath string
@@ -16,7 +15,6 @@ type EventsTodayConfig struct {
 	Limit        int
 }
 
-// EventsTodayResult describes events selected for inspection.
 type EventsTodayResult struct {
 	Date        string
 	Type        string
@@ -26,7 +24,6 @@ type EventsTodayResult struct {
 	Message     string
 }
 
-// EventsToday returns today's captured events with optional type filtering.
 func EventsToday(config EventsTodayConfig) (EventsTodayResult, error) {
 	today, err := Today(TodayConfig{
 		HomeDir:            config.HomeDir,

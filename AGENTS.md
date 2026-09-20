@@ -10,13 +10,17 @@ Agents contributing to this repo must follow the development model and principle
 
 ## Development Model
 
-Always follow:
+For new or changed behavior, follow:
 
 ```text
 write spec → write feature → write failing fact → implement → pass → cross off roadmap
 ```
 
 Facts are the source of truth for behavior.
+
+For refactors, documentation, tooling, and test-only changes, preserve behavior
+and run proportionate checks. Do not invent specs or roadmap items solely to
+satisfy the development loop.
 
 ## Architecture Overview
 
@@ -62,7 +66,10 @@ Write code that communicates its behavior through clear naming, structure, types
 - Do not add narrative comments that merely restate the code.
 - Do not add comments to explain a change made in the current task or PR.
 - Avoid TODO/FIXME comments; track future work outside the code instead.
-- Treat docstrings and documentation comments as code comments for these purposes, except when they are required for public API, generated documentation, or tooling.
+- Tool directives and generated-code markers are exempt and must not be removed.
+- Public API documentation is appropriate only for APIs intended for external
+  use. Document contracts, invariants, security properties, and non-obvious
+  zero-value behavior; do not merely restate declarations.
 
 ## Connector Guidelines
 
@@ -75,14 +82,19 @@ stone toward a connectable workflow, not the end of a user-visible slice.
 
 ## Facts
 
-Before implementing behavior:
+Before implementing new or changed behavior:
 
-1. Replace a skipped placeholder in `/facts` with a believable executable test
+1. Add or activate a believable executable fact in `facts/`
 2. Run it and verify it fails for the right reason
 3. Implement minimal code to pass
 4. Do not weaken tests to pass unless the spec changed
 
-Deleting `t.Skip(...)` is not enough. A fact only becomes active when it contains real assertions that fail before implementation and pass after implementation.
+Deleting `t.Skip(...)` is not enough. A fact only becomes active when it
+contains real assertions that fail before implementation and pass after
+implementation.
+
+If an existing fact already covers the behavior, strengthen it instead of
+adding a duplicate.
 
 ## AI Usage Guidelines
 

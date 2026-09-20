@@ -23,7 +23,6 @@ const (
 	bridgedClaimLease    = 5 * time.Minute
 )
 
-// CaptureRequest is one durable unit of provider work for an approved bridge.
 type CaptureRequest struct {
 	ID               string          `json:"id"`
 	ConnectorID      string          `json:"connector_id"`
@@ -40,7 +39,6 @@ type CaptureRequest struct {
 	LeaseExpiresAt   string          `json:"lease_expires_at,omitempty"`
 }
 
-// CaptureRequestEmitConfig controls one daemon-owned bridged scheduling pass.
 type CaptureRequestEmitConfig struct {
 	HomeDir      string
 	DatabasePath string
@@ -48,13 +46,11 @@ type CaptureRequestEmitConfig struct {
 	Now          time.Time
 }
 
-// CaptureRequestEmitResult describes an emitted or coalesced request.
 type CaptureRequestEmitResult struct {
 	Request   CaptureRequest
 	Coalesced bool
 }
 
-// CaptureRequestClaimConfig controls atomic bridge request claiming.
 type CaptureRequestClaimConfig struct {
 	HomeDir      string
 	DatabasePath string
@@ -65,14 +61,12 @@ type CaptureRequestClaimConfig struct {
 	Lease        time.Duration
 }
 
-// CaptureRequestListConfig controls non-secret outbox inspection.
 type CaptureRequestListConfig struct {
 	HomeDir      string
 	DatabasePath string
 	ConnectorID  string
 }
 
-// CaptureRequestCapabilityConfig presents a short-lived claim capability.
 type CaptureRequestCapabilityConfig struct {
 	HomeDir      string
 	DatabasePath string
@@ -83,7 +77,6 @@ type CaptureRequestCapabilityConfig struct {
 	Lease        time.Duration
 }
 
-// CaptureRequestCancelConfig controls deliberate cancellation of one request.
 type CaptureRequestCancelConfig struct {
 	HomeDir      string
 	DatabasePath string
@@ -92,13 +85,11 @@ type CaptureRequestCancelConfig struct {
 	Now          time.Time
 }
 
-// ClaimedCaptureRequest includes the secret capability needed to complete work.
 type ClaimedCaptureRequest struct {
 	Request    CaptureRequest `json:"request"`
 	ClaimToken string         `json:"claim_token"`
 }
 
-// ListCaptureRequests returns outbox metadata without claim capabilities.
 func ListCaptureRequests(config CaptureRequestListConfig) ([]CaptureRequest, error) {
 	status, err := prepareRunStatus(RunConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath})
 	if err != nil {
@@ -141,7 +132,6 @@ func ListCaptureRequests(config CaptureRequestListConfig) ([]CaptureRequest, err
 	return requests, nil
 }
 
-// CaptureWatermark returns daemon-owned completed-through state for one connector.
 func CaptureWatermark(config CaptureRequestListConfig) (string, error) {
 	status, err := prepareRunStatus(RunConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath})
 	if err != nil {
@@ -167,7 +157,6 @@ func CaptureWatermark(config CaptureRequestListConfig) (string, error) {
 	return watermark, nil
 }
 
-// RenewCaptureRequest extends an unexpired claimed request lease.
 func RenewCaptureRequest(config CaptureRequestCapabilityConfig) (CaptureRequest, error) {
 	status, err := prepareRunStatus(RunConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath})
 	if err != nil {
@@ -208,9 +197,6 @@ func RenewCaptureRequest(config CaptureRequestCapabilityConfig) (CaptureRequest,
 	return request, nil
 }
 
-// CancelCaptureRequest permanently cancels one pending or claimed request.
-// Cancellation is idempotent for an already-cancelled request and preserves
-// claim audit fields while invalidating its capability.
 func CancelCaptureRequest(config CaptureRequestCancelConfig) error {
 	status, err := prepareRunStatus(RunConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath})
 	if err != nil {
@@ -273,9 +259,6 @@ func CancelCaptureRequest(config CaptureRequestCancelConfig) error {
 	return fmt.Errorf("capture request %s changed before cancellation", requestID)
 }
 
-// FailCaptureRequest returns claimed work to pending after persisted backoff.
-// A matching token may report failure after lease expiry while the request is
-// still claimed, preserving the real failure before the daemon reaps it.
 func FailCaptureRequest(config CaptureRequestCapabilityConfig) error {
 	status, err := prepareRunStatus(RunConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath})
 	if err != nil {
@@ -324,7 +307,6 @@ func FailCaptureRequest(config CaptureRequestCapabilityConfig) error {
 	return recordConnectorPollAttempt(status.HomeDir, connectorID, now, availableAt, attempts, fmt.Errorf("%s", errorMessage))
 }
 
-// EmitBridgedCaptureRequest persists one bounded request or returns the active request.
 func EmitBridgedCaptureRequest(config CaptureRequestEmitConfig) (CaptureRequestEmitResult, error) {
 	status, err := prepareRunStatus(RunConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath})
 	if err != nil {
@@ -420,7 +402,6 @@ func EmitBridgedCaptureRequest(config CaptureRequestEmitConfig) (CaptureRequestE
 	return CaptureRequestEmitResult{Request: request}, nil
 }
 
-// ClaimCaptureRequests atomically leases available requests to one bridge worker.
 func ClaimCaptureRequests(config CaptureRequestClaimConfig) ([]ClaimedCaptureRequest, error) {
 	status, err := prepareRunStatus(RunConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath})
 	if err != nil {
@@ -697,7 +678,6 @@ func completeClaimedCaptureRequest(tx *sql.Tx, request CaptureRequest, claimToke
 	return nil
 }
 
-// BridgedIngestConfig controls an explicit local bridged capture ingest.
 type BridgedIngestConfig struct {
 	HomeDir        string
 	DatabasePath   string
@@ -708,7 +688,6 @@ type BridgedIngestConfig struct {
 	Input          io.Reader
 }
 
-// BridgedIngestResult describes one local bridged capture ingest.
 type BridgedIngestResult struct {
 	HomeDir          string
 	DatabasePath     string
@@ -745,7 +724,6 @@ type preparedBridgedEvent struct {
 	SnapshotKey     string
 }
 
-// IngestBridgedCapture validates and atomically stores normalized bridged events.
 func IngestBridgedCapture(config BridgedIngestConfig) (BridgedIngestResult, error) {
 	status, err := prepareRunStatus(RunConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath})
 	if err != nil {
@@ -1138,10 +1116,6 @@ func prepareBridgedEvent(source string, envelope bridgedEventEnvelope) (prepared
 	return event, nil
 }
 
-// prepareNotionActivityEvent mirrors the direct notion connector's event
-// identity (eventType:externalID, unhashed) so overlapping capture between
-// notion and notion.activity de-duplicates in the events table instead of
-// storing the same edit twice.
 func prepareNotionActivityEvent(envelope bridgedEventEnvelope) (preparedBridgedEvent, error) {
 	eventType := strings.TrimSpace(envelope.Type)
 	if eventType != "notion.page_updated" && eventType != "notion.database_updated" {

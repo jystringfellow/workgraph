@@ -17,7 +17,6 @@ const organizationMemoryDirName = "organizations"
 const teamMemoryDirName = "teams"
 const personalMemoryFileName = "personal.md"
 
-// MemoryDoc is user-owned context loaded from a local memory file.
 type MemoryDoc struct {
 	ID        string
 	Path      string
@@ -26,62 +25,53 @@ type MemoryDoc struct {
 	UpdatedAt time.Time
 }
 
-// ProjectMemoryInitConfig controls creation of starter project memory.
 type ProjectMemoryInitConfig struct {
 	HomeDir   string
 	MemoryDir string
 	Project   string
 }
 
-// ProjectMemoryInitResult describes initialized project memory.
 type ProjectMemoryInitResult struct {
 	Path    string
 	Created bool
 	Message string
 }
 
-// PersonalMemoryInitConfig controls creation of starter personal memory.
 type PersonalMemoryInitConfig struct {
 	HomeDir   string
 	MemoryDir string
 }
 
-// PersonalMemoryInitResult describes initialized personal memory.
 type PersonalMemoryInitResult struct {
 	Path    string
 	Created bool
 	Message string
 }
 
-// OrganizationMemoryInitConfig controls creation of starter organization memory.
 type OrganizationMemoryInitConfig struct {
 	HomeDir      string
 	MemoryDir    string
 	Organization string
 }
 
-// OrganizationMemoryInitResult describes initialized organization memory.
 type OrganizationMemoryInitResult struct {
 	Path    string
 	Created bool
 	Message string
 }
 
-// TeamMemoryInitConfig controls creation of starter team memory.
 type TeamMemoryInitConfig struct {
 	HomeDir   string
 	MemoryDir string
 	Team      string
 }
 
-// TeamMemoryInitResult describes initialized team memory.
 type TeamMemoryInitResult struct {
 	Path    string
 	Created bool
 	Message string
 }
 
-// MemorySuggestConfig controls draft memory update suggestions from evidence.
 type MemorySuggestConfig struct {
 	HomeDir      string
 	DatabasePath string
@@ -91,7 +81,6 @@ type MemorySuggestConfig struct {
 	MaxEvents    int
 }
 
-// MemorySuggestResult describes draft suggestions without mutating memory.
 type MemorySuggestResult struct {
 	Scope       string
 	Project     string
@@ -100,14 +89,12 @@ type MemorySuggestResult struct {
 	Message     string
 }
 
-// MemorySuggestion is a draft update backed by one captured event.
 type MemorySuggestion struct {
 	Draft      string
 	EvidenceID string
 	Evidence   string
 }
 
-// MemoryPromoteConfig controls explicit promotion of curated text into memory.
 type MemoryPromoteConfig struct {
 	HomeDir      string
 	DatabasePath string
@@ -118,7 +105,6 @@ type MemoryPromoteConfig struct {
 	Text         string
 }
 
-// MemoryPromoteResult describes a successful explicit memory promotion.
 type MemoryPromoteResult struct {
 	Scope      string
 	Project    string
@@ -127,7 +113,6 @@ type MemoryPromoteResult struct {
 	Message    string
 }
 
-// MemoryLinksConfig controls listing links between memory and evidence.
 type MemoryLinksConfig struct {
 	HomeDir      string
 	DatabasePath string
@@ -136,7 +121,6 @@ type MemoryLinksConfig struct {
 	Project      string
 }
 
-// MemoryLinksResult describes durable links for a memory document.
 type MemoryLinksResult struct {
 	Scope      string
 	Project    string
@@ -145,7 +129,6 @@ type MemoryLinksResult struct {
 	Message    string
 }
 
-// MemoryLink connects one memory document to one evidence event.
 type MemoryLink struct {
 	ID            string
 	MemoryDocPath string
@@ -228,7 +211,6 @@ func loadProjectMemory(memoryDir string, project string) (*MemoryDoc, string, er
 	}, path, nil
 }
 
-// SuggestMemoryUpdates emits draft, evidence-backed memory suggestions without writing memory files.
 func SuggestMemoryUpdates(config MemorySuggestConfig) (MemorySuggestResult, error) {
 	scope := config.Scope
 	if scope == "" {
@@ -298,7 +280,6 @@ func SuggestMemoryUpdates(config MemorySuggestConfig) (MemorySuggestResult, erro
 	return result, nil
 }
 
-// PromoteMemory appends user-curated memory text with an evidence link.
 func PromoteMemory(config MemoryPromoteConfig) (MemoryPromoteResult, error) {
 	scope := config.Scope
 	if scope == "" {
@@ -371,7 +352,6 @@ func PromoteMemory(config MemoryPromoteConfig) (MemoryPromoteResult, error) {
 	return result, nil
 }
 
-// ListMemoryLinks returns durable links for project memory evidence.
 func ListMemoryLinks(config MemoryLinksConfig) (MemoryLinksResult, error) {
 	scope := config.Scope
 	if scope == "" {
@@ -444,7 +424,6 @@ func ListMemoryLinks(config MemoryLinksConfig) (MemoryLinksResult, error) {
 	return result, nil
 }
 
-// InitPersonalMemory creates starter Markdown for personal memory without overwriting.
 func InitPersonalMemory(config PersonalMemoryInitConfig) (PersonalMemoryInitResult, error) {
 	homeDir, err := resolveHomeDir(config.HomeDir)
 	if err != nil {
@@ -487,7 +466,6 @@ func InitPersonalMemory(config PersonalMemoryInitConfig) (PersonalMemoryInitResu
 	return result, nil
 }
 
-// InitOrganizationMemory creates starter Markdown for one organization without overwriting.
 func InitOrganizationMemory(config OrganizationMemoryInitConfig) (OrganizationMemoryInitResult, error) {
 	homeDir, err := resolveHomeDir(config.HomeDir)
 	if err != nil {
@@ -533,7 +511,6 @@ func InitOrganizationMemory(config OrganizationMemoryInitConfig) (OrganizationMe
 	return result, nil
 }
 
-// InitTeamMemory creates starter Markdown for one team without overwriting.
 func InitTeamMemory(config TeamMemoryInitConfig) (TeamMemoryInitResult, error) {
 	homeDir, err := resolveHomeDir(config.HomeDir)
 	if err != nil {
@@ -579,7 +556,6 @@ func InitTeamMemory(config TeamMemoryInitConfig) (TeamMemoryInitResult, error) {
 	return result, nil
 }
 
-// InitProjectMemory creates starter Markdown for one project without overwriting.
 func InitProjectMemory(config ProjectMemoryInitConfig) (ProjectMemoryInitResult, error) {
 	homeDir, err := resolveHomeDir(config.HomeDir)
 	if err != nil {

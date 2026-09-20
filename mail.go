@@ -19,28 +19,20 @@ import (
 	"time"
 )
 
-// DefaultGoogleMailClientID is the OAuth client id used for Google Mail PKCE OAuth.
 var DefaultGoogleMailClientID = DefaultGoogleCalendarClientID
 
-// DefaultGoogleMailRedirectURI is used by manual Google Mail OAuth flows.
 const DefaultGoogleMailRedirectURI = "http://127.0.0.1:2727/mail/google/callback"
 
-// DefaultGoogleMailTokenURL is the workgraph OAuth token relay for Google Mail.
 var DefaultGoogleMailTokenURL = DefaultGoogleCalendarTokenURL
 
-// DefaultGoogleMailRevokeURL is Google's OAuth token revocation endpoint.
 var DefaultGoogleMailRevokeURL = DefaultGoogleCalendarRevokeURL
 
-// DefaultMicrosoftMailClientID is the Entra application id used for Microsoft Mail PKCE OAuth.
 var DefaultMicrosoftMailClientID = DefaultMicrosoftCalendarClientID
 
-// DefaultMicrosoftMailRedirectURI is used by Microsoft Mail OAuth flows.
 const DefaultMicrosoftMailRedirectURI = "http://localhost:2727/mail/microsoft/callback"
 
-// DefaultMicrosoftMailTokenURL is Microsoft identity platform's v2 token endpoint.
 var DefaultMicrosoftMailTokenURL = DefaultMicrosoftCalendarTokenURL
 
-// MailConnectConfig controls mail provider OAuth setup.
 type MailConnectConfig struct {
 	HomeDir       string
 	Provider      string
@@ -57,7 +49,6 @@ type MailConnectConfig struct {
 	OpenBrowser   func(string) error
 }
 
-// MailConnectResult describes mail provider OAuth setup.
 type MailConnectResult struct {
 	ConfigPath       string
 	AuthorizationURL string
@@ -66,7 +57,6 @@ type MailConnectResult struct {
 	Message          string
 }
 
-// MailDisconnectConfig controls mail provider disconnect behavior.
 type MailDisconnectConfig struct {
 	HomeDir    string
 	Provider   string
@@ -74,14 +64,12 @@ type MailDisconnectConfig struct {
 	HTTPClient *http.Client
 }
 
-// MailDisconnectResult describes mail provider disconnect behavior.
 type MailDisconnectResult struct {
 	ConfigPath string
 	Revoked    bool
 	Message    string
 }
 
-// MailCaptureConfig controls normalized mail message ingestion.
 type MailCaptureConfig struct {
 	HomeDir      string
 	DatabasePath string
@@ -94,7 +82,6 @@ type MailCaptureConfig struct {
 	HTTPClient   *http.Client
 }
 
-// MailCaptureResult describes a mail capture run.
 type MailCaptureResult struct {
 	HomeDir        string
 	DatabasePath   string
@@ -224,7 +211,6 @@ type microsoftMailMessageBody struct {
 	Content     string `json:"content"`
 }
 
-// ConnectMail prepares or completes mail provider OAuth setup.
 func ConnectMail(config MailConnectConfig) (MailConnectResult, error) {
 	switch strings.ToLower(config.Provider) {
 	case "google":
@@ -242,7 +228,6 @@ func ConnectMail(config MailConnectConfig) (MailConnectResult, error) {
 	}
 }
 
-// DisconnectMail revokes provider OAuth access when possible and removes local connector settings.
 func DisconnectMail(config MailDisconnectConfig) (MailDisconnectResult, error) {
 	switch strings.ToLower(config.Provider) {
 	case "google":
@@ -254,7 +239,6 @@ func DisconnectMail(config MailDisconnectConfig) (MailDisconnectResult, error) {
 	}
 }
 
-// CaptureMailMessages stores normalized mail messages from a provider API.
 func CaptureMailMessages(config MailCaptureConfig) (MailCaptureResult, error) {
 	status, err := prepareRunStatus(RunConfig{
 		HomeDir:      config.HomeDir,
@@ -299,7 +283,6 @@ func CaptureMailMessages(config MailCaptureConfig) (MailCaptureResult, error) {
 	return result, nil
 }
 
-// ConnectMailWithBrowser completes mail provider OAuth with a local callback and PKCE.
 func ConnectMailWithBrowser(ctx context.Context, config MailConnectConfig) (MailConnectResult, error) {
 	provider := strings.ToLower(config.Provider)
 	if provider != "google" && provider != "microsoft" {
