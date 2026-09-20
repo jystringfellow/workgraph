@@ -236,7 +236,7 @@ func TestLeafHelpListsAvailableOptions(t *testing.T) {
 		{"plugin install", []string{"Options:", "--client", "--no-launchd", "--model", "--clear-model", "--allow-provider-tool"}},
 		{"plugin doctor", []string{"Options:", "--client", "--install-root"}},
 		{"bridge install", []string{"Options:", "--client", "--no-launchd", "--model", "--clear-model"}},
-		{"capture requests", []string{"Options:", "--claim", "--renew", "--fail", "--claim-file"}},
+		{"capture requests", []string{"Options:", "--claim", "--cancel", "--renew", "--fail", "--claim-file"}},
 		{"connectors connect", []string{"Options:", "--mode", "--params-json"}},
 		{"calendar connect", []string{"Options:", "--client-id", "--no-browser", "--calendar-id"}},
 		{"suggestions dismiss", []string{"Options:", "--reason", "--note"}},

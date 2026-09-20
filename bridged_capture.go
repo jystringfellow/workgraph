@@ -83,6 +83,15 @@ type CaptureRequestCapabilityConfig struct {
 	Lease        time.Duration
 }
 
+// CaptureRequestCancelConfig controls deliberate cancellation of one request.
+type CaptureRequestCancelConfig struct {
+	HomeDir      string
+	DatabasePath string
+	RequestID    string
+	Reason       string
+	Now          time.Time
+}
+
 // ClaimedCaptureRequest includes the secret capability needed to complete work.
 type ClaimedCaptureRequest struct {
 	Request    CaptureRequest `json:"request"`
@@ -197,6 +206,71 @@ func RenewCaptureRequest(config CaptureRequestCapabilityConfig) (CaptureRequest,
 		return CaptureRequest{}, fmt.Errorf("capture request was not found after renewal")
 	}
 	return request, nil
+}
+
+// CancelCaptureRequest permanently cancels one pending or claimed request.
+// Cancellation is idempotent for an already-cancelled request and preserves
+// claim audit fields while invalidating its capability.
+func CancelCaptureRequest(config CaptureRequestCancelConfig) error {
+	status, err := prepareRunStatus(RunConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath})
+	if err != nil {
+		return err
+	}
+	requestID := strings.TrimSpace(config.RequestID)
+	if requestID == "" {
+		return fmt.Errorf("capture request id is required")
+	}
+	now := config.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	now = now.UTC()
+	reason := strings.TrimSpace(config.Reason)
+	if reason == "" {
+		reason = "cancelled by operator"
+	}
+	db, err := sql.Open("sqlite3", status.DatabasePath)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+	if err := createSchema(db); err != nil {
+		return fmt.Errorf("prepare capture outbox: %w", err)
+	}
+
+	var requestStatus string
+	err = db.QueryRow(`SELECT status FROM capture_requests WHERE id = ?`, requestID).Scan(&requestStatus)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("capture request %s was not found", requestID)
+	}
+	if err != nil {
+		return fmt.Errorf("read capture request: %w", err)
+	}
+	if requestStatus == "cancelled" {
+		return nil
+	}
+	if requestStatus != "pending" && requestStatus != "claimed" {
+		return fmt.Errorf("capture request %s is already %s", requestID, requestStatus)
+	}
+	updated, err := db.Exec(`UPDATE capture_requests SET
+		status = 'cancelled', cancelled_at = ?, last_error = ?, claim_token = NULL, lease_expires_at = NULL
+		WHERE id = ? AND status IN ('pending', 'claimed')`,
+		now.Format(time.RFC3339Nano), reason, requestID)
+	if err != nil {
+		return fmt.Errorf("cancel capture request: %w", err)
+	}
+	count, err := updated.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("count cancelled capture request: %w", err)
+	}
+	if count == 1 {
+		return nil
+	}
+	var finalStatus string
+	if err := db.QueryRow(`SELECT status FROM capture_requests WHERE id = ?`, requestID).Scan(&finalStatus); err == nil && finalStatus == "cancelled" {
+		return nil
+	}
+	return fmt.Errorf("capture request %s changed before cancellation", requestID)
 }
 
 // FailCaptureRequest returns claimed work to pending after persisted backoff.

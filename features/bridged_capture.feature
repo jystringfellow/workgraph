@@ -38,6 +38,14 @@ Feature: Bridged connector capture
     Then workgraph records the bounded error and releases the claim for retry
     And a different or previously reaped token remains invalid
 
+  Scenario: Cancel one capture request exactly
+    Given a bridge worker has claimed a capture request
+    When an operator cancels that request by id
+    Then workgraph preserves the request and claim audit fields
+    And it records terminal cancellation and invalidates the claim token
+    And repeating the cancellation is idempotent
+    And unattended bridge workers cannot call request cancellation
+
   Scenario: Complete one bridged capture transaction
     Given an approved bridge worker has claimed a request
     When it ingests a valid normalized event batch
