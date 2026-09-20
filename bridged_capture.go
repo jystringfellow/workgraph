@@ -549,18 +549,15 @@ func canonicalBridgeParams(raw json.RawMessage) (json.RawMessage, error) {
 }
 
 func eventSourceForConnector(connectorID string) string {
-	if connectorID == "slack.lists" {
-		return "slack"
-	}
-	if connectorID == "notion.activity" {
-		return "notion"
+	if definition, found := registeredConnector(connectorID); found {
+		return definition.EventSource
 	}
 	return connectorID
 }
 
 func captureSemanticsForConnector(connectorID string) string {
-	if connectorID == "slack.lists" {
-		return "complete_snapshot"
+	if definition, found := registeredConnector(connectorID); found && definition.CaptureSemantics != "" {
+		return definition.CaptureSemantics
 	}
 	return "bounded_events"
 }
@@ -651,25 +648,27 @@ type BridgedIngestResult struct {
 }
 
 type bridgedEventEnvelope struct {
-	Type       string          `json:"type"`
-	Timestamp  string          `json:"timestamp"`
-	Payload    json.RawMessage `json:"payload"`
-	Project    string          `json:"project,omitempty"`
-	Actor      string          `json:"actor,omitempty"`
-	Summary    string          `json:"summary,omitempty"`
-	ExternalID string          `json:"external_id,omitempty"`
+	Type        string          `json:"type"`
+	Timestamp   string          `json:"timestamp"`
+	Payload     json.RawMessage `json:"payload"`
+	Project     string          `json:"project,omitempty"`
+	Actor       string          `json:"actor,omitempty"`
+	Involvement *[]string       `json:"involvement,omitempty"`
+	Summary     string          `json:"summary,omitempty"`
+	ExternalID  string          `json:"external_id,omitempty"`
 }
 
 type preparedBridgedEvent struct {
-	ID          string
-	Type        string
-	Timestamp   string
-	PayloadJSON string
-	Project     string
-	Actor       string
-	Summary     string
-	WeakDedupe  bool
-	SnapshotKey string
+	ID              string
+	Type            string
+	Timestamp       string
+	PayloadJSON     string
+	Project         string
+	Actor           string
+	InvolvementJSON *string
+	Summary         string
+	WeakDedupe      bool
+	SnapshotKey     string
 }
 
 // IngestBridgedCapture validates and atomically stores normalized bridged events.
@@ -774,6 +773,13 @@ func IngestBridgedCapture(config BridgedIngestConfig) (BridgedIngestResult, erro
 		if err != nil {
 			return BridgedIngestResult{}, fmt.Errorf("event %d: %w", index+1, err)
 		}
+		if envelope.Involvement != nil {
+			encoded, encodeErr := involvementJSON(*envelope.Involvement)
+			if encodeErr != nil {
+				return BridgedIngestResult{}, fmt.Errorf("event %d: %w", index+1, encodeErr)
+			}
+			event.InvolvementJSON = &encoded
+		}
 		if event.SnapshotKey != "" {
 			if snapshotKeys[event.SnapshotKey] {
 				return BridgedIngestResult{}, fmt.Errorf("event %d: duplicate Slack List snapshot row key", index+1)
@@ -802,11 +808,11 @@ func IngestBridgedCapture(config BridgedIngestConfig) (BridgedIngestResult, erro
 	createdAt := now.Format(time.RFC3339Nano)
 	for _, event := range prepared {
 		insert, err := tx.Exec(`INSERT OR IGNORE INTO events (
-			id, source, type, timestamp, payload_json, project, actor, summary, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, source, type, timestamp, payload_json, project, actor, involvement_json, summary, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			event.ID, source, event.Type, event.Timestamp, event.PayloadJSON,
 			emptyStringAsNull(event.Project), emptyStringAsNull(event.Actor),
-			emptyStringAsNull(event.Summary), createdAt,
+			event.InvolvementJSON, emptyStringAsNull(event.Summary), createdAt,
 		)
 		if err != nil {
 			return BridgedIngestResult{}, fmt.Errorf("store event %s: %w", event.ID, err)
@@ -1057,14 +1063,19 @@ func prepareNotionActivityEvent(envelope bridgedEventEnvelope) (preparedBridgedE
 	if err != nil {
 		return preparedBridgedEvent{}, fmt.Errorf("payload: %w", err)
 	}
+	editedInvolvement, err := involvementJSON([]string{"edited"})
+	if err != nil {
+		return preparedBridgedEvent{}, fmt.Errorf("encode notion.activity involvement: %w", err)
+	}
 	return preparedBridgedEvent{
-		ID:          notionEventID(eventType, externalID),
-		Type:        eventType,
-		Timestamp:   parsedTimestamp.UTC().Format(time.RFC3339Nano),
-		PayloadJSON: payloadJSON,
-		Project:     strings.TrimSpace(envelope.Project),
-		Actor:       strings.TrimSpace(envelope.Actor),
-		Summary:     strings.TrimSpace(envelope.Summary),
+		ID:              notionEventID(eventType, externalID),
+		Type:            eventType,
+		Timestamp:       parsedTimestamp.UTC().Format(time.RFC3339Nano),
+		PayloadJSON:     payloadJSON,
+		Project:         strings.TrimSpace(envelope.Project),
+		Actor:           strings.TrimSpace(envelope.Actor),
+		InvolvementJSON: &editedInvolvement,
+		Summary:         strings.TrimSpace(envelope.Summary),
 	}, nil
 }
 

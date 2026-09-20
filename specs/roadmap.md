@@ -17,6 +17,61 @@ Priority labels used below:
 - `P1`: next, after P0 trust loops are stable
 - `P2`: later
 
+## Open Issue Delivery Plan
+
+Work the current reliability backlog in this order. Each implementation slice
+follows `spec -> feature -> failing fact -> implementation -> pass -> roadmap`.
+
+1. [x] **#117: restore personal meaning to Notion activity.** Keep workspace
+   inventory inspectable without presenting other people's edits as the user's
+   work in `today`; populate actor metadata first, then add stable Notion
+   project-root attribution and general actor/identity filters as explicit
+   follow-up slices.
+   - [x] Exclude raw Notion inventory from `today`, retain it in `events today`,
+     and populate inventory `actor` from `last_edited_by`. [specs:
+     `specs/notion.md` and `specs/today.md`]
+   - [x] Add stable Notion project-root attribution without treating an
+     immediate parent id as a durable project root. [spec: `specs/notion.md`]
+   - [x] Add exact, source-neutral `--actor` filtering to `today` and
+     `events today`. [spec: `specs/today.md`]
+   - [x] Add explicit event involvement metadata and make `today` default to
+     directly relevant activity; keep legacy evidence visible during migration
+     and retain `events today` as the complete evidence view. Do not add a
+     generic `--mine-only`. [spec: `specs/event-involvement.md`]
+2. [x] **#122: add one canonical connector registry.** Start with the smallest
+   registry that owns connector ids, supported capture modes, event source,
+   default interval, scheduling eligibility, and scope requirements. Add facts
+   that make a half-wired connector fail the build. Connector listing, id
+   validation, interval selection, event-source mapping, capture semantics,
+   bridged scheduling, and executable scope validators now derive from the
+   registry. [spec: `specs/connector-runtime.md`]
+3. [x] **#123: declare complete provider-tool requirements.** Extend the
+   registry with fetch and identity-construction capabilities, expose them via
+   `connectors required-tools`, and make unattended preflight consume the same
+   declarations before claiming work. [spec:
+   `specs/provider-tool-requirements.md`]
+4. [ ] **#102: make bridged provider recipes executable.** Use sanitized
+   fixtures to verify the production normalization path for exact bounds,
+   pagination, time zones, truncation, and proven-empty behavior; do not test a
+   disconnected reference implementation.
+5. [ ] **#101: add exact capture-request cancellation.** Preserve audit state,
+   invalidate claimed capabilities, define idempotent terminal behavior, and
+   keep cancellation out of unattended worker permissions.
+6. [ ] **#121: persist unattended worker model selection.** Make model choice
+   explicit and discoverable, and preserve it across reinstall without parsing
+   generated launchd files as configuration.
+7. [ ] **#120: publish one bridged-capture operator guide.** Consolidate setup,
+   bridgeability rules, connector recipes, and recovery guidance after the
+   preceding command surfaces stabilize; generate or fact-check packaged
+   contract copies against one canonical source.
+8. [ ] **#118: close as already implemented.** Scoped bridge configuration
+   already fails before save, legacy invalid scope is reported by status and
+   doctor, and invalid bridged connectors are not scheduled.
+9. [x] **#119: absorbed into #123.** Azure CLI token and PAT guidance is
+   already documented; runtime authentication readiness now belongs to the
+   shared provider capability contract rather than an Azure-specific workgraph
+   credential path.
+
 ## Phase 0: Core loop (weekend V1)
 - [x] Discoverable root and per-command CLI help. [spec: `specs/cli-help.md`]
 - [x] CLI: workgraph init

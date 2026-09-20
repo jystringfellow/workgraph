@@ -22,6 +22,13 @@ workgraph connectors connect <connector> --mode bridged --params-json '<approved
 workgraph connectors interval <connector> <duration>
 ```
 
+Inspect the canonical fetch and identity obligations before choosing exact
+provider tools:
+
+```sh
+workgraph connectors required-tools <connector>
+```
+
 Never bridge `git` or `notion`. The reference Notion client search cannot
 paginate to exhaustion, so use direct Notion OAuth or `workgraph notion
 connect-token`. Preserve existing direct credentials and unrelated client
@@ -66,9 +73,10 @@ Do not use wildcards or add write-capable provider tools.
 An installed unattended worker uses MCP only:
 
 1. List pending requests before claiming.
-2. For a candidate connector, verify every provider tool required for both
-   fetching and stable identity is present and authorized with a harmless
-   read-only discovery call. An empty result does not exercise item identity.
+2. For a candidate connector, call `connector_required_tools` and verify every
+   applicable fetch and identity operation returned by the registry is present
+   and authorized with a harmless read-only discovery call. An empty result
+   does not exercise item identity.
 3. If capability is missing or denied, leave that request pending. Do not claim
    it, report a connector failure, or infer capability from workgraph connector
    status.

@@ -10,6 +10,22 @@ Scenario: Inspect connector polling
   Given workgraph has enabled connectors
   When I run "workgraph connectors list"
   Then workgraph shows each connector id, enabled state, polling interval, and last poll result
+  And each connector reports its supported capture modes and normalized event source
+  And each bridgeable connector reports its capture semantics
+
+Scenario: Register a connector once
+  Given workgraph has a canonical connector registry
+  When a connector is registered as bridgeable
+  Then connector status and bridged scheduling use that same registry entry
+  And no independent bridged connector id list can omit it
+
+Scenario: Declare complete provider requirements once
+  Given workgraph has a canonical connector registry
+  When a connector is registered as bridgeable
+  Then it declares provider operations for both fetching and stable identity
+  And "workgraph connectors required-tools" renders those declarations
+  And the unattended bridge reads the same declarations before claiming work
+  And a missing provider operation leaves the request pending
 
 Scenario: Change connector polling without disconnecting
   Given Notion is connected

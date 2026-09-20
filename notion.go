@@ -343,6 +343,9 @@ func CaptureNotion(config NotionCaptureConfig) (NotionCaptureResult, error) {
 	if searchErr != nil {
 		return NotionCaptureResult{}, searchErr
 	}
+	if err := attributeNotionEventProjects(db); err != nil {
+		return NotionCaptureResult{}, err
+	}
 	// The walk reached either the watermark or the end of the workspace, so
 	// everything through this poll's start time is now covered.
 	if err := advanceNotionCaptureCursor(db, now); err != nil {
@@ -906,19 +909,25 @@ func storeNotionEvent(db *sql.DB, object notionSearchResult) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("encode Notion event payload: %w", err)
 	}
+	ambientInvolvement, err := involvementJSON(nil)
+	if err != nil {
+		return false, fmt.Errorf("encode Notion inventory involvement: %w", err)
+	}
 	result, err := db.Exec(`INSERT INTO events (
-			id, source, type, timestamp, payload_json, project, actor, summary, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			id, source, type, timestamp, payload_json, project, actor, involvement_json, summary, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			timestamp = excluded.timestamp,
 			payload_json = excluded.payload_json,
 			project = excluded.project,
 			actor = excluded.actor,
+			involvement_json = excluded.involvement_json,
 			summary = excluded.summary
 		WHERE excluded.timestamp != events.timestamp
 			OR excluded.payload_json != events.payload_json
 			OR COALESCE(excluded.project, '') != COALESCE(events.project, '')
 			OR COALESCE(excluded.actor, '') != COALESCE(events.actor, '')
+			OR COALESCE(excluded.involvement_json, '') != COALESCE(events.involvement_json, '')
 			OR COALESCE(excluded.summary, '') != COALESCE(events.summary, '')`,
 		notionEventID(eventType, object.ID),
 		"notion",
@@ -926,7 +935,8 @@ func storeNotionEvent(db *sql.DB, object notionSearchResult) (bool, error) {
 		parsedTime.UTC().Format(time.RFC3339Nano),
 		string(payloadJSON),
 		emptyStringAsNull(""),
-		emptyStringAsNull(""),
+		emptyStringAsNull(object.LastEditedBy.ID),
+		ambientInvolvement,
 		emptyStringAsNull(title),
 		time.Now().UTC().Format(time.RFC3339Nano),
 	)
@@ -1056,9 +1066,13 @@ func storeNotionActivityEvent(db *sql.DB, object notionSearchResult, title strin
 	if err != nil {
 		return false, fmt.Errorf("encode Notion activity payload: %w", err)
 	}
+	editedInvolvement, err := involvementJSON([]string{"edited"})
+	if err != nil {
+		return false, fmt.Errorf("encode Notion activity involvement: %w", err)
+	}
 	_, err = db.Exec(`INSERT INTO events (
-			id, source, type, timestamp, payload_json, project, actor, summary, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			id, source, type, timestamp, payload_json, project, actor, involvement_json, summary, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO NOTHING`,
 		notionEventID(eventType, object.ID+":"+lastEditedTime),
 		"notion",
@@ -1067,6 +1081,7 @@ func storeNotionActivityEvent(db *sql.DB, object notionSearchResult, title strin
 		string(payloadJSON),
 		emptyStringAsNull(""),
 		emptyStringAsNull(object.LastEditedBy.ID),
+		editedInvolvement,
 		emptyStringAsNull(title),
 		time.Now().UTC().Format(time.RFC3339Nano),
 	)
@@ -1074,6 +1089,90 @@ func storeNotionActivityEvent(db *sql.DB, object notionSearchResult, title strin
 		return false, fmt.Errorf("store Notion activity event: %w", err)
 	}
 	return true, nil
+}
+
+type notionParentRef struct {
+	Type       string `json:"type"`
+	PageID     string `json:"page_id"`
+	DatabaseID string `json:"database_id"`
+	Workspace  bool   `json:"workspace"`
+}
+
+func attributeNotionEventProjects(db *sql.DB) error {
+	rows, err := db.Query(`SELECT notion_id, COALESCE(parent_json, '{}') FROM notion_index`)
+	if err != nil {
+		return fmt.Errorf("query Notion project parents: %w", err)
+	}
+	parents := map[string]json.RawMessage{}
+	for rows.Next() {
+		var id string
+		var parentJSON string
+		if err := rows.Scan(&id, &parentJSON); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan Notion project parent: %w", err)
+		}
+		parents[id] = json.RawMessage(parentJSON)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close Notion project parents: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("query Notion project parents: %w", err)
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin Notion project attribution: %w", err)
+	}
+	defer tx.Rollback()
+	for objectID := range parents {
+		rootID, resolved := notionProjectRoot(objectID, parents)
+		var project any
+		if resolved {
+			project = "notion:" + rootID
+		}
+		if _, err := tx.Exec(`UPDATE events SET project = ?
+			WHERE source = 'notion' AND json_extract(payload_json, '$.id') = ?`, project, objectID); err != nil {
+			return fmt.Errorf("attribute Notion project for %s: %w", objectID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit Notion project attribution: %w", err)
+	}
+	return nil
+}
+
+func notionProjectRoot(objectID string, parents map[string]json.RawMessage) (string, bool) {
+	current := strings.TrimSpace(objectID)
+	visited := map[string]bool{}
+	for current != "" {
+		if visited[current] {
+			return "", false
+		}
+		visited[current] = true
+		raw, found := parents[current]
+		if !found {
+			return "", false
+		}
+		var parent notionParentRef
+		if err := json.Unmarshal(raw, &parent); err != nil {
+			return "", false
+		}
+		switch parent.Type {
+		case "workspace":
+			if !parent.Workspace {
+				return "", false
+			}
+			return current, true
+		case "page_id":
+			current = strings.TrimSpace(parent.PageID)
+		case "database_id":
+			current = strings.TrimSpace(parent.DatabaseID)
+		default:
+			return "", false
+		}
+	}
+	return "", false
 }
 
 func notionTitle(object notionSearchResult) string {

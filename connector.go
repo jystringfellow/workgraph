@@ -31,6 +31,9 @@ type ConnectorListResult struct {
 // ConnectorStatus describes one connector's polling state.
 type ConnectorStatus struct {
 	ID                  string
+	SupportedModes      []string
+	EventSource         string
+	CaptureSemantics    string
 	CaptureMode         string
 	Connected           bool
 	Enabled             bool
@@ -268,156 +271,17 @@ func validatedBridgeParams(connectorID string, raw json.RawMessage) (json.RawMes
 	if err := rejectBridgeSecrets(params); err != nil {
 		return nil, err
 	}
-	var values map[string]json.RawMessage
+	values := bridgeParamValues{}
 	if err := json.Unmarshal(params, &values); err != nil {
 		return nil, fmt.Errorf("decode bridge parameters: %w", err)
 	}
-	requireStrings := func(keys ...string) bool {
-		for _, key := range keys {
-			var items []string
-			if err := json.Unmarshal(values[key], &items); err == nil {
-				for _, item := range items {
-					if strings.TrimSpace(item) != "" {
-						return true
-					}
-				}
-			}
-		}
-		return false
+	definition, _ := registeredConnector(connectorID)
+	if definition.ValidateBridge == nil {
+		return nil, fmt.Errorf("connector %s is missing bridged scope validation", connectorID)
 	}
-	requireString := func(key string) bool {
-		var value string
-		return json.Unmarshal(values[key], &value) == nil && strings.TrimSpace(value) != ""
-	}
-	stringValue := func(key string) string {
-		var value string
-		_ = json.Unmarshal(values[key], &value)
-		return strings.TrimSpace(value)
-	}
-	participantScope := func(allowedIncludes ...string) bool {
-		if stringValue("scope") != "participant" || !requireString("identity") {
-			return false
-		}
-		var includes []string
-		if json.Unmarshal(values["include"], &includes) != nil || len(includes) == 0 {
-			return false
-		}
-		allowed := map[string]bool{}
-		for _, include := range allowedIncludes {
-			allowed[include] = true
-		}
-		for _, include := range includes {
-			if !allowed[strings.TrimSpace(include)] {
-				return false
-			}
-		}
-		return true
-	}
-	requirePositiveInt := func(key string, allowZero bool) bool {
-		var value int
-		if json.Unmarshal(values[key], &value) != nil {
-			return false
-		}
-		if allowZero {
-			return value >= 0
-		}
-		return value > 0
-	}
-	paramsChanged := false
-	switch connectorID {
-	case "github":
-		if !participantScope("involves", "review_requested") {
-			return nil, fmt.Errorf("bridged github requires participant scope with identity and approved include values (involves, review_requested)")
-		}
-		if err := validateGitHubAlwaysRepositories(values["always_repositories"]); err != nil {
-			return nil, err
-		}
-		if err := validateGitHubBootstrapLookback(values["bootstrap_lookback"]); err != nil {
-			return nil, err
-		}
-	case "slack":
-		includeDMs := false
-		if rawValue, found := values["include_dms"]; found {
-			if err := json.Unmarshal(rawValue, &includeDMs); err != nil {
-				return nil, fmt.Errorf("bridged slack include_dms must be a boolean")
-			}
-		}
-		if !requireStrings("channels") && !includeDMs && !participantScope("authored", "mentions", "thread_participation") {
-			return nil, fmt.Errorf("bridged slack requires channels, include_dms true, or participant scope with identity and approved include values")
-		}
-	case "slack.lists":
-		if !requireStrings("lists") {
-			return nil, fmt.Errorf("bridged slack.lists requires a non-empty lists array")
-		}
-		var listIDs []string
-		if err := json.Unmarshal(values["lists"], &listIDs); err != nil {
-			return nil, fmt.Errorf("bridged slack.lists requires a non-empty lists array")
-		}
-		listIDs = normalizeSlackListColumns(listIDs)
-		encodedListIDs, _ := json.Marshal(listIDs)
-		values["lists"] = encodedListIDs
-		paramsChanged = true
-		doneColumn := stringValue("done_column")
-		if _, present := values["done_column"]; present && doneColumn == "" {
-			return nil, fmt.Errorf("bridged slack.lists done_column must be a non-empty string")
-		}
-		if doneColumn != "" {
-			encodedDoneColumn, _ := json.Marshal(doneColumn)
-			values["done_column"] = encodedDoneColumn
-			paramsChanged = true
-		}
-		var rowKeyCandidates [][]string
-		if rawCandidates, present := values["row_key_candidates"]; present {
-			if err := json.Unmarshal(rawCandidates, &rowKeyCandidates); err != nil {
-				return nil, fmt.Errorf("bridged slack.lists row_key_candidates must be a non-empty array of non-empty string arrays")
-			}
-			rowKeyCandidates, err = normalizeSlackListRowKeyCandidates(rowKeyCandidates)
-			if err != nil {
-				return nil, fmt.Errorf("bridged slack.lists %w", err)
-			}
-			encoded, _ := json.Marshal(rowKeyCandidates)
-			values["row_key_candidates"] = encoded
-			paramsChanged = true
-		} else {
-			rowKeyCandidates = defaultSlackListRowKeyCandidates()
-			encoded, _ := json.Marshal(rowKeyCandidates)
-			values["row_key_candidates"] = encoded
-			paramsChanged = true
-		}
-		if rawOptions, present := values["list_options"]; present {
-			var options map[string]SlackListOptions
-			if err := decodeStrictJSON(rawOptions, &options); err != nil {
-				return nil, fmt.Errorf("bridged slack.lists list_options must be an object keyed by configured List id: %w", err)
-			}
-			normalized, err := normalizeSlackListOptionsMap(options, listIDs)
-			if err != nil {
-				return nil, fmt.Errorf("bridged slack.lists %w", err)
-			}
-			encoded, _ := json.Marshal(normalized)
-			values["list_options"] = encoded
-			paramsChanged = true
-		}
-	case "mail.google", "mail.microsoft":
-		if !requireStrings("mailboxes", "folders") || !requirePositiveInt("preview_limit", false) {
-			return nil, fmt.Errorf("bridged %s requires non-empty mailboxes or folders and positive preview_limit", connectorID)
-		}
-	case "calendar.google", "calendar.microsoft":
-		if !requireStrings("calendars") || !requirePositiveInt("past_days", true) || !requirePositiveInt("future_days", false) {
-			return nil, fmt.Errorf("bridged %s requires non-empty calendars, non-negative past_days, and positive future_days", connectorID)
-		}
-	case "azure.boards":
-		projectScope := requireString("project") && requireString("area_path")
-		participant := participantScope("authored", "assigned")
-		if !requireString("organization") || (!projectScope && !participant) {
-			return nil, fmt.Errorf("bridged azure.boards requires organization plus project and area_path, or participant scope with identity and approved include values")
-		}
-	case "notion.activity":
-		if !participantScope("edited", "created") {
-			return nil, fmt.Errorf("bridged notion.activity requires participant scope with identity and approved include values (edited, created)")
-		}
-		if err := validateNotionActivityBootstrapLookback(values["bootstrap_lookback"]); err != nil {
-			return nil, err
-		}
+	paramsChanged, err := definition.ValidateBridge(values)
+	if err != nil {
+		return nil, err
 	}
 	if paramsChanged {
 		encoded, err := json.Marshal(values)
@@ -429,27 +293,198 @@ func validatedBridgeParams(connectorID string, raw json.RawMessage) (json.RawMes
 	return params, nil
 }
 
+type bridgeParamValues map[string]json.RawMessage
+
+func (values bridgeParamValues) requireStrings(keys ...string) bool {
+	for _, key := range keys {
+		var items []string
+		if err := json.Unmarshal(values[key], &items); err == nil {
+			for _, item := range items {
+				if strings.TrimSpace(item) != "" {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func (values bridgeParamValues) requireString(key string) bool {
+	var value string
+	return json.Unmarshal(values[key], &value) == nil && strings.TrimSpace(value) != ""
+}
+
+func (values bridgeParamValues) stringValue(key string) string {
+	var value string
+	_ = json.Unmarshal(values[key], &value)
+	return strings.TrimSpace(value)
+}
+
+func (values bridgeParamValues) participantScope(allowedIncludes ...string) bool {
+	if values.stringValue("scope") != "participant" || !values.requireString("identity") {
+		return false
+	}
+	var includes []string
+	if json.Unmarshal(values["include"], &includes) != nil || len(includes) == 0 {
+		return false
+	}
+	allowed := map[string]bool{}
+	for _, include := range allowedIncludes {
+		allowed[include] = true
+	}
+	for _, include := range includes {
+		if !allowed[strings.TrimSpace(include)] {
+			return false
+		}
+	}
+	return true
+}
+
+func (values bridgeParamValues) requirePositiveInt(key string, allowZero bool) bool {
+	var value int
+	if json.Unmarshal(values[key], &value) != nil {
+		return false
+	}
+	if allowZero {
+		return value >= 0
+	}
+	return value > 0
+}
+
+func validateGitHubBridgeParams(values bridgeParamValues) (bool, error) {
+	if !values.participantScope("involves", "review_requested") {
+		return false, fmt.Errorf("bridged github requires participant scope with identity and approved include values (involves, review_requested)")
+	}
+	if err := validateGitHubAlwaysRepositories(values["always_repositories"]); err != nil {
+		return false, err
+	}
+	return false, validateGitHubBootstrapLookback(values["bootstrap_lookback"])
+}
+
+func validateSlackBridgeParams(values bridgeParamValues) (bool, error) {
+	includeDMs := false
+	if rawValue, found := values["include_dms"]; found {
+		if err := json.Unmarshal(rawValue, &includeDMs); err != nil {
+			return false, fmt.Errorf("bridged slack include_dms must be a boolean")
+		}
+	}
+	if !values.requireStrings("channels") && !includeDMs && !values.participantScope("authored", "mentions", "thread_participation") {
+		return false, fmt.Errorf("bridged slack requires channels, include_dms true, or participant scope with identity and approved include values")
+	}
+	return false, nil
+}
+
+func validateSlackListsBridgeParams(values bridgeParamValues) (bool, error) {
+	if !values.requireStrings("lists") {
+		return false, fmt.Errorf("bridged slack.lists requires a non-empty lists array")
+	}
+	var listIDs []string
+	if err := json.Unmarshal(values["lists"], &listIDs); err != nil {
+		return false, fmt.Errorf("bridged slack.lists requires a non-empty lists array")
+	}
+	listIDs = normalizeSlackListColumns(listIDs)
+	encodedListIDs, _ := json.Marshal(listIDs)
+	values["lists"] = encodedListIDs
+	doneColumn := values.stringValue("done_column")
+	if _, present := values["done_column"]; present && doneColumn == "" {
+		return false, fmt.Errorf("bridged slack.lists done_column must be a non-empty string")
+	}
+	if doneColumn != "" {
+		encodedDoneColumn, _ := json.Marshal(doneColumn)
+		values["done_column"] = encodedDoneColumn
+	}
+	var rowKeyCandidates [][]string
+	if rawCandidates, present := values["row_key_candidates"]; present {
+		if err := json.Unmarshal(rawCandidates, &rowKeyCandidates); err != nil {
+			return false, fmt.Errorf("bridged slack.lists row_key_candidates must be a non-empty array of non-empty string arrays")
+		}
+		var err error
+		rowKeyCandidates, err = normalizeSlackListRowKeyCandidates(rowKeyCandidates)
+		if err != nil {
+			return false, fmt.Errorf("bridged slack.lists %w", err)
+		}
+	} else {
+		rowKeyCandidates = defaultSlackListRowKeyCandidates()
+	}
+	encodedCandidates, _ := json.Marshal(rowKeyCandidates)
+	values["row_key_candidates"] = encodedCandidates
+	if rawOptions, present := values["list_options"]; present {
+		var options map[string]SlackListOptions
+		if err := decodeStrictJSON(rawOptions, &options); err != nil {
+			return false, fmt.Errorf("bridged slack.lists list_options must be an object keyed by configured List id: %w", err)
+		}
+		normalized, err := normalizeSlackListOptionsMap(options, listIDs)
+		if err != nil {
+			return false, fmt.Errorf("bridged slack.lists %w", err)
+		}
+		encoded, _ := json.Marshal(normalized)
+		values["list_options"] = encoded
+	}
+	return true, nil
+}
+
+func validateMailBridgeParams(connectorID string, values bridgeParamValues) (bool, error) {
+	if !values.requireStrings("mailboxes", "folders") || !values.requirePositiveInt("preview_limit", false) {
+		return false, fmt.Errorf("bridged %s requires non-empty mailboxes or folders and positive preview_limit", connectorID)
+	}
+	return false, nil
+}
+
+func validateCalendarBridgeParams(connectorID string, values bridgeParamValues) (bool, error) {
+	if !values.requireStrings("calendars") || !values.requirePositiveInt("past_days", true) || !values.requirePositiveInt("future_days", false) {
+		return false, fmt.Errorf("bridged %s requires non-empty calendars, non-negative past_days, and positive future_days", connectorID)
+	}
+	return false, nil
+}
+
+func validateAzureBoardsBridgeParams(values bridgeParamValues) (bool, error) {
+	projectScope := values.requireString("project") && values.requireString("area_path")
+	participant := values.participantScope("authored", "assigned")
+	if !values.requireString("organization") || (!projectScope && !participant) {
+		return false, fmt.Errorf("bridged azure.boards requires organization plus project and area_path, or participant scope with identity and approved include values")
+	}
+	return false, nil
+}
+
+func validateNotionActivityBridgeParams(values bridgeParamValues) (bool, error) {
+	if !values.participantScope("edited", "created") {
+		return false, fmt.Errorf("bridged notion.activity requires participant scope with identity and approved include values (edited, created)")
+	}
+	return false, validateNotionActivityBootstrapLookback(values["bootstrap_lookback"])
+}
+
 func validateBridgeableConnector(connectorID string) error {
-	switch connectorID {
-	case "git":
-		return fmt.Errorf("connector git only supports direct capture")
-	case "notion":
-		return fmt.Errorf("connector notion only supports direct capture; use workgraph notion connect or workgraph notion connect-token")
-	default:
+	definition, found := registeredConnector(connectorID)
+	if !found {
+		return fmt.Errorf("unknown connector %q", connectorID)
+	}
+	if definition.Bridged {
 		return nil
 	}
+	if connectorID == "git" {
+		return fmt.Errorf("connector git only supports direct capture")
+	}
+	if connectorID == "notion" {
+		return fmt.Errorf("connector notion only supports direct capture; use workgraph notion connect or workgraph notion connect-token")
+	}
+	return fmt.Errorf("connector %s only supports direct capture", connectorID)
 }
 
 // validateDirectableConnector rejects direct-mode setup for connectors that
 // only support bridged capture, mirroring validateBridgeableConnector's
 // symmetric direct-only rejections.
 func validateDirectableConnector(connectorID string) error {
-	switch connectorID {
-	case "notion.activity":
-		return fmt.Errorf("connector notion.activity only supports bridged capture; the public Notion API cannot express workspace-wide participant scope, use workgraph connectors connect notion.activity --mode bridged")
-	default:
+	definition, found := registeredConnector(connectorID)
+	if !found {
+		return fmt.Errorf("unknown connector %q", connectorID)
+	}
+	if definition.Direct {
 		return nil
 	}
+	if connectorID == "notion.activity" {
+		return fmt.Errorf("connector notion.activity only supports bridged capture; the public Notion API cannot express workspace-wide participant scope, use workgraph connectors connect notion.activity --mode bridged")
+	}
+	return fmt.Errorf("connector %s only supports bridged capture", connectorID)
 }
 
 func validateGitHubAlwaysRepositories(raw json.RawMessage) error {
@@ -1133,20 +1168,7 @@ func pollConnectorOnce(homeDir string, databasePath string, id string) error {
 }
 
 func connectorStatuses(homeDir string, state connectorRuntimeFile) []ConnectorStatus {
-	ids := []string{
-		"git",
-		"github",
-		"slack",
-		"slack.lists",
-		"calendar.google",
-		"calendar.microsoft",
-		"mail.google",
-		"mail.microsoft",
-		"notion",
-		"notion.activity",
-		"azure.boards",
-	}
-	statuses := make([]ConnectorStatus, 0, len(ids))
+	statuses := make([]ConnectorStatus, 0, len(connectorRegistry))
 	activeRequests := map[string]CaptureRequest{}
 	if requests, err := ListCaptureRequests(CaptureRequestListConfig{HomeDir: homeDir}); err == nil {
 		for _, request := range requests {
@@ -1155,7 +1177,8 @@ func connectorStatuses(homeDir string, state connectorRuntimeFile) []ConnectorSt
 			}
 		}
 	}
-	for _, id := range ids {
+	for _, definition := range connectorRegistry {
+		id := definition.ID
 		connected := connectorConnected(homeDir, state, id)
 		entry := state.entry(id)
 		request := activeRequests[id]
@@ -1170,6 +1193,9 @@ func connectorStatuses(homeDir string, state connectorRuntimeFile) []ConnectorSt
 		}
 		statuses = append(statuses, ConnectorStatus{
 			ID:                  id,
+			SupportedModes:      definition.supportedModes(),
+			EventSource:         definition.EventSource,
+			CaptureSemantics:    definition.CaptureSemantics,
 			CaptureMode:         captureMode,
 			Connected:           connected,
 			Enabled:             connectorEnabled(state, id),
@@ -1358,9 +1384,10 @@ func connectorHomeDir(homeDir string) (string, error) {
 
 func normalizeConnectorID(id string) (string, error) {
 	id = strings.ToLower(strings.TrimSpace(id))
-	switch id {
-	case "git", "github", "slack", "slack.lists", "calendar.google", "calendar.microsoft", "mail.google", "mail.microsoft", "notion", "notion.activity", "azure.boards":
+	if _, found := registeredConnector(id); found {
 		return id, nil
+	}
+	switch id {
 	case "calendar":
 		return "", fmt.Errorf("connector %q is ambiguous: use calendar.google or calendar.microsoft", id)
 	case "mail":
@@ -1488,28 +1515,11 @@ func connectorNextPoll(entry connectorRuntimeEntry, fallback time.Duration) stri
 }
 
 func defaultConnectorInterval(id string) time.Duration {
-	switch id {
-	case "git":
-		return gitPollInterval(0)
-	case "github":
-		return githubPollInterval(0)
-	case "slack":
-		return slackPollInterval(0)
-	case "slack.lists":
-		return slackListPollInterval(0)
-	case "calendar.google", "calendar.microsoft":
-		return calendarPollInterval(0)
-	case "mail.google", "mail.microsoft":
-		return mailPollInterval(0)
-	case "notion":
-		return notionPollInterval(0)
-	case "notion.activity":
-		return 30 * time.Minute
-	case "azure.boards":
-		return azureBoardsPollInterval(0)
-	default:
+	definition, found := registeredConnector(id)
+	if !found || definition.DefaultInterval == nil {
 		return 0
 	}
+	return definition.DefaultInterval()
 }
 
 func connectorHealthFindings(homeDir string, state connectorRuntimeFile) []ConnectorHealthFinding {
@@ -1623,6 +1633,10 @@ func connectorListMessage(result ConnectorListResult) string {
 			enabled = "enabled"
 		}
 		line := fmt.Sprintf("- %s: %s, %s, interval %s", label, connected, enabled, status.Interval)
+		line += fmt.Sprintf(", modes %s, source %s", strings.Join(status.SupportedModes, "|"), status.EventSource)
+		if status.CaptureSemantics != "" {
+			line += ", semantics " + status.CaptureSemantics
+		}
 		if status.LastPoll != "" {
 			line += ", last poll " + status.LastPoll
 		}

@@ -43,15 +43,33 @@ backfills, and one-off runs.
 - **Bounded independent polls**: each connector polls independently with a
   whole-poll deadline. A stalled provider must not block filesystem events or
   another connector.
+- **One connector registry**: one ordered registry owns every accepted
+  connector id, event source, supported capture modes, default interval, and
+  bridged capture semantics, plus the provider operations needed for fetch and
+  stable identity. Connector listing, id validation, default intervals,
+  bridged scheduling, and provider preflight derive from that registry so
+  adding a connector to status without making it schedulable or executable is
+  not possible.
 
 ## Desired Commands
 
 ```text
 workgraph connectors list
+workgraph connectors required-tools [connector]
 workgraph connectors enable <connector>
 workgraph connectors disable <connector>
 workgraph connectors interval <connector> <duration>
 ```
+
+`connectors list` reports the registry capabilities for every connector:
+supported capture modes, normalized event source, and bridged capture semantics
+when applicable. Runtime connection and polling state remains additive to that
+static metadata.
+
+`connectors required-tools` reports the registry's logical read-only provider
+operations and labels each as a fetch, identity, or combined requirement.
+Provider MCP namespaces remain client-specific. The unattended worker reads
+the same declarations over local MCP before claiming a request.
 
 The first runtime control slice stores polling preferences in
 `connectors.json`. Disabling a connector stops polling without removing OAuth

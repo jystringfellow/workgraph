@@ -393,6 +393,7 @@ capture_ingest
 capture_request_fail
 capture_watermark
 connector_status
+connector_required_tools
 connector_bridge_configure
 connector_bridge_disconnect
 bridge_worker_heartbeat
@@ -404,11 +405,12 @@ lease expiry, and claim token. Provider secrets and direct connector credentials
 are never returned. Every successful MCP tool call returns object-shaped
 `structuredContent`, as required by the MCP contract. Collection results use
 named envelopes: `capture_requests_list` returns `requests`,
-`capture_requests_claim` returns `claims`, and `connector_status` returns
-`connectors`.
+`capture_requests_claim` returns `claims`, and both `connector_status` and
+`connector_required_tools` return `connectors`.
 
-Every successful `capture_*` and `connector_status` result also includes a
-`runtime` object containing the MCP process's running build identity, the build
+Every successful `capture_*`, `connector_status`, and
+`connector_required_tools` result also includes a `runtime` object containing
+the MCP process's running build identity, the build
 currently present at its executable path, executable timestamps, a `stale`
 boolean, and restart guidance when they differ. The MCP process snapshots its
 executable when the server starts and checks the path again for every reported
@@ -441,6 +443,7 @@ Each event has this envelope:
 | `payload` | `payload_json` | Required JSON object; compact canonical representation stored |
 | `project` | `project` | Optional string |
 | `actor` | `actor` | Optional string |
+| `involvement` | `involvement_json` | Optional array from the canonical involvement vocabulary; sorted and de-duplicated before storage |
 | `summary` | `summary` | Optional string |
 | `external_id` | — | Strong dedupe input; revision-aware for mutable objects |
 | derived | `id` | Deterministic id described below |
@@ -448,9 +451,11 @@ Each event has this envelope:
 
 The entire batch is decoded and validated before writes begin. Trailing JSON,
 unknown envelope fields, invalid types, non-object payloads, invalid timestamps,
-source/type mismatches, and request/source mismatches reject the batch. No event,
-projection, cursor, or request state changes on validation or transaction
-failure.
+source/type mismatches, unknown involvement values, and request/source mismatches
+reject the batch. An omitted `involvement` remains legacy-unclassified (`NULL`),
+while an explicit empty array records that the event has no direct involvement.
+No event, projection, cursor, or request state changes on validation or
+transaction failure.
 
 Successful output reports counts for events read, inserted, and deduplicated,
 plus projection changes. Warnings go to stderr. A valid empty scheduled batch
@@ -674,10 +679,11 @@ connector scopes. Install output and doctor report how many provider tools are
 configured; zero is a visible warning rather than an implied working provider
 connection.
 
-Before claiming, an unattended worker lists pending requests and proves that
-every provider tool required for both fetching and stable identity is present
-and authorized through a harmless read-only discovery operation. Microsoft
-calendar therefore preflights the resource read used to obtain a change key or
+Before claiming, an unattended worker lists pending requests, calls
+`connector_required_tools` for a candidate connector, and proves every
+applicable fetch and identity operation returned by the registry is present and
+authorized through a harmless read-only discovery operation. Microsoft calendar
+therefore preflights the resource read used to obtain a change key or
 last-modified revision, not only calendar search. It claims only that connector.
 A missing or denied provider capability leaves work pending and does not overwrite
 healthy connector history with a capture failure. The unattended Claude worker
@@ -763,7 +769,8 @@ Events reuse the direct `notion` connector's `notion.page_updated` /
 set to `<page-id>:<last-edited-time>` — the same identity the direct connector
 derives internally. Overlapping capture between `notion` and `notion.activity`
 therefore de-duplicates in the events table rather than double-counting the
-same edit.
+same edit. These update events default to `edited` involvement, matching direct
+Notion capture even when the bridge omits the optional envelope field.
 
 A first cut of this connector supports only `edited` and `created` includes.
 Comments and mentions have no enumerable-by-actor surface in either Notion API
@@ -837,6 +844,8 @@ later increment.
   chronological project/time-range queries.
 - Invalid input rejects the whole batch without partial events, projections,
   cursor advancement, or request completion.
+- Bridged involvement is sorted and de-duplicated; unknown values reject the
+  whole batch, and `notion.activity` updates default to `edited`.
 - Mutable calendar revisions produce distinct event ids.
 - A bridged connector reports awaiting-ingest, pending, claimed, stale, retry,
   and successful recency states without exposing claim tokens.

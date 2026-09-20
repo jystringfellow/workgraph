@@ -65,7 +65,7 @@ var helpTopics = map[string]helpTopic{
 	"connectors validate":     {"workgraph connectors validate <connector> [options]", "Validate a connector's local setup."},
 	"doctor":                  {"workgraph doctor [options]", "Diagnose local workgraph readiness without contacting providers."},
 	"events":                  {"workgraph events <subcommand>", "Inspect captured source events."},
-	"events today":            {"workgraph events today [--type <event-type>] [--limit <count>] [options]", "List detailed events captured during the current local day."},
+	"events today":            {"workgraph events today [--type <event-type>] [--actor <actor>] [--involvement <kind>] [--limit <count>] [options]", "List detailed events captured during the current local day."},
 	"git":                     {"workgraph git <subcommand>", "Connect and capture local Git activity."},
 	"git capture":             {"workgraph git capture [--max-commits <count>] [options]", "Capture recent commits from configured watch roots."},
 	"git connect":             {"workgraph git connect [options]", "Discover Git repositories from configured watch roots."},
@@ -114,6 +114,7 @@ var helpTopics = map[string]helpTopic{
 	"security":                {"workgraph security <subcommand>", "Inspect local security posture."},
 	"security report":         {"workgraph security report [--format text|json] [options]", "Produce a secret-free local endpoint security report."},
 
+	"connectors required-tools":   {"workgraph connectors required-tools [connector]", "Show canonical fetch and identity provider-tool requirements for bridged capture."},
 	"settings":                    {"workgraph settings <subcommand>", "Inspect and change local workgraph settings."},
 	"settings add-ignore-name":    {"workgraph settings add-ignore-name <name> [options]", "Ignore directories and files with an exact basename."},
 	"settings add-ignore-path":    {"workgraph settings add-ignore-path <path> [options]", "Ignore an absolute path and all of its descendants."},
@@ -140,7 +141,7 @@ var helpTopics = map[string]helpTopic{
 	"suggestions scan":     {"workgraph suggestions scan [--type ignore] [--limit <count>] [options]", "Run bounded deterministic suggestion producers."},
 	"suggestions show":     {"workgraph suggestions show <id> [options]", "Show a suggestion with its evidence and history."},
 	"suggestions snooze":   {"workgraph suggestions snooze <id> --until <RFC3339> [options]", "Snooze a suggestion until a future instant."},
-	"today":                {"workgraph today [options]", "Show a compact overview of work captured today."},
+	"today":                {"workgraph today [--actor <actor>] [--involvement <kind>] [options]", "Show a compact overview of work captured today."},
 	"version":              {"workgraph version", "Show the installed workgraph version and build identity."},
 }
 

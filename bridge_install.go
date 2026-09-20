@@ -151,6 +151,7 @@ var claudeBridgeDrainPermissions = []string{
 	"mcp__plugin_workgraph_workgraph__capture_request_fail",
 	"mcp__plugin_workgraph_workgraph__capture_watermark",
 	"mcp__plugin_workgraph_workgraph__connector_status",
+	"mcp__plugin_workgraph_workgraph__connector_required_tools",
 	"mcp__plugin_workgraph_workgraph__bridge_worker_heartbeat",
 }
 
@@ -622,7 +623,7 @@ func DrainBridge(homeDir string, client string, clientCommand string) (string, e
 			commandName = "claude"
 		}
 	}
-	prompt := "Use the workgraph-bridge skill and local workgraph MCP tools. List pending requests before claiming. For each connector, prove every provider tool needed for fetching and stable identity is present and authorized with a harmless read-only discovery call. Claim at most one request, filtered to a connector whose preflight succeeded. Follow the request capture_semantics: fetch only the bounded approved scope for bounded_events, or the exhaustive configured current state for complete_snapshot. If provider capability is absent or denied, leave the request pending and do not report a connector failure. Never fall back to the CLI. Report failures that occur after a successful capability preflight through capture_request_fail."
+	prompt := "Use the workgraph-bridge skill and local workgraph MCP tools. List pending requests before claiming. For each candidate connector, call connector_required_tools and prove that every operation in the fetch and identity requirements returned by the registry is present and authorized with a harmless read-only discovery call. Claim at most one request, filtered to a connector whose complete registry preflight succeeded. Follow the request capture_semantics: fetch only the bounded approved scope for bounded_events, or the exhaustive configured current state for complete_snapshot. If provider capability is absent or denied, leave the request pending and do not report a connector failure. Never fall back to the CLI. Report failures that occur after a successful capability preflight through capture_request_fail."
 	var args []string
 	switch client {
 	case "codex":

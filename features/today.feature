@@ -43,6 +43,29 @@ Scenario: Keep captured details behind a compact overview
   And the output points to "workgraph events today" for complete details
   And the complete stored event remains unchanged
 
+Scenario: Keep Notion workspace inventory out of personal activity
+  Given Notion inventory and personal Notion activity were captured today
+  When I run "workgraph today"
+  Then I see the personal Notion activity
+  And I do not see raw Notion page or database inventory
+  When I run "workgraph events today"
+  Then I can inspect the raw Notion inventory
+
+Scenario: Filter today's activity by exact actor
+  Given workgraph has captured events attributed to multiple actors today
+  When I run "workgraph today --actor user-me"
+  Then I see only events attributed to "user-me"
+  When I run "workgraph events today --actor user-other"
+  Then I see only detailed events attributed to "user-other"
+
+Scenario: Default to explicitly relevant activity
+  Given workgraph has directly involved, ambient, and legacy events today
+  When I run "workgraph today"
+  Then I see directly involved and legacy events
+  And I do not see explicitly classified ambient events
+  When I run "workgraph events today"
+  Then I can inspect all three kinds of evidence
+
 Scenario: Keep output simple for Phase 0
   Given workgraph has captured events today
   When I run "workgraph today"

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -25,6 +26,7 @@ func TestLocalBridgeMCPAdvertisesToolsAndConfiguresScopedConnector(t *testing.T)
 		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"capture_requests_list","arguments":{}}}`,
 		`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"capture_requests_claim","arguments":{"worker":"facts"}}}`,
 		`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"connector_status","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"connector_required_tools","arguments":{"connector":"calendar.microsoft"}}}`,
 	}
 	command := exec.Command(workgraphFactsBinary, "bridge", "mcp", "--home", homeDir)
 	command.Dir = repoRoot(t)
@@ -39,6 +41,7 @@ func TestLocalBridgeMCPAdvertisesToolsAndConfiguresScopedConnector(t *testing.T)
 		"capture_requests_list", "capture_requests_claim", "capture_request_renew",
 		"capture_ingest", "capture_request_fail", "capture_watermark",
 		"connector_status", "connector_bridge_configure", "connector_bridge_disconnect",
+		"connector_required_tools",
 		"bridge_worker_heartbeat",
 	} {
 		if !strings.Contains(stdout.String(), `"name":"`+tool+`"`) {
@@ -48,7 +51,7 @@ func TestLocalBridgeMCPAdvertisesToolsAndConfiguresScopedConnector(t *testing.T)
 	if strings.Contains(stdout.String(), "provider-token") {
 		t.Fatalf("MCP output exposed a provider credential:\n%s", stdout.String())
 	}
-	collectionFields := map[float64]string{4: "requests", 5: "claims", 6: "connectors"}
+	collectionFields := map[float64]string{4: "requests", 5: "claims", 6: "connectors", 7: "connectors"}
 	for _, line := range strings.Split(strings.TrimSpace(stdout.String()), "\n") {
 		var response map[string]any
 		if err := json.Unmarshal([]byte(line), &response); err != nil {
@@ -68,6 +71,9 @@ func TestLocalBridgeMCPAdvertisesToolsAndConfiguresScopedConnector(t *testing.T)
 		}
 		if _, ok := structured[field].([]any); !ok {
 			t.Fatalf("MCP tool %d structuredContent omitted %q collection: %#v", int(response["id"].(float64)), field, structured)
+		}
+		if response["id"].(float64) == 7 && !strings.Contains(fmt.Sprint(structured[field]), "microsoft.read_resource") {
+			t.Fatalf("required-tools MCP result omitted identity operation: %#v", structured)
 		}
 		runtimeInfo, ok := structured["runtime"].(map[string]any)
 		if !ok {

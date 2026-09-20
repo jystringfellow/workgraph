@@ -195,6 +195,7 @@ func TestNotionCaptureIndexesObjectsAndStoresChangedByMeActivity(t *testing.T) {
       "last_edited_time": "2026-06-07T16:45:00.000Z",
       "last_edited_by": {"object": "user", "id": "user-someone-else"},
       "url": "https://www.notion.so/page-2",
+      "parent": {"type": "page_id", "page_id": "page-1"},
       "properties": {
         "title": {
           "id": "title",
@@ -232,6 +233,12 @@ func TestNotionCaptureIndexesObjectsAndStoresChangedByMeActivity(t *testing.T) {
 	if activity.Summary != "Updated launch plan" {
 		t.Fatalf("expected activity summary from title, got %q", activity.Summary)
 	}
+	if activity.Project != "notion:page-1" {
+		t.Fatalf("expected root Notion page as activity project, got %#v", activity)
+	}
+	if !activity.InvolvementJSON.Valid || activity.InvolvementJSON.String != `["edited"]` {
+		t.Fatalf("expected personal Notion activity to record edited involvement, got %#v", activity)
+	}
 	for _, expected := range []string{
 		`"object":"page"`,
 		`"id":"page-1"`,
@@ -255,6 +262,16 @@ func TestNotionCaptureIndexesObjectsAndStoresChangedByMeActivity(t *testing.T) {
 	otherIndex := notionIndexRow(t, dbPath, "page-2")
 	if otherIndex.Title != "Someone else's update" || otherIndex.LastEditedBy != "user-someone-else" {
 		t.Fatalf("expected other-user page to be indexed, got %#v", otherIndex)
+	}
+	otherInventory := notionEvent(t, dbPath, "notion.page", "page-2")
+	if otherInventory.Actor != "user-someone-else" {
+		t.Fatalf("expected Notion inventory actor from last_edited_by, got %#v", otherInventory)
+	}
+	if otherInventory.Project != "notion:page-1" {
+		t.Fatalf("expected nested Notion inventory to share its stable root project, got %#v", otherInventory)
+	}
+	if !otherInventory.InvolvementJSON.Valid || otherInventory.InvolvementJSON.String != `[]` {
+		t.Fatalf("expected raw Notion inventory to be explicitly ambient, got %#v", otherInventory)
 	}
 	if notionEventExists(t, dbPath, "notion.page_updated", "page-2:2026-06-07T16:45:00Z") {
 		t.Fatalf("expected other-user page update not to create personal activity event")
@@ -963,9 +980,12 @@ func TestNotionConnectorValidateUsesStoredToken(t *testing.T) {
 }
 
 type storedNotionEvent struct {
-	Timestamp   string
-	Summary     string
-	PayloadJSON string
+	Timestamp       string
+	Actor           string
+	Project         string
+	InvolvementJSON sql.NullString
+	Summary         string
+	PayloadJSON     string
 }
 
 type storedNotionIndex struct {
@@ -987,7 +1007,7 @@ func notionEvent(t *testing.T, dbPath, eventType, objectID string) storedNotionE
 
 	id := fmt.Sprintf("%s:%s", eventType, objectID)
 	var event storedNotionEvent
-	err = db.QueryRow(`SELECT timestamp, summary, payload_json FROM events WHERE id = ?`, id).Scan(&event.Timestamp, &event.Summary, &event.PayloadJSON)
+	err = db.QueryRow(`SELECT timestamp, COALESCE(actor, ''), COALESCE(project, ''), involvement_json, summary, payload_json FROM events WHERE id = ?`, id).Scan(&event.Timestamp, &event.Actor, &event.Project, &event.InvolvementJSON, &event.Summary, &event.PayloadJSON)
 	if err != nil {
 		t.Fatalf("read Notion event %s: %v", id, err)
 	}

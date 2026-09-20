@@ -319,11 +319,15 @@ func TestNotionActivityBridgedIngestDedupesAgainstDirectNotionIdentity(t *testin
 
 	db := openBridgedCaptureDatabase(t, homeDir)
 	var count int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE id = 'notion.page_updated:page-1:2026-06-07T16:30:00Z'`).Scan(&count); err != nil {
+	var involvement string
+	if err := db.QueryRow(`SELECT COUNT(*), COALESCE(MAX(involvement_json), '') FROM events WHERE id = 'notion.page_updated:page-1:2026-06-07T16:30:00Z'`).Scan(&count, &involvement); err != nil {
 		t.Fatalf("count notion event: %v", err)
 	}
 	if count != 1 {
 		t.Fatalf("expected bridged event id to match the direct notion connector's identity scheme, got %d rows", count)
+	}
+	if involvement != `["edited"]` {
+		t.Fatalf("expected notion.activity bridge to preserve personal edit involvement, got %q", involvement)
 	}
 
 	// A second ingest of the same edit (as the direct notion connector would produce) must de-duplicate.
@@ -333,6 +337,43 @@ func TestNotionActivityBridgedIngestDedupesAgainstDirectNotionIdentity(t *testin
 	}
 	if second.EventsDuplicate != 1 || second.EventsInserted != 0 {
 		t.Fatalf("expected the repeated edit to de-duplicate, got %#v", second)
+	}
+}
+
+func TestBridgedCaptureNormalizesAndValidatesInvolvement(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+	connectBridgedConnector(t, repoRoot, homeDir, "slack")
+
+	input := `[{"type":"slack.message","timestamp":"2026-06-07T16:30:00Z","external_id":"message-1","involvement":["mentioned","authored","mentioned"],"payload":{"channel":"C0DEMO123"}}]`
+	result, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{
+		HomeDir: homeDir,
+		Source:  "slack",
+		Input:   strings.NewReader(input),
+	})
+	if err != nil {
+		t.Fatalf("ingest event with involvement: %v", err)
+	}
+	if result.EventsInserted != 1 {
+		t.Fatalf("expected one inserted event, got %#v", result)
+	}
+
+	db := openBridgedCaptureDatabase(t, homeDir)
+	var stored string
+	if err := db.QueryRow(`SELECT involvement_json FROM events WHERE type = 'slack.message'`).Scan(&stored); err != nil {
+		t.Fatalf("read stored involvement: %v", err)
+	}
+	if stored != `["authored","mentioned"]` {
+		t.Fatalf("expected canonical involvement, got %s", stored)
+	}
+
+	invalid := `[{"type":"slack.message","timestamp":"2026-06-07T16:31:00Z","external_id":"message-2","involvement":["nearby"],"payload":{"channel":"C0DEMO123"}}]`
+	if _, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{
+		HomeDir: homeDir,
+		Source:  "slack",
+		Input:   strings.NewReader(invalid),
+	}); err == nil || !strings.Contains(err.Error(), `unknown involvement "nearby"`) {
+		t.Fatalf("expected unknown involvement to be rejected, got %v", err)
 	}
 }
 

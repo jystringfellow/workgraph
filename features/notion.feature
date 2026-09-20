@@ -6,7 +6,16 @@ Scenario: Capture shared Notion pages and databases
   Then workgraph searches Notion for pages and databases shared with the connection
   And workgraph stores notion.page and notion.database records
   And the records preserve object id, title, URL, created time, last edited time, and parent metadata
+  And each record attributes the last editor when Notion provides one
+  And each inventory record is explicitly classified with no direct involvement
+  And nested records share the stable page or database root below the workspace as their project
   And recapturing the same page or database updates the existing event instead of creating duplicates
+
+Scenario: Store personal Notion edits separately from workspace inventory
+  Given a previously indexed Notion object was edited by the connected user
+  When I run "workgraph notion capture"
+  Then workgraph stores a derived activity event with edited involvement
+  And the workspace inventory record remains ambient evidence
 
 Scenario: Notion capture bootstraps a cursor and resumes incrementally
   Given Notion is connected

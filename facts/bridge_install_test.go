@@ -63,6 +63,7 @@ func TestClaudePluginInstallMergesLeastPrivilegeDrainPermissions(t *testing.T) {
 		"mcp__plugin_workgraph_workgraph__capture_request_fail",
 		"mcp__plugin_workgraph_workgraph__capture_watermark",
 		"mcp__plugin_workgraph_workgraph__connector_status",
+		"mcp__plugin_workgraph_workgraph__connector_required_tools",
 		"mcp__plugin_workgraph_workgraph__bridge_worker_heartbeat",
 	} {
 		if !strings.Contains(allowed, expected) {
@@ -162,7 +163,7 @@ func TestSlackListsBridgeContractAllowsContentHashWithoutClaimingDeletion(t *tes
 		}
 		for _, expected := range []string{
 			"complete_snapshot", "slack_read_file", `response_format: "detailed"`,
-			"resource read needed", "routing context",
+			"resource read needed", "routing context", "connector_required_tools",
 		} {
 			if !strings.Contains(string(contents), expected) {
 				t.Fatalf("bridge skill %s omitted %q", path, expected)
@@ -292,7 +293,9 @@ func TestClaudeBridgeDrainUsesNonInteractivePermissionMode(t *testing.T) {
 	}
 	for _, expected := range []string{
 		"-p", "--permission-mode dontAsk",
-		"List pending requests before claiming", "leave the request pending", "Never fall back to the CLI",
+		"List pending requests before claiming", "connector_required_tools",
+		"fetch and identity requirements returned by the registry",
+		"leave the request pending", "Never fall back to the CLI",
 	} {
 		if !strings.Contains(string(contents), expected) {
 			t.Fatalf("Claude drain invocation omitted %q:\n%s", expected, contents)
