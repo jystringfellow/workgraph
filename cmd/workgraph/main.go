@@ -140,6 +140,8 @@ func runPluginInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 	clientCommand := flags.String("client-command", "", "client executable override")
 	installRoot := flags.String("install-root", "", "package installation root override")
 	noLaunchd := flags.Bool("no-launchd", false, "skip installing the macOS bridge drain worker")
+	model := flags.String("model", "", "pin the unattended bridge worker to this client model")
+	clearModel := flags.Bool("clear-model", false, "clear the persisted bridge worker model and use the client default")
 	var providerTools repeatedStringFlags
 	flags.Var(&providerTools, "allow-provider-tool", "exact provider MCP tool name to allow for the unattended Claude worker; repeatable")
 	if err := flags.Parse(args); err != nil {
@@ -152,6 +154,7 @@ func runPluginInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 	result, err := workgraph.InstallPlugin(workgraph.PluginInstallConfig{
 		HomeDir: *homeDir, Client: *client, ClientCommand: *clientCommand,
 		InstallRoot: *installRoot, SkipLaunchd: *noLaunchd, ProviderTools: providerTools,
+		Model: *model, ClearModel: *clearModel,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph plugin install: %v\n", err)
@@ -279,6 +282,8 @@ func runBridgeInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 	clientCommand := flags.String("client-command", "", "client executable override")
 	installRoot := flags.String("install-root", "", "package installation root override")
 	noLaunchd := flags.Bool("no-launchd", false, "skip installing the macOS drain worker")
+	model := flags.String("model", "", "pin the unattended bridge worker to this client model")
+	clearModel := flags.Bool("clear-model", false, "clear the persisted bridge worker model and use the client default")
 	var providerTools repeatedStringFlags
 	flags.Var(&providerTools, "allow-provider-tool", "exact provider MCP tool name to allow for the unattended Claude worker; repeatable")
 	if err := flags.Parse(args); err != nil {
@@ -291,6 +296,7 @@ func runBridgeInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 	result, err := workgraph.InstallBridge(workgraph.BridgeInstallConfig{
 		HomeDir: *homeDir, Client: *client, ClientCommand: *clientCommand,
 		InstallRoot: *installRoot, SkipLaunchd: *noLaunchd, ProviderTools: providerTools,
+		Model: *model, ClearModel: *clearModel,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph bridge install: %v\n", err)

@@ -39,6 +39,7 @@ Additional MCP tools require their own specs and facts.
 
 ```sh
 workgraph plugin install --client <codex|claude-code>
+workgraph plugin install --client <codex|claude-code> --model <model>
 workgraph plugin doctor --client <codex|claude-code>
 ```
 
@@ -50,8 +51,10 @@ workgraph plugin doctor --client <codex|claude-code>
 4. writes an absolute MCP command and explicit workgraph home;
 5. registers the local marketplace and installs or updates `workgraph`;
 6. installs the opt-in macOS bridge drain worker unless `--no-launchd` is set;
-7. reports the client, package location, skills, MCP, and worker state;
-8. tells the user that executable upgrades require a daemon restart and a new
+7. persists an explicitly selected unattended model, preserves it when the
+   model flags are omitted on reinstall, or clears it with `--clear-model`;
+8. reports the client, model, package location, skills, MCP, and worker state;
+9. tells the user that executable upgrades require a daemon restart and a new
    client session, because neither long-lived process hot-reloads its binary.
 
 The command is idempotent and preserves unrelated client settings. Rerunning it
@@ -59,7 +62,8 @@ is the supported plugin update path after upgrading the workgraph binary.
 
 `plugin doctor` is provider-free. It verifies the client executable, `workgraph`
 manifest, all bundled skills and bridge references, local MCP tool discovery, a
-disposable claim/empty-ingest round trip, bridge worker marker, and heartbeat.
+disposable claim/empty-ingest round trip, bridge worker marker, configured
+model, and heartbeat.
 
 For compatibility, `workgraph bridge install` and `workgraph bridge doctor`
 delegate to the same implementation. They install and diagnose the broader
@@ -110,6 +114,8 @@ session. Each skill retains its own approval and safety boundaries.
 ## Security and compatibility
 
 - Installation never copies provider or model credentials into workgraph.
+- A selected client model is non-secret worker configuration stored under the
+  workgraph home, not in generated launchd files.
 - The generated MCP config contains only executable and local workgraph paths.
 - Plugin installation does not enable hosted LLM consent or create an LLM
   profile.

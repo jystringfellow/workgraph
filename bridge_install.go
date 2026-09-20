@@ -27,6 +27,8 @@ type PluginInstallConfig struct {
 	InstallRoot   string
 	SkipLaunchd   bool
 	ProviderTools []string
+	Model         string
+	ClearModel    bool
 }
 
 // PluginInstallResult describes an installed client plugin package.
@@ -34,6 +36,7 @@ type PluginInstallResult struct {
 	Client      string
 	InstallRoot string
 	Version     string
+	Model       string
 	Message     string
 }
 
@@ -59,6 +62,9 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 	client := strings.ToLower(strings.TrimSpace(config.Client))
 	if client != "codex" && client != "claude-code" {
 		return PluginInstallResult{}, fmt.Errorf("plugin client must be codex or claude-code")
+	}
+	if strings.TrimSpace(config.Model) != "" && config.ClearModel {
+		return PluginInstallResult{}, fmt.Errorf("--model and --clear-model cannot be used together")
 	}
 	providerTools, err := validateClaudeProviderTools(client, config.ProviderTools)
 	if err != nil {
@@ -109,6 +115,10 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 			return PluginInstallResult{}, err
 		}
 	}
+	workerModel, err := configureBridgeWorkerModel(homeDir, client, config.Model, config.ClearModel)
+	if err != nil {
+		return PluginInstallResult{}, err
+	}
 	launchStatus := "launchd setup skipped"
 	if !config.SkipLaunchd {
 		if err := installBridgeLaunchAgent(client, commandName, executable, homeDir); err != nil {
@@ -120,7 +130,7 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 	if client == "claude-code" {
 		clientLabel = "Claude Code"
 	}
-	result := PluginInstallResult{Client: client, InstallRoot: installRoot, Version: pluginVersion}
+	result := PluginInstallResult{Client: client, InstallRoot: installRoot, Version: pluginVersion, Model: workerModel}
 	lines := []string{
 		"workgraph plugin installed",
 		"Client: " + client,
@@ -128,6 +138,7 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 		"Version: " + pluginVersion,
 		"Skills: 3",
 		"MCP: workgraph",
+		"Model: " + bridgeWorkerModelLabel(workerModel),
 	}
 	if client == "claude-code" {
 		lines = append(lines, "Permissions: unattended workgraph MCP drain only")
@@ -616,6 +627,13 @@ func DrainBridge(homeDir string, client string, clientCommand string) (string, e
 		return "No active bridged capture requests.", nil
 	}
 	client = strings.ToLower(strings.TrimSpace(client))
+	if client != "codex" && client != "claude-code" {
+		return "", fmt.Errorf("bridge client must be codex or claude-code")
+	}
+	workerModel, err := bridgeWorkerModel(homeDir, client)
+	if err != nil {
+		return "", err
+	}
 	commandName := strings.TrimSpace(clientCommand)
 	if commandName == "" {
 		commandName = client
@@ -627,7 +645,11 @@ func DrainBridge(homeDir string, client string, clientCommand string) (string, e
 	var args []string
 	switch client {
 	case "codex":
-		args = []string{"exec", "--ephemeral", "--skip-git-repo-check", prompt}
+		args = []string{"exec", "--ephemeral", "--skip-git-repo-check"}
+		if workerModel != "" {
+			args = append(args, "--model", workerModel)
+		}
+		args = append(args, prompt)
 	case "claude-code":
 		settingsPath := filepath.Join(homeDir, ".claude", "settings.json")
 		if _, err := os.Stat(settingsPath); err != nil {
@@ -644,9 +666,11 @@ func DrainBridge(homeDir string, client string, clientCommand string) (string, e
 			recordBridgeDrainHeartbeat(homeDir, client)
 			return "No Claude provider tools are explicitly allowed; active capture requests remain pending.", nil
 		}
-		args = []string{"-p", "--permission-mode", "dontAsk", prompt}
-	default:
-		return "", fmt.Errorf("bridge client must be codex or claude-code")
+		args = []string{"-p", "--permission-mode", "dontAsk"}
+		if workerModel != "" {
+			args = append(args, "--model", workerModel)
+		}
+		args = append(args, prompt)
 	}
 	command := exec.Command(commandName, args...)
 	command.Dir = homeDir
@@ -746,6 +770,10 @@ func DoctorPlugin(config PluginDoctorConfig) (string, error) {
 			return "", fmt.Errorf("inspect Claude provider permissions: %w", err)
 		}
 	}
+	workerModel, err := bridgeWorkerModel(homeDir, client)
+	if err != nil {
+		return "", err
+	}
 	worker := "not installed"
 	workerEnvironment := "not installed"
 	marker := filepath.Join(homeDir, "bridge", client+".launch-agent")
@@ -773,6 +801,7 @@ func DoctorPlugin(config PluginDoctorConfig) (string, error) {
 		"Skills: 3/3 ready",
 		"MCP: ready",
 		"Permissions: " + permissionStatus,
+		"Model: " + bridgeWorkerModelLabel(workerModel),
 	}
 	if client == "claude-code" {
 		lines = append(lines, "Workspace trust: ready")

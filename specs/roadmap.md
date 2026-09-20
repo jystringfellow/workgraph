@@ -57,9 +57,10 @@ follows `spec -> feature -> failing fact -> implementation -> pass -> roadmap`.
 5. [ ] **#101: add exact capture-request cancellation.** Preserve audit state,
    invalidate claimed capabilities, define idempotent terminal behavior, and
    keep cancellation out of unattended worker permissions.
-6. [ ] **#121: persist unattended worker model selection.** Make model choice
+6. [x] **#121: persist unattended worker model selection.** Make model choice
    explicit and discoverable, and preserve it across reinstall without parsing
-   generated launchd files as configuration.
+   generated launchd files as configuration. [spec:
+   `specs/bridge-worker-model.md`]
 7. [ ] **#120: publish one bridged-capture operator guide.** Consolidate setup,
    bridgeability rules, connector recipes, and recovery guidance after the
    preceding command surfaces stabilize; generate or fact-check packaged
