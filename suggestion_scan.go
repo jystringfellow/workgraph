@@ -26,7 +26,6 @@ const (
 
 var suggestionScanEventWindow = 24 * time.Hour
 
-// SuggestionScanConfig controls an explicit deterministic suggestion scan.
 type SuggestionScanConfig struct {
 	HomeDir        string
 	DatabasePath   string
@@ -36,7 +35,6 @@ type SuggestionScanConfig struct {
 	Now            time.Time
 }
 
-// SuggestionScanResult describes suggestions recorded by one bounded scan.
 type SuggestionScanResult struct {
 	Type                 string
 	WatchRoots           int
@@ -74,7 +72,6 @@ type suggestionScanEvidence struct {
 	Reasons        []string `json:"reasons"`
 }
 
-// ScanSuggestions runs bounded local suggestion producers and stores proposals.
 func ScanSuggestions(config SuggestionScanConfig) (SuggestionScanResult, error) {
 	scanType := strings.TrimSpace(config.Type)
 	if scanType == "" {

@@ -20,29 +20,20 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// DefaultNotionClientID is the OAuth client id used for the workgraph Notion public connection.
 var DefaultNotionClientID = "378d872b-594c-8110-b4c0-0037422697b3"
 
-// DefaultNotionRedirectURI is the local redirect URI registered for the workgraph Notion public connection.
 const DefaultNotionRedirectURI = "http://localhost:2727/notion/callback"
 
-// DefaultNotionTokenURL is the workgraph OAuth token relay for Notion.
 var DefaultNotionTokenURL = "https://workgraph-notion-oauth-token.jystringfellow.workers.dev/notion/token"
 
-// DefaultNotionAPIBaseURL is Notion's API base URL.
 var DefaultNotionAPIBaseURL = "https://api.notion.com"
 
-// DefaultNotionAPIVersion is pinned to the API shape where search returns pages and databases.
 const DefaultNotionAPIVersion = "2022-06-28"
 
-// notionCaptureOverlap re-checks a small window before the stored cursor to absorb clock skew.
 const notionCaptureOverlap = 5 * time.Minute
 
-// notionPreviewFetchCap bounds block-content fetches per capture call so preview
-// enrichment cannot gate the index pass on a large workspace.
 const notionPreviewFetchCap = 25
 
-// NotionCaptureConfig controls Notion page and database metadata capture.
 type NotionCaptureConfig struct {
 	HomeDir      string
 	DatabasePath string
@@ -51,7 +42,6 @@ type NotionCaptureConfig struct {
 	HTTPClient   *http.Client
 }
 
-// NotionCaptureResult describes a Notion capture run.
 type NotionCaptureResult struct {
 	HomeDir      string
 	DatabasePath string
@@ -59,7 +49,6 @@ type NotionCaptureResult struct {
 	Message      string
 }
 
-// NotionConnectConfig controls Notion OAuth setup.
 type NotionConnectConfig struct {
 	HomeDir       string
 	ClientID      string
@@ -74,7 +63,6 @@ type NotionConnectConfig struct {
 	OpenBrowser   func(string) error
 }
 
-// NotionConnectResult describes Notion OAuth setup.
 type NotionConnectResult struct {
 	ConfigPath       string
 	AuthorizationURL string
@@ -83,7 +71,6 @@ type NotionConnectResult struct {
 	Message          string
 }
 
-// NotionConnectTokenConfig controls local Notion internal-integration token setup.
 type NotionConnectTokenConfig struct {
 	HomeDir    string
 	Token      string
@@ -91,12 +78,10 @@ type NotionConnectTokenConfig struct {
 	HTTPClient *http.Client
 }
 
-// NotionDisconnectConfig controls Notion disconnect behavior.
 type NotionDisconnectConfig struct {
 	HomeDir string
 }
 
-// NotionDisconnectResult describes Notion disconnect behavior.
 type NotionDisconnectResult struct {
 	ConfigPath string
 	Message    string
@@ -240,7 +225,6 @@ type notionEventPayload struct {
 	ContentPreview string          `json:"content_preview,omitempty"`
 }
 
-// CaptureNotion stores metadata for shared Notion pages and databases.
 func CaptureNotion(config NotionCaptureConfig) (NotionCaptureResult, error) {
 	status, err := prepareRunStatus(RunConfig{
 		HomeDir:      config.HomeDir,
@@ -295,7 +279,7 @@ func CaptureNotion(config NotionCaptureConfig) (NotionCaptureResult, error) {
 
 	stored := 0
 	previewBudget := notionPreviewFetchCap
-	searchErr := notionSearchAll(config, since, func(page []notionSearchResult) (bool, error) {
+	searchErr := notionSearchAll(config, func(page []notionSearchResult) (bool, error) {
 		var pageCompletedThrough time.Time
 		for _, object := range page {
 			if object.Object != "page" && object.Object != "database" {
@@ -308,7 +292,6 @@ func CaptureNotion(config NotionCaptureConfig) (NotionCaptureResult, error) {
 			if !since.IsZero() && edited != "" {
 				editedTime, timeErr := time.Parse(time.RFC3339Nano, edited)
 				if timeErr == nil && editedTime.Before(since) {
-					// Descending sort means everything after this point is older still.
 					return true, nil
 				}
 			}
@@ -346,8 +329,6 @@ func CaptureNotion(config NotionCaptureConfig) (NotionCaptureResult, error) {
 	if err := attributeNotionEventProjects(db); err != nil {
 		return NotionCaptureResult{}, err
 	}
-	// The walk reached either the watermark or the end of the workspace, so
-	// everything through this poll's start time is now covered.
 	if err := advanceNotionCaptureCursor(db, now); err != nil {
 		return NotionCaptureResult{}, err
 	}
@@ -388,7 +369,6 @@ func advanceNotionCaptureCursor(db *sql.DB, completedThrough time.Time) error {
 	return nil
 }
 
-// ConnectNotion prepares or completes Notion OAuth setup.
 func ConnectNotion(config NotionConnectConfig) (NotionConnectResult, error) {
 	homeDir, err := resolveNotionHomeDir(config.HomeDir)
 	if err != nil {
@@ -448,7 +428,6 @@ func ConnectNotion(config NotionConnectConfig) (NotionConnectResult, error) {
 	return storeNotionConnection(homeDir, config, token)
 }
 
-// ConnectNotionWithToken validates and stores a local Notion integration token.
 func ConnectNotionWithToken(config NotionConnectTokenConfig) (NotionConnectResult, error) {
 	homeDir, err := resolveNotionHomeDir(config.HomeDir)
 	if err != nil {
@@ -491,7 +470,6 @@ func ConnectNotionWithToken(config NotionConnectTokenConfig) (NotionConnectResul
 	}, nil
 }
 
-// ConnectNotionWithBrowser completes Notion OAuth with a local callback.
 func ConnectNotionWithBrowser(ctx context.Context, config NotionConnectConfig) (NotionConnectResult, error) {
 	homeDir, err := resolveNotionHomeDir(config.HomeDir)
 	if err != nil {
@@ -582,7 +560,6 @@ func ConnectNotionWithBrowser(ctx context.Context, config NotionConnectConfig) (
 	return result, nil
 }
 
-// DisconnectNotion removes local Notion connector settings.
 func DisconnectNotion(config NotionDisconnectConfig) (NotionDisconnectResult, error) {
 	homeDir, err := resolveHomeDir(config.HomeDir)
 	if err != nil {
@@ -674,13 +651,12 @@ func ShowNotionIndex(config NotionIndexShowConfig) (NotionIndexResult, error) {
 	return result, nil
 }
 
-func notionSearchAll(config NotionCaptureConfig, since time.Time, onPage func([]notionSearchResult) (bool, error)) error {
+func notionSearchAll(config NotionCaptureConfig, onPage func([]notionSearchResult) (bool, error)) error {
 	baseURL := resolveNotionAPIBaseURL(config.APIBaseURL)
 	client := config.HTTPClient
 	if client == nil {
 		client = http.DefaultClient
 	}
-	_ = since // watermark comparison happens in onPage, which sees each object's last_edited_time
 	cursor := ""
 	for {
 		body := map[string]any{
@@ -721,7 +697,6 @@ func notionSearchAll(config NotionCaptureConfig, since time.Time, onPage func([]
 		if err := json.Unmarshal(responseBody, &parsed); err != nil {
 			return fmt.Errorf("parse Notion search response: %w", err)
 		}
-		// Store this page immediately so a later page's failure or deadline leaves progress behind.
 		stop, err := onPage(parsed.Results)
 		if err != nil {
 			return err

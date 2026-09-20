@@ -19,7 +19,6 @@ const (
 	defaultResumeFreshness     = 180 * 24 * time.Hour
 )
 
-// ResumeConfig controls the resumable work view.
 type ResumeConfig struct {
 	HomeDir        string
 	DatabasePath   string
@@ -33,7 +32,6 @@ type ResumeConfig struct {
 	DebugRelevance bool
 }
 
-// ResumeResult describes resumable work in deterministic plain text.
 type ResumeResult struct {
 	Project    string
 	Projects   []ResumeProject
@@ -46,14 +44,12 @@ type ResumeResult struct {
 	Message    string
 }
 
-// ResumeProject is a project with captured activity.
 type ResumeProject struct {
 	Name       string
 	EventCount int
 	LastActive time.Time
 }
 
-// ResumeEvent is one stored event included in a resume view.
 type ResumeEvent struct {
 	ID        string
 	Type      string
@@ -64,7 +60,6 @@ type ResumeEvent struct {
 	Payload   string
 }
 
-// Resume returns recent project context from captured events.
 func Resume(config ResumeConfig) (ResumeResult, error) {
 	now := config.Now
 	if now.IsZero() {

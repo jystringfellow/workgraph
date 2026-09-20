@@ -23,7 +23,6 @@ type daemonProcess struct {
 	Command string
 }
 
-// DaemonConfig controls background event capture.
 type DaemonConfig struct {
 	HomeDir         string
 	DatabasePath    string
@@ -35,7 +34,6 @@ type DaemonConfig struct {
 	SlackAPIBaseURL string
 }
 
-// DaemonStatus describes the current background capture process.
 type DaemonStatus struct {
 	Running             bool                     `json:"running"`
 	PID                 int                      `json:"pid"`
@@ -56,7 +54,6 @@ type DaemonStatus struct {
 	Message             string                   `json:"-"`
 }
 
-// StartDaemon starts background capture and writes daemon state under workgraph home.
 func StartDaemon(config DaemonConfig) (DaemonStatus, error) {
 	runStatus, err := prepareRunStatus(RunConfig{
 		HomeDir:      config.HomeDir,
@@ -141,7 +138,6 @@ func StartDaemon(config DaemonConfig) (DaemonStatus, error) {
 	return status, nil
 }
 
-// RunDaemon runs capture in the current process until interrupted.
 func RunDaemon(config DaemonConfig) error {
 	ctx, stop := signalContext()
 	defer stop()
@@ -177,7 +173,6 @@ func RunDaemon(config DaemonConfig) error {
 	return nil
 }
 
-// DaemonStatusForConfig reports whether background capture is running.
 func DaemonStatusForConfig(config DaemonConfig) (DaemonStatus, error) {
 	homeDir, err := resolveHomeDir(config.HomeDir)
 	if err != nil {
@@ -186,7 +181,6 @@ func DaemonStatusForConfig(config DaemonConfig) (DaemonStatus, error) {
 	return DaemonStatusForHome(homeDir)
 }
 
-// DaemonStatusForHome reports daemon state for a resolved or unresolved workgraph home path.
 func DaemonStatusForHome(homeDir string) (DaemonStatus, error) {
 	resolvedHome, err := filepath.Abs(homeDir)
 	if err != nil {
@@ -227,7 +221,6 @@ func DaemonStatusForHome(homeDir string) (DaemonStatus, error) {
 	return status, nil
 }
 
-// StopDaemon stops background capture and removes daemon state.
 func StopDaemon(config DaemonConfig) (DaemonStatus, error) {
 	status, err := DaemonStatusForConfig(config)
 	if err != nil {

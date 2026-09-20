@@ -42,14 +42,12 @@ var (
 	}
 )
 
-// AssociationExplainConfig controls deterministic local association inspection.
 type AssociationExplainConfig struct {
 	HomeDir      string
 	DatabasePath string
 	EventID      string
 }
 
-// AssociationExplainResult describes the bounded candidate evaluation for one event.
 type AssociationExplainResult struct {
 	Event                AssociationEvent
 	Candidates           []AssociationCandidate
@@ -57,7 +55,6 @@ type AssociationExplainResult struct {
 	Message              string
 }
 
-// AssociationEvent is the stored event identity needed for association inspection.
 type AssociationEvent struct {
 	ID        string
 	Source    string
@@ -68,7 +65,6 @@ type AssociationEvent struct {
 	Payload   string
 }
 
-// AssociationCandidate is one qualifying, explainable cross-source event pair.
 type AssociationCandidate struct {
 	RelatedEventID string
 	SuggestionID   string
@@ -105,8 +101,6 @@ type associationSignals struct {
 	Project      string
 }
 
-// ExplainEventAssociations evaluates a bounded local candidate set and stores
-// qualifying pairs in the shared suggestion lifecycle.
 func ExplainEventAssociations(config AssociationExplainConfig) (AssociationExplainResult, error) {
 	eventID := strings.TrimSpace(config.EventID)
 	if eventID == "" {

@@ -98,7 +98,6 @@ func readManagedSettings() (managedSettingsFile, string, bool, error) {
 	return settings, path, true, nil
 }
 
-// SetManagedSettingsPathForTest redirects managed settings lookup for facts.
 func SetManagedSettingsPathForTest(path string) func() {
 	previous := managedSettingsPathOverrideForTest
 	managedSettingsPathOverrideForTest = path

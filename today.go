@@ -18,20 +18,11 @@ const (
 	todaySessionGap         = 30 * time.Minute
 	todayEventLabelMaxRunes = 160
 
-	// todayAssociationTargetLimit bounds how many of today's most recent
-	// events are evaluated as association targets, matching the requirement
-	// that today's association context is a small supplement, not a broad
-	// re-scan of stored evidence.
-	todayAssociationTargetLimit = 50
-	// todayAssociationRenderLimit bounds how many coalesced association
-	// pairs are rendered in the compact today section.
-	todayAssociationRenderLimit = 5
-	// todayAssociationMinimumScore restricts today's association context to
-	// the high-confidence baseline tier only (score 80 through 100).
+	todayAssociationTargetLimit  = 50
+	todayAssociationRenderLimit  = 5
 	todayAssociationMinimumScore = 80
 )
 
-// TodayConfig controls the local-day activity view.
 type TodayConfig struct {
 	HomeDir            string
 	DatabasePath       string
@@ -41,7 +32,6 @@ type TodayConfig struct {
 	IncludeAllEvidence bool
 }
 
-// TodayResult describes today's activity in deterministic plain text.
 type TodayResult struct {
 	Date         string
 	Events       []TodayEvent
@@ -50,7 +40,6 @@ type TodayResult struct {
 	Message      string
 }
 
-// TodayEvent is one stored event included in the local-day activity view.
 type TodayEvent struct {
 	ID          string
 	Source      string
@@ -64,7 +53,6 @@ type TodayEvent struct {
 	Payload     string
 }
 
-// TodaySession is a time-based grouping inferred from today's events.
 type TodaySession struct {
 	StartedAt time.Time
 	EndedAt   time.Time
@@ -72,9 +60,6 @@ type TodaySession struct {
 	Events    []TodayEvent
 }
 
-// TodayAssociation is a compact, high-confidence deterministic baseline
-// association surfaced alongside today's raw events and sessions. It
-// supplements that primary evidence and never regroups or replaces it.
 type TodayAssociation struct {
 	EventIDs     []string
 	PatternKey   string
@@ -97,7 +82,6 @@ type storedTodayEvent struct {
 	PayloadJSON string
 }
 
-// Today returns captured work from the current local day.
 func Today(config TodayConfig) (TodayResult, error) {
 	now := config.Now
 	if now.IsZero() {
@@ -274,16 +258,6 @@ func newTodaySession(event TodayEvent) TodaySession {
 	}
 }
 
-// loadTodayAssociations evaluates a small, bounded set of high-confidence
-// deterministic baseline associations to supplement today's raw events and
-// sessions. It reuses the same candidate window and scoring evaluator as
-// `workgraph associations explain`, but only reads existing suggestion
-// lifecycle state; it never coalesces or writes new association suggestion
-// rows. This keeps repeated `today` invocations free of uncontrolled writes.
-//
-// Only stored snoozed suggestions are refreshed via expireSnoozedSuggestions,
-// matching the read-path behavior already used by ListSuggestions and
-// ExplainEventAssociations.
 func loadTodayAssociations(db *sql.DB, events []TodayEvent, now time.Time) ([]TodayAssociation, error) {
 	if len(events) == 0 {
 		return nil, nil
@@ -396,10 +370,6 @@ func loadTodayAssociations(db *sql.DB, events []TodayEvent, now time.Time) ([]To
 	return associations, nil
 }
 
-// todayAssociationLifecycleStatus reports the current suggestion lifecycle
-// state for a candidate association pattern. A pattern with no stored
-// suggestion row yet (never inspected through `associations explain`)
-// defaults to "proposed" without writing anything.
 func todayAssociationLifecycleStatus(db *sql.DB, patternKey string) (string, error) {
 	suggestion, err := readSuggestionByPattern(db, "association", patternKey)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -411,8 +381,6 @@ func todayAssociationLifecycleStatus(db *sql.DB, patternKey string) (string, err
 	return suggestion.Status, nil
 }
 
-// todayAssociationStatusHidden hides dismissed and snoozed associations.
-// Proposed, reviewed, approved, and acted associations remain visible.
 func todayAssociationStatusHidden(status string) bool {
 	switch status {
 	case "dismissed", "snoozed":

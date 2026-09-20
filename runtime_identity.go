@@ -10,16 +10,12 @@ import (
 	"time"
 )
 
-// BuildIdentity identifies one workgraph executable build without exposing its
-// source checkout path.
 type BuildIdentity struct {
 	Version string `json:"version"`
 	Commit  string `json:"commit"`
 	Built   string `json:"built"`
 }
 
-// ProcessRuntimeStatus compares the executable a process started with to the
-// executable currently present at the same path.
 type ProcessRuntimeStatus struct {
 	Running                     BuildIdentity `json:"running"`
 	OnDisk                      BuildIdentity `json:"on_disk"`
@@ -37,15 +33,12 @@ var (
 	processBuildIdentity   = BuildIdentity{Version: "dev", Commit: "unknown", Built: "unknown"}
 )
 
-// SetProcessBuildIdentity records the build metadata injected into the current
-// CLI process. The command package calls this before dispatching any command.
 func SetProcessBuildIdentity(identity BuildIdentity) {
 	processBuildIdentityMu.Lock()
 	defer processBuildIdentityMu.Unlock()
 	processBuildIdentity = normalizeBuildIdentity(identity)
 }
 
-// CurrentProcessBuildIdentity returns the running process's build metadata.
 func CurrentProcessBuildIdentity() BuildIdentity {
 	processBuildIdentityMu.RLock()
 	defer processBuildIdentityMu.RUnlock()

@@ -809,7 +809,6 @@ func TestRunCapturesGitHubPullRequestsThroughGHCLI(t *testing.T) {
 		done <- capture.Run(ctx)
 	}()
 
-
 	waitForGitHubEvent(t, initResult.DatabasePath, "github.pull_request", "jystringfellow/Cupcake", 42)
 
 	cancel()
@@ -924,8 +923,6 @@ exit 1
 	return path
 }
 
-// writeFakeGHOverlapping returns the same PR from both the involves and
-// review-requested searches so merge behavior can be verified.
 func writeFakeGHOverlapping(t *testing.T, dir string, remaining int) string {
 	t.Helper()
 	path := filepath.Join(dir, "gh")
@@ -959,8 +956,6 @@ exit 1
 	return path
 }
 
-// writeFakeGHMalformedSearch fails auth/rate-limit checks but returns invalid
-// JSON for a search query so poll failures can be verified.
 func writeFakeGHMalformedSearch(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "gh-fail")
@@ -1035,7 +1030,6 @@ exit 1
 func fmtInt(value int) string {
 	return strconv.Itoa(value)
 }
-
 
 func waitForGitHubEvent(t *testing.T, dbPath, eventType, repository string, number int) {
 	t.Helper()

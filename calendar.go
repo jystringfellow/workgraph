@@ -19,29 +19,20 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// DefaultGoogleCalendarClientID is the OAuth client id used for Google Calendar PKCE OAuth.
 var DefaultGoogleCalendarClientID = "249970569298-d3ba0fnmoc720pq1coacr9s1ss2rhp5s.apps.googleusercontent.com"
 
-// DefaultGoogleCalendarRedirectURI is used by manual Google Calendar OAuth flows.
-// Browser OAuth binds a random loopback port and builds the redirect dynamically.
 const DefaultGoogleCalendarRedirectURI = "http://127.0.0.1:2727"
 
-// DefaultGoogleCalendarTokenURL is the workgraph OAuth token relay for Google Calendar.
 var DefaultGoogleCalendarTokenURL = "https://workgraph-google-oauth-token.jystringfellow.workers.dev/calendar/google/token"
 
-// DefaultGoogleCalendarRevokeURL is Google's OAuth token revocation endpoint.
 var DefaultGoogleCalendarRevokeURL = "https://oauth2.googleapis.com/revoke"
 
-// DefaultMicrosoftCalendarClientID is the Entra application id used for Microsoft Calendar PKCE OAuth.
 var DefaultMicrosoftCalendarClientID = "413dce76-e10c-4a57-84b4-89f6b66ab265"
 
-// DefaultMicrosoftCalendarRedirectURI is used by Microsoft Calendar OAuth flows.
 const DefaultMicrosoftCalendarRedirectURI = "http://localhost:2727/calendar/microsoft/callback"
 
-// DefaultMicrosoftCalendarTokenURL is Microsoft identity platform's v2 token endpoint.
 var DefaultMicrosoftCalendarTokenURL = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
 
-// CalendarCaptureConfig controls normalized calendar event ingestion.
 type CalendarCaptureConfig struct {
 	HomeDir      string
 	DatabasePath string
@@ -56,7 +47,6 @@ type CalendarCaptureConfig struct {
 	HTTPClient   *http.Client
 }
 
-// CalendarCaptureResult describes a calendar capture run.
 type CalendarCaptureResult struct {
 	HomeDir      string
 	DatabasePath string
@@ -64,7 +54,6 @@ type CalendarCaptureResult struct {
 	Message      string
 }
 
-// CalendarConnectConfig controls calendar provider OAuth setup.
 type CalendarConnectConfig struct {
 	HomeDir       string
 	Provider      string
@@ -82,7 +71,6 @@ type CalendarConnectConfig struct {
 	OpenBrowser   func(string) error
 }
 
-// CalendarConnectResult describes calendar provider OAuth setup.
 type CalendarConnectResult struct {
 	ConfigPath       string
 	AuthorizationURL string
@@ -91,7 +79,6 @@ type CalendarConnectResult struct {
 	Message          string
 }
 
-// CalendarDisconnectConfig controls calendar provider disconnect behavior.
 type CalendarDisconnectConfig struct {
 	HomeDir    string
 	Provider   string
@@ -99,7 +86,6 @@ type CalendarDisconnectConfig struct {
 	HTTPClient *http.Client
 }
 
-// CalendarDisconnectResult describes calendar provider disconnect behavior.
 type CalendarDisconnectResult struct {
 	ConfigPath string
 	Revoked    bool
@@ -249,7 +235,6 @@ type googleOAuthTokenResponse struct {
 	Scope        string `json:"scope"`
 }
 
-// CaptureCalendarEvents stores normalized calendar events from a local export file or provider API.
 func CaptureCalendarEvents(config CalendarCaptureConfig) (CalendarCaptureResult, error) {
 	status, err := prepareRunStatus(RunConfig{
 		HomeDir:      config.HomeDir,
@@ -295,7 +280,6 @@ func CaptureCalendarEvents(config CalendarCaptureConfig) (CalendarCaptureResult,
 	return result, nil
 }
 
-// ConnectCalendar prepares or completes calendar provider OAuth setup.
 func ConnectCalendar(config CalendarConnectConfig) (CalendarConnectResult, error) {
 	switch strings.ToLower(config.Provider) {
 	case "google":
@@ -313,7 +297,6 @@ func ConnectCalendar(config CalendarConnectConfig) (CalendarConnectResult, error
 	}
 }
 
-// DisconnectCalendar revokes provider OAuth access when possible and removes local connector settings.
 func DisconnectCalendar(config CalendarDisconnectConfig) (CalendarDisconnectResult, error) {
 	switch strings.ToLower(config.Provider) {
 	case "google":
@@ -325,7 +308,6 @@ func DisconnectCalendar(config CalendarDisconnectConfig) (CalendarDisconnectResu
 	}
 }
 
-// ConnectCalendarWithBrowser completes calendar provider OAuth with a local callback and PKCE.
 func ConnectCalendarWithBrowser(ctx context.Context, config CalendarConnectConfig) (CalendarConnectResult, error) {
 	provider := strings.ToLower(config.Provider)
 	if provider != "google" && provider != "microsoft" {

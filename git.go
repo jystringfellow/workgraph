@@ -17,7 +17,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// GitCaptureConfig controls local git commit capture.
 type GitCaptureConfig struct {
 	HomeDir      string
 	DatabasePath string
@@ -26,7 +25,6 @@ type GitCaptureConfig struct {
 	Context      context.Context
 }
 
-// GitCaptureResult describes a local git capture run.
 type GitCaptureResult struct {
 	HomeDir       string
 	DatabasePath  string
@@ -53,7 +51,6 @@ type gitCommit struct {
 	Subject     string
 }
 
-// CaptureGitCommits scans configured watch roots and stores local git commits.
 func CaptureGitCommits(config GitCaptureConfig) (GitCaptureResult, error) {
 	status, err := prepareGitCaptureStatus(config)
 	if err != nil {

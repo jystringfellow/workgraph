@@ -10,7 +10,6 @@ import (
 	"time"
 )
 
-// BridgeMCPConfig controls the local stdio MCP server.
 type BridgeMCPConfig struct {
 	HomeDir      string
 	DatabasePath string
@@ -32,7 +31,6 @@ type bridgeMCPTool struct {
 	InputSchema map[string]any `json:"inputSchema"`
 }
 
-// ServeBridgeMCP serves workgraph bridge tools over newline-delimited JSON-RPC stdio.
 func ServeBridgeMCP(config BridgeMCPConfig) error {
 	if config.Input == nil || config.Output == nil {
 		return fmt.Errorf("bridge MCP requires input and output")
@@ -236,7 +234,6 @@ func callBridgeMCPTool(config BridgeMCPConfig, name string, raw json.RawMessage)
 	}
 }
 
-// RecordBridgeWorkerHeartbeat persists client worker liveness without provider access.
 func RecordBridgeWorkerHeartbeat(homeDir string, databasePath string, worker string) (string, error) {
 	worker = strings.TrimSpace(worker)
 	if worker == "" {

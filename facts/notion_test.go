@@ -512,7 +512,6 @@ func TestNotionCaptureLeavesPartialProgressOnPaginationFailure(t *testing.T) {
 		t.Fatalf("expected exactly two search requests, got %d", requests)
 	}
 
-	// The first page's object must be stored even though the run ultimately failed.
 	page := notionEvent(t, filepath.Join(homeDir, "workgraph.db"), "notion.page", "page-1")
 	if page.Summary != "Launch plan" {
 		t.Fatalf("expected page-1 to be stored despite the later page failing, got %#v", page)

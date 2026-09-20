@@ -10,20 +10,17 @@ import (
 	"strings"
 )
 
-// NetworkDestinationsConfig controls local network destination reporting.
 type NetworkDestinationsConfig struct {
 	HomeDir string
 	Format  string
 }
 
-// NetworkDestinationsResult describes externally reachable destinations from local config.
 type NetworkDestinationsResult struct {
 	HomeDir      string
 	Destinations []NetworkDestination
 	Message      string
 }
 
-// NetworkDestination describes one configured network destination without credentials.
 type NetworkDestination struct {
 	ID          string `json:"id"`
 	Connector   string `json:"connector"`
@@ -34,7 +31,6 @@ type NetworkDestination struct {
 	label       string
 }
 
-// NetworkDestinations reports configured external destinations without contacting providers.
 func NetworkDestinations(config NetworkDestinationsConfig) (NetworkDestinationsResult, error) {
 	homeDir, err := resolveNetworkHomeDir(config.HomeDir)
 	if err != nil {

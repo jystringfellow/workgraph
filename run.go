@@ -24,7 +24,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// ErrNotInitialized is returned when capture starts before workgraph init.
 var ErrNotInitialized = errors.New("workgraph is not initialized")
 
 var errWatchLimitReached = errors.New("watch limit reached")
@@ -42,67 +41,39 @@ const (
 	defaultConnectorRetryMax     = 5 * time.Minute
 )
 
-// RunConfig controls foreground event capture.
 type RunConfig struct {
-	HomeDir               string
-	DatabasePath          string
-	WatchDirs             []string
-	ConservativeWatchDirs []string
-	// MaxWatchEntries bounds recursive watcher setup. Zero uses the default.
-	MaxWatchEntries int
-	// PollInterval controls file capture polling in tests.
-	PollInterval time.Duration
-	// GitPollInterval controls local git commit capture while running.
-	GitPollInterval time.Duration
-	// GitHubPollInterval controls GitHub activity capture while running.
-	GitHubPollInterval time.Duration
-	// GitHubCommand is the gh-compatible executable used for GitHub polling.
-	GitHubCommand string
-	// SlackPollInterval controls Slack message capture while running.
-	SlackPollInterval time.Duration
-	// SlackListPollInterval controls Slack List item capture while running.
-	SlackListPollInterval time.Duration
-	// SlackToken is the Slack API bearer token used for read-only polling.
-	SlackToken string
-	// SlackChannels are explicit Slack channel ids to poll.
-	SlackChannels []string
-	// SlackListIDs are explicit Slack List ids to poll.
-	SlackListIDs []string
-	// SlackListOptions interpret state and planning fields per Slack List.
-	SlackListOptions map[string]SlackListOptions
-	// SlackIncludeDMs opts into Slack IM and MPIM discovery.
-	SlackIncludeDMs bool
-	// SlackSelfUserID is the authorized Slack user id for self-authored events.
-	SlackSelfUserID string
-	// SlackAPIBaseURL overrides the Slack Web API base URL for tests.
-	SlackAPIBaseURL string
-	// SlackHTTPClient overrides the Slack API HTTP client for tests.
-	SlackHTTPClient *http.Client
-	// CalendarPollInterval controls connected calendar capture while running.
-	CalendarPollInterval time.Duration
-	// CalendarHTTPClient overrides the Calendar API HTTP client for tests.
-	CalendarHTTPClient *http.Client
-	// MailPollInterval controls connected mail capture while running.
-	MailPollInterval time.Duration
-	// MailHTTPClient overrides the Mail API HTTP client for tests.
-	MailHTTPClient *http.Client
-	// NotionPollInterval controls connected Notion capture while running.
-	NotionPollInterval time.Duration
-	// NotionHTTPClient overrides the Notion API HTTP client for tests.
-	NotionHTTPClient *http.Client
-	// AzureBoardsPollInterval controls connected Azure Boards capture while running.
+	HomeDir                 string
+	DatabasePath            string
+	WatchDirs               []string
+	ConservativeWatchDirs   []string
+	MaxWatchEntries         int
+	PollInterval            time.Duration
+	GitPollInterval         time.Duration
+	GitHubPollInterval      time.Duration
+	GitHubCommand           string
+	SlackPollInterval       time.Duration
+	SlackListPollInterval   time.Duration
+	SlackToken              string
+	SlackChannels           []string
+	SlackListIDs            []string
+	SlackListOptions        map[string]SlackListOptions
+	SlackIncludeDMs         bool
+	SlackSelfUserID         string
+	SlackAPIBaseURL         string
+	SlackHTTPClient         *http.Client
+	CalendarPollInterval    time.Duration
+	CalendarHTTPClient      *http.Client
+	MailPollInterval        time.Duration
+	MailHTTPClient          *http.Client
+	NotionPollInterval      time.Duration
+	NotionHTTPClient        *http.Client
 	AzureBoardsPollInterval time.Duration
-	// AzureBoardsHTTPClient overrides the Azure Boards API HTTP client for tests.
-	AzureBoardsHTTPClient *http.Client
-	// ConnectorPollTimeout bounds one complete connector poll. Zero uses the default.
-	ConnectorPollTimeout time.Duration
-	// ConnectorRetryInitial controls the first transient retry delay. Zero uses the default.
-	ConnectorRetryInitial time.Duration
-	// ConnectorRetryMax caps transient retry delay. Zero uses the default.
-	ConnectorRetryMax time.Duration
+	AzureBoardsHTTPClient   *http.Client
+	ConnectorPollTimeout    time.Duration
+	ConnectorRetryInitial   time.Duration
+	ConnectorRetryMax       time.Duration
 }
 
-// RunStatus describes an active capture process.
 type RunStatus struct {
 	HomeDir               string
 	DatabasePath          string
@@ -119,7 +90,6 @@ type RunStatus struct {
 	Message               string
 }
 
-// CapturedEvent describes an event written by the foreground capture process.
 type CapturedEvent struct {
 	Type      string
 	Operation string
@@ -128,7 +98,6 @@ type CapturedEvent struct {
 	Summary   string
 }
 
-// RunCapture watches local files and stores events until stopped.
 type RunCapture struct {
 	Status                  RunStatus
 	Events                  <-chan CapturedEvent
@@ -186,7 +155,6 @@ type fileEventPayload struct {
 	Size      int64  `json:"size,omitempty"`
 }
 
-// StartRun prepares foreground capture and returns once the watcher is ready.
 func StartRun(config RunConfig) (*RunCapture, error) {
 	status, err := prepareRunStatus(config)
 	if err != nil {
@@ -357,7 +325,6 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 	}, nil
 }
 
-// Run captures file events until the context is canceled.
 func (capture *RunCapture) Run(ctx context.Context) error {
 	defer capture.Close()
 
@@ -804,7 +771,6 @@ func (capture *RunCapture) captureAzureBoardsEvents(ctx context.Context) error {
 	return err
 }
 
-// Close releases resources held by the capture process.
 func (capture *RunCapture) Close() error {
 	var closeErr error
 	if capture.watcher != nil {

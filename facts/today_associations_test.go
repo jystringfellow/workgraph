@@ -12,8 +12,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// TestTodayShowsHighConfidenceAssociation covers requirement: one
-// high-confidence cross-source association rendered in `today`.
 func TestTodayShowsHighConfidenceAssociation(t *testing.T) {
 	homeDir, dbPath := initAssociationStore(t)
 	now := time.Date(2026, 7, 20, 16, 0, 0, 0, time.UTC)
@@ -38,8 +36,6 @@ func TestTodayShowsHighConfidenceAssociation(t *testing.T) {
 	}
 }
 
-// TestTodayExcludesMediumConfidenceAssociation covers requirement: a
-// medium-confidence association is excluded from today's compact section.
 func TestTodayExcludesMediumConfidenceAssociation(t *testing.T) {
 	homeDir, dbPath := initAssociationStore(t)
 	now := time.Date(2026, 7, 20, 16, 0, 0, 0, time.UTC)
@@ -61,9 +57,6 @@ func TestTodayExcludesMediumConfidenceAssociation(t *testing.T) {
 	}
 }
 
-// TestTodayCoalescesCanonicalPairWhenBothEventsAreToday covers requirement:
-// the same association renders exactly once even though both cited events
-// occurred today and each could independently surface it as a target.
 func TestTodayCoalescesCanonicalPairWhenBothEventsAreToday(t *testing.T) {
 	homeDir, dbPath := initAssociationStore(t)
 	now := time.Date(2026, 7, 20, 16, 0, 0, 0, time.UTC)
@@ -89,24 +82,18 @@ func TestTodayCoalescesCanonicalPairWhenBothEventsAreToday(t *testing.T) {
 	}
 }
 
-// TestTodayAssociationOrderingIsDeterministic covers requirement:
-// deterministic score descending, then most recent cited timestamp
-// descending, tie-break ordering.
 func TestTodayAssociationOrderingIsDeterministic(t *testing.T) {
 	homeDir, dbPath := initAssociationStore(t)
 	now := time.Date(2026, 7, 20, 18, 0, 0, 0, time.UTC)
 
-	// Pair A: exact URL match, score 100, most recent cited timestamp is latest.
 	urlA := "https://github.com/acme/alpha/pull/1"
 	insertAssociationEvent(t, dbPath, associationStoredEvent{ID: "github:a", Source: "github", Type: "github.pull_request", Timestamp: now.Add(-6 * time.Hour), Payload: fmt.Sprintf(`{"url":%q}`, urlA)})
 	insertAssociationEvent(t, dbPath, associationStoredEvent{ID: "slack:a", Source: "slack", Type: "slack.message", Timestamp: now.Add(-30 * time.Minute), Payload: fmt.Sprintf(`{"text":%q}`, urlA)})
 
-	// Pair B: exact URL match, score 100, most recent cited timestamp earlier than pair A.
 	urlB := "https://github.com/acme/beta/pull/2"
 	insertAssociationEvent(t, dbPath, associationStoredEvent{ID: "github:b", Source: "github", Type: "github.pull_request", Timestamp: now.Add(-6 * time.Hour), Payload: fmt.Sprintf(`{"url":%q}`, urlB)})
 	insertAssociationEvent(t, dbPath, associationStoredEvent{ID: "slack:b", Source: "slack", Type: "slack.message", Timestamp: now.Add(-5 * time.Hour), Payload: fmt.Sprintf(`{"text":%q}`, urlB)})
 
-	// Pair C: repository + issue number match, score 90 (medium time gap keeps it below 100).
 	insertAssociationEvent(t, dbPath, associationStoredEvent{ID: "github:c", Source: "github", Type: "github.issue", Timestamp: now.Add(-6 * time.Hour), Payload: `{"repository":"acme/gamma","number":7}`})
 	insertAssociationEvent(t, dbPath, associationStoredEvent{ID: "mail:c", Source: "mail", Type: "mail.message", Timestamp: now.Add(-3 * time.Hour), Payload: `{"repository":"acme/gamma","number":7}`})
 
@@ -131,8 +118,6 @@ func TestTodayAssociationOrderingIsDeterministic(t *testing.T) {
 	}
 }
 
-// TestTodayExcludesDismissedAssociation covers requirement: a dismissed
-// association is excluded even though it still meets the score threshold.
 func TestTodayExcludesDismissedAssociation(t *testing.T) {
 	homeDir, dbPath := initAssociationStore(t)
 	now := time.Date(2026, 7, 20, 16, 0, 0, 0, time.UTC)
@@ -157,8 +142,6 @@ func TestTodayExcludesDismissedAssociation(t *testing.T) {
 	}
 }
 
-// TestTodayExcludesSnoozedOrSuppressedAssociation covers requirement:
-// snoozed and explicitly suppressed associations are excluded.
 func TestTodayExcludesSnoozedOrSuppressedAssociation(t *testing.T) {
 	t.Run("snoozed", func(t *testing.T) {
 		homeDir, dbPath := initAssociationStore(t)
@@ -208,8 +191,6 @@ func TestTodayExcludesSnoozedOrSuppressedAssociation(t *testing.T) {
 	})
 }
 
-// TestTodayShowsApprovedAndActedAssociations covers requirement: approved
-// and acted associations remain visible with their lifecycle state shown.
 func TestTodayShowsApprovedAndActedAssociations(t *testing.T) {
 	homeDir, dbPath := initAssociationStore(t)
 	now := time.Date(2026, 7, 20, 16, 0, 0, 0, time.UTC)
@@ -246,9 +227,6 @@ func TestTodayShowsApprovedAndActedAssociations(t *testing.T) {
 	}
 }
 
-// TestTodayAssociationIncludesRelatedEventOutsideToday covers requirements:
-// a related event outside today but inside the seven-day window is
-// permitted, while it is not itself listed among today's raw events.
 func TestTodayAssociationIncludesRelatedEventOutsideToday(t *testing.T) {
 	homeDir, dbPath := initAssociationStore(t)
 	now := time.Date(2026, 7, 20, 16, 0, 0, 0, time.UTC)
@@ -276,8 +254,6 @@ func TestTodayAssociationIncludesRelatedEventOutsideToday(t *testing.T) {
 	}
 }
 
-// TestTodayNoAssociationHeadingForInsufficientEvidence covers requirement:
-// no Associations heading appears when no pair meets the evidence threshold.
 func TestTodayNoAssociationHeadingForInsufficientEvidence(t *testing.T) {
 	homeDir, dbPath := initAssociationStore(t)
 	now := time.Date(2026, 7, 20, 16, 0, 0, 0, time.UTC)
@@ -293,8 +269,6 @@ func TestTodayNoAssociationHeadingForInsufficientEvidence(t *testing.T) {
 	}
 }
 
-// TestTodayNoAssociationHeadingOnEmptyDay covers requirement: no Associations
-// heading appears when there is no activity captured today.
 func TestTodayNoAssociationHeadingOnEmptyDay(t *testing.T) {
 	homeDir, dbPath := initAssociationStore(t)
 	now := time.Date(2026, 7, 20, 16, 0, 0, 0, time.UTC)
@@ -311,9 +285,6 @@ func TestTodayNoAssociationHeadingOnEmptyDay(t *testing.T) {
 	}
 }
 
-// TestTodayAssociationsPreserveProjectsSessionsAndRawEventLines covers
-// requirement: association context is purely additive and never replaces or
-// regroups existing Projects, Sessions, or raw event lines.
 func TestTodayAssociationsPreserveProjectsSessionsAndRawEventLines(t *testing.T) {
 	homeDir, dbPath := initAssociationStore(t)
 	now := time.Date(2026, 7, 20, 16, 0, 0, 0, time.UTC)
@@ -335,18 +306,11 @@ func TestTodayAssociationsPreserveProjectsSessionsAndRawEventLines(t *testing.T)
 	}
 }
 
-// TestTodayAssociationTargetEvaluationIsCappedAtFifty covers requirement:
-// evaluate at most the 50 most recent events from today as association
-// targets. A qualifying pair whose members are both older than the 50 most
-// recent events must not surface, while a qualifying pair within the cap
-// still does.
 func TestTodayAssociationTargetEvaluationIsCappedAtFifty(t *testing.T) {
 	homeDir, dbPath := initAssociationStore(t)
 	now := time.Date(2026, 7, 20, 20, 0, 0, 0, time.UTC)
 	dayStart := time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)
 
-	// Oldest-of-the-day qualifying pair: excluded once 60 more recent filler
-	// events push both members out of the top 50 most-recent targets.
 	excludedURL := "https://github.com/acme/oldest/pull/1"
 	insertAssociationEvent(t, dbPath, associationStoredEvent{ID: "github:oldest", Source: "github", Type: "github.pull_request", Timestamp: dayStart.Add(1 * time.Minute), Payload: fmt.Sprintf(`{"url":%q}`, excludedURL)})
 	insertAssociationEvent(t, dbPath, associationStoredEvent{ID: "slack:oldest", Source: "slack", Type: "slack.message", Timestamp: dayStart.Add(2 * time.Minute), Payload: fmt.Sprintf(`{"text":%q}`, excludedURL)})
@@ -359,8 +323,6 @@ func TestTodayAssociationTargetEvaluationIsCappedAtFifty(t *testing.T) {
 		})
 	}
 
-	// Recent qualifying pair: included because both members are within the
-	// most recent 50 evaluated targets.
 	includedURL := "https://github.com/acme/recent/pull/2"
 	insertAssociationEvent(t, dbPath, associationStoredEvent{ID: "github:recent", Source: "github", Type: "github.pull_request", Timestamp: now.Add(-20 * time.Minute), Payload: fmt.Sprintf(`{"url":%q}`, includedURL)})
 	insertAssociationEvent(t, dbPath, associationStoredEvent{ID: "slack:recent", Source: "slack", Type: "slack.message", Timestamp: now.Add(-10 * time.Minute), Payload: fmt.Sprintf(`{"text":%q}`, includedURL)})
@@ -380,16 +342,12 @@ func TestTodayAssociationTargetEvaluationIsCappedAtFifty(t *testing.T) {
 	}
 }
 
-// TestTodayAssociationRenderIsCappedAtFive covers requirement: render at
-// most 5 association pairs even when more qualify.
 func TestTodayAssociationRenderIsCappedAtFive(t *testing.T) {
 	homeDir, dbPath := initAssociationStore(t)
 	now := time.Date(2026, 7, 20, 18, 0, 0, 0, time.UTC)
 
 	for i := 0; i < 6; i++ {
 		url := fmt.Sprintf("https://github.com/acme/cap%d/pull/%d", i, i)
-		// Space out the "most recent cited event" per pair so ranking is
-		// unambiguous: pair i's recency is earlier than pair i+1's.
 		recent := now.Add(-time.Duration(60-i*5) * time.Minute)
 		older := recent.Add(-30 * time.Minute)
 		insertAssociationEvent(t, dbPath, associationStoredEvent{ID: fmt.Sprintf("github:cap%d", i), Source: "github", Type: "github.pull_request", Timestamp: older, Payload: fmt.Sprintf(`{"url":%q}`, url)})
@@ -403,8 +361,6 @@ func TestTodayAssociationRenderIsCappedAtFive(t *testing.T) {
 	if len(result.Associations) != 5 {
 		t.Fatalf("expected exactly 5 rendered associations, got %d: %#v", len(result.Associations), result.Associations)
 	}
-	// Pair 0 has the earliest recency of all six pairs, so it must be the one
-	// dropped by the 5-pair render cap.
 	if strings.Contains(result.Message, "github:cap0, slack:cap0") {
 		t.Fatalf("expected least-recent pair to be dropped by the render cap, got:\n%s", result.Message)
 	}
@@ -416,8 +372,6 @@ func TestTodayAssociationRenderIsCappedAtFive(t *testing.T) {
 	}
 }
 
-// TestTodayAssociationDoesNotMutateRawEvents covers requirement: computing
-// association context never rewrites or deletes raw events.
 func TestTodayAssociationDoesNotMutateRawEvents(t *testing.T) {
 	homeDir, dbPath := initAssociationStore(t)
 	now := time.Date(2026, 7, 20, 16, 0, 0, 0, time.UTC)
@@ -435,9 +389,6 @@ func TestTodayAssociationDoesNotMutateRawEvents(t *testing.T) {
 	}
 }
 
-// TestTodayAssociationCLIOutput covers requirement: association context is
-// exercised through the `workgraph today` CLI command, with no LLM or
-// network dependency required.
 func TestTodayAssociationCLIOutput(t *testing.T) {
 	homeDir, dbPath := initAssociationStore(t)
 	now := time.Now().UTC()

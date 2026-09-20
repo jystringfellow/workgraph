@@ -10,13 +10,11 @@ import (
 	"strings"
 )
 
-// SecurityReportConfig controls read-only endpoint security reporting.
 type SecurityReportConfig struct {
 	HomeDir string
 	Format  string
 }
 
-// SecurityReportResult contains a secret-free endpoint security report.
 type SecurityReportResult struct {
 	HomeDir string
 	Message string
@@ -80,7 +78,6 @@ type securityFinding struct {
 	Remediation string `json:"remediation"`
 }
 
-// SecurityReport inspects local controls without contacting providers or modifying state.
 func SecurityReport(config SecurityReportConfig) (SecurityReportResult, error) {
 	homeDir, err := resolveHomeDir(config.HomeDir)
 	if err != nil {
