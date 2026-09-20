@@ -50,7 +50,7 @@ type RunConfig struct {
 	ConservativeWatchDirs []string
 	// MaxWatchEntries bounds recursive watcher setup. Zero uses the default.
 	MaxWatchEntries int
-	// PollInterval is kept for tests and future fallback capture modes.
+	// PollInterval controls file capture polling in tests.
 	PollInterval time.Duration
 	// GitPollInterval controls local git commit capture while running.
 	GitPollInterval time.Duration
