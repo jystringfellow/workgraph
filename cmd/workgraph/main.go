@@ -1272,6 +1272,8 @@ func runCaptureRequests(args []string, stdin io.Reader, stdout io.Writer, stderr
 	databasePath := flags.String("database", "", "workgraph SQLite database path")
 	claim := flags.Bool("claim", false, "claim available capture requests")
 	list := flags.Bool("list", false, "list capture requests")
+	cancelID := flags.String("cancel", "", "cancel one pending or claimed request id")
+	cancelReason := flags.String("reason", "", "reason recorded for request cancellation")
 	renewID := flags.String("renew", "", "renew a claimed request id")
 	failID := flags.String("fail", "", "report failure for a claimed request id")
 	errorJSON := flags.String("error-json", "", "JSON failure details; - reads stdin")
@@ -1283,7 +1285,25 @@ func runCaptureRequests(args []string, stdin io.Reader, stdout io.Writer, stderr
 		return 2
 	}
 	if flags.NArg() != 0 {
-		fmt.Fprintln(stderr, "usage: workgraph capture requests --claim [--connector X] [--max N] --worker <name> --claim-file <path>")
+		fmt.Fprintln(stderr, "usage: workgraph capture requests --list | --cancel <id> [--reason <text>] | --claim [--connector X] [--max N] --worker <name> --claim-file <path>")
+		return 2
+	}
+	if strings.TrimSpace(*cancelID) != "" {
+		if *claim || *list || strings.TrimSpace(*renewID) != "" || strings.TrimSpace(*failID) != "" || strings.TrimSpace(*claimFile) != "" || strings.TrimSpace(*worker) != "" || strings.TrimSpace(*connector) != "" || *maxClaims != 1 {
+			fmt.Fprintln(stderr, "usage: workgraph capture requests --cancel <id> [--reason <text>]")
+			return 2
+		}
+		if err := workgraph.CancelCaptureRequest(workgraph.CaptureRequestCancelConfig{
+			HomeDir: *homeDir, DatabasePath: *databasePath, RequestID: *cancelID, Reason: *cancelReason,
+		}); err != nil {
+			fmt.Fprintf(stderr, "workgraph capture requests cancel: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "Capture request cancelled\nRequest: %s\n", strings.TrimSpace(*cancelID))
+		return 0
+	}
+	if strings.TrimSpace(*cancelReason) != "" {
+		fmt.Fprintln(stderr, "workgraph capture requests: --reason requires --cancel")
 		return 2
 	}
 	capabilityOperation := strings.TrimSpace(*renewID) != "" || strings.TrimSpace(*failID) != ""

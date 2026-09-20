@@ -314,6 +314,15 @@ The daemon coalesces while a request is pending or claimed, so an unavailable
 bridge cannot create an unbounded backlog. After a retried request succeeds, the
 next request covers activity through the newer emission time.
 
+An operator may cancel one exact request with `capture requests --cancel
+<request-id>`. Cancellation is terminal and idempotent: a pending or claimed
+request becomes `cancelled`, records `cancelled_at` and the first cancellation
+reason in its audit state, preserves `claimed_by` and `claimed_at`, and clears
+the claim token and lease so the worker can no longer renew, ingest, or
+complete it. Completed requests cannot be cancelled. Exact cancellation is a
+local operator action and is intentionally not exposed to unattended bridge
+workers through MCP or their installed permissions.
+
 ### Cursor and query-window semantics
 
 `event.timestamp` describes when provider activity occurred. It is **not** a
@@ -355,6 +364,7 @@ validation and state transitions.
 
 ```sh
 workgraph capture requests --list
+workgraph capture requests --cancel <id> [--reason <text>]
 workgraph capture requests --claim [--connector X] [--max N] --worker <name> --claim-file <path>
 workgraph capture requests --renew <id> --claim-file <path>
 workgraph capture ingest --request <id> --claim-file <path> [--json -]

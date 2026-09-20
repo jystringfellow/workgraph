@@ -49,7 +49,7 @@ var helpTopics = map[string]helpTopic{
 	"calendar disconnect":     {"workgraph calendar disconnect <google|microsoft> [options]", "Revoke and remove a calendar provider connection."},
 	"capture":                 {"workgraph capture <subcommand>", "Inspect, claim, and ingest daemon-scheduled bridged capture work."},
 	"capture ingest":          {"workgraph capture ingest (--source <source> | --request <id> --claim-file <path>) [options]", "Validate and atomically store normalized bridged events."},
-	"capture requests":        {"workgraph capture requests (--list | --claim | --renew <id> | --fail <id>) [options]", "Inspect, claim, renew, or fail work in the local bridged-capture outbox."},
+	"capture requests":        {"workgraph capture requests (--list | --cancel <id> | --claim | --renew <id> | --fail <id>) [options]", "Inspect, cancel, claim, renew, or fail work in the local bridged-capture outbox."},
 	"capture watermark":       {"workgraph capture watermark --connector <connector> [options]", "Print the connector's completed-through capture cursor."},
 	"connectors":              {"workgraph connectors <subcommand>", "Inspect and control configured connector polling."},
 	"connectors connect":      {"workgraph connectors connect <connector> --mode bridged [options]", "Configure a remote connector for credential-free bridged capture."},
@@ -168,6 +168,7 @@ var helpExamples = map[string][]string{
 	},
 	"capture requests": {
 		"workgraph capture requests --list",
+		"workgraph capture requests --cancel <request-id> --reason \"operator requested cancellation\"",
 		"workgraph capture requests --claim --connector slack --max 1 --worker manual --claim-file /private/path/claim.json",
 	},
 	"connectors connect": {

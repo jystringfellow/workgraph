@@ -48,6 +48,9 @@ func TestLocalBridgeMCPAdvertisesToolsAndConfiguresScopedConnector(t *testing.T)
 			t.Fatalf("MCP tools/list omitted %s:\n%s", tool, stdout.String())
 		}
 	}
+	if strings.Contains(stdout.String(), `"name":"capture_request_cancel"`) {
+		t.Fatalf("MCP exposed operator-only request cancellation:\n%s", stdout.String())
+	}
 	if strings.Contains(stdout.String(), "provider-token") {
 		t.Fatalf("MCP output exposed a provider credential:\n%s", stdout.String())
 	}

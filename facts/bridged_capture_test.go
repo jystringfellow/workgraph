@@ -540,6 +540,58 @@ func TestChangingBridgeScopeCancelsAndReplacesActiveRequest(t *testing.T) {
 	}
 }
 
+func TestExactCaptureRequestCancellationPreservesAuditAndInvalidatesClaim(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+	connectBridgedConnector(t, repoRoot, homeDir, "slack")
+	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	emitted, err := workgraph.EmitBridgedCaptureRequest(workgraph.CaptureRequestEmitConfig{
+		HomeDir: homeDir, ConnectorID: "slack", Now: now,
+	})
+	if err != nil {
+		t.Fatalf("emit request: %v", err)
+	}
+	claims, err := workgraph.ClaimCaptureRequests(workgraph.CaptureRequestClaimConfig{
+		HomeDir: homeDir, ConnectorID: "slack", Worker: "facts", Max: 1, Now: now,
+	})
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("claim request: claims=%d error=%v", len(claims), err)
+	}
+	claimed := claims[0]
+
+	output, err := runworkgraph(t, repoRoot, "capture", "requests", "--cancel", emitted.Request.ID, "--reason", "operator requested cancellation", "--home", homeDir)
+	if err != nil || !strings.Contains(string(output), "Capture request cancelled") {
+		t.Fatalf("cancel request: %v", err)
+	}
+
+	db := openBridgedCaptureDatabase(t, homeDir)
+	var status, cancelledAt, claimedBy, claimedAt, leaseExpiresAt, lastError string
+	if err := db.QueryRow(`SELECT status, COALESCE(cancelled_at, ''), COALESCE(claimed_by, ''), COALESCE(claimed_at, ''), COALESCE(lease_expires_at, ''), COALESCE(last_error, '') FROM capture_requests WHERE id = ?`, emitted.Request.ID).
+		Scan(&status, &cancelledAt, &claimedBy, &claimedAt, &leaseExpiresAt, &lastError); err != nil {
+		t.Fatalf("read cancelled request: %v", err)
+	}
+	if status != "cancelled" || cancelledAt == "" || claimedBy != "facts" || claimedAt == "" || leaseExpiresAt != "" || lastError != "operator requested cancellation" {
+		t.Fatalf("unexpected cancelled audit state: status=%q cancelled_at=%q claimed_by=%q claimed_at=%q lease=%q last_error=%q", status, cancelledAt, claimedBy, claimedAt, leaseExpiresAt, lastError)
+	}
+	if _, err := workgraph.RenewCaptureRequest(workgraph.CaptureRequestCapabilityConfig{
+		HomeDir: homeDir, RequestID: claimed.Request.ID, ClaimToken: claimed.ClaimToken, Now: now.Add(2 * time.Minute),
+	}); err == nil {
+		t.Fatal("expected cancelled claim token to be invalid")
+	}
+	if err := workgraph.CancelCaptureRequest(workgraph.CaptureRequestCancelConfig{
+		HomeDir: homeDir, RequestID: emitted.Request.ID, Now: now.Add(2 * time.Minute), Reason: "repeat cancellation",
+	}); err != nil {
+		t.Fatalf("repeat cancellation should be idempotent: %v", err)
+	}
+	var repeatReason string
+	if err := db.QueryRow(`SELECT COALESCE(last_error, '') FROM capture_requests WHERE id = ?`, emitted.Request.ID).Scan(&repeatReason); err != nil {
+		t.Fatalf("read repeat cancellation: %v", err)
+	}
+	if repeatReason != "operator requested cancellation" {
+		t.Fatalf("repeat cancellation overwrote audit reason with %q", repeatReason)
+	}
+}
+
 func TestBridgedConnectorRejectsMalformedAndSecretScope(t *testing.T) {
 	homeDir := initBridgedCaptureHome(t)
 	repoRoot := repoRoot(t)

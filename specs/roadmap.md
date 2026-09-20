@@ -60,7 +60,7 @@ follows `spec -> feature -> failing fact -> implementation -> pass -> roadmap`.
        contiguous pagination, and truncation rejection.
     - [x] Require exhaustive-query or control-query proof before completing an
        empty bounded bridge capture.
-5. [ ] **#101: add exact capture-request cancellation.** Preserve audit state,
+5. [x] **#101: add exact capture-request cancellation.** Preserve audit state,
    invalidate claimed capabilities, define idempotent terminal behavior, and
    keep cancellation out of unattended worker permissions.
 6. [x] **#121: persist unattended worker model selection.** Make model choice
