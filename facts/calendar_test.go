@@ -267,7 +267,7 @@ func TestCalendarCaptureMapsMicrosoftCalendarEvents(t *testing.T) {
 	}
 
 	event := calendarEvent(t, filepath.Join(homeDir, "workgraph.db"), "microsoft", "primary", "microsoft-event-1")
-	if event.Timestamp != "2026-05-21T09:00:00Z" {
+	if event.Timestamp != "2026-05-21T16:00:00Z" {
 		t.Fatalf("expected UTC start timestamp, got %q", event.Timestamp)
 	}
 	if event.Actor != "Ada Lovelace" {
@@ -281,8 +281,8 @@ func TestCalendarCaptureMapsMicrosoftCalendarEvents(t *testing.T) {
 		`"calendar_id":"primary"`,
 		`"event_id":"microsoft-event-1"`,
 		`"title":"Roadmap review"`,
-		`"start":"2026-05-21T09:00:00Z"`,
-		`"end":"2026-05-21T09:45:00Z"`,
+		`"start":"2026-05-21T16:00:00Z"`,
+		`"end":"2026-05-21T16:45:00Z"`,
 		`"location":"Board Room"`,
 		`"meeting_url":"https://teams.microsoft.com/road-map"`,
 		`"organizer":"Ada Lovelace"`,
@@ -295,6 +295,48 @@ func TestCalendarCaptureMapsMicrosoftCalendarEvents(t *testing.T) {
 	}
 	if !strings.Contains(string(output), "Events stored: 1") {
 		t.Fatalf("expected capture summary, got:\n%s", output)
+	}
+}
+
+func TestMicrosoftCalendarRecipeUsesDSTAwareProviderTimezone(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{
+  "value": [{
+    "id": "microsoft-dst-event",
+    "subject": "September planning",
+    "start": {"dateTime": "2026-09-21T09:00:00", "timeZone": "Pacific Standard Time"},
+    "end": {"dateTime": "2026-09-21T10:00:00", "timeZone": "Pacific Standard Time"}
+  }]
+}`))
+	}))
+	defer server.Close()
+
+	output, err := runworkgraph(t, repoRoot, "calendar", "capture",
+		"--home", homeDir,
+		"--provider", "microsoft",
+		"--calendar-id", "primary",
+		"--token", "test-token",
+		"--calendar-api-base", server.URL,
+	)
+	if err != nil {
+		t.Fatalf("workgraph calendar capture failed: %v\n%s", err, output)
+	}
+
+	event := calendarEvent(t, filepath.Join(homeDir, "workgraph.db"), "microsoft", "primary", "microsoft-dst-event")
+	if event.Timestamp != "2026-09-21T16:00:00Z" {
+		t.Fatalf("expected Pacific daylight time to convert to UTC, got %q", event.Timestamp)
+	}
+	if !strings.Contains(event.PayloadJSON, `"provider_start":"2026-09-21T09:00:00"`) ||
+		!strings.Contains(event.PayloadJSON, `"provider_end":"2026-09-21T10:00:00"`) {
+		t.Fatalf("expected provider timezone-bearing start and end in payload, got %s", event.PayloadJSON)
 	}
 }
 

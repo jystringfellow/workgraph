@@ -521,6 +521,21 @@ the complete declared snapshot, or report failure. They must not silently
 complete a request after truncation, pagination failure, permission denial, or
 an unsupported provider operation.
 
+Microsoft Mail recipes query a two-calendar-day pad on each side of the exact
+request window in mailbox-local time, then filter returned `receivedDateTime`
+values against the exact UTC bounds. Offset pages must be contiguous and
+exhaustive, or continue until results pass the lower bound; a non-contiguous or
+truncated page fails the request.
+
+An empty bounded capture must include either an exhaustive-query proof or a
+provider-specific control-query proof. A bare empty JSON array is rejected.
+
+The shared Microsoft calendar normalization path converts provider-local
+occurrence times with DST-aware Windows-to-IANA timezone mappings before using
+the UTC start as the event envelope timestamp. It also preserves the original
+provider-local start and end values in `provider_start` and `provider_end` so
+the normalized event retains the timezone-bearing source data.
+
 For a claimed Slack Lists snapshot, the bridge preferably submits the complete
 provider CSV as `snapshot_csv` with its configured `list_id`. The compatibility
 path may submit one event-shaped row per CSV record with `type =

@@ -136,34 +136,38 @@ type microsoftCalendarConnectorConfig struct {
 }
 
 type calendarExportEvent struct {
-	Provider   string   `json:"provider"`
-	CalendarID string   `json:"calendar_id"`
-	EventID    string   `json:"event_id"`
-	Title      string   `json:"title"`
-	Start      string   `json:"start"`
-	End        string   `json:"end"`
-	AllDay     bool     `json:"all_day,omitempty"`
-	Location   string   `json:"location,omitempty"`
-	MeetingURL string   `json:"meeting_url,omitempty"`
-	Organizer  string   `json:"organizer,omitempty"`
-	Attendees  []string `json:"attendees,omitempty"`
-	Status     string   `json:"status,omitempty"`
-	Project    string   `json:"project,omitempty"`
+	Provider      string   `json:"provider"`
+	CalendarID    string   `json:"calendar_id"`
+	EventID       string   `json:"event_id"`
+	Title         string   `json:"title"`
+	Start         string   `json:"start"`
+	End           string   `json:"end"`
+	ProviderStart string   `json:"provider_start,omitempty"`
+	ProviderEnd   string   `json:"provider_end,omitempty"`
+	AllDay        bool     `json:"all_day,omitempty"`
+	Location      string   `json:"location,omitempty"`
+	MeetingURL    string   `json:"meeting_url,omitempty"`
+	Organizer     string   `json:"organizer,omitempty"`
+	Attendees     []string `json:"attendees,omitempty"`
+	Status        string   `json:"status,omitempty"`
+	Project       string   `json:"project,omitempty"`
 }
 
 type calendarEventPayload struct {
-	Provider   string   `json:"provider"`
-	CalendarID string   `json:"calendar_id"`
-	EventID    string   `json:"event_id"`
-	Title      string   `json:"title"`
-	Start      string   `json:"start"`
-	End        string   `json:"end"`
-	AllDay     bool     `json:"all_day,omitempty"`
-	Location   string   `json:"location,omitempty"`
-	MeetingURL string   `json:"meeting_url,omitempty"`
-	Organizer  string   `json:"organizer,omitempty"`
-	Attendees  []string `json:"attendees,omitempty"`
-	Status     string   `json:"status,omitempty"`
+	Provider      string   `json:"provider"`
+	CalendarID    string   `json:"calendar_id"`
+	EventID       string   `json:"event_id"`
+	Title         string   `json:"title"`
+	Start         string   `json:"start"`
+	End           string   `json:"end"`
+	ProviderStart string   `json:"provider_start,omitempty"`
+	ProviderEnd   string   `json:"provider_end,omitempty"`
+	AllDay        bool     `json:"all_day,omitempty"`
+	Location      string   `json:"location,omitempty"`
+	MeetingURL    string   `json:"meeting_url,omitempty"`
+	Organizer     string   `json:"organizer,omitempty"`
+	Attendees     []string `json:"attendees,omitempty"`
+	Status        string   `json:"status,omitempty"`
 }
 
 type googleCalendarEventsResponse struct {
@@ -1488,17 +1492,19 @@ func microsoftCalendarExportEvent(calendarID string, event microsoftCalendarEven
 		status = "cancelled"
 	}
 	return calendarExportEvent{
-		Provider:   "microsoft",
-		CalendarID: calendarID,
-		EventID:    event.ID,
-		Title:      event.Subject,
-		Start:      start,
-		End:        end,
-		Location:   event.Location.DisplayName,
-		MeetingURL: event.OnlineMeetingURL,
-		Organizer:  microsoftCalendarPersonName(event.Organizer),
-		Attendees:  microsoftCalendarAttendees(event.Attendees),
-		Status:     status,
+		Provider:      "microsoft",
+		CalendarID:    calendarID,
+		EventID:       event.ID,
+		Title:         event.Subject,
+		Start:         start,
+		End:           end,
+		ProviderStart: event.Start.DateTime,
+		ProviderEnd:   event.End.DateTime,
+		Location:      event.Location.DisplayName,
+		MeetingURL:    event.OnlineMeetingURL,
+		Organizer:     microsoftCalendarPersonName(event.Organizer),
+		Attendees:     microsoftCalendarAttendees(event.Attendees),
+		Status:        status,
 	}, nil
 }
 
@@ -1510,13 +1516,33 @@ func microsoftCalendarTimestamp(value microsoftCalendarDateTime) (string, error)
 	if parsed, err := time.Parse(time.RFC3339Nano, text); err == nil {
 		return parsed.UTC().Format(time.RFC3339Nano), nil
 	}
-	if parsed, err := time.Parse("2006-01-02T15:04:05.9999999", text); err == nil {
-		return parsed.UTC().Format(time.RFC3339Nano), nil
+	if location, ok := microsoftCalendarTimeZone(value.TimeZone); ok {
+		for _, layout := range []string{"2006-01-02T15:04:05.9999999", "2006-01-02T15:04:05"} {
+			if parsed, err := time.ParseInLocation(layout, text, location); err == nil {
+				return parsed.UTC().Format(time.RFC3339Nano), nil
+			}
+		}
 	}
-	if parsed, err := time.Parse("2006-01-02T15:04:05", text); err == nil {
-		return parsed.UTC().Format(time.RFC3339Nano), nil
+	for _, layout := range []string{"2006-01-02T15:04:05.9999999", "2006-01-02T15:04:05"} {
+		if parsed, err := time.Parse(layout, text); err == nil {
+			return parsed.UTC().Format(time.RFC3339Nano), nil
+		}
 	}
 	return "", fmt.Errorf("unsupported dateTime %q", text)
+}
+
+func microsoftCalendarTimeZone(name string) (*time.Location, bool) {
+	iana, ok := map[string]string{
+		"Pacific Standard Time": "America/Los_Angeles",
+	}[strings.TrimSpace(name)]
+	if !ok {
+		return nil, false
+	}
+	location, err := time.LoadLocation(iana)
+	if err != nil {
+		return nil, false
+	}
+	return location, true
 }
 
 func microsoftCalendarAttendees(attendees []microsoftCalendarPerson) []string {
@@ -1634,18 +1660,20 @@ func storeCalendarEvent(db *sql.DB, event calendarExportEvent) (bool, error) {
 	}
 
 	payload, err := json.Marshal(calendarEventPayload{
-		Provider:   event.Provider,
-		CalendarID: event.CalendarID,
-		EventID:    event.EventID,
-		Title:      event.Title,
-		Start:      event.Start,
-		End:        event.End,
-		AllDay:     event.AllDay,
-		Location:   event.Location,
-		MeetingURL: event.MeetingURL,
-		Organizer:  event.Organizer,
-		Attendees:  append([]string(nil), event.Attendees...),
-		Status:     event.Status,
+		Provider:      event.Provider,
+		CalendarID:    event.CalendarID,
+		EventID:       event.EventID,
+		Title:         event.Title,
+		Start:         event.Start,
+		End:           event.End,
+		ProviderStart: event.ProviderStart,
+		ProviderEnd:   event.ProviderEnd,
+		AllDay:        event.AllDay,
+		Location:      event.Location,
+		MeetingURL:    event.MeetingURL,
+		Organizer:     event.Organizer,
+		Attendees:     append([]string(nil), event.Attendees...),
+		Status:        event.Status,
 	})
 	if err != nil {
 		return false, fmt.Errorf("encode calendar event: %w", err)

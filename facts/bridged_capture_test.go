@@ -19,6 +19,92 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+func TestMicrosoftMailRecipeUsesPaddedLocalWindowAndExactBounds(t *testing.T) {
+	location, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatalf("load mailbox timezone: %v", err)
+	}
+	since := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	until := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	window, err := workgraph.MicrosoftMailRecipeWindow(since, until, location)
+	if err != nil {
+		t.Fatalf("build Microsoft mail recipe window: %v", err)
+	}
+	if !window.Since.Equal(time.Date(2026, 9, 8, 8, 0, 0, 0, location)) ||
+		!window.Until.Equal(time.Date(2026, 9, 13, 8, 0, 0, 0, location)) {
+		t.Fatalf("expected mailbox-local two-day padding, got %#v", window)
+	}
+
+	messages, err := workgraph.NormalizeMicrosoftMailRecipe([]workgraph.MicrosoftMailRecipePage{
+		{
+			URL:     "messages?$skip=0",
+			NextURL: "messages?$skip=2",
+			Messages: []workgraph.MicrosoftMailRecipeMessage{
+				{ID: "after-window", ReceivedDateTime: "2026-09-11T12:00:01Z"},
+				{ID: "inside-one", ReceivedDateTime: "2026-09-11T11:59:59Z"},
+			},
+		},
+		{
+			URL:      "messages?$skip=2",
+			Complete: true,
+			Messages: []workgraph.MicrosoftMailRecipeMessage{
+				{ID: "inside-two", ReceivedDateTime: "2026-09-10T12:00:00Z"},
+				{ID: "before-window", ReceivedDateTime: "2026-09-10T11:59:59Z"},
+			},
+		},
+	}, since, until)
+	if err != nil {
+		t.Fatalf("normalize Microsoft mail recipe: %v", err)
+	}
+	if len(messages) != 2 || messages[0].ID != "inside-one" || messages[1].ID != "inside-two" {
+		t.Fatalf("expected exact UTC-bound filtering, got %#v", messages)
+	}
+}
+
+func TestMicrosoftMailRecipeRejectsNonContiguousOrTruncatedPages(t *testing.T) {
+	since := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	until := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name  string
+		pages []workgraph.MicrosoftMailRecipePage
+	}{
+		{
+			name: "non-contiguous offset",
+			pages: []workgraph.MicrosoftMailRecipePage{
+				{URL: "messages?$skip=0", NextURL: "messages?$skip=2"},
+				{URL: "messages?$skip=3", Complete: true},
+			},
+		},
+		{
+			name: "truncated terminal page",
+			pages: []workgraph.MicrosoftMailRecipePage{
+				{URL: "messages?$skip=0", Truncated: true},
+			},
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := workgraph.NormalizeMicrosoftMailRecipe(test.pages, since, until); err == nil {
+				t.Fatalf("expected recipe to reject %s", test.name)
+			}
+		})
+	}
+}
+
+func TestBridgedEmptyResultRequiresExhaustiveOrControlProof(t *testing.T) {
+	if err := workgraph.ValidateBridgedEmptyProof(workgraph.BridgedEmptyProof{}); err == nil {
+		t.Fatal("expected unproven empty result to be rejected")
+	}
+	for _, proof := range []workgraph.BridgedEmptyProof{
+		{ExhaustiveQuery: true},
+		{ControlQueryPassed: true},
+	} {
+		if err := workgraph.ValidateBridgedEmptyProof(proof); err != nil {
+			t.Fatalf("expected proven empty result to pass: %v", err)
+		}
+	}
+}
+
 func TestBridgedConnectorSetupNeedsNoProviderCredentials(t *testing.T) {
 	homeDir := initBridgedCaptureHome(t)
 	repoRoot := repoRoot(t)
@@ -767,8 +853,13 @@ func TestClaimAndEmptyIngestCompletesRequestAndAdvancesControlCursor(t *testing.
 	}
 	output, err = runworkgraphInput(t, repoRoot, "[]", "capture", "ingest", "--home", homeDir,
 		"--request", claim.RequestID, "--claim-file", claimFile, "--json", "-")
+	if err == nil || !strings.Contains(string(output), "empty bridged capture requires") {
+		t.Fatalf("expected unproven empty capture to fail, got err=%v output=%s", err, output)
+	}
+	output, err = runworkgraphInput(t, repoRoot, `{"events":[],"empty_proof":{"exhaustive_query":true}}`, "capture", "ingest", "--home", homeDir,
+		"--request", claim.RequestID, "--claim-file", claimFile, "--json", "-")
 	if err != nil {
-		t.Fatalf("complete empty capture: %v\n%s", err, output)
+		t.Fatalf("complete proven-empty capture: %v\n%s", err, output)
 	}
 	if !strings.Contains(string(output), "Events read: 0") || !strings.Contains(string(output), "Request completed") {
 		t.Fatalf("expected successful empty completion, got:\n%s", output)
@@ -783,6 +874,50 @@ func TestClaimAndEmptyIngestCompletesRequestAndAdvancesControlCursor(t *testing.
 	}
 	if requestStatus != "completed" || completedThrough != requestUntil {
 		t.Fatalf("expected completed request and cursor %q, got status=%q cursor=%q", requestUntil, requestStatus, completedThrough)
+	}
+}
+
+func TestCalendarBridgeProgressUsesRequestCompletionBound(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+	connectBridgedConnector(t, repoRoot, homeDir, "calendar.microsoft")
+	emitted, err := workgraph.EmitBridgedCaptureRequest(workgraph.CaptureRequestEmitConfig{
+		HomeDir: homeDir, ConnectorID: "calendar.microsoft", Now: time.Date(2026, 9, 21, 18, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("emit calendar request: %v", err)
+	}
+	claims, err := workgraph.ClaimCaptureRequests(workgraph.CaptureRequestClaimConfig{
+		HomeDir: homeDir, ConnectorID: "calendar.microsoft", Worker: "facts", Max: 1,
+		Now: time.Date(2026, 9, 21, 18, 0, 0, 0, time.UTC), Lease: 10 * time.Minute,
+	})
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("claim calendar request: claims=%d error=%v", len(claims), err)
+	}
+	result, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{
+		HomeDir: homeDir, RequestID: emitted.Request.ID, ClaimToken: claims[0].ClaimToken,
+		Input: strings.NewReader(`[{
+  "type":"calendar.microsoft.event",
+  "timestamp":"2026-09-21T16:00:00Z",
+  "external_id":"event-1:change:rev-7",
+  "payload":{"start":"2026-09-21T16:00:00Z","provider_start":"2026-09-21T09:00:00","provider_end":"2026-09-21T10:00:00"}
+}]`),
+	})
+	if err != nil {
+		t.Fatalf("ingest calendar event: %v", err)
+	}
+	if !result.RequestCompleted {
+		t.Fatal("expected calendar request to complete")
+	}
+
+	db := openBridgedCaptureDatabase(t, homeDir)
+	defer db.Close()
+	var completedThrough string
+	if err := db.QueryRow(`SELECT completed_through FROM capture_cursors WHERE connector_id = 'calendar.microsoft'`).Scan(&completedThrough); err != nil {
+		t.Fatalf("read calendar cursor: %v", err)
+	}
+	if completedThrough != emitted.Request.Until {
+		t.Fatalf("expected cursor at request completion %q, got %q", emitted.Request.Until, completedThrough)
 	}
 }
 

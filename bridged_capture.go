@@ -730,7 +730,7 @@ func IngestBridgedCapture(config BridgedIngestConfig) (BridgedIngestResult, erro
 			return BridgedIngestResult{}, fmt.Errorf("capture source is required")
 		}
 	}
-	envelopes, err := decodeBridgedEvents(config.Input)
+	envelopes, emptyProof, err := decodeBridgedEvents(config.Input)
 	if err != nil {
 		return BridgedIngestResult{}, err
 	}
@@ -756,6 +756,11 @@ func IngestBridgedCapture(config BridgedIngestConfig) (BridgedIngestResult, erro
 	}
 	if err := enforceConnectorManagedSettings(connectorID); err != nil {
 		return BridgedIngestResult{}, err
+	}
+	if len(envelopes) == 0 && (claimedRequest == nil || claimedRequest.CaptureSemantics != "complete_snapshot") {
+		if err := ValidateBridgedEmptyProof(emptyProof); err != nil {
+			return BridgedIngestResult{}, err
+		}
 	}
 
 	prepared := make([]preparedBridgedEvent, 0, len(envelopes))
@@ -901,24 +906,41 @@ func connectorAllowsBridgedEvent(connectorID string, eventType string) bool {
 	}
 }
 
-func decodeBridgedEvents(input io.Reader) ([]bridgedEventEnvelope, error) {
+type bridgedCaptureInput struct {
+	Events     []bridgedEventEnvelope `json:"events"`
+	EmptyProof BridgedEmptyProof      `json:"empty_proof"`
+}
+
+func decodeBridgedEvents(input io.Reader) ([]bridgedEventEnvelope, BridgedEmptyProof, error) {
 	contents, err := io.ReadAll(io.LimitReader(input, maxBridgedIngestBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("read capture input: %w", err)
+		return nil, BridgedEmptyProof{}, fmt.Errorf("read capture input: %w", err)
 	}
 	if len(contents) > maxBridgedIngestBytes {
-		return nil, fmt.Errorf("capture input exceeds %d bytes", maxBridgedIngestBytes)
+		return nil, BridgedEmptyProof{}, fmt.Errorf("capture input exceeds %d bytes", maxBridgedIngestBytes)
 	}
 	contents = bytes.TrimSpace(contents)
 	if len(contents) == 0 {
-		return nil, fmt.Errorf("capture input is empty")
+		return nil, BridgedEmptyProof{}, fmt.Errorf("capture input is empty")
 	}
 	if contents[0] == '[' {
 		var events []bridgedEventEnvelope
 		if err := decodeStrictJSON(contents, &events); err != nil {
-			return nil, fmt.Errorf("parse capture JSON array: %w", err)
+			return nil, BridgedEmptyProof{}, fmt.Errorf("parse capture JSON array: %w", err)
 		}
-		return events, nil
+		return events, BridgedEmptyProof{}, nil
+	}
+	if contents[0] == '{' {
+		var object map[string]json.RawMessage
+		if err := decodeStrictJSON(contents, &object); err == nil {
+			if _, found := object["events"]; found {
+				var capture bridgedCaptureInput
+				if err := decodeStrictJSON(contents, &capture); err != nil {
+					return nil, BridgedEmptyProof{}, fmt.Errorf("parse capture object: %w", err)
+				}
+				return capture.Events, capture.EmptyProof, nil
+			}
+		}
 	}
 
 	lines := bytes.Split(contents, []byte{'\n'})
@@ -930,14 +952,14 @@ func decodeBridgedEvents(input io.Reader) ([]bridgedEventEnvelope, error) {
 		}
 		var event bridgedEventEnvelope
 		if err := decodeStrictJSON(line, &event); err != nil {
-			return nil, fmt.Errorf("parse capture NDJSON line %d: %w", index+1, err)
+			return nil, BridgedEmptyProof{}, fmt.Errorf("parse capture NDJSON line %d: %w", index+1, err)
 		}
 		events = append(events, event)
 	}
 	if len(events) == 0 {
-		return nil, fmt.Errorf("capture input contains no events")
+		return nil, BridgedEmptyProof{}, fmt.Errorf("capture input contains no events")
 	}
-	return events, nil
+	return events, BridgedEmptyProof{}, nil
 }
 
 func slackListSnapshotEnvelopesFromCSV(listID string, contents string) ([]bridgedEventEnvelope, error) {
