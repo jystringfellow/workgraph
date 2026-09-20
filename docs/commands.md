@@ -283,11 +283,18 @@ Inspect captured events without opening SQLite:
 ```sh
 workgraph events today
 workgraph events today --type notion.page_updated
+workgraph events today --actor user-me
+workgraph events today --involvement review_requested
 workgraph events today --type slack.message --limit 10
 ```
 
 `workgraph events today` is the drill-down view: it shows complete stored event
-labels and event IDs, and can be narrowed by event type or recent result count.
+labels, event IDs, actor metadata, and involvement classification, and can be
+narrowed by exact actor, involvement, event type, or recent result count. The
+compact overview supports the same exact filters with `workgraph today --actor
+<actor>` and `workgraph today --involvement <kind>`. `today` includes direct and
+legacy-unclassified evidence while hiding evidence explicitly classified with
+no direct involvement; `events today` retains the complete evidence view.
 
 Create a starter memory template for a project:
 
@@ -412,6 +419,17 @@ workgraph connectors poll --once --connector notion
 ```
 
 See the [connectors guide](connectors.md) for provider-specific setup.
+
+Inspect the canonical read-only provider operations needed by every bridged
+recipe, or one connector:
+
+```sh
+workgraph connectors required-tools
+workgraph connectors required-tools calendar.microsoft
+```
+
+Each operation is labeled `fetch`, `identity`, or both. The names are stable
+logical capabilities rather than client-specific MCP permission strings.
 
 ## Agent Plugin
 

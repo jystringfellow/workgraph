@@ -33,9 +33,12 @@ const (
 
 // TodayConfig controls the local-day activity view.
 type TodayConfig struct {
-	HomeDir      string
-	DatabasePath string
-	Now          time.Time
+	HomeDir            string
+	DatabasePath       string
+	Now                time.Time
+	Actor              string
+	Involvement        string
+	IncludeAllEvidence bool
 }
 
 // TodayResult describes today's activity in deterministic plain text.
@@ -49,14 +52,16 @@ type TodayResult struct {
 
 // TodayEvent is one stored event included in the local-day activity view.
 type TodayEvent struct {
-	ID        string
-	Source    string
-	Type      string
-	Timestamp time.Time
-	Project   string
-	Path      string
-	Summary   string
-	Payload   string
+	ID          string
+	Source      string
+	Type        string
+	Timestamp   time.Time
+	Project     string
+	Actor       string
+	Involvement []string
+	Path        string
+	Summary     string
+	Payload     string
 }
 
 // TodaySession is a time-based grouping inferred from today's events.
@@ -86,6 +91,8 @@ type storedTodayEvent struct {
 	Type        string
 	Timestamp   string
 	Project     sql.NullString
+	Actor       sql.NullString
+	Involvement sql.NullString
 	Summary     sql.NullString
 	PayloadJSON string
 }
@@ -133,7 +140,7 @@ func Today(config TodayConfig) (TodayResult, error) {
 		return TodayResult{}, fmt.Errorf("open database: %w", err)
 	}
 
-	events, err := loadTodayEvents(db, now)
+	events, err := loadTodayEvents(db, now, config.Actor, config.Involvement, config.IncludeAllEvidence)
 	if err != nil {
 		return TodayResult{}, err
 	}
@@ -153,16 +160,33 @@ func Today(config TodayConfig) (TodayResult, error) {
 	return result, nil
 }
 
-func loadTodayEvents(db *sql.DB, now time.Time) ([]TodayEvent, error) {
+func loadTodayEvents(db *sql.DB, now time.Time, actor string, involvement string, includeAllEvidence bool) ([]TodayEvent, error) {
 	location := now.Location()
 	dayStart := time.Date(now.In(location).Year(), now.In(location).Month(), now.In(location).Day(), 0, 0, 0, 0, location)
 	dayEnd := dayStart.AddDate(0, 0, 1)
 
-	rows, err := db.Query(
-		`SELECT id, source, type, timestamp, project, summary, payload_json FROM events WHERE timestamp >= ? AND timestamp < ? ORDER BY timestamp ASC, id ASC`,
+	query := `SELECT id, source, type, timestamp, project, actor, involvement_json, summary, payload_json
+		FROM events WHERE timestamp >= ? AND timestamp < ?`
+	args := []any{
 		dayStart.UTC().Format(time.RFC3339),
 		dayEnd.UTC().Format(time.RFC3339),
-	)
+	}
+	if actor = strings.TrimSpace(actor); actor != "" {
+		query += ` AND actor = ?`
+		args = append(args, actor)
+	}
+	if involvement = strings.TrimSpace(involvement); involvement != "" {
+		if !validInvolvement(involvement) {
+			return nil, fmt.Errorf("unknown involvement %q", involvement)
+		}
+		query += ` AND EXISTS (SELECT 1 FROM json_each(events.involvement_json) WHERE value = ?)`
+		args = append(args, involvement)
+	} else if !includeAllEvidence {
+		query += ` AND (involvement_json IS NULL OR json_array_length(involvement_json) > 0)`
+		query += ` AND NOT (source = 'notion' AND type IN ('notion.page', 'notion.database'))`
+	}
+	query += ` ORDER BY timestamp ASC, id ASC`
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query events: %w", err)
 	}
@@ -171,7 +195,7 @@ func loadTodayEvents(db *sql.DB, now time.Time) ([]TodayEvent, error) {
 	var events []TodayEvent
 	for rows.Next() {
 		var stored storedTodayEvent
-		if err := rows.Scan(&stored.ID, &stored.Source, &stored.Type, &stored.Timestamp, &stored.Project, &stored.Summary, &stored.PayloadJSON); err != nil {
+		if err := rows.Scan(&stored.ID, &stored.Source, &stored.Type, &stored.Timestamp, &stored.Project, &stored.Actor, &stored.Involvement, &stored.Summary, &stored.PayloadJSON); err != nil {
 			return nil, fmt.Errorf("scan event: %w", err)
 		}
 
@@ -190,6 +214,14 @@ func loadTodayEvents(db *sql.DB, now time.Time) ([]TodayEvent, error) {
 		}
 		if stored.Project.Valid {
 			event.Project = stored.Project.String
+		}
+		if stored.Actor.Valid {
+			event.Actor = stored.Actor.String
+		}
+		if stored.Involvement.Valid {
+			if err := json.Unmarshal([]byte(stored.Involvement.String), &event.Involvement); err != nil {
+				return nil, fmt.Errorf("parse event involvement %q: %w", stored.ID, err)
+			}
 		}
 		if stored.Summary.Valid {
 			event.Summary = stored.Summary.String

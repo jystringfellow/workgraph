@@ -72,6 +72,18 @@ mcp__claude_ai_Microsoft_365__read_resource
 Preflight must cover identity and revision tools as well as the initial search
 tool. A proven-empty window does not exercise that identity path.
 
+Use the canonical registry view instead of reconstructing that matrix from
+this guide:
+
+```sh
+workgraph connectors required-tools
+workgraph connectors required-tools azure.boards
+```
+
+The output uses stable logical operation names. Match them to the exact
+read-only MCP tools exported by the installed provider version before adding
+client-specific permission strings.
+
 Tool names are provider-version-specific. Approve only tools that are present,
 read-only, and needed for the selected scopes; do not copy the list blindly.
 

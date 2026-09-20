@@ -56,6 +56,96 @@ func TestTodayReturnsEventsFromCurrentDay(t *testing.T) {
 	}
 }
 
+func TestTodayExcludesNotionInventoryButEventsTodayKeepsItInspectable(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	result, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	now := time.Now()
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "notion.page:other-page",
+		Source:    "notion",
+		Type:      "notion.page",
+		Timestamp: now.Add(-2 * time.Hour),
+		Summary:   "Someone else's workspace edit",
+		Payload:   `{"id":"other-page","last_edited_by":"user-other"}`,
+	})
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID:        "notion.page_updated:my-page:revision",
+		Source:    "notion",
+		Type:      "notion.page_updated",
+		Timestamp: now.Add(-time.Hour),
+		Summary:   "My Notion update",
+		Payload:   `{"id":"my-page","last_edited_by":"user-me"}`,
+	})
+
+	today, err := workgraph.Today(workgraph.TodayConfig{
+		HomeDir: homeDir, DatabasePath: result.DatabasePath, Now: now,
+	})
+	if err != nil {
+		t.Fatalf("today failed: %v", err)
+	}
+	if strings.Contains(today.Message, "Someone else's workspace edit") {
+		t.Fatalf("expected raw Notion inventory to be omitted from personal today output:\n%s", today.Message)
+	}
+	if !strings.Contains(today.Message, "My Notion update") {
+		t.Fatalf("expected attributed Notion activity in today output:\n%s", today.Message)
+	}
+
+	details, err := workgraph.EventsToday(workgraph.EventsTodayConfig{
+		HomeDir: homeDir, DatabasePath: result.DatabasePath, Type: "notion.page",
+	})
+	if err != nil {
+		t.Fatalf("events today failed: %v", err)
+	}
+	if !strings.Contains(details.Message, "Someone else's workspace edit") {
+		t.Fatalf("expected raw Notion inventory to remain inspectable:\n%s", details.Message)
+	}
+}
+
+func TestTodayAndEventsTodayFilterByExactActor(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	result, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	now := time.Now()
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID: "mine", Source: "notion", Type: "notion.page_updated", Actor: "user-me",
+		Timestamp: now.Add(-2 * time.Hour), Summary: "My attributed work", Payload: `{"id":"mine"}`,
+	})
+	insertEvent(t, result.DatabasePath, storedEvent{
+		ID: "theirs", Source: "slack", Type: "slack.message", Actor: "user-other",
+		Timestamp: now.Add(-time.Hour), Summary: "Someone else's attributed work", Payload: `{"id":"theirs"}`,
+	})
+
+	todayOutput, err := runworkgraph(t, repoRoot(t), "today", "--home", homeDir,
+		"--database", result.DatabasePath, "--actor", "user-me")
+	if err != nil {
+		t.Fatalf("workgraph today --actor failed: %v\n%s", err, todayOutput)
+	}
+	if !strings.Contains(string(todayOutput), "My attributed work") || strings.Contains(string(todayOutput), "Someone else's attributed work") {
+		t.Fatalf("expected exact actor filter in today output:\n%s", todayOutput)
+	}
+
+	eventsOutput, err := runworkgraph(t, repoRoot(t), "events", "today", "--home", homeDir,
+		"--database", result.DatabasePath, "--actor", "user-other")
+	if err != nil {
+		t.Fatalf("workgraph events today --actor failed: %v\n%s", err, eventsOutput)
+	}
+	if !strings.Contains(string(eventsOutput), "Someone else's attributed work") || strings.Contains(string(eventsOutput), "My attributed work") {
+		t.Fatalf("expected exact actor filter in detailed events output:\n%s", eventsOutput)
+	}
+	if !strings.Contains(string(eventsOutput), "actor: user-other") {
+		t.Fatalf("expected detailed events output to render actor metadata:\n%s", eventsOutput)
+	}
+}
+
 func TestTodayGroupsEventsIntoSessions(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
@@ -471,6 +561,7 @@ type storedEvent struct {
 	Type      string
 	Timestamp time.Time
 	Project   string
+	Actor     string
 	Payload   string
 	Summary   string
 }
@@ -490,14 +581,15 @@ func insertEvent(t *testing.T, dbPath string, event storedEvent) {
 	}
 
 	_, err = db.Exec(`INSERT INTO events
-		(id, source, type, timestamp, payload_json, project, summary, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		(id, source, type, timestamp, payload_json, project, actor, summary, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.ID,
 		source,
 		event.Type,
 		event.Timestamp.UTC().Format(time.RFC3339Nano),
 		event.Payload,
 		event.Project,
+		event.Actor,
 		event.Summary,
 		event.Timestamp.UTC().Format(time.RFC3339Nano),
 	)

@@ -736,6 +736,8 @@ func runEventsToday(args []string, stdout io.Writer, stderr io.Writer) int {
 	homeDir := flags.String("home", "", "workgraph home directory")
 	databasePath := flags.String("database", "", "workgraph SQLite database path")
 	eventType := flags.String("type", "", "Event type to include")
+	actor := flags.String("actor", "", "Exact event actor to include")
+	involvement := flags.String("involvement", "", "Exact user involvement to include")
 	limit := flags.Int("limit", 0, "Maximum number of matching events to show")
 
 	if err := flags.Parse(args); err != nil {
@@ -746,6 +748,8 @@ func runEventsToday(args []string, stdout io.Writer, stderr io.Writer) int {
 		HomeDir:      *homeDir,
 		DatabasePath: *databasePath,
 		Type:         *eventType,
+		Actor:        *actor,
+		Involvement:  *involvement,
 		Limit:        *limit,
 	})
 	if err != nil {
@@ -1114,7 +1118,7 @@ func runLLMSummarize(args []string, stdout io.Writer, stderr io.Writer) int {
 
 func runConnectors(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: workgraph connectors <connect|mode|list|status|doctor|upgrade|poll|validate|enable|disable|interval>")
+		fmt.Fprintln(stderr, "usage: workgraph connectors <connect|mode|list|required-tools|status|doctor|upgrade|poll|validate|enable|disable|interval>")
 		return 2
 	}
 
@@ -1125,6 +1129,8 @@ func runConnectors(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runConnectorsMode(args[1:], stdout, stderr)
 	case "list":
 		return runConnectorsList(args[1:], stdout, stderr)
+	case "required-tools":
+		return runConnectorsRequiredTools(args[1:], stdout, stderr)
 	case "status":
 		return runConnectorsStatus(args[1:], stdout, stderr)
 	case "doctor":
@@ -1145,6 +1151,29 @@ func runConnectors(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unknown connectors command: %s\n", args[0])
 		return 2
 	}
+}
+
+func runConnectorsRequiredTools(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("connectors required-tools", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() > 1 {
+		fmt.Fprintln(stderr, "usage: workgraph connectors required-tools [connector]")
+		return 2
+	}
+	connectorID := ""
+	if flags.NArg() == 1 {
+		connectorID = flags.Arg(0)
+	}
+	result, err := workgraph.RequiredConnectorTools(connectorID)
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph connectors required-tools: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
 }
 
 func runConnectorsConnect(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -3202,6 +3231,8 @@ func runToday(args []string, stdout io.Writer, stderr io.Writer) int {
 
 	homeDir := flags.String("home", "", "workgraph home directory")
 	databasePath := flags.String("database", "", "workgraph SQLite database path")
+	actor := flags.String("actor", "", "Exact event actor to include")
+	involvement := flags.String("involvement", "", "Exact user involvement to include")
 
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -3210,6 +3241,8 @@ func runToday(args []string, stdout io.Writer, stderr io.Writer) int {
 	result, err := workgraph.Today(workgraph.TodayConfig{
 		HomeDir:      *homeDir,
 		DatabasePath: *databasePath,
+		Actor:        *actor,
+		Involvement:  *involvement,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph today: %v\n", err)

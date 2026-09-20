@@ -11,22 +11,29 @@ type EventsTodayConfig struct {
 	HomeDir      string
 	DatabasePath string
 	Type         string
+	Actor        string
+	Involvement  string
 	Limit        int
 }
 
 // EventsTodayResult describes events selected for inspection.
 type EventsTodayResult struct {
-	Date    string
-	Type    string
-	Events  []TodayEvent
-	Message string
+	Date        string
+	Type        string
+	Actor       string
+	Involvement string
+	Events      []TodayEvent
+	Message     string
 }
 
 // EventsToday returns today's captured events with optional type filtering.
 func EventsToday(config EventsTodayConfig) (EventsTodayResult, error) {
 	today, err := Today(TodayConfig{
-		HomeDir:      config.HomeDir,
-		DatabasePath: config.DatabasePath,
+		HomeDir:            config.HomeDir,
+		DatabasePath:       config.DatabasePath,
+		Actor:              config.Actor,
+		Involvement:        config.Involvement,
+		IncludeAllEvidence: true,
 	})
 	if err != nil {
 		return EventsTodayResult{}, err
@@ -43,9 +50,11 @@ func EventsToday(config EventsTodayConfig) (EventsTodayResult, error) {
 		events = events[len(events)-config.Limit:]
 	}
 	result := EventsTodayResult{
-		Date:   today.Date,
-		Type:   eventType,
-		Events: events,
+		Date:        today.Date,
+		Type:        eventType,
+		Actor:       strings.TrimSpace(config.Actor),
+		Involvement: strings.TrimSpace(config.Involvement),
+		Events:      events,
 	}
 	result.Message = eventsTodayMessage(result, time.Now().Location())
 	return result, nil
@@ -59,6 +68,12 @@ func eventsTodayMessage(result EventsTodayResult, location *time.Location) strin
 	if result.Type != "" {
 		lines = append(lines, "Type: "+result.Type)
 	}
+	if result.Actor != "" {
+		lines = append(lines, "Actor: "+result.Actor)
+	}
+	if result.Involvement != "" {
+		lines = append(lines, "Involvement: "+result.Involvement)
+	}
 	if len(result.Events) == 0 {
 		lines = append(lines, "No matching events captured today.")
 		return strings.Join(lines, "\n")
@@ -68,6 +83,17 @@ func eventsTodayMessage(result EventsTodayResult, location *time.Location) strin
 		lines = append(lines, "  id: "+event.ID)
 		if event.Project != "" {
 			lines = append(lines, "  project: "+event.Project)
+		}
+		if event.Actor != "" {
+			lines = append(lines, "  actor: "+event.Actor)
+		}
+		switch {
+		case event.Involvement == nil:
+			lines = append(lines, "  involvement: unclassified")
+		case len(event.Involvement) == 0:
+			lines = append(lines, "  involvement: none")
+		default:
+			lines = append(lines, "  involvement: "+strings.Join(event.Involvement, ", "))
 		}
 		if event.Path != "" {
 			lines = append(lines, "  path: "+event.Path)

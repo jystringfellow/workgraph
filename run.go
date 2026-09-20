@@ -653,10 +653,11 @@ func connectorReadyForRuntime(state connectorRuntimeFile, id string, managed man
 
 func readyBridgedConnectors(state connectorRuntimeFile, managed managedSettingsFile, managedPresent bool) map[string]time.Duration {
 	bridged := map[string]time.Duration{}
-	for _, id := range []string{
-		"github", "slack", "slack.lists", "calendar.google", "calendar.microsoft",
-		"mail.google", "mail.microsoft", "notion.activity", "azure.boards",
-	} {
+	for _, definition := range connectorRegistry {
+		if !definition.Bridged {
+			continue
+		}
+		id := definition.ID
 		if connectorCaptureMode(state, id) == "bridged" && connectorReadyForRuntime(state, id, managed, managedPresent) {
 			bridged[id] = connectorInterval(state, id, defaultConnectorInterval(id))
 		}

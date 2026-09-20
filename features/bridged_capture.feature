@@ -100,7 +100,8 @@ Feature: Bridged connector capture
     Given a healthy connector has pending bridged work
     And the unattended client lacks an authorized provider read tool for it
     When the bridge worker inspects available work
-    Then it leaves that request pending without claiming it
+    Then it reads that connector's fetch and identity requirements from the canonical registry
+    And it leaves that request pending without claiming it
     And it does not overwrite the connector's prior success with a failure
     And it does not fall back to a CLI claim file
 

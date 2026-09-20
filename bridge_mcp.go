@@ -97,7 +97,7 @@ func handleBridgeMCPRequest(config BridgeMCPConfig, request bridgeMCPRequest) (a
 		if err != nil {
 			return map[string]any{"content": []any{map[string]any{"type": "text", "text": err.Error()}}, "isError": true}, nil
 		}
-		if strings.HasPrefix(call.Name, "capture_") || call.Name == "connector_status" {
+		if strings.HasPrefix(call.Name, "capture_") || call.Name == "connector_status" || call.Name == "connector_required_tools" {
 			value = bridgeMCPResultWithRuntime(value, inspectProcessRuntimeStatus(config.runtime, "MCP server"))
 		}
 		encoded, _ := json.Marshal(value)
@@ -148,6 +148,7 @@ func bridgeMCPTools() []bridgeMCPTool {
 		{"capture_request_fail", "Return claimed work for retry with bounded error details.", object(map[string]any{"request_id": str, "claim_token": str, "error": str}, "request_id", "claim_token")},
 		{"capture_watermark", "Read a connector completed-through cursor.", object(map[string]any{"connector": str}, "connector")},
 		{"connector_status", "Read connector capture mode and health.", object(map[string]any{})},
+		{"connector_required_tools", "Read canonical provider fetch and identity requirements before claiming work.", object(map[string]any{"connector": str})},
 		{"connector_bridge_configure", "Configure approved non-secret bridge scope and cadence.", object(map[string]any{"connector": str, "interval": str, "bridge_params": map[string]any{"type": "object"}}, "connector", "interval", "bridge_params")},
 		{"connector_bridge_disconnect", "Switch a bridged connector back to direct mode and cancel active work.", object(map[string]any{"connector": str}, "connector")},
 		{"bridge_worker_heartbeat", "Report that an installed client bridge worker is alive.", object(map[string]any{"worker": str}, "worker")},
@@ -215,6 +216,9 @@ func callBridgeMCPTool(config BridgeMCPConfig, name string, raw json.RawMessage)
 	case "connector_status":
 		status, err := StatusConnectors(ConnectorListConfig{HomeDir: config.HomeDir})
 		return map[string]any{"connectors": status.Connectors}, err
+	case "connector_required_tools":
+		requirements, err := RequiredConnectorTools(stringArg("connector"))
+		return map[string]any{"connectors": requirements.Connectors}, err
 	case "connector_bridge_configure":
 		interval, err := time.ParseDuration(stringArg("interval"))
 		if err != nil || interval <= 0 {

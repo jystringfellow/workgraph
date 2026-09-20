@@ -269,6 +269,7 @@ func createSchema(db *sql.DB) error {
 			payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
 			project TEXT,
 			actor TEXT,
+			involvement_json TEXT CHECK (involvement_json IS NULL OR json_valid(involvement_json)),
 			summary TEXT,
 			created_at TEXT NOT NULL
 		);`,
@@ -390,6 +391,9 @@ func createSchema(db *sql.DB) error {
 		return err
 	}
 	if err := ensureColumn(db, "notion_index", "content_synced_at", "TEXT"); err != nil {
+		return err
+	}
+	if err := ensureColumn(db, "events", "involvement_json", "TEXT CHECK (involvement_json IS NULL OR json_valid(involvement_json))"); err != nil {
 		return err
 	}
 

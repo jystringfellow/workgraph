@@ -9,6 +9,21 @@ The command is deterministic and local-first:
 - groups nearby events from the same project into sessions
 - renders plain text without an LLM
 
+`today` is a personal activity view rather than a connector inventory view.
+Raw `notion.page` and `notion.database` records describe workspace objects the
+connection can see, including objects most recently edited by other people, so
+they are excluded from `today`. Derived `notion.page_updated` and
+`notion.database_updated` records remain visible because direct capture emits
+them only for activity attributed to the connected user. The raw inventory
+records remain stored and inspectable through `workgraph events today`.
+
+Both `workgraph today --actor <actor>` and `workgraph events today --actor
+<actor>` apply an exact actor filter to stored event metadata. This is a
+source-neutral inspection control: it does not infer whether the actor is the
+current user. Exact `--involvement <kind>` filtering selects the explicit reason
+an event is relevant. See `specs/event-involvement.md`; actor equality is never
+used as an implicit `--mine-only` rule.
+
 ## Output
 
 When events exist, output includes:
@@ -35,7 +50,7 @@ When no events exist for the local day, output includes `Today` and says no acti
 Compaction is presentation-only. `today` does not rewrite event summaries or
 payloads in SQLite. `workgraph events today` remains the detailed inspection
 path and renders the complete stored label, with optional `--type` and `--limit`
-filters.
+filters. Detailed output also renders stored actor metadata when present.
 
 ## Sessions
 

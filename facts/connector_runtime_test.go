@@ -138,6 +138,65 @@ fileCaptured:
 	}
 }
 
+func TestConnectorListReportsCanonicalRegistryCapabilities(t *testing.T) {
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	output, err := runworkgraph(t, repoRoot(t), "connectors", "list", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("workgraph connectors list failed: %v\n%s", err, output)
+	}
+	for _, expected := range []string{
+		"git: connected, enabled, interval",
+		"modes direct, source git",
+		"slack.lists: not connected, enabled, interval",
+		"modes direct|bridged, source slack, semantics complete_snapshot",
+		"notion.activity: not connected, enabled, interval",
+		"modes bridged, source notion, semantics bounded_events",
+	} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected canonical connector capability %q, got:\n%s", expected, output)
+		}
+	}
+}
+
+func TestConnectorRequiredToolsReportsFetchAndIdentityRequirements(t *testing.T) {
+	output, err := runworkgraph(t, repoRoot(t), "connectors", "required-tools")
+	if err != nil {
+		t.Fatalf("workgraph connectors required-tools failed: %v\n%s", err, output)
+	}
+	for _, expected := range []string{
+		"Required provider tools",
+		"github",
+		"github.search_pull_requests [fetch, identity]",
+		"slack.read_thread [fetch, identity]",
+		"slack.lists",
+		"slack.read_file [fetch, identity]",
+		"calendar.microsoft",
+		"microsoft.read_resource [fetch, identity]",
+		"azure.read_work_item [fetch, identity]",
+	} {
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("expected provider requirement %q, got:\n%s", expected, output)
+		}
+	}
+
+	filtered, err := runworkgraph(t, repoRoot(t), "connectors", "required-tools", "slack.lists")
+	if err != nil {
+		t.Fatalf("filtered required tools failed: %v\n%s", err, filtered)
+	}
+	if !strings.Contains(string(filtered), "slack.read_file [fetch, identity]") || strings.Contains(string(filtered), "github.search") {
+		t.Fatalf("expected only Slack Lists requirements, got:\n%s", filtered)
+	}
+
+	rejected, err := runworkgraph(t, repoRoot(t), "connectors", "required-tools", "git")
+	if err == nil || !strings.Contains(string(rejected), "git does not support bridged capture") {
+		t.Fatalf("expected direct-only connector rejection, got err=%v:\n%s", err, rejected)
+	}
+}
+
 func TestConnectorAuthenticationFailureStopsOnlyThatPoller(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")

@@ -65,7 +65,19 @@ metadata when available.
 
 Notion capture keeps one stored event per Notion object id. Recapturing the same
 page or database updates the stored event when Notion metadata changes without
-creating duplicates.
+creating duplicates. These records are workspace inventory rather than proof
+of personal activity. They populate `actor` from `last_edited_by` when Notion
+provides it, store explicit empty involvement (`[]`), remain available through
+`workgraph events today`, and are omitted from the default personal `workgraph
+today` view.
+
+After a complete search walk, direct capture resolves each indexed object's
+Notion parent chain. The first page or database below the workspace is the
+stable project root, represented as `notion:<root-object-id>` on both inventory
+and derived activity events. Nested objects share that root even when their
+immediate parent differs. Missing parents, unsupported parent shapes, and
+cycles leave `project` empty rather than inventing a root. A later complete
+capture may backfill attribution after the missing parent becomes indexed.
 
 Notion search is requested sorted descending by `last_edited_time`. Capture
 stores each fetched page of results immediately rather than waiting for
@@ -96,7 +108,9 @@ When a previously indexed page or database has a newer `last_edited_time` and
 the `last_edited_by` user id matches the stored OAuth owner user id, capture
 stores a derived personal activity event such as `notion.page_updated` or
 `notion.database_updated`. If another user is the latest editor, capture updates
-the local index but does not create a personal activity event.
+the local index but does not create a personal activity event. Derived personal
+activity records `edited` involvement independently from the editor's `actor`
+identity.
 
 When a previously indexed page was edited by the connected user, capture fetches
 the page's top-level block children and stores a capped normalized
@@ -116,6 +130,8 @@ cannot express. See `specs/bridged-capture.md` for its scope, recipe, and
 event-identity contract; its events share this connector's `notion.page_updated`
 and `notion.database_updated` event types so overlapping capture between the
 two connectors de-duplicates rather than double-counting.
+`notion.activity` also defaults these update events to `edited` involvement so
+direct and bridged capture preserve the same personal meaning.
 
 The first Notion OAuth slice is a narrow Cloudflare Worker token relay:
 
