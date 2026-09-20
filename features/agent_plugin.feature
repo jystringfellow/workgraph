@@ -26,6 +26,16 @@ Feature: Agent plugin installation
     And an already loaded launchd worker is reloaded
     And the regenerated worker environment preserves provider executable discovery
 
+  Scenario: Persist an unattended worker model
+    Given I install the workgraph plugin with a model selected for one client
+    When I reinstall the plugin without a model flag
+    Then workgraph preserves that client's model in durable worker configuration
+    And bridge drain passes the selected model to the client
+    And plugin doctor reports the selected model
+    And the generated launchd file is not treated as model configuration
+    When I reinstall with --clear-model
+    Then bridge drain returns to the client's default model
+
   Scenario: Diagnose the plugin locally
     Given the workgraph plugin is installed
     When I run plugin doctor

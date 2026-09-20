@@ -41,7 +41,7 @@ var helpTopics = map[string]helpTopic{
 	"bridge":                  {"workgraph bridge <subcommand>", "Install, diagnose, and run credential-free AI-client capture bridges."},
 	"bridge doctor":           {"workgraph bridge doctor --client <codex|claude-code> [options]", "Compatibility alias for plugin doctor."},
 	"bridge drain":            {"workgraph bridge drain --client <codex|claude-code> [options]", "Drain active daemon requests through a signed-in reference client."},
-	"bridge install":          {"workgraph bridge install --client <codex|claude-code> [options]", "Compatibility alias for plugin install."},
+	"bridge install":          {"workgraph bridge install --client <codex|claude-code> [--model <model> | --clear-model] [options]", "Compatibility alias for plugin install."},
 	"bridge mcp":              {"workgraph bridge mcp [options]", "Serve local bridge tools over stdio MCP."},
 	"calendar":                {"workgraph calendar <subcommand>", "Connect, capture, or disconnect calendar providers."},
 	"calendar capture":        {"workgraph calendar capture [options]", "Capture normalized calendar events from a provider or JSON export."},
@@ -108,7 +108,7 @@ var helpTopics = map[string]helpTopic{
 	"notion index show":       {"workgraph notion index show <notion-id> [options]", "Show one locally indexed Notion object."},
 	"plugin":                  {"workgraph plugin <subcommand>", "Install and diagnose the workgraph agent plugin for supported AI clients."},
 	"plugin doctor":           {"workgraph plugin doctor --client <codex|claude-code> [options]", "Verify the workgraph plugin, bundled skills, local MCP, worker, and heartbeat."},
-	"plugin install":          {"workgraph plugin install --client <codex|claude-code> [options]", "Install or update the workgraph plugin, bundled skills, local MCP, and macOS bridge worker."},
+	"plugin install":          {"workgraph plugin install --client <codex|claude-code> [--model <model> | --clear-model] [options]", "Install or update the workgraph plugin, bundled skills, local MCP, and macOS bridge worker."},
 	"resume":                  {"workgraph resume [project] [--all] [--debug-relevance] [options]", "Restore context for recent work or a specific project."},
 	"review":                  {"workgraph review [--since week|7d|30d] [--format text|json] [options]", "Review local suggestion effectiveness over a time window."},
 	"security":                {"workgraph security <subcommand>", "Inspect local security posture."},
@@ -163,6 +163,7 @@ var helpExamples = map[string][]string{
 	"plugin install": {
 		"workgraph plugin install --client codex",
 		"workgraph plugin install --client claude-code",
+		"workgraph plugin install --client claude-code --model <approved-model>",
 		"workgraph plugin install --client claude-code --allow-provider-tool mcp__provider__exact_read_tool",
 	},
 	"capture requests": {

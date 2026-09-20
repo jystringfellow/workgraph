@@ -693,6 +693,13 @@ Plugin reinstall reloads an existing launchd service with an idempotent
 bootout-then-bootstrap sequence. A missing prior service is harmless; a failed
 bootstrap remains an installation error.
 
+An unattended client model may be pinned with `workgraph plugin install
+--client <client> --model <model>`. The selection is stored in
+`bridge/workers.json`, survives reinstall when model flags are omitted, is
+reported by plugin doctor, and can be removed with `--clear-model`. Launchd
+continues to invoke `bridge drain` without embedding the model; drain resolves
+the current durable setting immediately before launching the client.
+
 `workgraph plugin doctor` verifies package version, every bundled
 skill, MCP reachability, worker heartbeat, permission readiness, and a
 claim/empty-ingest round trip without contacting a provider.

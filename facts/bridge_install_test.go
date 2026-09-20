@@ -143,6 +143,90 @@ func TestClaudePluginInstallAddsOnlyExplicitProviderTools(t *testing.T) {
 	}
 }
 
+func TestBridgeWorkerModelPersistsAcrossReinstallAndCanBeCleared(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	fixtureDir := t.TempDir()
+	logPath := filepath.Join(fixtureDir, "codex.log")
+	clientPath := filepath.Join(fixtureDir, "codex")
+	if err := os.WriteFile(clientPath, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \""+logPath+"\"\n"), 0o700); err != nil {
+		t.Fatalf("write fake Codex: %v", err)
+	}
+	installRoot := filepath.Join(fixtureDir, "installed")
+	model := "gpt-bridge-pinned"
+	install := func(extra ...string) []byte {
+		t.Helper()
+		args := []string{"plugin", "install", "--home", homeDir, "--client", "codex", "--client-command", clientPath, "--install-root", installRoot, "--no-launchd"}
+		args = append(args, extra...)
+		output, err := runworkgraph(t, repoRoot(t), args...)
+		if err != nil {
+			t.Fatalf("install Codex plugin: %v\n%s", err, output)
+		}
+		return output
+	}
+
+	if output := install("--model", model); !strings.Contains(string(output), "Model: "+model) {
+		t.Fatalf("install did not report pinned model:\n%s", output)
+	}
+	configPath := filepath.Join(homeDir, "bridge", "workers.json")
+	contents, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read worker model config: %v", err)
+	}
+	if !strings.Contains(string(contents), `"codex"`) || !strings.Contains(string(contents), `"model": "`+model+`"`) {
+		t.Fatalf("worker model config omitted selection:\n%s", contents)
+	}
+	if info, err := os.Stat(configPath); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("expected private worker config, info=%v error=%v", info, err)
+	}
+
+	if output := install(); !strings.Contains(string(output), "Model: "+model) {
+		t.Fatalf("reinstall did not preserve pinned model:\n%s", output)
+	}
+	doctor, err := runworkgraph(t, repoRoot(t), "plugin", "doctor", "--home", homeDir,
+		"--client", "codex", "--client-command", clientPath, "--install-root", installRoot)
+	if err != nil || !strings.Contains(string(doctor), "Model: "+model) {
+		t.Fatalf("doctor did not report pinned model: %v\n%s", err, doctor)
+	}
+
+	connectBridgedConnector(t, repoRoot(t), homeDir, "slack")
+	if output, err := runworkgraph(t, repoRoot(t), "connectors", "poll", "--home", homeDir, "--once", "--connector", "slack"); err != nil {
+		t.Fatalf("emit request: %v\n%s", err, output)
+	}
+	_ = os.Remove(logPath)
+	if output, err := runworkgraph(t, repoRoot(t), "bridge", "drain", "--home", homeDir, "--client", "codex", "--client-command", clientPath); err != nil {
+		t.Fatalf("drain with pinned model: %v\n%s", err, output)
+	}
+	drainArgs, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read Codex drain arguments: %v", err)
+	}
+	if !strings.Contains(string(drainArgs), "--model "+model) {
+		t.Fatalf("drain omitted pinned model:\n%s", drainArgs)
+	}
+
+	if output := install("--clear-model"); !strings.Contains(string(output), "Model: client default") {
+		t.Fatalf("clear did not report client default:\n%s", output)
+	}
+	_ = os.Remove(logPath)
+	if output, err := runworkgraph(t, repoRoot(t), "bridge", "drain", "--home", homeDir, "--client", "codex", "--client-command", clientPath); err != nil {
+		t.Fatalf("drain with default model: %v\n%s", err, output)
+	}
+	drainArgs, err = os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read default Codex drain arguments: %v", err)
+	}
+	if strings.Contains(string(drainArgs), "--model") {
+		t.Fatalf("cleared model still reached drain:\n%s", drainArgs)
+	}
+
+	conflict, err := runworkgraph(t, repoRoot(t), "plugin", "install", "--home", homeDir,
+		"--client", "codex", "--client-command", clientPath, "--install-root", installRoot,
+		"--no-launchd", "--model", model, "--clear-model")
+	if err == nil || !strings.Contains(string(conflict), "cannot be used together") {
+		t.Fatalf("expected conflicting model flags to fail, got err=%v:\n%s", err, conflict)
+	}
+}
+
 func TestSlackListsBridgeContractAllowsContentHashWithoutClaimingDeletion(t *testing.T) {
 	root := repoRoot(t)
 	skillPaths := []string{
@@ -276,7 +360,8 @@ func TestClaudeBridgeDrainUsesNonInteractivePermissionMode(t *testing.T) {
 	}
 	if output, err := runworkgraph(t, repoRoot(t), "plugin", "install", "--home", homeDir,
 		"--client", "claude-code", "--client-command", clientPath, "--install-root", filepath.Join(fixtureDir, "installed"),
-		"--no-launchd", "--allow-provider-tool", "mcp__claude_ai_Slack__slack_list_user_channels"); err != nil {
+		"--no-launchd", "--model", "claude-bridge-pinned",
+		"--allow-provider-tool", "mcp__claude_ai_Slack__slack_list_user_channels"); err != nil {
 		t.Fatalf("install Claude bridge permissions: %v\n%s", err, output)
 	}
 	_ = os.Remove(logPath)
@@ -293,6 +378,7 @@ func TestClaudeBridgeDrainUsesNonInteractivePermissionMode(t *testing.T) {
 	}
 	for _, expected := range []string{
 		"-p", "--permission-mode dontAsk",
+		"--model claude-bridge-pinned",
 		"List pending requests before claiming", "connector_required_tools",
 		"fetch and identity requirements returned by the registry",
 		"leave the request pending", "Never fall back to the CLI",
@@ -403,7 +489,8 @@ func TestBridgeInstallReloadsExistingLaunchAgentBeforeBootstrap(t *testing.T) {
 	}
 	installRoot := filepath.Join(fixtureDir, "installed")
 	if output, err := runworkgraph(t, repoRoot(t), "plugin", "install", "--home", homeDir,
-		"--client", "claude-code", "--client-command", clientPath, "--install-root", installRoot); err != nil {
+		"--client", "claude-code", "--client-command", clientPath, "--install-root", installRoot,
+		"--model", "launchd-pinned"); err != nil {
 		t.Fatalf("install with launchd reload: %v\n%s", err, output)
 	}
 	contents, err := os.ReadFile(logPath)
@@ -430,15 +517,17 @@ func TestBridgeInstallReloadsExistingLaunchAgentBeforeBootstrap(t *testing.T) {
 			t.Fatalf("launch agent omitted %q:\n%s", expected, plist)
 		}
 	}
-	if strings.Contains(string(plist), "ACCESS_TOKEN") || strings.Contains(string(plist), "must-not-enter-launch-agent") {
-		t.Fatalf("launch agent copied unrelated environment secrets:\n%s", plist)
+	for _, forbidden := range []string{"ACCESS_TOKEN", "must-not-enter-launch-agent", "launchd-pinned", "--model"} {
+		if strings.Contains(string(plist), forbidden) {
+			t.Fatalf("launch agent copied generated configuration %q:\n%s", forbidden, plist)
+		}
 	}
 	doctor, err := runworkgraph(t, repoRoot(t), "plugin", "doctor", "--home", homeDir,
 		"--client", "claude-code", "--client-command", clientPath, "--install-root", installRoot)
 	if err != nil {
 		t.Fatalf("doctor installed launch agent: %v\n%s", err, doctor)
 	}
-	if !strings.Contains(string(doctor), "Worker environment: ready") {
+	if !strings.Contains(string(doctor), "Worker environment: ready") || !strings.Contains(string(doctor), "Model: launchd-pinned") {
 		t.Fatalf("doctor did not verify launch environment:\n%s", doctor)
 	}
 }

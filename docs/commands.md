@@ -439,6 +439,7 @@ Install or update one logical `workgraph` plugin for Codex or Claude Code:
 workgraph plugin install --client codex
 # or
 workgraph plugin install --client claude-code
+workgraph plugin install --client claude-code --model <approved-model>
 ```
 
 Claude's unattended worker trusts the workgraph home and discovers its local
@@ -456,6 +457,12 @@ workgraph plugin install --client claude-code \
 
 Wildcards are rejected. Reinstalling preserves previously allowed provider
 tools and reloads an existing launchd worker.
+
+`--model <model>` pins the unattended drain worker for that client. The choice
+is stored in `<workgraph-home>/bridge/workers.json`, appears in install and
+doctor output, and survives reinstall when model flags are omitted. Use
+`--clear-model` to return to the client's configured default. The generated
+launchd file does not contain the selected model.
 
 The host packages use their native manifest formats but bundle the same local
 MCP and three canonical skills: `workgraph-bridge`, `workgraph-memory`, and

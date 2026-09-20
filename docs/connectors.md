@@ -36,6 +36,7 @@ connectors already approved in that client. Install the workgraph agent plugin:
 workgraph plugin install --client codex
 # or
 workgraph plugin install --client claude-code
+workgraph plugin install --client claude-code --model <approved-model>
 workgraph plugin doctor --client codex
 ```
 
@@ -47,6 +48,11 @@ workgraph plugin install --client claude-code \
   --allow-provider-tool mcp__azure-devops__wit_query \
   --allow-provider-tool mcp__azure-devops__wit_work_item
 ```
+
+The unattended worker otherwise uses the client's default model. Pin one with
+`--model <model>` during plugin install; reinstall without model flags preserves
+the choice, and `--clear-model` restores the client default. `plugin doctor`
+reports the effective selection.
 
 For the provider versions exercised by the reference verification, a complete
 Slack message/List plus Azure Boards read set is:
