@@ -213,6 +213,8 @@ workgraph associations explain <event-id>
   Homebrew tap workflow.
 - [Connectors guide](docs/connectors.md) for connecting Slack, Notion, Azure
   Boards, calendar, mail, and other capture sources.
+- [Bridged-capture operator guide](docs/bridged-capture.md) for approved
+  AI-client capture setup, recovery, and verification.
 - [Roadmap](specs/roadmap.md) for current implementation direction.
 - [Init](specs/init.md), [start](specs/start.md), [today](specs/today.md),
   [resume](specs/resume.md), and [event associations](specs/event-associations.md)
