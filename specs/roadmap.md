@@ -67,13 +67,14 @@ follows `spec -> feature -> failing fact -> implementation -> pass -> roadmap`.
    explicit and discoverable, and preserve it across reinstall without parsing
    generated launchd files as configuration. [spec:
    `specs/bridge-worker-model.md`]
-7. [ ] **#120: publish one bridged-capture operator guide.** Consolidate setup,
+7. [x] **#120: publish one bridged-capture operator guide.** Consolidate setup,
    bridgeability rules, connector recipes, and recovery guidance after the
    preceding command surfaces stabilize; generate or fact-check packaged
-   contract copies against one canonical source.
-8. [ ] **#118: close as already implemented.** Scoped bridge configuration
+   contract copies against one canonical source. [guide: `docs/bridged-capture.md`]
+8. [x] **#118: close as already implemented.** Scoped bridge configuration
    already fails before save, legacy invalid scope is reported by status and
-   doctor, and invalid bridged connectors are not scheduled.
+   doctor, and invalid bridged connectors are not scheduled. [facts:
+   `facts/bridged_capture_test.go`]
 9. [x] **#119: absorbed into #123.** Azure CLI token and PAT guidance is
    already documented; runtime authentication readiness now belongs to the
    shared provider capability contract rather than an Azure-specific workgraph

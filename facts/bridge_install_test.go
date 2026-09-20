@@ -272,6 +272,30 @@ func TestSlackListsBridgeContractAllowsContentHashWithoutClaimingDeletion(t *tes
 	}
 }
 
+func TestBridgedCaptureOperatorGuideCoversSetupSupportAndRecovery(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join(repoRoot(t), "docs", "bridged-capture.md"))
+	if err != nil {
+		t.Fatalf("read bridged-capture operator guide: %v", err)
+	}
+	guide := string(contents)
+	for _, expected := range []string{
+		"workgraph plugin install --client codex",
+		"workgraph connectors connect <connector> --mode bridged",
+		"never receives the provider token",
+		"notion` | **no**",
+		"notion.activity` | **only**",
+		"workgraph capture requests --list",
+		"workgraph capture requests --cancel <request-id>",
+		"capture_request_fail",
+		"specs/bridged-capture.md",
+		".agents/skills/workgraph-bridge/SKILL.md",
+	} {
+		if !strings.Contains(guide, expected) {
+			t.Fatalf("operator guide omitted %q", expected)
+		}
+	}
+}
+
 func TestBridgeInstallPackagesCodexAndClaudeCodeIdempotently(t *testing.T) {
 	for _, client := range []string{"codex", "claude-code"} {
 		t.Run(client, func(t *testing.T) {

@@ -28,6 +28,9 @@ overwrite stored tokens.
 
 ## Bridged remote connectors
 
+For the complete setup, bridgeability, recovery, and verification workflow,
+see the [bridged-capture operator guide](bridged-capture.md).
+
 When workgraph itself is not approved for a provider OAuth connection, a
 signed-in Codex or Claude Code installation can execute capture through provider
 connectors already approved in that client. Install the workgraph agent plugin:
