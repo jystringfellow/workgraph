@@ -909,7 +909,7 @@ func verifyBridgeLifecycleRoundTrip() error {
 	if err != nil || len(claimed) != 1 {
 		return fmt.Errorf("claim disposable request: claims=%d error=%v", len(claimed), err)
 	}
-	if _, err := IngestBridgedCapture(BridgedIngestConfig{HomeDir: homeDir, DatabasePath: initialized.DatabasePath, RequestID: emitted.Request.ID, ClaimToken: claimed[0].ClaimToken, Input: strings.NewReader("[]")}); err != nil {
+	if _, err := IngestBridgedCapture(BridgedIngestConfig{HomeDir: homeDir, DatabasePath: initialized.DatabasePath, RequestID: emitted.Request.ID, ClaimToken: claimed[0].ClaimToken, Input: strings.NewReader(`{"events":[],"empty_proof":{"exhaustive_query":true}}`)}); err != nil {
 		return err
 	}
 	watermark, err := CaptureWatermark(CaptureRequestListConfig{HomeDir: homeDir, DatabasePath: initialized.DatabasePath, ConnectorID: "slack"})

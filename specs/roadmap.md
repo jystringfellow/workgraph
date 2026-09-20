@@ -50,10 +50,16 @@ follows `spec -> feature -> failing fact -> implementation -> pass -> roadmap`.
    `connectors required-tools`, and make unattended preflight consume the same
    declarations before claiming work. [spec:
    `specs/provider-tool-requirements.md`]
-4. [ ] **#102: make bridged provider recipes executable.** Use sanitized
+4. [x] **#102: make bridged provider recipes executable.** Use sanitized
    fixtures to verify the production normalization path for exact bounds,
    pagination, time zones, truncation, and proven-empty behavior; do not test a
    disconnected reference implementation.
+   - [x] Add the first executable Microsoft Calendar recipe fact for DST-aware
+     timezone conversion and preservation of provider-local start/end values.
+    - [x] Verify Microsoft Mail mailbox-local padding, exact UTC filtering,
+       contiguous pagination, and truncation rejection.
+    - [x] Require exhaustive-query or control-query proof before completing an
+       empty bounded bridge capture.
 5. [ ] **#101: add exact capture-request cancellation.** Preserve audit state,
    invalidate claimed capabilities, define idempotent terminal behavior, and
    keep cancellation out of unattended worker permissions.

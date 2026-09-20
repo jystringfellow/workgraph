@@ -125,9 +125,20 @@ Feature: Bridged connector capture
   Scenario: Apply provider-specific recipe correctness
     Given a bridged request needs secondary identity data or client-side filtering
     When the worker preflights and executes the provider recipe
-    Then Microsoft calendar verifies the resource read needed for its revision marker
+    Then Microsoft calendar converts Pacific Standard Time occurrences with DST-aware rules
+    And Microsoft calendar preserves provider-local start and end values in the normalized payload
+    And Microsoft calendar verifies the resource read needed for its revision marker
+    And Microsoft mail pads provider filters in mailbox-local time and filters exact UTC bounds client-side
+    And Microsoft mail follows contiguous offset pagination until results pass the lower bound
+    And Microsoft mail rejects non-contiguous or truncated pagination
     And Slack threads use detailed output and filter replies against exact bounds after reading
     And Azure Boards supplies an accessible project as routing context for collection-wide participant WIQL
+
+  Scenario: Prove an empty bounded bridge capture
+    Given a bounded bridged request has no matching provider events
+    When the worker submits an empty capture
+    Then workgraph accepts it only with an exhaustive query or passed control-query proof
+    And workgraph rejects a bare empty array as unproven
 
   Scenario: Bridge Notion participant activity that the public API cannot express
     Given the public Notion API cannot filter search by editor or creator workspace-wide
