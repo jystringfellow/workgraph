@@ -50,6 +50,20 @@ capture events → store → group → query (today / resume)
 - Log important actions for debugging
 - Make behavior testable
 
+### Code Comments
+
+Write code that communicates its behavior through clear naming, structure, types, and tests. Do not add code comments by default.
+
+- Use a test to document surprising or non-obvious behavior whenever practical.
+- Add a code comment only when the code cannot reasonably make an essential constraint or behavior clear on its own.
+- Keep necessary comments brief, precise, and limited to the code they directly describe.
+- Comments must describe the code as it exists now.
+- Never use comments to discuss previous implementations, removed behavior, migrations from an older approach, anticipated changes, or future states.
+- Do not add narrative comments that merely restate the code.
+- Do not add comments to explain a change made in the current task or PR.
+- Avoid TODO/FIXME comments; track future work outside the code instead.
+- Treat docstrings and documentation comments as code comments for these purposes, except when they are required for public API, generated documentation, or tooling.
+
 ## Connector Guidelines
 
 When adding an API-backed connector, prefer starting with the user-facing

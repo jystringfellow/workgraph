@@ -1,262 +1,78 @@
 # workgraph Roadmap
 
-## Recommended Priority Order
-1. **P0a now**: connector reliability and setup UX so capture is dependable and easy to configure.
-2. **P0b now**: shared suggestion substrate: durable suggestions, evidence, confidence, lifecycle, feedback, and suppression.
-3. **P0c now**: first deterministic suggestion producers, starting with watch-root or ignore-rule suggestions.
-4. **P0d now**: local-only feedback loop and personal effectiveness review once suggestion lifecycle records exist.
-5. **P1 next**: deterministic cross-source association baseline, then optional semantic association and hosted LLM controls.
-6. **P2 later**: action automation and broader platform/distribution work after trust and relevance loops are stable.
+The roadmap records current bets and sequencing. It does not define behavior;
+that belongs in the linked specs and executable facts.
+
+## Now
+
+These are the current bets, in priority order.
+
+1. **Finish connector setup UX.** Make calendar, mail, and Azure Boards setup
+   validation consistent with the existing connector runtime, including
+   draft-and-resume setup and test-before-save flows. [specs:
+   `specs/connector-setup.md` and `specs/connector-runtime.md`]
+2. **Make managed policy inspectable and complete.** Report setting provenance
+   in diagnostics and add administrator controls for connector enablement and
+   high-risk capture options. [specs: `specs/config.md` and
+   `specs/enterprise-security.md`]
+3. **Improve local context routing.** Add memory routing and indexing so the
+   relevant user-owned context can be selected by task without introducing
+   silent automation. [spec: `specs/memory.md`]
+4. **Expand deterministic coverage analysis.** Improve watch-root coverage and
+   suggestion quality using inspectable signals before adding more semantic or
+   hosted intelligence. [specs: `specs/watch-suggestions.md` and
+   `specs/ignore-suggestions.md`]
 
 Priority labels used below:
 
-- `P0a`: immediate reliability/setup foundation
-- `P0b`: immediate suggestion storage/trust substrate
-- `P0c`: first suggestion producers
-- `P0d`: feedback/review loop built on suggestion records
-- `P1`: next, after P0 trust loops are stable
-- `P2`: later
+- `P0`: current reliability, trust, and usability work
+- `P1`: next work after the current trust loop is stable
+- `P2`: later platform or automation work
 
-## Open Issue Delivery Plan
+## Next
 
-Work the current reliability backlog in this order. Each implementation slice
-follows `spec -> feature -> failing fact -> implementation -> pass -> roadmap`.
+- `P1` Add optional semantic association behind explicit opt-in and confidence
+  gates. [specs: `specs/event-associations.md` and
+  `specs/llm-integration.md`]
+- `P1` Add explicit hosted LLM credentials and outbound request controls.
+  [specs: `specs/llm-integration.md` and `specs/enterprise-security.md`]
+- `P1` Add recurring-collaborator people memory and task-based memory routing.
+  [spec: `specs/memory.md`]
+- `P1` Expand connector coverage to meetings, work tracking, and knowledge
+  bases as user-verifiable integrations. [specs: `specs/calendar.md`,
+  `specs/azure-boards.md`, and `specs/notion.md`]
+- `P1` Add preference modeling and locally resettable ranking weights while
+  preserving the explicit suggestion lifecycle. [spec:
+  `specs/personalization-feedback.md`]
 
-1. [x] **#117: restore personal meaning to Notion activity.** Keep workspace
-   inventory inspectable without presenting other people's edits as the user's
-   work in `today`; populate actor metadata first, then add stable Notion
-   project-root attribution and general actor/identity filters as explicit
-   follow-up slices.
-   - [x] Exclude raw Notion inventory from `today`, retain it in `events today`,
-     and populate inventory `actor` from `last_edited_by`. [specs:
-     `specs/notion.md` and `specs/today.md`]
-   - [x] Add stable Notion project-root attribution without treating an
-     immediate parent id as a durable project root. [spec: `specs/notion.md`]
-   - [x] Add exact, source-neutral `--actor` filtering to `today` and
-     `events today`. [spec: `specs/today.md`]
-   - [x] Add explicit event involvement metadata and make `today` default to
-     directly relevant activity; keep legacy evidence visible during migration
-     and retain `events today` as the complete evidence view. Do not add a
-     generic `--mine-only`. [spec: `specs/event-involvement.md`]
-2. [x] **#122: add one canonical connector registry.** Start with the smallest
-   registry that owns connector ids, supported capture modes, event source,
-   default interval, scheduling eligibility, and scope requirements. Add facts
-   that make a half-wired connector fail the build. Connector listing, id
-   validation, interval selection, event-source mapping, capture semantics,
-   bridged scheduling, and executable scope validators now derive from the
-   registry. [spec: `specs/connector-runtime.md`]
-3. [x] **#123: declare complete provider-tool requirements.** Extend the
-   registry with fetch and identity-construction capabilities, expose them via
-   `connectors required-tools`, and make unattended preflight consume the same
-   declarations before claiming work. [spec:
-   `specs/provider-tool-requirements.md`]
-4. [x] **#102: make bridged provider recipes executable.** Use sanitized
-   fixtures to verify the production normalization path for exact bounds,
-   pagination, time zones, truncation, and proven-empty behavior; do not test a
-   disconnected reference implementation.
-   - [x] Add the first executable Microsoft Calendar recipe fact for DST-aware
-     timezone conversion and preservation of provider-local start/end values.
-    - [x] Verify Microsoft Mail mailbox-local padding, exact UTC filtering,
-       contiguous pagination, and truncation rejection.
-    - [x] Require exhaustive-query or control-query proof before completing an
-       empty bounded bridge capture.
-5. [x] **#101: add exact capture-request cancellation.** Preserve audit state,
-   invalidate claimed capabilities, define idempotent terminal behavior, and
-   keep cancellation out of unattended worker permissions.
-6. [x] **#121: persist unattended worker model selection.** Make model choice
-   explicit and discoverable, and preserve it across reinstall without parsing
-   generated launchd files as configuration. [spec:
-   `specs/bridge-worker-model.md`]
-7. [x] **#120: publish one bridged-capture operator guide.** Consolidate setup,
-   bridgeability rules, connector recipes, and recovery guidance after the
-   preceding command surfaces stabilize; generate or fact-check packaged
-   contract copies against one canonical source. [guide: `docs/bridged-capture.md`]
-8. [x] **#118: close as already implemented.** Scoped bridge configuration
-   already fails before save, legacy invalid scope is reported by status and
-   doctor, and invalid bridged connectors are not scheduled. [facts:
-   `facts/bridged_capture_test.go`]
-9. [x] **#119: absorbed into #123.** Azure CLI token and PAT guidance is
-   already documented; runtime authentication readiness now belongs to the
-   shared provider capability contract rather than an Azure-specific workgraph
-   credential path.
+## Later
 
-## Phase 0: Core loop (weekend V1)
-- [x] Discoverable root and per-command CLI help. [spec: `specs/cli-help.md`]
-- [x] CLI: workgraph init
-- [x] CLI: workgraph start
-- [x] Foreground file capture
-- [x] Background capture controls
-- [x] macOS capture supervisor keeps the worker's parent alive so detached HTTPS connector polling retains platform certificate verification. [spec: `specs/capture-controls.md`]
-- [x] CLI: workgraph today
-- [x] CLI: workgraph resume <project>
-- [x] Local config file
-- [x] Sane default watch roots
-- [x] Configurable ignored paths and names
-- [ ] CLI removal of configured watch roots with `workgraph settings remove-watch <path>`.
-- [x] SQLite event store
-- [x] Database indices on events (timestamp, project, source, type) to prevent full-table-scan degradation as event volume grows. [spec: `specs/architecture-improvements.md`]
-- [x] File system watcher
-- [x] Basic project inference (repo/folder name)
-- [x] Git-root project inference
-- [x] Session grouping (time-based)
-- [x] Simple output (no LLM)
-- [x] Bounded one-line event previews in `today` with a detailed `events today` handoff. [spec: `specs/today.md`]
+- `P2` Approval-based actions: draft responses, draft PR comments, suggested
+  commits, and explicit execution approval.
+- `P2` Stronger local security: SQLite encryption, OS credential-store-backed
+  keys, Windows credential ACLs, and Windows CI coverage.
+- `P2` Broader distribution: Scoop, plugin expansion, and an open-source
+  release workflow. [spec: `specs/distribution.md`]
+- `P2` Desktop UI after the local CLI and data contracts are stable.
 
-## Phase 1: Initial integrations
-- [x] Git integration (commits, branches)
-- [x] GitHub ingestion (PRs, issues)
+## Recently Delivered
 
-## Phase 2: Active memory layer
-- [x] Markdown memory repo
-- [x] Load memory into system
-- [x] Resume explicit project from memory-only context
-- [x] Personal memory (role, priorities, principles, preferences, working style, AI collaboration)
-- [x] Organization memory (strategic themes, strategy, planning notes, operating principles)
-- [x] Team memory (strategy, people, operating norms, rituals, ownership, goals)
-- [x] Evidence can suggest memory updates without becoming memory automatically
-- [x] Link events ↔ memory (projects, people)
-
-## Phase 3: Connectors
-- [x] Slack ingestion (messages, threads)
-   - [x] Fix Slack thread polling so replies added to already-seen parent messages are captured.
-   - [x] Make Slack DM opt-in OAuth-aware.
-   - [x] Resolve Slack conversation and user display names.
-   - [ ] People memory files or index for recurring collaborators discovered through connectors.
-- [ ] Calendar ingestion (Google Calendar, Outlook Calendar)
-   - [x] Normalized calendar.event capture from provider-neutral JSON export.
-   - [x] Google Calendar event capture maps provider API events into calendar.event.
-   - [x] Google Calendar OAuth connect stores local connector settings.
-   - [x] Google Calendar browser OAuth uses PKCE with the default workgraph client id.
-   - [x] Google Calendar OAuth token exchange uses the workgraph Cloudflare relay with local `.dev.vars` development setup.
-   - [x] Google Calendar disconnect revokes the stored token and removes local connector settings, including local recovery when Google reports the token is already invalid.
-   - [x] Google Calendar token refresh.
-   - [x] Microsoft publisher-domain verification file is hosted from the workgraph Pages site.
-   - [x] Microsoft Calendar OAuth connect uses PKCE and stores local connector settings.
-   - [x] Microsoft Calendar disconnect removes local connector settings while preserving other providers.
-   - [x] Background polling from stored calendar connector settings. [P0a, spec: `specs/connector-runtime.md`]
-- [ ] Mail ingestion (Gmail, Outlook Mail)
-   - [x] Google Mail uses the existing Google OAuth app.
-   - [x] Only full-content mail capture, no separate modes.
-   - [x] Google Mail OAuth planning for Restricted Gmail scopes.
-   - [x] Google Mail OAuth connect stores local connector settings.
-   - [x] Google Mail disconnect revokes and removes local connector settings.
-   - [x] Google Mail capture into normalized mail events.
-   - [x] Microsoft Graph Mail OAuth planning with incremental delegated consent.
-   - [x] Microsoft Mail OAuth connect stores local connector settings.
-   - [x] Microsoft Mail disconnect removes local connector settings.
-   - [x] Microsoft Mail capture into normalized mail events.
-- [ ] Meeting ingestion (Zoom, Google Meet, Microsoft Teams metadata/transcripts when explicitly available)
-   - [ ] Meeting notes archive with index, decisions, and action items.
-- [ ] Work tracking ingestion (Jira, Azure DevOps, Linear)
-   - [x] Azure DevOps authentication via Microsoft Entra ID as a separate connector from Microsoft Graph mail/calendar.
-   - [ ] Advanced manual-token/PAT setup for enterprise environments where OAuth app approval is blocked or slow.
-- [ ] Knowledge base ingestion (Notion, Confluence, Google Docs/Drive)
-   - [x] Notion OAuth connect/disconnect.
-   - [x] Notion page/database capture into normalized knowledge events.
-   - [x] Advanced manual-token setup for Notion internal integrations when OAuth is not practical.
-   - [ ] Knowledge claim notes for durable beliefs and decision rationale.
-   - [ ] Rich local HTML artifacts/reports linked to memory and evidence.
-- [ ] LLM connector
-   - [x] Local config for provider/model selection.
-   - [x] Signed-in Codex and Claude Code client profiles for credential-free LLM testing and summaries, with per-task routing and managed client allowlists. [P1, spec: `specs/llm-integration.md`]
-   - [ ] Explicit opt-in hosted LLM credentials and outbound request controls. [P1, spec: `specs/llm-integration.md`]
-   - [ ] Fact-backed summary/suggestion command path using the configured LLM.
-- [ ] Configurable connector framework
-   - [x] Connected services poll automatically from `workgraph start` with visible controls. [P0a, spec: `specs/connector-runtime.md`]
-   - [x] Bridged connector capture through approved AI-client connectors, with daemon-owned cadence, durable outbox ingestion, and Claude Code/Codex macOS reference integrations. [P0a, spec: `specs/bridged-capture.md`]
-      - [x] Harden bridge connections with required non-secret scope, claim-visible parameters, trusted auto-discovered least-privilege Claude permissions, opt-in provider tools, capability-gated claims, object-shaped MCP results, direct-only Notion enforcement, Slack Lists hash revisions, scope replacement, and idempotent worker reload. [P0a, issue: #98]
-      - [x] Add complete-snapshot Slack Lists bridging with deterministic row keys, Done normalization, content-hash revisions, explicit request semantics, verified provider recipes, and a non-secret launchd worker environment. [P0a, issue: #98, spec: `specs/bridged-capture.md`]
-      - [x] Share per-List state and interest-column interpretation across direct and bridged Slack Lists capture without filtering raw evidence. [P0a, issue: #98, specs: `specs/slack.md` and `specs/bridged-capture.md`]
-      - [x] Accept raw Slack Lists CSV at bridged ingest and preserve matching-token failure diagnostics after lease expiry. [P0a, issue: #105, spec: `specs/bridged-capture.md`]
-      - [x] Replace GitHub's cloned-repository fan-out with participant-scoped `[since, until]` search capture (involves/review-requested PRs and issues, batched `always_repositories`, bisected 1,000-result cap, cursor-advancing transaction), fix unsupported `headRefName`/`headSha` search JSON fields, and require explicit reconnection for legacy repository-only bridged configurations. [P0a, issue: #107, specs: `specs/github.md` and `specs/bridged-capture.md`]
-      - [x] Fix the direct Notion connector's all-or-nothing search pagination (sorted, watermark-bounded, incrementally written, cursor-tracked, capped preview fetch) and add a bridged-only `notion.activity` connector for participant-scoped edited/created activity the public REST API cannot express, sharing the direct connector's event identity for free de-duplication. [P0a, issue: #110, specs: `specs/notion.md` and `specs/bridged-capture.md`]
-      - [x] Schedule ready `notion.activity` connectors from daemon startup so their configured cadence emits capture requests. [P0a, issue: #114, spec: `specs/bridged-capture.md`]
-   - [x] One-command `workgraph` agent plugin installation for Codex and Claude Code, bundling the local MCP plus bridge, memory, and AI checkpoint skills. [P0a, spec: `specs/agent-plugin.md`]
-   - [x] Connector poll failures are isolated from the daemon, recorded in connector state, logged, and shown by `workgraph status`. Fatal local capture exits preserve their last error. [P0a, specs: `specs/connector-runtime.md` and `specs/capture-controls.md`]
-   - [x] Preserve replacement daemon state when a prior worker exits late so `workgraph status` cannot report a healthy replacement as stopped. [P0a, issue: #109, spec: `specs/capture-controls.md`]
-   - [x] Detect and report stale daemon and MCP binaries after executable upgrades, with explicit daemon/client restart guidance. [P0a, issue: #98, specs: `specs/start.md`, `specs/bridged-capture.md`, and `specs/agent-plugin.md`]
-   - [x] Bound connector polls with request deadlines and retry backoff so a stalled or failing provider cannot block the shared capture loop. [P0a, specs: `specs/connector-runtime.md` and `specs/architecture-improvements.md`]
-   - [ ] Memory routing/index file for loading relevant context by task.
-   - [x] Connector setup handoff state: `draft`, `ready`, `error`, validation timestamps, validation errors, and `connectors status`. [P0a, spec: `specs/connector-runtime.md` and `specs/connector-setup.md`]
-   - [ ] Interactive connector setup wizard for required/optional params with inline help. [P0a, spec: `specs/connector-setup.md`]
-   - [ ] Connector setup validation flow (test connection before save, draft-and-resume support). [P0a, spec: `specs/connector-setup.md`]
-   - [ ] Connector validation implemented for calendar, mail, and azure.boards (currently only github and notion implement `connectors validate`). [P0a]
-
-## Phase 3.5: Enterprise security and compliance
-- [x] IT-readable Slack/compliance document
-- [x] Admin-controlled managed settings file that overrides local user config for workgraph's own behavior. [spec: `specs/config.md` and `specs/enterprise-security.md`]
-  - [x] First managed settings reader with fixed platform-managed runtime paths and internal fact-only path injection.
-  - [x] Admin deployment guide and recommended managed settings policy example for endpoint-managed devices.
-  - [x] `workgraph settings get` reports effective LLM managed settings without exposing secrets.
-  - [x] `workgraph settings get --format json` reports effective managed controls, provenance, and non-secret local settings counts.
-  - [x] Managed LLM policy is enforced before provider calls.
-  - [x] Managed LLM provider/model allowlists plus Bedrock exact ARN and account/region inference profile scope allowlists are enforced before provider calls.
-  - [x] OpenAI-compatible LLM profiles can be verified against `/v1/models`, and managed settings can require model advertisement before prompt content is sent.
-  - [x] Locked managed Slack DM policy is enforced before OAuth scope requests and capture startup.
-- [ ] Managed setting provenance in `workgraph doctor`, `workgraph settings get`, and machine-readable diagnostics.
-- [x] Admin controls for disabling hosted LLM providers or restricting OpenAI-compatible LLM endpoints to approved local/company URLs.
-- [ ] Admin controls for connector enablement and high-risk connector options such as Slack DM capture and mail body capture.
-  - [x] Managed connector allowlists and denylists are enforced before setup, enablement, and polling.
-  - [x] Slack direct-message and group-direct-message capture can be locked off with managed settings.
-- [x] Machine-readable, secret-free `workgraph security report` for endpoint verification, with stable findings and an administrator review guide. [spec: `specs/enterprise-security.md`]
-- [ ] SQLite encryption at rest
-- [ ] OS credential-store backed SQLite encryption keys
-- [x] POSIX connector credential file permission hardening
-- [x] POSIX SQLite, settings, and daemon runtime file permission hardening and repair.
-- [ ] Windows connector credential ACL design and CI readiness
-- [ ] Windows connector credential ACL implementation verified by Windows CI
-- [ ] OS credential-store backed connector secrets
-- [x] Manual-token connector setup pattern: OAuth remains the default, while `connect-token` style commands support local-only PAT/internal-token use with clear warnings.
-- [x] Hosted LLM opt-in controls [P1, spec: `specs/enterprise-security.md`]
-- [x] Local outbound LLM filtering for secrets and configured sensitive patterns
-- [x] Network destination transparency [P1, spec: `specs/enterprise-security.md`]
-
-## Phase 4: Suggestions and intelligence
-- [ ] Suggest watch roots from external signals
-- [ ] Deterministic watch-budget coverage analysis: report per-root/project watch cost, covered and uncovered directories, recent activity, and explicit `add-watch`, `remove-watch`, or ignore-rule recommendations without relying on an LLM.
-- [x] Suggest ignore rules from noisy tracked activity
-- [ ] Session summaries
-- [ ] Task extraction
-- [ ] “What next?” suggestions [P1, spec: `specs/today.md`]
-- [ ] Resume improvements
-- [x] Local AI coding session continuity: `workgraph ai run`, cooperative `ai checkpoint`, `ai sessions`, and deterministic `ai show` for cooperating CLI agents, with checkout-aware observed state, conservative derived status, and a strict observed/agent-stated trust boundary. [P1, spec: `specs/ai-sessions.md`]
-- [x] Agent-invoked AI checkpoint UX: bundled `$workgraph-ai-checkpoint` skill plus a secret-free CLI receipt with session and event IDs. [P1, spec: `specs/ai-sessions.md`]
-- [x] Native AI session continuation: rename the read-only projector to `ai show`, bind verified Codex, Claude Code, direct GitHub Copilot CLI, and OpenCode session IDs, make `ai resume` launch native continuation, and link resumed workgraph lifetimes. [P1, spec: `specs/ai-sessions.md`]
-- [x] AI session lifecycle UX: reversible event-sourced archive/unarchive, guarded atomic bulk selection, archived-only/all visibility, derived-status and date filtering, and disclosed deterministic result limits. [P1, spec: `specs/ai-sessions.md`]
-- [x] Resume relevance gate for bare `workgraph resume`, preserving exact `resume <project>` and adding an `--all` escape hatch. [P1, spec: `specs/resume.md` and `specs/architecture-improvements.md`]
-- [x] Shared suggestion storage: ids, type, reason, evidence, confidence, lane, lifecycle state, feedback, and suppression. [P0b, spec: `specs/suggestion-explainability.md` and `specs/db-contracts.md`]
-- [x] Explainable suggestion evidence trails with per-suggestion suppression controls. [P0b, spec: `specs/suggestion-explainability.md`]
-- [x] Suggestion snooze expiration: resurface snoozed suggestions when their scheduled `until_at` time passes. [P0b]
-- [x] First deterministic suggestion producer: ignore-rule or watch-root suggestions. [P0c, spec: `specs/ignore-suggestions.md` and `specs/watch-suggestions.md`]
-- [x] Cross-source event association baseline (deterministic IDs + local fuzzy heuristics) without LLM dependency. [P1, spec: `specs/event-associations.md` and `specs/architecture-improvements.md`]
-- [x] Compact high-confidence deterministic association context in `workgraph today`, additive to raw events and sessions. [P1, spec: `specs/event-associations.md` and `specs/today.md`]
-- [ ] Optional semantic association lane (LLM/embeddings) behind explicit opt-in and confidence gates. [P1, spec: `specs/event-associations.md` and `specs/llm-integration.md`]
-- [x] Local personal effectiveness review (no telemetry): deterministic current-week/7d/30d windows, acceptance/dismissal/snooze rates, dismissal reasons, connector freshness and degradation, honest insufficient-data states, time-to-useful, and equivalent text/JSON output. [P0d, spec: `specs/effectiveness-review.md`]
-
-## Phase 5: Personalization
-- [ ] Voice/tone learning
-- [ ] Preference modeling [P1, spec: `specs/personalization-feedback.md`]
-- [ ] Decision heuristics
-- [x] Local feedback event capture (accept, dismiss, snooze, complete) with append-only history and transactional suggestion lifecycle updates; ranking remains future work. [P0b, spec: `specs/personalization-feedback.md` and `specs/db-contracts.md`]
-- [ ] Per-user ranking weights learned locally with reset/export controls. [P1, spec: `specs/personalization-feedback.md`]
-- [ ] Advanced editable local preference rules in addition to interaction-driven learning. [P1, spec: `specs/personalization-feedback.md`]
-
-## Phase 6: Actions
-- [ ] Draft responses (Slack/GitHub)
-- [ ] Draft PR comments
-- [ ] Suggested commits
-- [ ] Approval-based execution
-
-## Phase 7: Platform
-- [x] CI blocks pull requests on `go vet ./...` and the full Go suite on Linux and macOS. [spec: `specs/ci.md`]
-- [x] Facts use portable temporary directories and one suite-built CLI binary so cold compilation is not charged to daemon command timeouts. [spec: `specs/ci.md`]
-- [ ] Distribution
-   - [x] Inspectable `workgraph version` build identity and corrected Go install/upgrade PATH guidance. [spec: `specs/distribution.md`]
-   - [x] Homebrew formula/tap.
-      - [x] Generate a checksum-pinned cross-platform formula and conditionally publish it with a separately scoped tap token. [spec: `specs/distribution.md`]
-      - [x] Create/configure `jystringfellow/homebrew-tap` and validate installation against the first tagged release.
-   - [ ] Scoop manifest.
-   - [x] Tag-driven native macOS, Linux, and Windows release archives with SHA-256 checksums and a pre-publish vet/full-suite gate. [spec: `specs/distribution.md`]
-- [ ] Plugin system
-- [ ] Desktop UI (Tauri)
-- [ ] Open-source release
+- Connector registry, setup state, polling isolation, deadlines, retry
+  backoff, and provider tool requirements. [specs:
+  `specs/connector-runtime.md` and `specs/provider-tool-requirements.md`]
+- Bridged capture hardening, executable provider recipes, cancellation,
+  worker model persistence, and operator documentation. [spec:
+  `specs/bridged-capture.md`]
+- Notion activity attribution, event involvement, and source-neutral actor
+  filtering. [specs: `specs/notion.md` and `specs/event-involvement.md`]
+- Suggestion storage, explainability, feedback lifecycle, deterministic
+  producers, associations, and effectiveness review. [specs:
+  `specs/suggestion-explainability.md`, `specs/event-associations.md`, and
+  `specs/effectiveness-review.md`]
+- AI session continuity, native continuation, lifecycle controls, and agent
+  plugin installation. [specs: `specs/ai-sessions.md` and
+  `specs/agent-plugin.md`]
+- Managed settings, enterprise security reporting, local LLM filtering, CI,
+  and cross-platform release packaging. [specs:
+  `specs/enterprise-security.md`, `specs/llm-integration.md`,
+  `specs/ci.md`, and `specs/distribution.md`]

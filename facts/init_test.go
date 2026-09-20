@@ -14,10 +14,6 @@ import (
 	workgraph "github.com/jystringfellow/workgraph"
 )
 
-// First implementation slice: replace the home and database placeholders with
-// executable assertions, verify they fail, then implement only enough init
-// behavior to pass them before expanding the slice.
-
 func TestInitCreatesworkgraphHome(t *testing.T) {
 	homeDir := filepath.Join(t.TempDir(), ".workgraph")
 

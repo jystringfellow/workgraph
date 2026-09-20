@@ -340,7 +340,6 @@ func TestSnoozedSuggestionResurfacesAfterExpiryWindow(t *testing.T) {
 		t.Fatalf("create suggestion: %v", err)
 	}
 
-	// Snooze the suggestion.
 	if err := workgraph.UpdateSuggestionStatus(workgraph.SuggestionStatusUpdate{
 		DatabasePath: result.DatabasePath,
 		ID:           suggestion.ID,

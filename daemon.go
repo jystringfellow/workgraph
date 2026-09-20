@@ -174,9 +174,6 @@ func RunDaemon(config DaemonConfig) error {
 		}
 		return runErr
 	}
-	// The controlling stop/status path removes state after observing this worker.
-	// A worker must not remove shared state here because a replacement may have
-	// become ready while this process was still shutting down.
 	return nil
 }
 
