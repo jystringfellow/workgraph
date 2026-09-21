@@ -14,3 +14,7 @@ The first health report checks:
 
 Doctor output is diagnostic only. It should suggest visible setup actions, but
 it must not start capture, refresh tokens, contact APIs, or modify local state.
+Presence is not reported as authentication health. In particular, a stored
+Azure Boards token is labeled `token present (not validated)`; active Azure CLI
+health belongs to `workgraph connectors doctor` for an explicitly configured
+`azcli` bridge.

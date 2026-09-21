@@ -22,7 +22,9 @@ workgraph connectors interval <connector> 15m
 
 `connectors doctor` reports local connector state that needs attention, such as
 legacy configs without setup handoff state or credentials that recently failed
-with invalid-auth errors. `connectors upgrade` performs a local-only
+with invalid-auth errors. For an Azure Boards bridge explicitly configured with
+`--authentication azcli`, it also verifies that Azure CLI can issue a current
+access token. `connectors upgrade` performs a local-only
 reconciliation of `connectors.json`; it does not contact provider APIs or
 overwrite stored tokens.
 
@@ -136,6 +138,10 @@ client connector supports one and long-lived unattended behavior matters. For
 Azure DevOps-only identities, `az login` may report `No subscriptions found`;
 that message is not itself an Azure DevOps authentication failure, so use the
 token command and an actual read-only Azure DevOps discovery call as the check.
+Configure that health check with `workgraph connectors connect azure.boards
+--mode bridged --authentication azcli ...`; `workgraph connectors doctor`
+repeats it. Use `--authentication pat` when the separately configured provider
+MCP owns a PAT; workgraph does not read or store that secret.
 If the MCP server is registered through `npx -y @azure-devops/mcp`, its first
 launch may spend longer than a client's connection timeout resolving or
 downloading the package. For unattended capture, install or pre-resolve the

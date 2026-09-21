@@ -104,6 +104,12 @@ Feature: Bridged connector capture
     And capture and connector status results report running and on-disk MCP builds
     And a client session whose executable changed reports that its MCP server is stale
 
+  Scenario: Retire stale and orphaned local MCP servers
+    Given a local bridge MCP server is idle with its input still open
+    When its startup executable is deleted or replaced
+    Then the MCP server exits without waiting for another request
+    And an operator can enumerate and stop all verified MCP servers for the workgraph home
+
   Scenario: Skip work that the unattended client cannot execute
     Given a healthy connector has pending bridged work
     And the unattended client lacks an authorized provider read tool for it

@@ -150,7 +150,7 @@ The initial required parameter shapes are:
 | `slack.lists` | non-empty `lists` array; optional per-id `list_options` with `state`, `interest_columns`, and ordered `row_key_candidates`; legacy top-level `done_column` and `row_key_candidates` remain accepted |
 | `mail.google` / `mail.microsoft` | non-empty `mailboxes` or `folders` array and positive `preview_limit` |
 | `calendar.google` / `calendar.microsoft` | non-empty `calendars` array plus non-negative `past_days` and positive `future_days` |
-| `azure.boards` | non-empty `organization` plus either `project` and `area_path`, or participant scope with `identity` and `include` values from `authored` and `assigned` |
+| `azure.boards` | non-empty `organization` plus either `project` and `area_path`, or participant scope with `identity` and `include` values from `authored` and `assigned`; optional `authentication` is `azcli` or `pat` |
 | `notion.activity` | participant scope with `identity` and `include` values from `edited` and `created`; optional `bootstrap_lookback` (positive duration string, default `168h`) |
 
 Participant scope is connector-specific rather than a universal provider
@@ -426,6 +426,13 @@ boolean, and restart guidance when they differ. The MCP process snapshots its
 executable when the server starts and checks the path again for every reported
 runtime record. This makes a long-lived client session visibly stale after an
 in-place executable upgrade instead of presenting old tool behavior as current.
+
+An idle MCP server also checks its startup executable periodically. If that
+path disappears or no longer identifies the startup binary, the server exits
+without waiting for another request so a client cannot retain deleted or stale
+code indefinitely. Operators can run `workgraph bridge mcp status` to enumerate
+servers for one workgraph home and `workgraph bridge mcp stop` to terminate all
+verified matches. Stop reports success only after those processes exit.
 
 ## Ingest contract
 

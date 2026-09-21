@@ -17,7 +17,8 @@ import (
 )
 
 type ConnectorListConfig struct {
-	HomeDir string
+	HomeDir         string
+	AzureCLICommand string
 }
 
 type ConnectorListResult struct {
@@ -58,10 +59,12 @@ type ConnectorModeConfig struct {
 }
 
 type ConnectorBridgeConfig struct {
-	HomeDir      string
-	ID           string
-	Interval     time.Duration
-	BridgeParams json.RawMessage
+	HomeDir         string
+	ID              string
+	Interval        time.Duration
+	BridgeParams    json.RawMessage
+	Authentication  string
+	AzureCLICommand string
 }
 
 type ConnectorUpdateConfig struct {
@@ -188,7 +191,14 @@ func ConfigureBridgedConnector(config ConnectorBridgeConfig) (ConnectorConnectRe
 	if err != nil {
 		return ConnectorConnectResult{}, err
 	}
-	params, err := validatedBridgeParams(id, config.BridgeParams)
+	if strings.TrimSpace(config.Authentication) != "" && id != "azure.boards" {
+		return ConnectorConnectResult{}, fmt.Errorf("connector authentication mode is only supported for azure.boards")
+	}
+	paramsInput, err := bridgeParamsWithAuthentication(config.BridgeParams, config.Authentication)
+	if err != nil {
+		return ConnectorConnectResult{}, err
+	}
+	params, err := validatedBridgeParams(id, paramsInput)
 	if err != nil {
 		return ConnectorConnectResult{}, err
 	}
@@ -197,6 +207,11 @@ func ConfigureBridgedConnector(config ConnectorBridgeConfig) (ConnectorConnectRe
 	}
 	if err := enforceConnectorManagedSettings(id); err != nil {
 		return ConnectorConnectResult{}, err
+	}
+	if id == "azure.boards" && bridgeAuthentication(params) == "azcli" {
+		if err := validateAzureCLIAuthentication(config.AzureCLICommand); err != nil {
+			return ConnectorConnectResult{}, err
+		}
 	}
 	connectorPollStateMu.Lock()
 	defer connectorPollStateMu.Unlock()
@@ -272,6 +287,35 @@ func validatedBridgeParams(connectorID string, raw json.RawMessage) (json.RawMes
 		params = json.RawMessage(encoded)
 	}
 	return params, nil
+}
+
+func bridgeParamsWithAuthentication(raw json.RawMessage, authentication string) (json.RawMessage, error) {
+	authentication = strings.ToLower(strings.TrimSpace(authentication))
+	if authentication == "" {
+		return raw, nil
+	}
+	params, err := canonicalBridgeParams(raw)
+	if err != nil {
+		return nil, fmt.Errorf("bridge parameters must be a JSON object: %w", err)
+	}
+	values := bridgeParamValues{}
+	if err := json.Unmarshal(params, &values); err != nil {
+		return nil, fmt.Errorf("decode bridge parameters: %w", err)
+	}
+	if configured := values.stringValue("authentication"); configured != "" && configured != authentication {
+		return nil, fmt.Errorf("bridge authentication %q conflicts with params authentication %q", authentication, configured)
+	}
+	encoded, _ := json.Marshal(authentication)
+	values["authentication"] = encoded
+	return json.Marshal(values)
+}
+
+func bridgeAuthentication(raw json.RawMessage) string {
+	values := bridgeParamValues{}
+	if json.Unmarshal(raw, &values) != nil {
+		return ""
+	}
+	return strings.ToLower(values.stringValue("authentication"))
 }
 
 type bridgeParamValues map[string]json.RawMessage
@@ -419,6 +463,9 @@ func validateCalendarBridgeParams(connectorID string, values bridgeParamValues) 
 }
 
 func validateAzureBoardsBridgeParams(values bridgeParamValues) (bool, error) {
+	if authentication := strings.ToLower(values.stringValue("authentication")); authentication != "" && authentication != "azcli" && authentication != "pat" {
+		return false, fmt.Errorf("bridged azure.boards authentication must be azcli or pat")
+	}
 	projectScope := values.requireString("project") && values.requireString("area_path")
 	participant := values.participantScope("authored", "assigned")
 	if !values.requireString("organization") || (!projectScope && !participant) {
@@ -715,8 +762,36 @@ func DoctorConnectors(config ConnectorListConfig) (ConnectorDoctorResult, error)
 		HomeDir:  homeDir,
 		Findings: connectorHealthFindings(homeDir, state),
 	}
+	azureEntry := state.entry("azure.boards")
+	if connectorCaptureMode(state, "azure.boards") == "bridged" && bridgeAuthentication(azureEntry.BridgeParams) == "azcli" {
+		if err := validateAzureCLIAuthentication(config.AzureCLICommand); err != nil {
+			result.Findings = append(result.Findings, ConnectorHealthFinding{ID: "azure.boards", Status: "authentication failed", Details: err.Error()})
+			sort.SliceStable(result.Findings, func(i, j int) bool { return result.Findings[i].ID < result.Findings[j].ID })
+		}
+	}
 	result.Message = connectorDoctorMessage(result)
 	return result, nil
+}
+
+func validateAzureCLIAuthentication(command string) error {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		command = "az"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, command, "account", "get-access-token").CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return fmt.Errorf("validate Azure CLI authentication: timed out after 15s")
+	}
+	details := strings.TrimSpace(string(output))
+	if details == "" {
+		details = err.Error()
+	}
+	return fmt.Errorf("validate Azure CLI authentication: %s", details)
 }
 
 func UpgradeConnectors(config ConnectorListConfig) (ConnectorUpgradeResult, error) {

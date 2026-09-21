@@ -39,6 +39,7 @@ const (
 	defaultConnectorPollTimeout  = 30 * time.Second
 	defaultConnectorRetryInitial = 5 * time.Second
 	defaultConnectorRetryMax     = 5 * time.Minute
+	connectorShutdownTimeout     = 5 * time.Second
 )
 
 type RunConfig struct {
@@ -325,7 +326,7 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 	}, nil
 }
 
-func (capture *RunCapture) Run(ctx context.Context) error {
+func (capture *RunCapture) Run(ctx context.Context) (runErr error) {
 	defer capture.Close()
 
 	pollContext, stopPollers := context.WithCancel(ctx)
@@ -346,7 +347,23 @@ func (capture *RunCapture) Run(ctx context.Context) error {
 	}
 	defer func() {
 		stopPollers()
-		pollers.Wait()
+		stopped := make(chan struct{})
+		go func() {
+			pollers.Wait()
+			close(stopped)
+		}()
+		timer := time.NewTimer(connectorShutdownTimeout)
+		defer timer.Stop()
+		select {
+		case <-stopped:
+		case <-timer.C:
+			shutdownErr := fmt.Errorf("connector shutdown timed out after %s", connectorShutdownTimeout)
+			if runErr == nil {
+				runErr = shutdownErr
+			} else {
+				runErr = fmt.Errorf("%v; %w", runErr, shutdownErr)
+			}
+		}
 	}()
 
 	for {
@@ -357,7 +374,10 @@ func (capture *RunCapture) Run(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-			if err := capture.handleEvent(event); err != nil {
+			if err := capture.handleEvent(ctx, event); err != nil {
+				if ctx.Err() != nil && errors.Is(err, context.Canceled) {
+					return nil
+				}
 				return err
 			}
 		case err, ok := <-capture.watcher.Errors:
@@ -796,7 +816,7 @@ func (capture *RunCapture) Close() error {
 	return closeErr
 }
 
-func (capture *RunCapture) handleEvent(event fsnotify.Event) error {
+func (capture *RunCapture) handleEvent(ctx context.Context, event fsnotify.Event) error {
 	if shouldIgnorePath(event.Name, capture.homeDir, capture.databasePath, capture.ignorePaths, capture.ignoreNames) {
 		return nil
 	}
@@ -816,19 +836,19 @@ func (capture *RunCapture) handleEvent(event fsnotify.Event) error {
 		if capture.shouldSuppressCreate(event.Name) {
 			return nil
 		}
-		if err := capture.recordFileEvent(time.Now().UTC(), "created", event.Name); err != nil {
+		if err := capture.recordFileEvent(ctx, time.Now().UTC(), "created", event.Name); err != nil {
 			return err
 		}
 	}
 
 	if event.Has(fsnotify.Write) {
-		if err := capture.recordFileEvent(time.Now().UTC(), "modified", event.Name); err != nil {
+		if err := capture.recordFileEvent(ctx, time.Now().UTC(), "modified", event.Name); err != nil {
 			return err
 		}
 	}
 
 	if event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename) {
-		if err := capture.recordDeleteOrReplace(event.Name); err != nil {
+		if err := capture.recordDeleteOrReplace(ctx, event.Name); err != nil {
 			return err
 		}
 	}
@@ -836,13 +856,13 @@ func (capture *RunCapture) handleEvent(event fsnotify.Event) error {
 	return nil
 }
 
-func (capture *RunCapture) recordDeleteOrReplace(path string) error {
+func (capture *RunCapture) recordDeleteOrReplace(ctx context.Context, path string) error {
 	time.Sleep(capture.deleteCoalesceDelay)
 	if _, err := os.Stat(path); err == nil {
 		capture.suppressedCreates[path] = time.Now().Add(500 * time.Millisecond)
-		return capture.recordFileEvent(time.Now().UTC(), "modified", path)
+		return capture.recordFileEvent(ctx, time.Now().UTC(), "modified", path)
 	}
-	return capture.recordFileEvent(time.Now().UTC(), "deleted", path)
+	return capture.recordFileEvent(ctx, time.Now().UTC(), "deleted", path)
 }
 
 func (capture *RunCapture) shouldSuppressCreate(path string) bool {
@@ -865,7 +885,7 @@ func isTransientEditorPath(path string) bool {
 	return strings.Contains(name, ".sb-")
 }
 
-func (capture *RunCapture) recordFileEvent(now time.Time, operation string, path string) error {
+func (capture *RunCapture) recordFileEvent(ctx context.Context, now time.Time, operation string, path string) error {
 	payload, err := json.Marshal(fileEventPayload{
 		Path:      path,
 		Operation: operation,
@@ -880,7 +900,7 @@ func (capture *RunCapture) recordFileEvent(now time.Time, operation string, path
 		return fmt.Errorf("create event id: %w", err)
 	}
 
-	_, err = capture.db.Exec(`INSERT INTO events
+	_, err = capture.db.ExecContext(ctx, `INSERT INTO events
 		(id, source, type, timestamp, payload_json, project, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		eventID,
@@ -898,10 +918,14 @@ func (capture *RunCapture) recordFileEvent(now time.Time, operation string, path
 		return err
 	}
 
-	capture.events <- CapturedEvent{
+	select {
+	case capture.events <- CapturedEvent{
 		Type:      "file." + operation,
 		Operation: operation,
 		Path:      path,
+	}:
+	case <-ctx.Done():
+		return nil
 	}
 
 	return nil

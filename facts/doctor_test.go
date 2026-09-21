@@ -28,6 +28,9 @@ func TestDoctorReportsLocalReadiness(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(homeDir, "slack.json"), []byte(`{"access_token":"slack-secret","channels":["C123"],"user_scopes":[]}`), 0o600); err != nil {
 		t.Fatalf("write slack config: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(homeDir, "azure-boards.json"), []byte(`{"access_token":"stale-azure-token","organization":"example-org","project":"Demo"}`), 0o600); err != nil {
+		t.Fatalf("write Azure Boards config: %v", err)
+	}
 	if err := os.WriteFile(filepath.Join(homeDir, "llm.json"), []byte(`{
   "default_profile": "main",
   "profiles": {
@@ -55,6 +58,7 @@ func TestDoctorReportsLocalReadiness(t *testing.T) {
 		"- " + watchDir + ": ok",
 		"- " + missingWatchDir + ": missing",
 		"- slack: token present",
+		"- azure.boards: token present (not validated)",
 		"LLM: default profile main",
 		"API key env WORKGRAPH_TEST_LLM_KEY: missing",
 	} {
@@ -64,5 +68,8 @@ func TestDoctorReportsLocalReadiness(t *testing.T) {
 	}
 	if strings.Contains(string(output), "slack-secret") {
 		t.Fatalf("doctor output exposed token:\n%s", output)
+	}
+	if strings.Contains(string(output), "stale-azure-token") {
+		t.Fatalf("doctor output exposed Azure token:\n%s", output)
 	}
 }

@@ -408,6 +408,16 @@ workgraph connectors interval <connector> 15m
 ```
 
 `connectors doctor` reports local setup issues and upgrade hints.
+Azure Boards bridges configured with `--authentication azcli` validate the
+session with `az account get-access-token`; use `--az <path>` to override the
+Azure CLI executable.
+
+Local MCP servers can be inspected and stopped per workgraph home:
+
+```text
+workgraph bridge mcp status
+workgraph bridge mcp stop
+```
 `connectors upgrade` reconciles legacy connector runtime state locally without
 contacting provider APIs or rewriting credentials.
 

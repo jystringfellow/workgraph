@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -988,6 +989,67 @@ func TestConnectorsDoctorReportsLegacySetupStateAndAuthErrors(t *testing.T) {
 		if !strings.Contains(string(output), expected) {
 			t.Fatalf("expected connector doctor detail %q, got:\n%s", expected, output)
 		}
+	}
+}
+
+func TestAzureBoardsAzCLIConnectAndDoctorValidateAnAccessToken(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-backed Azure CLI fact")
+	}
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	azPath := filepath.Join(t.TempDir(), "az")
+	argsPath := filepath.Join(t.TempDir(), "az-args")
+	writeAzureCLIFact(t, azPath, argsPath, false)
+
+	params := `{"organization":"example-org","project":"Demo","area_path":"Demo"}`
+	output, err := runworkgraph(t, repoRoot, "connectors", "connect", "azure.boards", "--home", homeDir, "--mode", "bridged", "--authentication", "azcli", "--az", azPath, "--params-json", params)
+	if err == nil || !strings.Contains(string(output), "AADSTS700082") {
+		t.Fatalf("expected expired Azure CLI refresh token to fail connect, got err=%v:\n%s", err, output)
+	}
+	assertAzureCLIGetAccessToken(t, argsPath)
+
+	writeAzureCLIFact(t, azPath, argsPath, true)
+	output, err = runworkgraph(t, repoRoot, "connectors", "connect", "azure.boards", "--home", homeDir, "--mode", "bridged", "--authentication", "azcli", "--az", azPath, "--params-json", params)
+	if err != nil {
+		t.Fatalf("expected valid Azure CLI token to connect: %v\n%s", err, output)
+	}
+
+	writeAzureCLIFact(t, azPath, argsPath, false)
+	output, err = runworkgraph(t, repoRoot, "connectors", "doctor", "--home", homeDir, "--az", azPath)
+	if err != nil {
+		t.Fatalf("connector doctor failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "azure.boards: authentication failed") || !strings.Contains(string(output), "AADSTS700082") {
+		t.Fatalf("expected doctor to report invalid Azure CLI token:\n%s", output)
+	}
+	assertAzureCLIGetAccessToken(t, argsPath)
+}
+
+func writeAzureCLIFact(t *testing.T, path string, argsPath string, success bool) {
+	t.Helper()
+	body := "printf '%s\\n' \"$*\" > \"" + argsPath + "\"\n"
+	if success {
+		body += "printf '%s\\n' '{\"accessToken\":\"valid\"}'\nexit 0\n"
+	} else {
+		body += "printf '%s\\n' 'AADSTS700082: refresh token expired due to inactivity' >&2\nexit 1\n"
+	}
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body), 0o700); err != nil {
+		t.Fatalf("write fake Azure CLI: %v", err)
+	}
+}
+
+func assertAzureCLIGetAccessToken(t *testing.T, argsPath string) {
+	t.Helper()
+	contents, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatalf("read Azure CLI arguments: %v", err)
+	}
+	if strings.TrimSpace(string(contents)) != "account get-access-token" {
+		t.Fatalf("expected az account get-access-token, got %q", strings.TrimSpace(string(contents)))
 	}
 }
 

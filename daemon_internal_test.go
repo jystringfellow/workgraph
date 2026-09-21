@@ -2,12 +2,32 @@ package workgraph
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestStartDaemonDoesNotLaunchWhenProcessDiscoveryFails(t *testing.T) {
+	homeDir := t.TempDir()
+	if _, err := Init(InitConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("initialize workgraph: %v", err)
+	}
+
+	original := listDaemonProcesses
+	listDaemonProcesses = func() ([]daemonProcess, error) {
+		return nil, errors.New("process inspection unavailable")
+	}
+	t.Cleanup(func() { listDaemonProcesses = original })
+
+	_, err := StartDaemon(DaemonConfig{HomeDir: homeDir, WatchDirs: []string{t.TempDir()}})
+	if err == nil || !strings.Contains(err.Error(), "process inspection unavailable") {
+		t.Fatalf("expected process discovery error, got %v", err)
+	}
+}
 
 func TestWaitForDaemonReadyWaitsForMatchingPIDFile(t *testing.T) {
 	homeDir := t.TempDir()

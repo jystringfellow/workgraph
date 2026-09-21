@@ -188,7 +188,10 @@ func doctorAzureBoardsOAuthStatus(homeDir string) string {
 	if strings.TrimSpace(config.Organization) == "" || strings.TrimSpace(config.Project) == "" {
 		return "missing organization or project"
 	}
-	return tokenPresence(config.AccessToken)
+	if strings.TrimSpace(config.AccessToken) == "" {
+		return "token missing"
+	}
+	return "token present (not validated)"
 }
 
 func tokenPresence(token string) string {

@@ -188,6 +188,102 @@ func TestBridgeMCPReportsStaleAfterItsExecutableChanges(t *testing.T) {
 	}
 }
 
+func TestBridgeMCPExitsWhenItsExecutableChangesWhileIdle(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	binaryPath := filepath.Join(t.TempDir(), "workgraph")
+	binary, err := os.ReadFile(workgraphFactsBinary)
+	if err != nil {
+		t.Fatalf("read facts binary: %v", err)
+	}
+	if err := os.WriteFile(binaryPath, binary, 0o700); err != nil {
+		t.Fatalf("copy facts binary: %v", err)
+	}
+
+	command := exec.Command(binaryPath, "bridge", "mcp", "--home", homeDir)
+	command.Dir = repoRoot(t)
+	stdin, err := command.StdinPipe()
+	if err != nil {
+		t.Fatalf("open MCP stdin: %v", err)
+	}
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		t.Fatalf("open MCP stdout: %v", err)
+	}
+	if err := command.Start(); err != nil {
+		t.Fatalf("start MCP server: %v", err)
+	}
+	defer func() {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+	}()
+	if _, err := io.WriteString(stdin, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`+"\n"); err != nil {
+		t.Fatalf("initialize MCP server: %v", err)
+	}
+	if scanner := bufio.NewScanner(stdout); !scanner.Scan() {
+		t.Fatalf("read MCP initialization response: %v", scanner.Err())
+	}
+	changedAt := time.Now().Add(2 * time.Minute)
+	if err := os.Chtimes(binaryPath, changedAt, changedAt); err != nil {
+		t.Fatalf("change MCP executable timestamp: %v", err)
+	}
+
+	exited := make(chan error, 1)
+	go func() { exited <- command.Wait() }()
+	select {
+	case err := <-exited:
+		if err != nil {
+			t.Fatalf("stale MCP server exited with error: %v", err)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("idle MCP server did not exit after its executable changed")
+	}
+}
+
+func TestBridgeMCPStatusAndStopManageEveryServerForTheHome(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	commands := make([]*exec.Cmd, 0, 2)
+	for index := 0; index < 2; index++ {
+		command := exec.Command(workgraphFactsBinary, "bridge", "mcp", "--home", homeDir)
+		command.Dir = repoRoot(t)
+		stdin, err := command.StdinPipe()
+		if err != nil {
+			t.Fatalf("open MCP stdin: %v", err)
+		}
+		stdout, err := command.StdoutPipe()
+		if err != nil {
+			t.Fatalf("open MCP stdout: %v", err)
+		}
+		if err := command.Start(); err != nil {
+			t.Fatalf("start MCP server: %v", err)
+		}
+		defer func() { _ = command.Process.Kill() }()
+		if _, err := io.WriteString(stdin, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`+"\n"); err != nil {
+			t.Fatalf("initialize MCP server: %v", err)
+		}
+		if scanner := bufio.NewScanner(stdout); !scanner.Scan() {
+			t.Fatalf("read MCP initialization response: %v", scanner.Err())
+		}
+		commands = append(commands, command)
+	}
+
+	status := runWorkgraphCommand(t, nil, "bridge", "mcp", "status", "--home", homeDir)
+	for _, command := range commands {
+		if !strings.Contains(status, fmt.Sprintf("PID: %d", command.Process.Pid)) {
+			t.Fatalf("MCP status omitted pid %d:\n%s", command.Process.Pid, status)
+		}
+	}
+
+	stop := runWorkgraphCommand(t, nil, "bridge", "mcp", "stop", "--home", homeDir)
+	if !strings.Contains(stop, "bridge MCP servers stopped: 2") {
+		t.Fatalf("unexpected MCP stop output:\n%s", stop)
+	}
+	for _, command := range commands {
+		if err := command.Wait(); err != nil {
+			t.Fatalf("wait for stopped MCP server %d: %v", command.Process.Pid, err)
+		}
+	}
+}
+
 func TestBridgeMCPIngestsRawSlackListCSVServerSide(t *testing.T) {
 	homeDir := initBridgedCaptureHome(t)
 	params := json.RawMessage(`{"lists":["FRAWCSV"],"list_options":{"FRAWCSV":{"state":{"column":"Status","done_values":["Done"]},"interest_columns":["Title","Priority"],"row_key_candidates":[["Title"]]}}}`)

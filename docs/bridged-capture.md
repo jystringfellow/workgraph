@@ -94,6 +94,7 @@ workgraph connectors connect calendar.microsoft --mode bridged \
   --params-json '{"calendars":["calendar-id"],"past_days":7,"future_days":30}'
 
 workgraph connectors connect azure.boards --mode bridged \
+  --authentication azcli \
   --params-json '{"organization":"example-org","project":"Demo","area_path":"Demo"}'
 ```
 
@@ -121,6 +122,12 @@ workgraph connectors doctor
 workgraph capture requests --list
 workgraph capture watermark --connector slack
 ```
+
+When Azure Boards uses `--authentication azcli`, connect and doctor verify the
+session with `az account get-access-token`. Override the executable for testing
+or nonstandard installations with `--az <path>`. PAT-backed provider MCP
+configuration uses `--authentication pat`; workgraph records only the mode and
+never the PAT.
 
 A request moves through `pending`, `claimed`, `completed`, or `cancelled`.
 Claimed work has a short lease. The worker renews before the lease expires and
