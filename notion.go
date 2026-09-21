@@ -40,6 +40,7 @@ type NotionCaptureConfig struct {
 	Token        string
 	APIBaseURL   string
 	HTTPClient   *http.Client
+	Context      context.Context
 }
 
 type NotionCaptureResult struct {
@@ -226,6 +227,11 @@ type notionEventPayload struct {
 }
 
 func CaptureNotion(config NotionCaptureConfig) (NotionCaptureResult, error) {
+	ctx := config.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	config.Context = ctx
 	status, err := prepareRunStatus(RunConfig{
 		HomeDir:      config.HomeDir,
 		DatabasePath: config.DatabasePath,
@@ -261,7 +267,7 @@ func CaptureNotion(config NotionCaptureConfig) (NotionCaptureResult, error) {
 		return NotionCaptureResult{}, fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
-	if err := db.Ping(); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		return NotionCaptureResult{}, fmt.Errorf("open database: %w", err)
 	}
 	if err := createSchema(db); err != nil {
@@ -326,7 +332,7 @@ func CaptureNotion(config NotionCaptureConfig) (NotionCaptureResult, error) {
 	if searchErr != nil {
 		return NotionCaptureResult{}, searchErr
 	}
-	if err := attributeNotionEventProjects(db); err != nil {
+	if err := attributeNotionEventProjects(ctx, db); err != nil {
 		return NotionCaptureResult{}, err
 	}
 	if err := advanceNotionCaptureCursor(db, now); err != nil {
@@ -670,7 +676,7 @@ func notionSearchAll(config NotionCaptureConfig, onPage func([]notionSearchResul
 		if err != nil {
 			return fmt.Errorf("encode Notion search request: %w", err)
 		}
-		request, err := http.NewRequest(http.MethodPost, strings.TrimRight(baseURL, "/")+"/v1/search", bytes.NewReader(requestBody))
+		request, err := http.NewRequestWithContext(config.Context, http.MethodPost, strings.TrimRight(baseURL, "/")+"/v1/search", bytes.NewReader(requestBody))
 		if err != nil {
 			return fmt.Errorf("build Notion search request: %w", err)
 		}
@@ -759,7 +765,7 @@ func notionPageContentPreview(config NotionCaptureConfig, pageID string) (string
 		if cursor != "" {
 			requestURL += "&start_cursor=" + url.QueryEscape(cursor)
 		}
-		request, err := http.NewRequest(http.MethodGet, requestURL, nil)
+		request, err := http.NewRequestWithContext(config.Context, http.MethodGet, requestURL, nil)
 		if err != nil {
 			return "", fmt.Errorf("build Notion block request: %w", err)
 		}
@@ -1073,8 +1079,8 @@ type notionParentRef struct {
 	Workspace  bool   `json:"workspace"`
 }
 
-func attributeNotionEventProjects(db *sql.DB) error {
-	rows, err := db.Query(`SELECT notion_id, COALESCE(parent_json, '{}') FROM notion_index`)
+func attributeNotionEventProjects(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `SELECT notion_id, COALESCE(parent_json, '{}') FROM notion_index`)
 	if err != nil {
 		return fmt.Errorf("query Notion project parents: %w", err)
 	}
@@ -1095,20 +1101,61 @@ func attributeNotionEventProjects(db *sql.DB) error {
 		return fmt.Errorf("query Notion project parents: %w", err)
 	}
 
-	tx, err := db.Begin()
+	projects := make(map[string]string, len(parents))
+	for objectID := range parents {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("resolve Notion project parents: %w", err)
+		}
+		rootID, resolved := notionProjectRoot(objectID, parents)
+		if resolved {
+			projects[objectID] = "notion:" + rootID
+		} else {
+			projects[objectID] = ""
+		}
+	}
+
+	rows, err = db.QueryContext(ctx, `SELECT id, COALESCE(json_extract(payload_json, '$.id'), ''), COALESCE(project, '')
+		FROM events WHERE source = 'notion'`)
+	if err != nil {
+		return fmt.Errorf("query Notion event projects: %w", err)
+	}
+	type projectUpdate struct {
+		eventID string
+		project string
+	}
+	updates := []projectUpdate{}
+	for rows.Next() {
+		var eventID string
+		var objectID string
+		var currentProject string
+		if err := rows.Scan(&eventID, &objectID, &currentProject); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan Notion event project: %w", err)
+		}
+		project, indexed := projects[objectID]
+		if !indexed || project == currentProject {
+			continue
+		}
+		updates = append(updates, projectUpdate{eventID: eventID, project: project})
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close Notion event projects: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("query Notion event projects: %w", err)
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin Notion project attribution: %w", err)
 	}
 	defer tx.Rollback()
-	for objectID := range parents {
-		rootID, resolved := notionProjectRoot(objectID, parents)
-		var project any
-		if resolved {
-			project = "notion:" + rootID
-		}
-		if _, err := tx.Exec(`UPDATE events SET project = ?
-			WHERE source = 'notion' AND json_extract(payload_json, '$.id') = ?`, project, objectID); err != nil {
-			return fmt.Errorf("attribute Notion project for %s: %w", objectID, err)
+	for _, update := range updates {
+		if _, err := tx.ExecContext(ctx, `UPDATE events SET project = ? WHERE id = ?`, emptyStringAsNull(update.project), update.eventID); err != nil {
+			return fmt.Errorf("attribute Notion project for event %s: %w", update.eventID, err)
 		}
 	}
 	if err := tx.Commit(); err != nil {

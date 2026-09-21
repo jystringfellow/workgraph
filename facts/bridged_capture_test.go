@@ -932,27 +932,28 @@ func TestCalendarBridgeProgressUsesRequestCompletionBound(t *testing.T) {
 	homeDir := initBridgedCaptureHome(t)
 	repoRoot := repoRoot(t)
 	connectBridgedConnector(t, repoRoot, homeDir, "calendar.microsoft")
+	now := time.Now().UTC()
 	emitted, err := workgraph.EmitBridgedCaptureRequest(workgraph.CaptureRequestEmitConfig{
-		HomeDir: homeDir, ConnectorID: "calendar.microsoft", Now: time.Date(2026, 9, 21, 18, 0, 0, 0, time.UTC),
+		HomeDir: homeDir, ConnectorID: "calendar.microsoft", Now: now,
 	})
 	if err != nil {
 		t.Fatalf("emit calendar request: %v", err)
 	}
 	claims, err := workgraph.ClaimCaptureRequests(workgraph.CaptureRequestClaimConfig{
 		HomeDir: homeDir, ConnectorID: "calendar.microsoft", Worker: "facts", Max: 1,
-		Now: time.Date(2026, 9, 21, 18, 0, 0, 0, time.UTC), Lease: 10 * time.Minute,
+		Now: now, Lease: 10 * time.Minute,
 	})
 	if err != nil || len(claims) != 1 {
 		t.Fatalf("claim calendar request: claims=%d error=%v", len(claims), err)
 	}
 	result, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{
 		HomeDir: homeDir, RequestID: emitted.Request.ID, ClaimToken: claims[0].ClaimToken,
-		Input: strings.NewReader(`[{
+		Input: strings.NewReader(fmt.Sprintf(`[{
   "type":"calendar.microsoft.event",
-  "timestamp":"2026-09-21T16:00:00Z",
+  "timestamp":%q,
   "external_id":"event-1:change:rev-7",
-  "payload":{"start":"2026-09-21T16:00:00Z","provider_start":"2026-09-21T09:00:00","provider_end":"2026-09-21T10:00:00"}
-}]`),
+  "payload":{"start":%q,"provider_start":"2026-09-21T09:00:00","provider_end":"2026-09-21T10:00:00"}
+}]`, now.Add(-time.Hour).Format(time.RFC3339), now.Add(-time.Hour).Format(time.RFC3339))),
 	})
 	if err != nil {
 		t.Fatalf("ingest calendar event: %v", err)
