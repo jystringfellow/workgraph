@@ -375,6 +375,9 @@ func (capture *RunCapture) Run(ctx context.Context) (runErr error) {
 				return nil
 			}
 			if err := capture.handleEvent(ctx, event); err != nil {
+				if ctx.Err() != nil && errors.Is(err, context.Canceled) {
+					return nil
+				}
 				return err
 			}
 		case err, ok := <-capture.watcher.Errors:
@@ -922,7 +925,7 @@ func (capture *RunCapture) recordFileEvent(ctx context.Context, now time.Time, o
 		Path:      path,
 	}:
 	case <-ctx.Done():
-		return ctx.Err()
+		return nil
 	}
 
 	return nil
