@@ -145,6 +145,89 @@ func TestNotionCaptureStoresSharedPagesAndDatabases(t *testing.T) {
 	}
 }
 
+func TestNotionCaptureDoesNotRewriteCorrectProjectAttribution(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+
+	dbPath := filepath.Join(homeDir, "workgraph.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	now := "2026-09-21T12:00:00Z"
+	for _, object := range []struct {
+		id     string
+		parent string
+	}{
+		{id: "root-page", parent: `{"type":"workspace","workspace":true}`},
+		{id: "child-page", parent: `{"type":"page_id","page_id":"root-page"}`},
+	} {
+		_, err := db.Exec(`INSERT INTO notion_index (
+			notion_id, object_type, parent_json, source, first_seen_at, last_seen_at, last_synced_at
+		) VALUES (?, 'page', ?, 'search', ?, ?, ?)`, object.id, object.parent, now, now, now)
+		if err != nil {
+			db.Close()
+			t.Fatalf("seed Notion index: %v", err)
+		}
+		_, err = db.Exec(`INSERT INTO events (
+			id, source, type, timestamp, payload_json, project, created_at
+		) VALUES (?, 'notion', 'notion.page', ?, ?, 'notion:root-page', ?)`,
+			"notion.page:"+object.id, now, `{"id":"`+object.id+`"}`, now)
+		if err != nil {
+			db.Close()
+			t.Fatalf("seed Notion event: %v", err)
+		}
+	}
+	if _, err := db.Exec(`CREATE TABLE project_update_audit (event_id TEXT NOT NULL)`); err != nil {
+		db.Close()
+		t.Fatalf("create project update audit: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER audit_notion_project_update
+		AFTER UPDATE OF project ON events
+		WHEN OLD.source = 'notion'
+		BEGIN
+			INSERT INTO project_update_audit (event_id) VALUES (OLD.id);
+		END`); err != nil {
+		db.Close()
+		t.Fatalf("create project update trigger: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close seeded database: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"object":"list","results":[],"next_cursor":null,"has_more":false}`))
+	}))
+	defer server.Close()
+
+	output, err := runworkgraph(t, repoRoot, "notion", "capture",
+		"--home", homeDir,
+		"--token", "notion-token",
+		"--notion-api-base", server.URL,
+	)
+	if err != nil {
+		t.Fatalf("workgraph notion capture failed: %v\n%s", err, output)
+	}
+
+	db, err = sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("reopen database: %v", err)
+	}
+	defer db.Close()
+	var updates int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM project_update_audit`).Scan(&updates); err != nil {
+		t.Fatalf("count project rewrites: %v", err)
+	}
+	if updates != 0 {
+		t.Fatalf("expected correct Notion projects not to be rewritten, got %d updates", updates)
+	}
+}
+
 func TestNotionCaptureIndexesObjectsAndStoresChangedByMeActivity(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")

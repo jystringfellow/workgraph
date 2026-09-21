@@ -11,6 +11,13 @@ Scenario: Capture shared Notion pages and databases
   And nested records share the stable page or database root below the workspace as their project
   And recapturing the same page or database updates the existing event instead of creating duplicates
 
+Scenario: Project attribution does not monopolize SQLite
+  Given indexed Notion objects already have the correct project attribution
+  When a later Notion capture resolves their parent graph
+  Then workgraph does not rewrite unchanged event projects
+  And the complete index walk occurs outside the project-update transaction
+  And cancellation releases any project-update transaction promptly
+
 Scenario: Store personal Notion edits separately from workspace inventory
   Given a previously indexed Notion object was edited by the connected user
   When I run "workgraph notion capture"

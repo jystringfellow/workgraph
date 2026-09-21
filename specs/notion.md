@@ -79,6 +79,14 @@ immediate parent differs. Missing parents, unsupported parent shapes, and
 cycles leave `project` empty rather than inventing a root. A later complete
 capture may backfill attribution after the missing parent becomes indexed.
 
+Project attribution must not hold a database write transaction while walking
+the complete Notion index. Capture resolves the parent graph and identifies
+changed event assignments before beginning a transaction, then updates only
+events whose stored project differs. Those updates use event ids rather than a
+full event-table scan for every indexed object. Daemon cancellation must abort
+the remaining attribution work so a Notion poll cannot retain the SQLite writer
+lock or delay shutdown indefinitely.
+
 Notion search is requested sorted descending by `last_edited_time`. Capture
 stores each fetched page of results immediately rather than waiting for
 pagination to finish, so a mid-poll error or deadline leaves already-fetched

@@ -778,6 +778,7 @@ func (capture *RunCapture) captureNotionEvents(ctx context.Context) error {
 		HomeDir:      capture.homeDir,
 		DatabasePath: capture.databasePath,
 		HTTPClient:   connectorHTTPClient(ctx, capture.notionHTTPClient),
+		Context:      ctx,
 	})
 	return err
 }
