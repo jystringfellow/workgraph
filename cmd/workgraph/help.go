@@ -42,7 +42,7 @@ var helpTopics = map[string]helpTopic{
 	"bridge doctor":           {"workgraph bridge doctor --client <codex|claude-code> [options]", "Compatibility alias for plugin doctor."},
 	"bridge drain":            {"workgraph bridge drain --client <codex|claude-code> [options]", "Drain active daemon requests through a signed-in reference client."},
 	"bridge install":          {"workgraph bridge install --client <codex|claude-code> [--model <model> | --clear-model] [options]", "Compatibility alias for plugin install."},
-	"bridge mcp":              {"workgraph bridge mcp [options]", "Serve local bridge tools over stdio MCP."},
+	"bridge mcp":              {"workgraph bridge mcp [status|stop] [options]", "Serve, inspect, or stop local bridge tools over stdio MCP."},
 	"calendar":                {"workgraph calendar <subcommand>", "Connect, capture, or disconnect calendar providers."},
 	"calendar capture":        {"workgraph calendar capture [options]", "Capture normalized calendar events from a provider or JSON export."},
 	"calendar connect":        {"workgraph calendar connect <google|microsoft> [options]", "Connect a calendar provider with OAuth."},

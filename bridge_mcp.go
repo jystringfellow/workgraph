@@ -2,11 +2,15 @@ package workgraph
 
 import (
 	"bufio"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -15,7 +19,14 @@ type BridgeMCPConfig struct {
 	DatabasePath string
 	Input        io.Reader
 	Output       io.Writer
+	Context      context.Context
 	runtime      ProcessRuntimeStatus
+}
+
+type BridgeMCPProcessResult struct {
+	HomeDir string
+	PIDs    []int
+	Message string
 }
 
 type bridgeMCPRequest struct {
@@ -38,11 +49,48 @@ func ServeBridgeMCP(config BridgeMCPConfig) error {
 	if strings.TrimSpace(config.runtime.Executable) == "" {
 		config.runtime = captureProcessRuntimeStatus()
 	}
+	ctx := config.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	scanner := bufio.NewScanner(config.Input)
 	scanner.Buffer(make([]byte, 64*1024), maxBridgedIngestBytes)
 	encoder := json.NewEncoder(config.Output)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	lines := make(chan string)
+	scanDone := make(chan error, 1)
+	stopScan := make(chan struct{})
+	defer close(stopScan)
+	go func() {
+		for scanner.Scan() {
+			select {
+			case lines <- scanner.Text():
+			case <-stopScan:
+				return
+			}
+		}
+		scanDone <- scanner.Err()
+	}()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		var scanned string
+		select {
+		case scanned = <-lines:
+		case <-ctx.Done():
+			return nil
+		case err := <-scanDone:
+			if err != nil {
+				return fmt.Errorf("read bridge MCP request: %w", err)
+			}
+			return nil
+		case <-ticker.C:
+			if inspectProcessRuntimeStatus(config.runtime, "MCP server").Stale {
+				return nil
+			}
+			continue
+		}
+
+		line := strings.TrimSpace(scanned)
 		if line == "" {
 			continue
 		}
@@ -67,10 +115,103 @@ func ServeBridgeMCP(config BridgeMCPConfig) error {
 			return fmt.Errorf("write bridge MCP response: %w", err)
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("read bridge MCP request: %w", err)
+}
+
+func StatusBridgeMCP(homeDir string) (BridgeMCPProcessResult, error) {
+	homeDir, err := resolveHomeDir(homeDir)
+	if err != nil {
+		return BridgeMCPProcessResult{}, err
 	}
-	return nil
+	homeDir, err = filepath.Abs(homeDir)
+	if err != nil {
+		return BridgeMCPProcessResult{}, fmt.Errorf("resolve workgraph home: %w", err)
+	}
+	processes, err := listDaemonProcesses()
+	if err != nil {
+		return BridgeMCPProcessResult{}, fmt.Errorf("list bridge MCP processes: %w", err)
+	}
+	matches := matchingBridgeMCPProcesses(homeDir, processes)
+	result := BridgeMCPProcessResult{HomeDir: homeDir, PIDs: make([]int, 0, len(matches))}
+	lines := []string{"workgraph bridge MCP servers", "Home: " + homeDir}
+	if len(matches) == 0 {
+		lines = append(lines, "Running: 0")
+	} else {
+		lines = append(lines, "Running: "+strconv.Itoa(len(matches)))
+		for _, process := range matches {
+			result.PIDs = append(result.PIDs, process.PID)
+			lines = append(lines, "PID: "+strconv.Itoa(process.PID))
+		}
+	}
+	result.Message = strings.Join(lines, "\n")
+	return result, nil
+}
+
+func StopBridgeMCP(homeDir string) (BridgeMCPProcessResult, error) {
+	result, err := StatusBridgeMCP(homeDir)
+	if err != nil {
+		return BridgeMCPProcessResult{}, err
+	}
+	for _, pid := range result.PIDs {
+		if err := signalDaemonProcess(pid, syscall.SIGTERM); err != nil && processRunning(pid) {
+			return BridgeMCPProcessResult{}, fmt.Errorf("stop bridge MCP process %d: %w", pid, err)
+		}
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	remaining := append([]int(nil), result.PIDs...)
+	for time.Now().Before(deadline) {
+		current, statusErr := StatusBridgeMCP(result.HomeDir)
+		if statusErr != nil {
+			return BridgeMCPProcessResult{}, statusErr
+		}
+		remaining = current.PIDs
+		if len(remaining) == 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(remaining) > 0 {
+		current, statusErr := StatusBridgeMCP(result.HomeDir)
+		if statusErr != nil {
+			return BridgeMCPProcessResult{}, statusErr
+		}
+		remaining = current.PIDs
+	}
+	if len(remaining) > 0 {
+		pids := make([]string, 0, len(remaining))
+		for _, pid := range remaining {
+			pids = append(pids, strconv.Itoa(pid))
+		}
+		return BridgeMCPProcessResult{}, fmt.Errorf("bridge MCP processes did not stop after SIGTERM: %s", strings.Join(pids, ", "))
+	}
+	result.Message = fmt.Sprintf("workgraph bridge MCP servers stopped: %d\nHome: %s", len(result.PIDs), result.HomeDir)
+	return result, nil
+}
+
+func matchingBridgeMCPProcesses(homeDir string, processes []daemonProcess) []daemonProcess {
+	homeDir = cleanProcessPath(homeDir)
+	matches := []daemonProcess{}
+	for _, process := range processes {
+		if strings.HasPrefix(process.State, "Z") {
+			continue
+		}
+		args := strings.Fields(process.Command)
+		server := false
+		for index := 0; index+1 < len(args); index++ {
+			if args[index] != "bridge" || args[index+1] != "mcp" {
+				continue
+			}
+			if index+2 < len(args) && (args[index+2] == "status" || args[index+2] == "stop") {
+				break
+			}
+			server = true
+			break
+		}
+		if !server || cleanProcessPath(flagValue(args, "--home")) != homeDir {
+			continue
+		}
+		matches = append(matches, process)
+	}
+	return matches
 }
 
 func handleBridgeMCPRequest(config BridgeMCPConfig, request bridgeMCPRequest) (any, map[string]any) {

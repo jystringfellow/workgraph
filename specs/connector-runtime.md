@@ -155,7 +155,11 @@ status` marks GitHub `ready`, failed validation marks it `error`, and
 Runtime polling should include only `ready` API connectors.
 
 When connector setup state evolves, `workgraph connectors doctor` should report
-legacy or inconsistent local state without making provider API calls.
+legacy or inconsistent local state without making provider API calls. The one
+explicit authentication-health exception is an Azure Boards bridge configured
+with `authentication: "azcli"`: connect and doctor run `az account
+get-access-token`, because cached Azure CLI profile presence does not prove that
+its refresh token is usable. Other authentication modes remain passive.
 `workgraph connectors upgrade` should reconcile safe local-only runtime state,
 such as marking existing legacy local configs ready or marking connectors with
 recent invalid-auth poll errors as setup `error` with reconnect guidance. Upgrade

@@ -419,8 +419,8 @@ func ensureColumn(db *sql.DB, table string, column string, definition string) er
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
+	found := false
 	for rows.Next() {
 		var cid int
 		var name string
@@ -429,14 +429,23 @@ func ensureColumn(db *sql.DB, table string, column string, definition string) er
 		var defaultValue any
 		var primaryKey int
 		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
 			return err
 		}
 		if name == column {
-			return nil
+			found = true
+			break
 		}
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if found {
+		return nil
 	}
 	_, err = db.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition)
 	return err

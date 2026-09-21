@@ -45,6 +45,25 @@ Scenario: Preserve replacement state during a delayed shutdown
   Then daemon state and the PID file still identify the replacement worker
   And "workgraph status" reports that replacement capture is running
 
+Scenario: Recover a live daemon whose state files are missing
+  Given a background capture worker is alive
+  And its daemon state and PID files are missing
+  When I check status or start capture again
+  Then workgraph identifies the existing worker
+  And it does not launch a duplicate worker
+
+Scenario: Stop reports only confirmed process exit
+  Given one or more background capture workers match the workgraph home or database
+  When I run "workgraph stop"
+  Then workgraph signals every matching worker
+  And it reports success only after every matching worker exits
+
+Scenario: Stop after a background event burst
+  Given background capture has recorded more events than its diagnostic output buffer holds
+  When I run "workgraph stop"
+  Then background capture exits after the termination signal
+  And the captured events remain in the database
+
 Scenario: Stop background capture
   Given workgraph background capture is running
   When I run "workgraph stop"

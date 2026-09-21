@@ -2,7 +2,9 @@ package facts
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -159,7 +161,7 @@ func TestStatusReportsRunningCaptureState(t *testing.T) {
 	}
 }
 
-func TestRestartKeepsReplacementDaemonStateWhenPriorWorkerExitsLate(t *testing.T) {
+func TestStartFindsLiveWorkerWhenDaemonStateIsMissing(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
 	watchDir := filepath.Join(tempDir, "project")
@@ -180,26 +182,55 @@ func TestRestartKeepsReplacementDaemonStateWhenPriorWorkerExitsLate(t *testing.T
 			t.Fatalf("remove prior %s: %v", name, err)
 		}
 	}
-	runWorkgraphCommand(t, nil, "start", "--home", homeDir, "--database", initResult.DatabasePath, "--watch", watchDir)
-	replacementPID := captureDaemonPID(t, homeDir)
-	defer signalProcess(replacementPID)
-	if replacementPID == priorPID {
-		t.Fatalf("expected a replacement worker, still pid %d", priorPID)
+	statusOutput := runWorkgraphCommand(t, nil, "status", "--home", homeDir)
+	if !strings.Contains(statusOutput, "capture is running") || !strings.Contains(statusOutput, "PID: "+strconv.Itoa(priorPID)) {
+		t.Fatalf("expected status to recover live worker %d, got:\n%s", priorPID, statusOutput)
 	}
 
-	signalProcess(priorPID)
+	startOutput := runWorkgraphCommand(t, nil, "start", "--home", homeDir, "--database", initResult.DatabasePath, "--watch", watchDir)
+	if !strings.Contains(startOutput, "capture is running") || !strings.Contains(startOutput, "PID: "+strconv.Itoa(priorPID)) {
+		t.Fatalf("expected start to retain live worker %d, got:\n%s", priorPID, startOutput)
+	}
+	if got := captureDaemonPID(t, homeDir); got != priorPID {
+		t.Fatalf("expected recovered daemon pid %d, got %d", priorPID, got)
+	}
+
+	stopOutput := runWorkgraphCommand(t, nil, "stop", "--home", homeDir)
+	if !strings.Contains(stopOutput, "capture stopped") {
+		t.Fatalf("expected recovered worker to stop, got:\n%s", stopOutput)
+	}
 	waitForProcessExit(t, priorPID)
+}
 
-	if got := captureDaemonPID(t, homeDir); got != replacementPID {
-		t.Fatalf("expected daemon pid %d to remain owned by replacement, got %d", replacementPID, got)
+func TestBackgroundCaptureStopsAfterDiagnosticEventBufferFills(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	watchDir := filepath.Join(tempDir, "project")
+	if err := os.MkdirAll(watchDir, 0o755); err != nil {
+		t.Fatalf("create watch dir: %v", err)
 	}
-	status, err := workgraph.DaemonStatusForHome(homeDir)
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
 	if err != nil {
-		t.Fatalf("read replacement daemon status: %v", err)
+		t.Fatalf("init failed: %v", err)
 	}
-	if !status.Running || status.PID != replacementPID {
-		t.Fatalf("expected replacement pid %d to be running, got pid %d running=%t:\n%s", replacementPID, status.PID, status.Running, status.Message)
+
+	runWorkgraphCommand(t, nil, "start", "--home", homeDir, "--database", initResult.DatabasePath, "--watch", watchDir)
+	pid := captureDaemonPID(t, homeDir)
+	defer signalProcess(pid)
+
+	for index := 0; index < 160; index++ {
+		path := filepath.Join(watchDir, fmt.Sprintf("event-%03d.txt", index))
+		if err := os.WriteFile(path, []byte("captured"), 0o644); err != nil {
+			t.Fatalf("write event file: %v", err)
+		}
 	}
+	waitForCapturedFileEvents(t, initResult.DatabasePath, 160)
+
+	output := runWorkgraphCommand(t, nil, "stop", "--home", homeDir)
+	if !strings.Contains(output, "capture stopped") {
+		t.Fatalf("expected capture to stop after event burst, got:\n%s", output)
+	}
+	waitForProcessExit(t, pid)
 }
 
 func TestStatusWarnsWhenRunningDaemonExecutableChanged(t *testing.T) {
@@ -510,4 +541,26 @@ func waitForProcessExit(t *testing.T, pid int) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("expected daemon process %d to exit", pid)
+}
+
+func waitForCapturedFileEvents(t *testing.T, databasePath string, minimum int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		db, err := sql.Open("sqlite3", databasePath)
+		if err != nil {
+			t.Fatalf("open event database: %v", err)
+		}
+		var count int
+		err = db.QueryRow(`SELECT COUNT(*) FROM events WHERE source = 'file'`).Scan(&count)
+		db.Close()
+		if err != nil {
+			t.Fatalf("count file events: %v", err)
+		}
+		if count >= minimum {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("expected at least %d captured file events", minimum)
 }

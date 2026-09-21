@@ -207,18 +207,44 @@ func runBridge(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 		fmt.Fprintf(stderr, "unknown bridge command: %s\n", args[0])
 		return 2
 	}
+	mcpArgs := args[1:]
+	action := "serve"
+	if len(mcpArgs) > 0 && (mcpArgs[0] == "status" || mcpArgs[0] == "stop") {
+		action = mcpArgs[0]
+		mcpArgs = mcpArgs[1:]
+	}
 	flags := flag.NewFlagSet("bridge mcp", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	homeDir := flags.String("home", "", "workgraph home directory")
 	databasePath := flags.String("database", "", "workgraph SQLite database path")
-	if err := flags.Parse(args[1:]); err != nil {
+	if err := flags.Parse(mcpArgs); err != nil {
 		return 2
 	}
 	if flags.NArg() != 0 {
-		fmt.Fprintln(stderr, "usage: workgraph bridge mcp [--home <path>] [--database <path>]")
+		fmt.Fprintln(stderr, "usage: workgraph bridge mcp [status|stop] [--home <path>] [--database <path>]")
 		return 2
 	}
-	if err := workgraph.ServeBridgeMCP(workgraph.BridgeMCPConfig{HomeDir: *homeDir, DatabasePath: *databasePath, Input: stdin, Output: stdout}); err != nil {
+	if action == "status" {
+		result, err := workgraph.StatusBridgeMCP(*homeDir)
+		if err != nil {
+			fmt.Fprintf(stderr, "workgraph bridge mcp status: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(stdout, result.Message)
+		return 0
+	}
+	if action == "stop" {
+		result, err := workgraph.StopBridgeMCP(*homeDir)
+		if err != nil {
+			fmt.Fprintf(stderr, "workgraph bridge mcp stop: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(stdout, result.Message)
+		return 0
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := workgraph.ServeBridgeMCP(workgraph.BridgeMCPConfig{HomeDir: *homeDir, DatabasePath: *databasePath, Input: stdin, Output: stdout, Context: ctx}); err != nil {
 		fmt.Fprintf(stderr, "workgraph bridge mcp: %v\n", err)
 		return 1
 	}
@@ -1188,6 +1214,8 @@ func runConnectorsConnect(args []string, stdout io.Writer, stderr io.Writer) int
 	homeDir := flags.String("home", "", "workgraph home directory")
 	mode := flags.String("mode", "direct", "capture mode: direct or bridged")
 	paramsJSON := flags.String("params-json", "", "non-secret bridged connector scope as a JSON object")
+	authentication := flags.String("authentication", "", "provider authentication mode for supported bridged connectors")
+	az := flags.String("az", "az", "Azure CLI executable for azcli authentication validation")
 	connectorArg := ""
 	connectorFirst := false
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
@@ -1210,9 +1238,11 @@ func runConnectorsConnect(args []string, stdout io.Writer, stderr io.Writer) int
 		return 1
 	}
 	result, err := workgraph.ConfigureBridgedConnector(workgraph.ConnectorBridgeConfig{
-		HomeDir:      *homeDir,
-		ID:           connectorArg,
-		BridgeParams: json.RawMessage(*paramsJSON),
+		HomeDir:         *homeDir,
+		ID:              connectorArg,
+		BridgeParams:    json.RawMessage(*paramsJSON),
+		Authentication:  *authentication,
+		AzureCLICommand: *az,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph connectors connect: %v\n", err)
@@ -1568,6 +1598,7 @@ func runConnectorsDoctor(args []string, stdout io.Writer, stderr io.Writer) int 
 	flags := flag.NewFlagSet("connectors doctor", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	homeDir := flags.String("home", "", "workgraph home directory")
+	az := flags.String("az", "az", "Azure CLI executable for azcli authentication validation")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -1576,7 +1607,8 @@ func runConnectorsDoctor(args []string, stdout io.Writer, stderr io.Writer) int 
 		return 2
 	}
 	result, err := workgraph.DoctorConnectors(workgraph.ConnectorListConfig{
-		HomeDir: *homeDir,
+		HomeDir:         *homeDir,
+		AzureCLICommand: *az,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph connectors doctor: %v\n", err)

@@ -21,6 +21,11 @@ if a replacement worker becomes ready before the prior worker finishes shutting
 down, the prior worker must not erase the replacement's `daemon.json` or
 `daemon.pid` files.
 
+The state files are a cache of process state, not the authority for whether a
+worker exists. Status, start, and stop must also discover live capture workers
+that match the resolved workgraph home or database. Missing or stale state must
+not allow a second worker to start against the same database.
+
 On macOS, the detached capture worker must retain a live workgraph supervisor
 as its parent. This avoids a Go/macOS platform-verifier failure where HTTPS
 requests from an orphaned child fail with `SecPolicyCreateSSL error: 0` after
@@ -54,6 +59,8 @@ It must:
 - allow `--watch` flags to override configured watch roots for that run
 - write local capture state under the workgraph home
 - avoid recording events from ignored paths or names
+- refuse to launch a duplicate when a matching capture worker is already alive,
+  even if the daemon state files are missing
 
 The default initialized settings watch existing common user-facing folders, so a newly initialized workgraph can start background capture without trying to recursively watch the entire home directory.
 
@@ -84,6 +91,15 @@ Stopping should remove stale capture state when the process exits cleanly. If
 more than one background `__capture-worker` process is running for the same
 workgraph home or database, stop should terminate all of those matching workers
 without stopping foreground commands or workers for other homes.
+
+Stop reports success only after every matching worker has exited. If graceful
+shutdown exceeds its deadline, stop retains inspectable daemon state and returns
+an error identifying the worker PIDs that are still alive.
+
+Background event reporting and connector cleanup must not prevent the worker
+from observing `SIGTERM`. Connector shutdown is bounded so a stuck poller cannot
+keep the worker alive indefinitely. Diagnostic event output may be drained or
+dropped in background mode because SQLite remains the source of truth.
 
 ## Local State
 

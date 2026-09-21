@@ -20,6 +20,7 @@ var listDaemonProcesses = listSystemDaemonProcesses
 
 type daemonProcess struct {
 	PID     int
+	State   string
 	Command string
 }
 
@@ -64,7 +65,11 @@ func StartDaemon(config DaemonConfig) (DaemonStatus, error) {
 		return DaemonStatus{}, err
 	}
 
-	if existing, err := DaemonStatusForHome(runStatus.HomeDir); err == nil && existing.Running {
+	existing, err := DaemonStatusForHome(runStatus.HomeDir)
+	if err != nil {
+		return DaemonStatus{}, err
+	}
+	if existing.Running {
 		existing.Message = daemonRunningMessage(existing)
 		return existing, nil
 	}
@@ -161,7 +166,14 @@ func RunDaemon(config DaemonConfig) error {
 		return err
 	}
 
+	eventsDrained := make(chan struct{})
+	go func() {
+		defer close(eventsDrained)
+		for range capture.Events {
+		}
+	}()
 	runErr := capture.Run(ctx)
+	<-eventsDrained
 	if runErr != nil {
 		status.Running = false
 		status.LastError = runErr.Error()
@@ -190,16 +202,26 @@ func DaemonStatusForHome(homeDir string) (DaemonStatus, error) {
 	status, err := readDaemonState(resolvedHome)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return daemonStoppedStatus(resolvedHome), nil
+			return discoverDaemonStatus(resolvedHome, filepath.Join(resolvedHome, "workgraph.db"), DaemonStatus{})
 		}
 		return DaemonStatus{}, err
 	}
 	if !status.Running && status.LastError != "" {
+		if discovered, found, discoverErr := findRunningDaemonStatus(resolvedHome, status.DatabasePath, status); discoverErr != nil {
+			return DaemonStatus{}, discoverErr
+		} else if found {
+			return discovered, nil
+		}
 		_ = removeDaemonPID(resolvedHome)
 		status.Message = daemonFailedMessage(status)
 		return status, nil
 	}
 	if !processRunning(status.PID) {
+		if discovered, found, discoverErr := findRunningDaemonStatus(resolvedHome, status.DatabasePath, status); discoverErr != nil {
+			return DaemonStatus{}, discoverErr
+		} else if found {
+			return discovered, nil
+		}
 		if status.LastError != "" {
 			_ = removeDaemonPID(resolvedHome)
 			status.Running = false
@@ -210,6 +232,11 @@ func DaemonStatusForHome(homeDir string) (DaemonStatus, error) {
 		return daemonStoppedStatus(resolvedHome), nil
 	}
 	if !processMatchesCaptureWorker(status.PID, status.HomeDir, status.DatabasePath) {
+		if discovered, found, discoverErr := findRunningDaemonStatus(resolvedHome, status.DatabasePath, status); discoverErr != nil {
+			return DaemonStatus{}, discoverErr
+		} else if found {
+			return discovered, nil
+		}
 		_ = removeDaemonState(resolvedHome)
 		return daemonStoppedStatus(resolvedHome), nil
 	}
@@ -244,12 +271,20 @@ func StopDaemon(config DaemonConfig) (DaemonStatus, error) {
 		}
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
 		if !anyDaemonProcessRunning(processes) {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+	remaining := runningDaemonProcesses(processes)
+	if len(remaining) > 0 {
+		pids := make([]string, 0, len(remaining))
+		for _, process := range remaining {
+			pids = append(pids, strconv.Itoa(process.PID))
+		}
+		return DaemonStatus{}, fmt.Errorf("daemon processes did not stop after SIGTERM: %s", strings.Join(pids, ", "))
 	}
 
 	if err := removeDaemonState(status.HomeDir); err != nil {
@@ -543,12 +578,62 @@ func signalDaemonProcess(pid int, signal os.Signal) error {
 }
 
 func anyDaemonProcessRunning(processes []daemonProcess) bool {
+	return len(runningDaemonProcesses(processes)) > 0
+}
+
+func runningDaemonProcesses(processes []daemonProcess) []daemonProcess {
+	running := make([]daemonProcess, 0, len(processes))
 	for _, process := range processes {
 		if processRunning(process.PID) {
-			return true
+			running = append(running, process)
 		}
 	}
-	return false
+	return running
+}
+
+func discoverDaemonStatus(homeDir string, databasePath string, prior DaemonStatus) (DaemonStatus, error) {
+	status, found, err := findRunningDaemonStatus(homeDir, databasePath, prior)
+	if err != nil {
+		return DaemonStatus{}, err
+	}
+	if found {
+		return status, nil
+	}
+	return daemonStoppedStatus(homeDir), nil
+}
+
+func findRunningDaemonStatus(homeDir string, databasePath string, prior DaemonStatus) (DaemonStatus, bool, error) {
+	processes, err := listDaemonProcesses()
+	if err != nil {
+		return DaemonStatus{}, false, fmt.Errorf("list daemon processes: %w", err)
+	}
+	matches := matchingCaptureWorkerProcesses(homeDir, databasePath, processes)
+	if len(matches) == 0 {
+		return DaemonStatus{}, false, nil
+	}
+	status := prior
+	status.Running = true
+	status.PID = matches[0].PID
+	status.HomeDir = cleanProcessPath(homeDir)
+	if processDB := cleanProcessPath(flagValue(strings.Fields(matches[0].Command), "--database")); processDB != "" {
+		status.DatabasePath = processDB
+	} else if strings.TrimSpace(status.DatabasePath) == "" {
+		status.DatabasePath = cleanProcessPath(databasePath)
+	}
+	status.LastError = ""
+	if strings.TrimSpace(status.Runtime.Executable) == "" {
+		args := strings.Fields(matches[0].Command)
+		if len(args) > 0 {
+			status.Runtime.Executable = cleanProcessPath(args[0])
+		}
+	}
+	status.Runtime = inspectProcessRuntimeStatus(status.Runtime, "daemon")
+	status.ConnectorErrors = activeConnectorPollErrors(status.HomeDir)
+	status.Message = daemonRunningMessage(status)
+	if err := writeDaemonState(status); err != nil {
+		return DaemonStatus{}, false, err
+	}
+	return status, true, nil
 }
 
 func matchingCaptureWorkerProcessesForStatus(status DaemonStatus) ([]daemonProcess, error) {
@@ -595,7 +680,7 @@ func matchingCaptureWorkerProcesses(homeDir string, databasePath string, process
 }
 
 func listSystemDaemonProcesses() ([]daemonProcess, error) {
-	output, err := exec.Command("ps", "-axo", "pid=,command=").Output()
+	output, err := exec.Command("ps", "-axo", "pid=,state=,command=").Output()
 	if err != nil {
 		return nil, err
 	}
@@ -606,7 +691,7 @@ func listSystemDaemonProcesses() ([]daemonProcess, error) {
 		if line == "" {
 			continue
 		}
-		pidText, command, ok := strings.Cut(line, " ")
+		pidText, remainder, ok := strings.Cut(line, " ")
 		if !ok {
 			continue
 		}
@@ -614,11 +699,16 @@ func listSystemDaemonProcesses() ([]daemonProcess, error) {
 		if err != nil {
 			continue
 		}
+		remainder = strings.TrimSpace(remainder)
+		state, command, ok := strings.Cut(remainder, " ")
+		if !ok {
+			continue
+		}
 		command = strings.TrimSpace(command)
 		if command == "" {
 			continue
 		}
-		processes = append(processes, daemonProcess{PID: pid, Command: command})
+		processes = append(processes, daemonProcess{PID: pid, State: strings.TrimSpace(state), Command: command})
 	}
 	return processes, nil
 }

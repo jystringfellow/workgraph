@@ -62,3 +62,10 @@ Scenario: Stop retrying a connector that needs authentication
   When its immediate poll returns an authentication error
   Then workgraph marks only that connector as needing reconnection
   And workgraph does not retry it until its setup is repaired
+
+Scenario: Validate Azure CLI authentication with a real token request
+  Given Azure Boards bridged capture uses Azure CLI authentication
+  When I connect it or run "workgraph connectors doctor"
+  Then workgraph runs "az account get-access-token"
+  And a cached profile with an expired refresh token is reported as unhealthy
+  And a successful token request remains valid even if login reported no subscriptions

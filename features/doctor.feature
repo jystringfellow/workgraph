@@ -6,3 +6,4 @@ Scenario: Diagnose local readiness
   When I run "workgraph doctor"
   Then workgraph reports database, daemon, watch root, OAuth connector, and LLM readiness
   And workgraph does not expose OAuth tokens
+  And stored Azure Boards token presence is not presented as proof of validity
