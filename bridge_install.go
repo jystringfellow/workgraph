@@ -20,14 +20,16 @@ import (
 var agentPluginAssets embed.FS
 
 type PluginInstallConfig struct {
-	HomeDir       string
-	Client        string
-	ClientCommand string
-	InstallRoot   string
-	SkipLaunchd   bool
-	ProviderTools []string
-	Model         string
-	ClearModel    bool
+	HomeDir        string
+	Client         string
+	ClientCommand  string
+	InstallRoot    string
+	SkipLaunchd    bool
+	ProviderTools  []string
+	Model          string
+	ClearModel     bool
+	ConfigDir      string
+	ClearConfigDir bool
 }
 
 type PluginInstallResult struct {
@@ -35,6 +37,7 @@ type PluginInstallResult struct {
 	InstallRoot string
 	Version     string
 	Model       string
+	ConfigDir   string
 	Message     string
 }
 
@@ -60,6 +63,9 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 	}
 	if strings.TrimSpace(config.Model) != "" && config.ClearModel {
 		return PluginInstallResult{}, fmt.Errorf("--model and --clear-model cannot be used together")
+	}
+	if strings.TrimSpace(config.ConfigDir) != "" && config.ClearConfigDir {
+		return PluginInstallResult{}, fmt.Errorf("--config-dir and --clear-config-dir cannot be used together")
 	}
 	providerTools, err := validateClaudeProviderTools(client, config.ProviderTools)
 	if err != nil {
@@ -97,7 +103,11 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 	if err != nil {
 		return PluginInstallResult{}, err
 	}
-	if err := registerAgentPlugin(client, commandName, installRoot); err != nil {
+	workerSettings, err := configureBridgeWorkerSettings(homeDir, client, config.Model, config.ClearModel, config.ConfigDir, config.ClearConfigDir)
+	if err != nil {
+		return PluginInstallResult{}, err
+	}
+	if err := registerAgentPlugin(client, commandName, installRoot, signedInClientBinding{ConfigDir: workerSettings.ConfigDir}); err != nil {
 		return PluginInstallResult{}, err
 	}
 	providerToolCount := 0
@@ -110,10 +120,6 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 			return PluginInstallResult{}, err
 		}
 	}
-	workerModel, err := configureBridgeWorkerModel(homeDir, client, config.Model, config.ClearModel)
-	if err != nil {
-		return PluginInstallResult{}, err
-	}
 	launchStatus := "launchd setup skipped"
 	if !config.SkipLaunchd {
 		if err := installBridgeLaunchAgent(client, commandName, executable, homeDir); err != nil {
@@ -125,7 +131,7 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 	if client == "claude-code" {
 		clientLabel = "Claude Code"
 	}
-	result := PluginInstallResult{Client: client, InstallRoot: installRoot, Version: pluginVersion, Model: workerModel}
+	result := PluginInstallResult{Client: client, InstallRoot: installRoot, Version: pluginVersion, Model: workerSettings.Model, ConfigDir: workerSettings.ConfigDir}
 	lines := []string{
 		"workgraph plugin installed",
 		"Client: " + client,
@@ -133,7 +139,8 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 		"Version: " + pluginVersion,
 		"Skills: 3",
 		"MCP: workgraph",
-		"Model: " + bridgeWorkerModelLabel(workerModel),
+		"Model: " + bridgeWorkerModelLabel(workerSettings.Model),
+		"Config dir: " + signedInClientBindingLabel(signedInClientBinding{ConfigDir: workerSettings.ConfigDir}),
 	}
 	if client == "claude-code" {
 		lines = append(lines, "Permissions: unattended workgraph MCP drain only")
@@ -465,7 +472,7 @@ func writeInstalledPluginMCP(client string, installRoot string, executable strin
 	return nil
 }
 
-func registerAgentPlugin(client string, commandName string, installRoot string) error {
+func registerAgentPlugin(client string, commandName string, installRoot string, binding signedInClientBinding) error {
 	commands := [][]string{}
 	if client == "codex" {
 		commands = [][]string{{"plugin", "marketplace", "add", installRoot}, {"plugin", "add", "workgraph@workgraph"}}
@@ -477,7 +484,9 @@ func registerAgentPlugin(client string, commandName string, installRoot string) 
 		}
 	}
 	for _, args := range commands {
-		output, err := exec.Command(commandName, args...).CombinedOutput()
+		command := exec.Command(commandName, args...)
+		command.Env = applySignedInClientBinding(os.Environ(), client, binding)
+		output, err := command.CombinedOutput()
 		if err != nil {
 			details := strings.ToLower(strings.TrimSpace(string(output)))
 			if !strings.Contains(details, "already") && !strings.Contains(details, "exist") {
@@ -517,7 +526,7 @@ func installBridgeLaunchAgent(client string, clientCommand string, workgraphExec
 	}
 	environment := bridgeLaunchEnvironment(userHome, clientPath, workgraphExecutable)
 	environmentXML := ""
-	for _, name := range []string{"HOME", "PATH", "CLAUDE_CONFIG_DIR"} {
+	for _, name := range []string{"HOME", "PATH"} {
 		if value := environment[name]; value != "" {
 			environmentXML += "\n    <key>" + name + "</key><string>" + html.EscapeString(value) + "</string>"
 		}
@@ -575,9 +584,6 @@ func bridgeLaunchEnvironment(userHome string, clientPath string, workgraphExecut
 		"HOME": userHome,
 		"PATH": strings.Join(path, string(os.PathListSeparator)),
 	}
-	if configDir := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")); configDir != "" {
-		environment["CLAUDE_CONFIG_DIR"] = configDir
-	}
 	return environment
 }
 
@@ -623,7 +629,7 @@ func DrainBridge(homeDir string, client string, clientCommand string) (string, e
 	if client != "codex" && client != "claude-code" {
 		return "", fmt.Errorf("bridge client must be codex or claude-code")
 	}
-	workerModel, err := bridgeWorkerModel(homeDir, client)
+	workerSettings, err := bridgeWorkerSettingsFor(homeDir, client)
 	if err != nil {
 		return "", err
 	}
@@ -639,8 +645,8 @@ func DrainBridge(homeDir string, client string, clientCommand string) (string, e
 	switch client {
 	case "codex":
 		args = []string{"exec", "--ephemeral", "--skip-git-repo-check"}
-		if workerModel != "" {
-			args = append(args, "--model", workerModel)
+		if workerSettings.Model != "" {
+			args = append(args, "--model", workerSettings.Model)
 		}
 		args = append(args, prompt)
 	case "claude-code":
@@ -660,8 +666,8 @@ func DrainBridge(homeDir string, client string, clientCommand string) (string, e
 			return "No Claude provider tools are explicitly allowed; active capture requests remain pending.", nil
 		}
 		args = []string{"-p", "--permission-mode", "dontAsk"}
-		if workerModel != "" {
-			args = append(args, "--model", workerModel)
+		if workerSettings.Model != "" {
+			args = append(args, "--model", workerSettings.Model)
 		}
 		args = append(args, prompt)
 	}
@@ -671,7 +677,8 @@ func DrainBridge(homeDir string, client string, clientCommand string) (string, e
 	if err != nil {
 		return "", fmt.Errorf("resolve workgraph executable: %w", err)
 	}
-	command.Env = append(os.Environ(), "WORKGRAPH_HOME="+homeDir, "WORKGRAPH_EXECUTABLE="+executable)
+	command.Env = applySignedInClientBinding(os.Environ(), client, signedInClientBinding{ConfigDir: workerSettings.ConfigDir})
+	command.Env = append(command.Env, "WORKGRAPH_HOME="+homeDir, "WORKGRAPH_EXECUTABLE="+executable)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("drain bridge with %s: %s", client, strings.TrimSpace(string(output)))
@@ -762,9 +769,12 @@ func DoctorPlugin(config PluginDoctorConfig) (string, error) {
 			return "", fmt.Errorf("inspect Claude provider permissions: %w", err)
 		}
 	}
-	workerModel, err := bridgeWorkerModel(homeDir, client)
+	workerSettings, err := bridgeWorkerSettingsFor(homeDir, client)
 	if err != nil {
 		return "", err
+	}
+	if err := verifySignedInClientBinding(signedInClientBinding{ConfigDir: workerSettings.ConfigDir}); err != nil {
+		return "", fmt.Errorf("verify client config directory: %w", err)
 	}
 	worker := "not installed"
 	workerEnvironment := "not installed"
@@ -793,7 +803,8 @@ func DoctorPlugin(config PluginDoctorConfig) (string, error) {
 		"Skills: 3/3 ready",
 		"MCP: ready",
 		"Permissions: " + permissionStatus,
-		"Model: " + bridgeWorkerModelLabel(workerModel),
+		"Model: " + bridgeWorkerModelLabel(workerSettings.Model),
+		"Config dir: " + signedInClientBindingLabel(signedInClientBinding{ConfigDir: workerSettings.ConfigDir}),
 	}
 	if client == "claude-code" {
 		lines = append(lines, "Workspace trust: ready")

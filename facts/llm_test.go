@@ -99,6 +99,77 @@ func TestLLMConnectsCodexAndClaudeCodeAsRoutableProfiles(t *testing.T) {
 	}
 }
 
+func TestLLMClientConfigDirPersistsAndControlsAccountContext(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("signed-in AI client reference integrations currently target macOS and Unix clients")
+	}
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	if output, err := runworkgraph(t, repoRoot(t), "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	fixtureDir := t.TempDir()
+	configDir := filepath.Join(fixtureDir, "claude-enterprise")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatalf("create Claude config directory: %v", err)
+	}
+	environmentPath := filepath.Join(fixtureDir, "claude.environment")
+	writeLLMClientFixture(t, fixtureDir, "claude", `
+printf '%s' "${CLAUDE_CONFIG_DIR:-missing}" > "`+environmentPath+`"
+printf '%s' 'Claude account binding works.'
+`)
+	t.Setenv("PATH", fixtureDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(fixtureDir, "claude-personal"))
+
+	output, err := runworkgraph(t, repoRoot(t), "llm", "connect", "claude-code",
+		"--home", homeDir, "--name", "work-claude", "--config-dir", configDir)
+	if err != nil {
+		t.Fatalf("connect Claude Code with config dir: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Config dir: "+configDir) {
+		t.Fatalf("connect did not report config-dir binding:\n%s", output)
+	}
+	output, err = runworkgraph(t, repoRoot(t), "llm", "add", "work-claude-added",
+		"--home", homeDir, "--provider", "ai-client", "--client", "claude-code", "--config-dir", configDir)
+	if err != nil {
+		t.Fatalf("add Claude Code profile with config dir: %v\n%s", err, output)
+	}
+	contents, err := os.ReadFile(filepath.Join(homeDir, "llm.json"))
+	if err != nil {
+		t.Fatalf("read LLM config: %v", err)
+	}
+	if strings.Count(string(contents), `"config_dir": "`+configDir+`"`) != 2 {
+		t.Fatalf("LLM profiles omitted config-dir bindings:\n%s", contents)
+	}
+	list, err := runworkgraph(t, repoRoot(t), "llm", "list", "--home", homeDir)
+	if err != nil || !strings.Contains(string(list), "config-dir "+configDir) {
+		t.Fatalf("LLM list did not report config-dir binding: %v\n%s", err, list)
+	}
+	doctor, err := runworkgraph(t, repoRoot(t), "llm", "doctor", "--home", homeDir, "--profile", "work-claude")
+	if err != nil || !strings.Contains(string(doctor), "config dir: ready - "+configDir) {
+		t.Fatalf("LLM doctor did not verify config-dir binding: %v\n%s", err, doctor)
+	}
+	if output, err := runworkgraph(t, repoRoot(t), "llm", "hosted", "enable", "--home", homeDir); err != nil {
+		t.Fatalf("enable hosted LLM use: %v\n%s", err, output)
+	}
+	testOutput, err := runworkgraph(t, repoRoot(t), "llm", "test", "--home", homeDir, "--profile", "work-claude")
+	if err != nil || !strings.Contains(string(testOutput), "Claude account binding works.") {
+		t.Fatalf("test bound Claude profile: %v\n%s", err, testOutput)
+	}
+	environment, err := os.ReadFile(environmentPath)
+	if err != nil {
+		t.Fatalf("read Claude environment: %v", err)
+	}
+	if string(environment) != configDir {
+		t.Fatalf("expected stored config dir %q, got %q", configDir, environment)
+	}
+	missingDir := filepath.Join(fixtureDir, "missing-client-config")
+	badOutput, err := runworkgraph(t, repoRoot(t), "llm", "connect", "claude-code",
+		"--home", homeDir, "--name", "missing", "--config-dir", missingDir)
+	if err == nil || !strings.Contains(string(badOutput), "check client config directory") {
+		t.Fatalf("expected missing config directory rejection, got err=%v:\n%s", err, badOutput)
+	}
+}
+
 func TestLLMSummarizeTodayUsesSignedInCodexAndClaudeCodeClients(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("signed-in AI client reference integrations currently target macOS and Unix clients")

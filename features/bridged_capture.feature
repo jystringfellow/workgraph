@@ -119,6 +119,15 @@ Feature: Bridged connector capture
     And it does not overwrite the connector's prior success with a failure
     And it does not fall back to a CLI claim file
 
+  Scenario: Bind an unattended worker to one client account context
+    Given Claude Code has a dedicated configuration directory for a work organization
+    When I install its workgraph plugin with "--config-dir <work-config-dir>"
+    Then workgraph stores the absolute non-secret config directory with that worker
+    And reinstalling without the flag preserves the binding
+    And plugin doctor reports the stored config directory
+    When the worker drains bridged capture
+    Then it sets CLAUDE_CONFIG_DIR to the stored directory regardless of launchd or shell state
+
   Scenario: Observe Slack List rows without provider revisions
     Given a bridged Slack List is available as a complete CSV without item ids or row timestamps
     When the worker reads the configured List with slack_read_file and submits its raw CSV

@@ -9,7 +9,8 @@ import (
 )
 
 type bridgeWorkerSettings struct {
-	Model string `json:"model,omitempty"`
+	Model     string `json:"model,omitempty"`
+	ConfigDir string `json:"config_dir,omitempty"`
 }
 
 type bridgeWorkerConfigFile struct {
@@ -39,19 +40,23 @@ func readBridgeWorkerConfig(homeDir string) (bridgeWorkerConfigFile, error) {
 	return config, nil
 }
 
-func configureBridgeWorkerModel(homeDir string, client string, model string, clear bool) (string, error) {
+func configureBridgeWorkerSettings(homeDir string, client string, model string, clearModel bool, configDir string, clearConfigDir bool) (bridgeWorkerSettings, error) {
 	model = strings.TrimSpace(model)
-	if model != "" && clear {
-		return "", fmt.Errorf("--model and --clear-model cannot be used together")
+	configDir = strings.TrimSpace(configDir)
+	if model != "" && clearModel {
+		return bridgeWorkerSettings{}, fmt.Errorf("--model and --clear-model cannot be used together")
+	}
+	if configDir != "" && clearConfigDir {
+		return bridgeWorkerSettings{}, fmt.Errorf("--config-dir and --clear-config-dir cannot be used together")
 	}
 	config, err := readBridgeWorkerConfig(homeDir)
 	if err != nil {
-		return "", err
+		return bridgeWorkerSettings{}, err
 	}
 	settings := config.Workers[client]
 	changed := false
 	switch {
-	case clear:
+	case clearModel:
 		if settings.Model != "" {
 			settings.Model = ""
 			changed = true
@@ -62,32 +67,51 @@ func configureBridgeWorkerModel(homeDir string, client string, model string, cle
 			changed = true
 		}
 	}
+	switch {
+	case clearConfigDir:
+		if settings.ConfigDir != "" {
+			settings.ConfigDir = ""
+			changed = true
+		}
+	case configDir != "":
+		binding, err := normalizeSignedInClientBinding(client, configDir)
+		if err != nil {
+			return bridgeWorkerSettings{}, err
+		}
+		if settings.ConfigDir != binding.ConfigDir {
+			settings.ConfigDir = binding.ConfigDir
+			changed = true
+		}
+	}
 	if changed {
-		if settings.Model == "" {
+		if settings.Model == "" && settings.ConfigDir == "" {
 			delete(config.Workers, client)
 		} else {
 			config.Workers[client] = settings
 		}
 		path := bridgeWorkerConfigPath(homeDir)
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			return "", fmt.Errorf("create bridge worker config directory: %w", err)
+			return bridgeWorkerSettings{}, fmt.Errorf("create bridge worker config directory: %w", err)
 		}
 		if err := writeJSONFile(path, config); err != nil {
-			return "", fmt.Errorf("write bridge worker config: %w", err)
+			return bridgeWorkerSettings{}, fmt.Errorf("write bridge worker config: %w", err)
 		}
 		if err := os.Chmod(path, 0o600); err != nil {
-			return "", fmt.Errorf("secure bridge worker config: %w", err)
+			return bridgeWorkerSettings{}, fmt.Errorf("secure bridge worker config: %w", err)
 		}
 	}
-	return settings.Model, nil
+	return settings, nil
 }
 
-func bridgeWorkerModel(homeDir string, client string) (string, error) {
+func bridgeWorkerSettingsFor(homeDir string, client string) (bridgeWorkerSettings, error) {
 	config, err := readBridgeWorkerConfig(homeDir)
 	if err != nil {
-		return "", err
+		return bridgeWorkerSettings{}, err
 	}
-	return strings.TrimSpace(config.Workers[client].Model), nil
+	settings := config.Workers[client]
+	settings.Model = strings.TrimSpace(settings.Model)
+	settings.ConfigDir = strings.TrimSpace(settings.ConfigDir)
+	return settings, nil
 }
 
 func bridgeWorkerModelLabel(model string) string {

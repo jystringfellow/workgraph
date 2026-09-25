@@ -142,6 +142,8 @@ func runPluginInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 	noLaunchd := flags.Bool("no-launchd", false, "skip installing the macOS bridge drain worker")
 	model := flags.String("model", "", "pin the unattended bridge worker to this client model")
 	clearModel := flags.Bool("clear-model", false, "clear the persisted bridge worker model and use the client default")
+	configDir := flags.String("config-dir", "", "bind the worker to this signed-in client configuration directory")
+	clearConfigDir := flags.Bool("clear-config-dir", false, "clear the persisted client configuration directory binding")
 	var providerTools repeatedStringFlags
 	flags.Var(&providerTools, "allow-provider-tool", "exact provider MCP tool name to allow for the unattended Claude worker; repeatable")
 	if err := flags.Parse(args); err != nil {
@@ -154,7 +156,7 @@ func runPluginInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 	result, err := workgraph.InstallPlugin(workgraph.PluginInstallConfig{
 		HomeDir: *homeDir, Client: *client, ClientCommand: *clientCommand,
 		InstallRoot: *installRoot, SkipLaunchd: *noLaunchd, ProviderTools: providerTools,
-		Model: *model, ClearModel: *clearModel,
+		Model: *model, ClearModel: *clearModel, ConfigDir: *configDir, ClearConfigDir: *clearConfigDir,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph plugin install: %v\n", err)
@@ -310,6 +312,8 @@ func runBridgeInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 	noLaunchd := flags.Bool("no-launchd", false, "skip installing the macOS drain worker")
 	model := flags.String("model", "", "pin the unattended bridge worker to this client model")
 	clearModel := flags.Bool("clear-model", false, "clear the persisted bridge worker model and use the client default")
+	configDir := flags.String("config-dir", "", "bind the worker to this signed-in client configuration directory")
+	clearConfigDir := flags.Bool("clear-config-dir", false, "clear the persisted client configuration directory binding")
 	var providerTools repeatedStringFlags
 	flags.Var(&providerTools, "allow-provider-tool", "exact provider MCP tool name to allow for the unattended Claude worker; repeatable")
 	if err := flags.Parse(args); err != nil {
@@ -322,7 +326,7 @@ func runBridgeInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 	result, err := workgraph.InstallBridge(workgraph.BridgeInstallConfig{
 		HomeDir: *homeDir, Client: *client, ClientCommand: *clientCommand,
 		InstallRoot: *installRoot, SkipLaunchd: *noLaunchd, ProviderTools: providerTools,
-		Model: *model, ClearModel: *clearModel,
+		Model: *model, ClearModel: *clearModel, ConfigDir: *configDir, ClearConfigDir: *clearConfigDir,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph bridge install: %v\n", err)
@@ -842,6 +846,7 @@ func runLLMAdd(args []string, stdout io.Writer, stderr io.Writer) int {
 	awsProfile := flags.String("aws-profile", "", "AWS profile for Bedrock")
 	region := flags.String("region", "", "Cloud provider region")
 	modelARN := flags.String("model-arn", "", "Bedrock model or inference profile ARN")
+	configDir := flags.String("config-dir", "", "signed-in AI client configuration directory")
 
 	if err := flags.Parse(args[1:]); err != nil {
 		return 2
@@ -858,6 +863,7 @@ func runLLMAdd(args []string, stdout io.Writer, stderr io.Writer) int {
 		AWSProfile: *awsProfile,
 		Region:     *region,
 		ModelARN:   *modelARN,
+		ConfigDir:  *configDir,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph llm add: %v\n", err)
@@ -879,6 +885,7 @@ func runLLMConnect(args []string, stdout io.Writer, stderr io.Writer) int {
 	name := flags.String("name", "", "Profile name; defaults to the client id")
 	task := flags.String("for", "", "Task to route to this profile")
 	model := flags.String("model", "", "Optional client model; defaults to the client's configured model")
+	configDir := flags.String("config-dir", "", "signed-in AI client configuration directory")
 	if err := flags.Parse(args[1:]); err != nil {
 		return 2
 	}
@@ -887,11 +894,12 @@ func runLLMConnect(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 2
 	}
 	result, err := workgraph.ConnectLLMClient(workgraph.LLMConnectClientConfig{
-		HomeDir: *homeDir,
-		Client:  client,
-		Name:    *name,
-		Task:    *task,
-		Model:   *model,
+		HomeDir:   *homeDir,
+		Client:    client,
+		Name:      *name,
+		Task:      *task,
+		Model:     *model,
+		ConfigDir: *configDir,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph llm connect: %v\n", err)

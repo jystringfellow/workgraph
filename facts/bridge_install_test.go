@@ -227,6 +227,71 @@ func TestBridgeWorkerModelPersistsAcrossReinstallAndCanBeCleared(t *testing.T) {
 	}
 }
 
+func TestBridgeWorkerConfigDirPersistsAndControlsClientAccountContext(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	fixtureDir := t.TempDir()
+	configDir := filepath.Join(fixtureDir, "codex-work")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatalf("create Codex config directory: %v", err)
+	}
+	ambientDir := filepath.Join(fixtureDir, "codex-personal")
+	t.Setenv("CODEX_HOME", ambientDir)
+	environmentPath := filepath.Join(fixtureDir, "codex.environment")
+	clientPath := filepath.Join(fixtureDir, "codex")
+	if err := os.WriteFile(clientPath, []byte("#!/bin/sh\nprintf '%s' \"${CODEX_HOME:-missing}\" > \""+environmentPath+"\"\n"), 0o700); err != nil {
+		t.Fatalf("write fake Codex: %v", err)
+	}
+	installRoot := filepath.Join(fixtureDir, "installed")
+	install := func(extra ...string) []byte {
+		t.Helper()
+		args := []string{"plugin", "install", "--home", homeDir, "--client", "codex", "--client-command", clientPath, "--install-root", installRoot, "--no-launchd"}
+		args = append(args, extra...)
+		output, err := runworkgraph(t, repoRoot(t), args...)
+		if err != nil {
+			t.Fatalf("install Codex plugin: %v\n%s", err, output)
+		}
+		return output
+	}
+
+	if output := install("--config-dir", configDir); !strings.Contains(string(output), "Config dir: "+configDir) {
+		t.Fatalf("install did not report config-dir binding:\n%s", output)
+	}
+	contents, err := os.ReadFile(filepath.Join(homeDir, "bridge", "workers.json"))
+	if err != nil {
+		t.Fatalf("read worker config: %v", err)
+	}
+	if !strings.Contains(string(contents), `"config_dir": "`+configDir+`"`) {
+		t.Fatalf("worker config omitted config-dir binding:\n%s", contents)
+	}
+	if output := install(); !strings.Contains(string(output), "Config dir: "+configDir) {
+		t.Fatalf("reinstall did not preserve config-dir binding:\n%s", output)
+	}
+	doctor, err := runworkgraph(t, repoRoot(t), "plugin", "doctor", "--home", homeDir,
+		"--client", "codex", "--client-command", clientPath, "--install-root", installRoot)
+	if err != nil || !strings.Contains(string(doctor), "Config dir: "+configDir) {
+		t.Fatalf("doctor did not verify config-dir binding: %v\n%s", err, doctor)
+	}
+
+	connectBridgedConnector(t, repoRoot(t), homeDir, "slack")
+	if output, err := runworkgraph(t, repoRoot(t), "connectors", "poll", "--home", homeDir, "--once", "--connector", "slack"); err != nil {
+		t.Fatalf("emit request: %v\n%s", err, output)
+	}
+	if output, err := runworkgraph(t, repoRoot(t), "bridge", "drain", "--home", homeDir, "--client", "codex", "--client-command", clientPath); err != nil {
+		t.Fatalf("drain with config-dir binding: %v\n%s", err, output)
+	}
+	environment, err := os.ReadFile(environmentPath)
+	if err != nil {
+		t.Fatalf("read Codex environment: %v", err)
+	}
+	if string(environment) != configDir {
+		t.Fatalf("expected stored config dir %q, got %q", configDir, environment)
+	}
+
+	if output := install("--clear-config-dir"); !strings.Contains(string(output), "Config dir: ambient default") {
+		t.Fatalf("clear did not report ambient default:\n%s", output)
+	}
+}
+
 func TestSlackListsBridgeContractAllowsContentHashWithoutClaimingDeletion(t *testing.T) {
 	root := repoRoot(t)
 	skillPaths := []string{
@@ -495,6 +560,9 @@ func TestBridgeInstallReloadsExistingLaunchAgentBeforeBootstrap(t *testing.T) {
 	}
 	t.Setenv("HOME", userHome)
 	claudeConfigDir := filepath.Join(userHome, ".claude-enterprise")
+	if err := os.MkdirAll(claudeConfigDir, 0o700); err != nil {
+		t.Fatalf("create Claude config directory: %v", err)
+	}
 	t.Setenv("CLAUDE_CONFIG_DIR", claudeConfigDir)
 	t.Setenv("ACCESS_TOKEN", "must-not-enter-launch-agent")
 	logPath := filepath.Join(fixtureDir, "launchctl.log")
@@ -514,7 +582,7 @@ func TestBridgeInstallReloadsExistingLaunchAgentBeforeBootstrap(t *testing.T) {
 	installRoot := filepath.Join(fixtureDir, "installed")
 	if output, err := runworkgraph(t, repoRoot(t), "plugin", "install", "--home", homeDir,
 		"--client", "claude-code", "--client-command", clientPath, "--install-root", installRoot,
-		"--model", "launchd-pinned"); err != nil {
+		"--model", "launchd-pinned", "--config-dir", claudeConfigDir); err != nil {
 		t.Fatalf("install with launchd reload: %v\n%s", err, output)
 	}
 	contents, err := os.ReadFile(logPath)
@@ -535,13 +603,12 @@ func TestBridgeInstallReloadsExistingLaunchAgentBeforeBootstrap(t *testing.T) {
 		"<key>HOME</key><string>" + userHome + "</string>",
 		"<key>PATH</key><string>",
 		filepath.Dir(clientPath),
-		"<key>CLAUDE_CONFIG_DIR</key><string>" + claudeConfigDir + "</string>",
 	} {
 		if !strings.Contains(string(plist), expected) {
 			t.Fatalf("launch agent omitted %q:\n%s", expected, plist)
 		}
 	}
-	for _, forbidden := range []string{"ACCESS_TOKEN", "must-not-enter-launch-agent", "launchd-pinned", "--model"} {
+	for _, forbidden := range []string{"ACCESS_TOKEN", "must-not-enter-launch-agent", "CLAUDE_CONFIG_DIR", claudeConfigDir, "launchd-pinned", "--model"} {
 		if strings.Contains(string(plist), forbidden) {
 			t.Fatalf("launch agent copied generated configuration %q:\n%s", forbidden, plist)
 		}
@@ -551,7 +618,7 @@ func TestBridgeInstallReloadsExistingLaunchAgentBeforeBootstrap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("doctor installed launch agent: %v\n%s", err, doctor)
 	}
-	if !strings.Contains(string(doctor), "Worker environment: ready") || !strings.Contains(string(doctor), "Model: launchd-pinned") {
+	if !strings.Contains(string(doctor), "Worker environment: ready") || !strings.Contains(string(doctor), "Model: launchd-pinned") || !strings.Contains(string(doctor), "Config dir: "+claudeConfigDir) {
 		t.Fatalf("doctor did not verify launch environment:\n%s", doctor)
 	}
 }

@@ -148,6 +148,11 @@ The model is optional for an AI-client profile. When omitted, the client uses
 its own client-selected default. workgraph stores no client login token and does not
 accept arbitrary command lines as LLM profiles.
 
+An AI-client profile may bind its invocation to an existing client
+configuration directory with `--config-dir`. The shared persistence, runtime
+environment, and diagnostic contract is defined in
+[`signed-in-client-binding.md`](signed-in-client-binding.md).
+
 AI-client execution must:
 
 - resolve only the registered `codex` or `claude` executable;

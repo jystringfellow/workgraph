@@ -695,13 +695,14 @@ doctor verify both the permission file and workspace trust and fail with a
 setup error when either is unavailable.
 
 The generated launch agent declares a minimal deterministic login environment:
-the user's `HOME`, an installation-time `PATH` augmented with the resolved
+the user's `HOME` and an installation-time `PATH` augmented with the resolved
 client and workgraph executable directories plus standard macOS binary
-locations, and `CLAUDE_CONFIG_DIR` when the installer inherited one. It must
-not copy arbitrary or secret environment variables. Doctor verifies this
-static worker environment when a launch-agent marker is present; provider
-capability preflight remains the runtime proof that a configured connector is
-actually visible.
+locations. It must not copy arbitrary, secret, or client-account environment
+variables. A durable config-dir binding from `bridge/workers.json` is applied
+by drain immediately before client execution. Doctor verifies this static
+worker environment and the configured client directory when a launch-agent
+marker is present; provider capability preflight remains the runtime proof
+that a configured connector is actually visible.
 
 Provider tools remain explicit opt-in. Repeating
 `--allow-provider-tool <exact-mcp-tool-name>` during Claude plugin installation

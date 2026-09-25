@@ -57,6 +57,9 @@ Priority labels used below:
 
 ## Recently Delivered
 
+- Signed-in client config-dir bindings shared by bridge workers and LLM
+  profiles, with runtime enforcement and inspectable diagnostics. [spec:
+  `specs/signed-in-client-binding.md`]
 - Connector registry, setup state, polling isolation, deadlines, retry
   backoff, and provider tool requirements. [specs:
   `specs/connector-runtime.md` and `specs/provider-tool-requirements.md`]

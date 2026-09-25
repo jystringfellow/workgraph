@@ -34,14 +34,16 @@ type LLMAddProfileConfig struct {
 	AWSProfile string
 	Region     string
 	ModelARN   string
+	ConfigDir  string
 }
 
 type LLMConnectClientConfig struct {
-	HomeDir string
-	Client  string
-	Name    string
-	Task    string
-	Model   string
+	HomeDir   string
+	Client    string
+	Name      string
+	Task      string
+	Model     string
+	ConfigDir string
 }
 
 type LLMListConfig struct {
@@ -103,6 +105,7 @@ type llmProfile struct {
 	AWSProfile string `json:"aws_profile,omitempty"`
 	Region     string `json:"region,omitempty"`
 	ModelARN   string `json:"model_arn,omitempty"`
+	ConfigDir  string `json:"config_dir,omitempty"`
 }
 
 type llmHostedConfig struct {
@@ -165,6 +168,13 @@ func AddLLMProfile(config LLMAddProfileConfig) (LLMResult, error) {
 		if err != nil {
 			return LLMResult{}, err
 		}
+		binding, err := normalizeSignedInClientBinding(profile.Client, config.ConfigDir)
+		if err != nil {
+			return LLMResult{}, err
+		}
+		profile.ConfigDir = binding.ConfigDir
+	} else if strings.TrimSpace(config.ConfigDir) != "" {
+		return LLMResult{}, errors.New("--config-dir is supported only for ai-client profiles")
 	}
 	if err := validateLLMProfile(profile); err != nil {
 		return LLMResult{}, err
@@ -182,15 +192,16 @@ func AddLLMProfile(config LLMAddProfileConfig) (LLMResult, error) {
 	if err := writeLLMConnectorConfig(configPath, stored); err != nil {
 		return LLMResult{}, err
 	}
-	return LLMResult{
-		ConfigPath: configPath,
-		Message: strings.Join([]string{
-			"LLM profile added: " + config.Name,
-			"Provider: " + profile.Provider,
-			"Model: " + llmProfileModelLabel(profile),
-			"Config: " + configPath,
-		}, "\n"),
-	}, nil
+	lines := []string{
+		"LLM profile added: " + config.Name,
+		"Provider: " + profile.Provider,
+		"Model: " + llmProfileModelLabel(profile),
+	}
+	if profile.Provider == "ai-client" {
+		lines = append(lines, "Config dir: "+llmProfileConfigDirLabel(profile))
+	}
+	lines = append(lines, "Config: "+configPath)
+	return LLMResult{ConfigPath: configPath, Message: strings.Join(lines, "\n")}, nil
 }
 
 func ListLLMProfiles(config LLMListConfig) (LLMResult, error) {
@@ -219,7 +230,11 @@ func ListLLMProfiles(config LLMListConfig) (LLMResult, error) {
 		if name == stored.DefaultProfile {
 			marker = " default"
 		}
-		lines = append(lines, fmt.Sprintf("- %s: %s %s%s", name, profile.Provider, llmProfileModelLabel(profile), marker))
+		line := fmt.Sprintf("- %s: %s %s%s", name, profile.Provider, llmProfileModelLabel(profile), marker)
+		if profile.Provider == "ai-client" {
+			line += " config-dir " + llmProfileConfigDirLabel(profile)
+		}
+		lines = append(lines, line)
 	}
 	if len(stored.TaskProfiles) > 0 {
 		lines = append(lines, "", "Task profiles")
@@ -497,6 +512,14 @@ func DoctorLLMProfiles(config LLMDoctorConfig) (LLMResult, error) {
 				lines = append(lines, "  client executable: missing - "+err.Error())
 			} else {
 				lines = append(lines, "  client executable: ready - "+path)
+			}
+			if err := verifySignedInClientBinding(signedInClientBinding{ConfigDir: profile.ConfigDir}); err != nil {
+				ok = false
+				lines = append(lines, "  config dir: missing - "+err.Error())
+			} else if profile.ConfigDir == "" {
+				lines = append(lines, "  config dir: ambient default")
+			} else {
+				lines = append(lines, "  config dir: ready - "+profile.ConfigDir)
 			}
 		} else {
 			lines = append(lines, "  model probe: skipped - provider does not expose OpenAI-compatible /models")
@@ -1184,6 +1207,9 @@ func resolveLLMProfile(config llmConnectorConfig, requestedProfile string, task 
 }
 
 func validateLLMProfile(profile llmProfile) error {
+	if profile.Provider != "ai-client" && profile.ConfigDir != "" {
+		return errors.New("config_dir is supported only for ai-client profiles")
+	}
 	switch profile.Provider {
 	case "":
 		return errors.New("llm provider is required")
@@ -1306,4 +1332,8 @@ func llmProfileDestination(profile llmProfile) string {
 	default:
 		return profile.Provider
 	}
+}
+
+func llmProfileConfigDirLabel(profile llmProfile) string {
+	return signedInClientBindingLabel(signedInClientBinding{ConfigDir: profile.ConfigDir})
 }
