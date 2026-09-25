@@ -450,6 +450,7 @@ workgraph plugin install --client codex
 # or
 workgraph plugin install --client claude-code
 workgraph plugin install --client claude-code --model <approved-model>
+workgraph plugin install --client claude-code --config-dir "$HOME/.claude-enterprise"
 ```
 
 Claude's unattended worker trusts the workgraph home and discovers its local
@@ -473,6 +474,13 @@ is stored in `<workgraph-home>/bridge/workers.json`, appears in install and
 doctor output, and survives reinstall when model flags are omitted. Use
 `--clear-model` to return to the client's configured default. The generated
 launchd file does not contain the selected model.
+
+`--config-dir <path>` binds the worker to that signed-in client account context
+and stores the absolute path beside the model in `bridge/workers.json`.
+Reinstalling without either config-dir flag preserves it. Use
+`--clear-config-dir` to return to the ambient client default. The generated
+launchd file does not contain the binding; drain reads it immediately before
+invoking the client.
 
 The host packages use their native manifest formats but bundle the same local
 MCP and three canonical skills: `workgraph-bridge`, `workgraph-memory`, and
@@ -639,10 +647,17 @@ task-specific routes can coexist:
 
 ```sh
 workgraph llm connect codex --name personal-codex --for summarize
-workgraph llm connect claude-code --name work-claude --model <approved-model> --for categorize
+workgraph llm connect claude-code --name work-claude \
+  --config-dir "$HOME/.claude-enterprise" \
+  --model <approved-model> --for categorize
 workgraph llm list
 workgraph llm use personal-codex --for summarize
 ```
+
+`--config-dir` stores the signed-in client account context with the profile:
+`CODEX_HOME` for Codex or `CLAUDE_CONFIG_DIR` for Claude Code. `llm list` and
+`llm doctor` report the binding, and later invocations do not depend on the
+ambient shell selecting the same account.
 
 `categorize` is a reserved task route; the project-categorization suggestion
 workflow is not implemented yet. Current client-backed execution supports

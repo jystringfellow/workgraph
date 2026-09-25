@@ -42,6 +42,15 @@ Scenario: Connect signed-in AI clients as separate LLM profiles
   And future categorize tasks use Claude Code
   And hosted LLM consent is still required before captured context is sent
 
+Scenario: Bind a signed-in LLM profile to one client account context
+  Given Claude Code has a dedicated configuration directory for a work organization
+  When I run "workgraph llm connect claude-code --config-dir <work-config-dir> --for summarize"
+  Then workgraph stores the absolute non-secret config directory with that profile
+  And list and doctor report the stored config directory
+  When workgraph invokes the profile
+  Then it sets CLAUDE_CONFIG_DIR to the stored directory regardless of the ambient shell
+  And it stores no client login token
+
 Scenario: Summarize through a signed-in AI client
   Given workgraph has captured local events today
   And Codex or Claude Code is selected for summarize tasks

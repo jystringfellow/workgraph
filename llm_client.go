@@ -40,6 +40,11 @@ func ConnectLLMClient(config LLMConnectClientConfig) (LLMResult, error) {
 		Client:   client,
 		Model:    strings.TrimSpace(config.Model),
 	}
+	binding, err := normalizeSignedInClientBinding(client, config.ConfigDir)
+	if err != nil {
+		return LLMResult{}, err
+	}
+	profile.ConfigDir = binding.ConfigDir
 	if err := validateLLMProfile(profile); err != nil {
 		return LLMResult{}, err
 	}
@@ -72,6 +77,7 @@ func ConnectLLMClient(config LLMConnectClientConfig) (LLMResult, error) {
 		"Profile: " + name,
 		"Provider: ai-client",
 		"Model: " + llmProfileModelLabel(profile),
+		"Config dir: " + llmProfileConfigDirLabel(profile),
 		"Executable: " + executable,
 	}
 	if task != "" {
@@ -141,6 +147,7 @@ func callAIClient(profile llmProfile, messages []openAICompatibleMessage) (strin
 	command := exec.CommandContext(ctx, executable, args...)
 	command.Dir = workingDir
 	command.Env = filteredAIClientEnvironment(os.Environ(), client)
+	command.Env = applySignedInClientBinding(command.Env, client, signedInClientBinding{ConfigDir: profile.ConfigDir})
 	command.Stdin = strings.NewReader(prompt)
 	var stdout cappedBuffer
 	var stderr cappedBuffer
