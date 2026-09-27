@@ -57,6 +57,9 @@ Priority labels used below:
 
 ## Recently Delivered
 
+- [x] Keep capture running when transient watched files disappear. [spec:
+  `specs/capture-reliability.md`; #139]
+
 - Signed-in client config-dir bindings shared by bridge workers and LLM
   profiles, with runtime enforcement and inspectable diagnostics. [spec:
   `specs/signed-in-client-binding.md`]

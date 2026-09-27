@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,9 +13,64 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	workgraph "github.com/jystringfellow/workgraph"
 	_ "github.com/mattn/go-sqlite3"
 )
+
+func TestRunSurvivesDisappearingFiles(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "state")
+	watch := t.TempDir()
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	capture, err := workgraph.StartRun(workgraph.RunConfig{HomeDir: home, WatchDirs: []string{watch}, Watcher: watcher})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- capture.Run(ctx) }()
+	go func() {
+		for range capture.Events {
+		}
+	}()
+	watcher.Errors <- &os.PathError{Op: "lstat", Path: filepath.Join(watch, "Unconfirmed.crdownload"), Err: os.ErrNotExist}
+	for i := 0; i < 2000; i++ {
+		path := filepath.Join(watch, fmt.Sprintf("Unconfirmed-%d.crdownload", i))
+		if err := os.WriteFile(path, []byte("partial"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("capture stopped during transient activity: %v", err)
+		default:
+		}
+	}
+	path := filepath.Join(watch, "durable.md")
+	if err := os.WriteFile(path, []byte("durable"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitForEvent(t, initialized.DatabasePath, "created", path)
+	watcher.Errors <- fsnotify.ErrEventOverflow
+	select {
+	case err := <-done:
+		if !errors.Is(err, fsnotify.ErrEventOverflow) {
+			t.Fatalf("unrelated watcher error was hidden: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("fatal watcher error did not stop capture")
+	}
+}
 
 func TestRunStartsEventCaptureAfterInit(t *testing.T) {
 	tempDir := t.TempDir()

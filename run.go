@@ -43,6 +43,8 @@ const (
 )
 
 type RunConfig struct {
+	// Capture closes a supplied Watcher, including when watcher setup fails.
+	Watcher                 *fsnotify.Watcher
 	HomeDir                 string
 	DatabasePath            string
 	WatchDirs               []string
@@ -172,10 +174,13 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("create file watcher: %w", err)
+	watcher := config.Watcher
+	if watcher == nil {
+		watcher, err = fsnotify.NewWatcher()
+		if err != nil {
+			db.Close()
+			return nil, fmt.Errorf("create file watcher: %w", err)
+		}
 	}
 
 	budget := newWatchBudget(config.MaxWatchEntries)
@@ -385,6 +390,9 @@ func (capture *RunCapture) Run(ctx context.Context) (runErr error) {
 				return nil
 			}
 			if err != nil {
+				if skipMissingWatchPath(err) {
+					continue
+				}
 				return err
 			}
 		}
@@ -1259,6 +1267,9 @@ func addWatchRoot(watcher *fsnotify.Watcher, path, homeDir, dbPath string, ignor
 		return false, errWatchLimitReached
 	}
 	if err := watcher.Add(path); err != nil {
+		if skipMissingWatchPath(err) {
+			return false, nil
+		}
 		if isPermissionError(err) || isUnsupportedSpecialFileError(err) {
 			return false, nil
 		}
@@ -1275,6 +1286,9 @@ func addWatchRoot(watcher *fsnotify.Watcher, path, homeDir, dbPath string, ignor
 func addWatchChildren(watcher *fsnotify.Watcher, root, path, homeDir, dbPath string, ignorePaths []string, ignoreNames []string, budget *watchBudget, conservativeRoot bool) error {
 	entries, err := os.ReadDir(path)
 	if err != nil {
+		if skipMissingWatchPath(err) {
+			return nil
+		}
 		if isPermissionError(err) || isUnsupportedSpecialFileError(err) || isResourceLimitError(err) {
 			return nil
 		}
@@ -1507,6 +1521,14 @@ func canReadDirectory(path string) bool {
 
 	_, err = dir.Readdirnames(1)
 	return err == nil || errors.Is(err, io.EOF) || errors.Is(err, os.ErrNotExist) || errors.Is(err, fs.ErrNotExist)
+}
+
+func skipMissingWatchPath(err error) bool {
+	if !errors.Is(err, fs.ErrNotExist) {
+		return false
+	}
+	log.Printf("capture: skipping disappeared watch path: %v", err)
+	return true
 }
 
 func isPermissionError(err error) bool {
