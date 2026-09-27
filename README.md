@@ -209,6 +209,18 @@ Create a starter memory file for a project:
 workgraph memory init "workgraph"
 ```
 
+Thematic memory projects can include evidence from multiple captured projects:
+
+```sh
+workgraph memory init "MMO Harness"
+workgraph memory link --source Mindbody.Modernization.Orchestration --source mmo-ui "MMO Harness"
+workgraph memory suggest "MMO Harness"
+workgraph memory links "MMO Harness"
+```
+
+`memory unlink --source mmo-ui "MMO Harness"` removes a mapping. Linking and
+unlinking preserve authored memory, raw events, and existing promoted evidence.
+
 Resume a project from captured events and explicit memory:
 
 ```sh

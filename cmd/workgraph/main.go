@@ -2759,6 +2759,10 @@ func runMemory(args []string, stdout io.Writer, stderr io.Writer) int {
 	switch args[0] {
 	case "init":
 		return runMemoryInit(args[1:], stdout, stderr)
+	case "link":
+		return runMemorySourceLink(args[1:], false, stdout, stderr)
+	case "unlink":
+		return runMemorySourceLink(args[1:], true, stdout, stderr)
 	case "links":
 		return runMemoryLinks(args[1:], stdout, stderr)
 	case "promote":

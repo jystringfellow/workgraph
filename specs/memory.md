@@ -56,8 +56,30 @@ include:
 - constraints
 - open questions
 
-This slice treats project memory as readable Markdown content. It does not
-require frontmatter, infer aliases, or generate memory with an LLM.
+Project memory remains readable Markdown without required frontmatter or
+LLM-generated content.
+
+## Captured Project Mappings
+
+`memory link --source <captured-project> [--source <captured-project> ...]
+<memory-project>` explicitly associates an existing memory file with captured
+project identifiers. `memory unlink` removes those associations. Both accept
+`--home`, `--database` and `--memory`. Flags precede the project argument.
+All sources must exist in captured events when linking; an invalid source
+rejects the entire request. Repeated links and unlinks are idempotent.
+
+Mappings are stored in SQLite `memory_project_sources`, keyed by the absolute
+memory document path and captured project. A project can have multiple sources,
+and a captured project can support several workstreams. No raw events or
+authored memory are rewritten. Moving a memory file requires relinking it.
+Existing databases gain the table on the first explicit link/unlink command;
+read-only queries do not migrate the database.
+
+Suggest, resume and promotion validation include exact-name evidence plus all
+explicitly mapped sources, deduplicated by event identity. Unlinking removes
+that source from future queries but preserves already promoted evidence.
+`memory links` shows captured project mappings separately from promoted evidence
+links. Linking a source does not manufacture an evidence link.
 
 Markdown remains the default generated active memory format because it is
 durable, diffable, easy to edit, and good for concise user-curated facts.

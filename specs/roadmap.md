@@ -57,6 +57,9 @@ Priority labels used below:
 
 ## Recently Delivered
 
+- [x] Explicit, reversible many-source memory project mappings across suggest,
+  resume and promotion. [spec: `specs/memory.md`; #138]
+
 - [x] Opt-in launchd and systemd user capture services with explicit lifecycle
   controls. [spec: `specs/capture-reliability.md`; #139]
 

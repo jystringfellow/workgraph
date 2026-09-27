@@ -126,6 +126,7 @@ type MemoryLinksResult struct {
 	Project    string
 	MemoryPath string
 	Links      []MemoryLink
+	Sources    []string
 	Message    string
 }
 
@@ -252,7 +253,10 @@ func SuggestMemoryUpdates(config MemorySuggestConfig) (MemorySuggestResult, erro
 	if err != nil {
 		return MemorySuggestResult{}, err
 	}
-	projectEvents := resumeProjectEvents(events, config.Project)
+	projectEvents, err := mappedMemoryEvents(db, events, config.Project, memoryPath)
+	if err != nil {
+		return MemorySuggestResult{}, err
+	}
 	sort.Slice(projectEvents, func(i, j int) bool {
 		if projectEvents[i].Timestamp.Equal(projectEvents[j].Timestamp) {
 			return projectEvents[i].ID < projectEvents[j].ID
@@ -311,9 +315,6 @@ func PromoteMemory(config MemoryPromoteConfig) (MemoryPromoteResult, error) {
 	event, err := memoryPromotionEvidence(config)
 	if err != nil {
 		return MemoryPromoteResult{}, err
-	}
-	if event.Project != config.Project {
-		return MemoryPromoteResult{}, fmt.Errorf("evidence %q belongs to project %q, not %q", config.EvidenceID, event.Project, config.Project)
 	}
 
 	if err := os.MkdirAll(projectMemoryDir(memoryDir), 0o755); err != nil {
@@ -402,6 +403,10 @@ func ListMemoryLinks(config MemoryLinksConfig) (MemoryLinksResult, error) {
 		Scope:      scope,
 		Project:    config.Project,
 		MemoryPath: memoryPath,
+	}
+	result.Sources, err = memoryProjectSources(db, memoryPath)
+	if err != nil {
+		return MemoryLinksResult{}, err
 	}
 	for rows.Next() {
 		var link MemoryLink
@@ -742,6 +747,22 @@ func memoryPromotionEvidence(config MemoryPromoteConfig) (ResumeEvent, error) {
 	}
 	for _, event := range events {
 		if event.ID == config.EvidenceID {
+			memoryDir, err := resolveMemoryDir(config.MemoryDir)
+			if err != nil {
+				return ResumeEvent{}, err
+			}
+			path, _ := projectMemoryPath(memoryDir, config.Project)
+			sources, err := memoryProjectSources(db, path)
+			if err != nil {
+				return ResumeEvent{}, err
+			}
+			allowed := event.Project == config.Project
+			for _, source := range sources {
+				allowed = allowed || event.Project == source
+			}
+			if !allowed {
+				return ResumeEvent{}, fmt.Errorf("evidence %q belongs to project %q, not %q", config.EvidenceID, event.Project, config.Project)
+			}
 			return event, nil
 		}
 	}
@@ -810,6 +831,12 @@ func memoryLinksMessage(result MemoryLinksResult) string {
 		"Project memory links",
 		"Project: " + result.Project,
 		"Path: " + result.MemoryPath,
+	}
+	if len(result.Sources) > 0 {
+		lines = append(lines, "", "Captured project mappings")
+		for _, source := range result.Sources {
+			lines = append(lines, "- "+source)
+		}
 	}
 	if len(result.Links) == 0 {
 		lines = append(lines, "", "No memory links found.")

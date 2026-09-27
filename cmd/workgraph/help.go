@@ -23,6 +23,8 @@ type helpTopic struct {
 }
 
 var helpTopics = map[string]helpTopic{
+	"memory link":             {"workgraph memory link --source <captured-project> <memory-project> [options]", "Associate captured project evidence with an existing memory project."},
+	"memory unlink":           {"workgraph memory unlink --source <captured-project> <memory-project> [options]", "Remove a captured project mapping, preserving promoted evidence."},
 	"service":                 {"workgraph service <install|status|uninstall>", "Manage opt-in supervised capture on macOS and Linux."},
 	"service install":         {"workgraph service install [--home path]", "Enable login startup and automatic capture restart."},
 	"service status":          {"workgraph service status [--home path]", "Inspect supervisor state and capture health."},

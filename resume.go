@@ -105,14 +105,18 @@ func Resume(config ResumeConfig) (ResumeResult, error) {
 	project = canonicalResumeProjectName(project, events)
 	result.Project = project
 
-	projectEvents := resumeProjectEvents(events, project)
-	result.GitHub = resumeOpenGitHubWork(projectEvents)
-	result.Events, result.Omitted = limitResumeEvents(projectEvents, resumeActivityLimit(config.MaxEvents))
-	result.Files = resumeRelevantFiles(result.Events)
 	memoryDir, err := resolveMemoryDir(config.MemoryDir)
 	if err != nil {
 		return ResumeResult{}, err
 	}
+	memoryPath, _ := projectMemoryPath(memoryDir, config.Project)
+	projectEvents, err := mappedMemoryEvents(db, events, project, memoryPath)
+	if err != nil {
+		return ResumeResult{}, err
+	}
+	result.GitHub = resumeOpenGitHubWork(projectEvents)
+	result.Events, result.Omitted = limitResumeEvents(projectEvents, resumeActivityLimit(config.MaxEvents))
+	result.Files = resumeRelevantFiles(result.Events)
 	result.Memory, result.MemoryPath, err = loadProjectMemory(memoryDir, config.Project)
 	if err != nil {
 		return ResumeResult{}, err

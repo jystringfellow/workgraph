@@ -285,6 +285,7 @@ func createSchema(db *sql.DB) error {
 			content TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		);`,
+		memoryProjectSourcesSchema,
 		`CREATE TABLE IF NOT EXISTS memory_links (
 			id TEXT PRIMARY KEY,
 			memory_doc_path TEXT NOT NULL,
