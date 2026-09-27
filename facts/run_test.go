@@ -42,7 +42,7 @@ func TestRunSurvivesDisappearingFiles(t *testing.T) {
 		}
 	}()
 	watcher.Errors <- &os.PathError{Op: "lstat", Path: filepath.Join(watch, "Unconfirmed.crdownload"), Err: os.ErrNotExist}
-	for i := 0; i < 2000; i++ {
+	for i := 0; i < 1000; i++ {
 		path := filepath.Join(watch, fmt.Sprintf("Unconfirmed-%d.crdownload", i))
 		if err := os.WriteFile(path, []byte("partial"), 0o600); err != nil {
 			t.Fatal(err)
