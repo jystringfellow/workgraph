@@ -65,6 +65,20 @@ func StartDaemon(config DaemonConfig) (DaemonStatus, error) {
 		return DaemonStatus{}, err
 	}
 
+	service, err := installedCaptureService(runStatus.HomeDir)
+	if err != nil {
+		return DaemonStatus{}, err
+	}
+	if service != nil {
+		if len(config.WatchDirs) > 0 || config.DatabasePath != "" || config.SlackToken != "" || len(config.SlackChannels) > 0 || len(config.SlackListIDs) > 0 || config.SlackIncludeDMs || config.SlackAPIBaseURL != "" {
+			return DaemonStatus{}, fmt.Errorf("installed capture service uses saved settings; omit start overrides or uninstall the service")
+		}
+		if err := service.start(); err != nil {
+			return DaemonStatus{}, err
+		}
+		return waitForDaemonReady(runStatus.HomeDir)
+	}
+
 	existing, err := DaemonStatusForHome(runStatus.HomeDir)
 	if err != nil {
 		return DaemonStatus{}, err
@@ -144,6 +158,15 @@ func StartDaemon(config DaemonConfig) (DaemonStatus, error) {
 }
 
 func RunDaemon(config DaemonConfig) error {
+	home, err := resolveHomeDir(config.HomeDir)
+	if err != nil {
+		return err
+	}
+	release, err := lockCaptureHome(home)
+	if err != nil {
+		return err
+	}
+	defer release()
 	ctx, stop := signalContext()
 	defer stop()
 
@@ -249,6 +272,15 @@ func DaemonStatusForHome(homeDir string) (DaemonStatus, error) {
 }
 
 func StopDaemon(config DaemonConfig) (DaemonStatus, error) {
+	service, err := installedCaptureService(config.HomeDir)
+	if err != nil {
+		return DaemonStatus{}, err
+	}
+	if service != nil {
+		if err := service.stop(); err != nil {
+			return DaemonStatus{}, err
+		}
+	}
 	status, err := DaemonStatusForConfig(config)
 	if err != nil {
 		return DaemonStatus{}, err
@@ -665,6 +697,10 @@ func matchingCaptureWorkerProcesses(homeDir string, databasePath string, process
 		if !strings.Contains(process.Command, "__capture-worker") {
 			continue
 		}
+		if captureWorkerCommandMatchesPaths(process.Command, homeDir, databasePath) {
+			matches = append(matches, process)
+			continue
+		}
 		args := strings.Fields(process.Command)
 		processHome := cleanProcessPath(flagValue(args, "--home"))
 		processDB := cleanProcessPath(flagValue(args, "--database"))
@@ -677,6 +713,22 @@ func matchingCaptureWorkerProcesses(homeDir string, databasePath string, process
 		}
 	}
 	return matches
+}
+
+func captureWorkerCommandMatchesPaths(command, home, database string) bool {
+	if home == "" || database == "" {
+		return false
+	}
+	_, arguments, found := strings.Cut(command, " __capture-worker ")
+	if !found {
+		return false
+	}
+	expected := "--home " + home + " --database " + database
+	if !strings.HasPrefix(arguments, expected) {
+		return false
+	}
+	rest := strings.TrimPrefix(arguments, expected)
+	return rest == "" || strings.HasPrefix(rest, " --")
 }
 
 func listSystemDaemonProcesses() ([]daemonProcess, error) {

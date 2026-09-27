@@ -8,6 +8,10 @@ import (
 )
 
 var publicCommandPaths = []string{
+	"service",
+	"service install",
+	"service status",
+	"service uninstall",
 	"ai",
 	"ai archive",
 	"ai checkpoint",

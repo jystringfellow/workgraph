@@ -92,6 +92,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runMemory(args[1:], stdout, stderr)
 	case "start":
 		return runCaptureStart(args[1:], stdout, stderr)
+	case "service":
+		return runService(args[1:], stdout, stderr)
 	case "status":
 		return runCaptureStatus(args[1:], stdout, stderr)
 	case "stop":

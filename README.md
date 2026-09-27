@@ -137,6 +137,22 @@ workgraph start
 connector polling settings. Capture is explicit: `init` never starts background
 capture silently.
 
+For automatic restart and startup at login on macOS or Linux, opt into a user
+service (stop manually started capture first):
+
+```sh
+workgraph stop
+workgraph service install
+workgraph service status
+```
+
+With a service installed, `workgraph stop` also disables login startup;
+`workgraph start` enables it again. `workgraph service uninstall` stops and
+removes the service while preserving your data. Reinstall the service if the
+executable moves. Linux requires a working systemd user session; workgraph does
+not enable lingering. Service logs use `daemon.log` on macOS and the user
+journal on Linux. See [capture reliability](specs/capture-reliability.md).
+
 Use these commands to check or stop the daemon:
 
 ```sh

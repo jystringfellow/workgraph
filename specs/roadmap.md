@@ -57,6 +57,9 @@ Priority labels used below:
 
 ## Recently Delivered
 
+- [x] Opt-in launchd and systemd user capture services with explicit lifecycle
+  controls. [spec: `specs/capture-reliability.md`; #139]
+
 - [x] Keep capture running when transient watched files disappear. [spec:
   `specs/capture-reliability.md`; #139]
 
