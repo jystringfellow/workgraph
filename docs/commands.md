@@ -296,6 +296,41 @@ compact overview supports the same exact filters with `workgraph today --actor
 legacy-unclassified evidence while hiding evidence explicitly classified with
 no direct involvement; `events today` retains the complete evidence view.
 
+Inspect and optionally accept project evidence mappings:
+
+```sh
+workgraph memory doctor
+workgraph memory doctor --interactive
+workgraph memory link --source Mindbody.Modernization.Orchestration --source mmo-ui "MMO Harness"
+workgraph memory links "MMO Harness"
+workgraph memory unlink --source mmo-ui "MMO Harness"
+```
+
+Create the memory project before linking. Mappings include captured evidence in
+suggest, resume and promotion without renaming events or rewriting authored
+memory. Flags precede the project argument. All memory commands accept `--home`,
+`--memory` and, except init, `--database`. Today also accepts `--memory` for
+project-mapping discovery. Discovery suggests associations; only an explicit
+link command or interactive acceptance creates one.
+
+For opt-in login startup and crash recovery on macOS or Linux:
+
+```sh
+workgraph stop
+workgraph service install
+workgraph service status
+workgraph stop
+workgraph start
+workgraph service uninstall
+```
+
+Service commands accept `--home`. Stop disables the installed job and login
+startup; start enables it again. Services use saved settings, so start-time
+overrides require uninstalling the service first. The definition records the
+current executable path; reinstall after moving it. macOS uses launchd and
+`daemon.log`; Linux uses systemd's user session and journal. No root service or
+lingering is installed. Uninstall preserves local data and logs.
+
 Create a starter memory template for a project:
 
 ```sh

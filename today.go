@@ -25,6 +25,7 @@ const (
 
 type TodayConfig struct {
 	HomeDir            string
+	MemoryDir          string
 	DatabasePath       string
 	Now                time.Time
 	Actor              string
@@ -140,6 +141,11 @@ func Today(config TodayConfig) (TodayResult, error) {
 	}
 	result.Associations = associations
 	result.Message = todayMessage(result, location)
+	var evidence []ResumeEvent
+	for _, event := range events {
+		evidence = append(evidence, ResumeEvent{ID: event.ID, Project: event.Project, Timestamp: event.Timestamp, Path: event.Path})
+	}
+	result.Message += memoryDiscoveryHints(db, evidence, MemoryDoctorConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir})
 
 	return result, nil
 }

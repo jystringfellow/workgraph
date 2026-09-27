@@ -281,6 +281,10 @@ func SuggestMemoryUpdates(config MemorySuggestConfig) (MemorySuggestResult, erro
 		})
 	}
 	result.Message = memorySuggestMessage(result)
+	if len(result.Suggestions) == 0 {
+		result.Message += memoryDiscoveryHints(db, events, MemoryDoctorConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir, Project: config.Project})
+		result.Message += "\nNo exact-name or mapped evidence was found. Use workgraph memory doctor to inspect captured identifiers and project mappings."
+	}
 	return result, nil
 }
 

@@ -10,3 +10,10 @@ Feature: Explicit project evidence mappings
     When I unlink a captured repository
     Then its events no longer appear as candidate evidence
     And previously promoted evidence remains linked
+
+  Scenario: Discover an acronym mismatch without changing memory
+    Given memory exists for MMO Harness
+    And captured events belong to Mindbody.Modernization.Orchestration
+    When I inspect memory doctor, today, resume or empty memory suggestions
+    Then I see a possible project mapping with a reason and explicit link command
+    And no association is created until I accept it

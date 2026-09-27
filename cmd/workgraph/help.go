@@ -23,6 +23,7 @@ type helpTopic struct {
 }
 
 var helpTopics = map[string]helpTopic{
+	"memory doctor":           {"workgraph memory doctor [--interactive] [project] [options]", "Inspect project mappings and review possible captured project matches."},
 	"memory link":             {"workgraph memory link --source <captured-project> <memory-project> [options]", "Associate captured project evidence with an existing memory project."},
 	"memory unlink":           {"workgraph memory unlink --source <captured-project> <memory-project> [options]", "Remove a captured project mapping, preserving promoted evidence."},
 	"service":                 {"workgraph service <install|status|uninstall>", "Manage opt-in supervised capture on macOS and Linux."},

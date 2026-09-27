@@ -57,6 +57,10 @@ Priority labels used below:
 
 ## Recently Delivered
 
+- [x] Explainable project-name and acronym candidates in memory doctor, today,
+  resume and empty suggestions, with explicit interactive acceptance. [spec:
+  `specs/memory.md`; #138]
+
 - [x] Explicit, reversible many-source memory project mappings across suggest,
   resume and promotion. [spec: `specs/memory.md`; #138]
 

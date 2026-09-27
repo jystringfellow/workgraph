@@ -221,6 +221,10 @@ workgraph memory links "MMO Harness"
 `memory unlink --source mmo-ui "MMO Harness"` removes a mapping. Linking and
 unlinking preserve authored memory, raw events, and existing promoted evidence.
 
+Use `workgraph memory doctor` to inspect possible name or acronym matches, or
+`workgraph memory doctor --interactive` to review and accept them individually.
+Today, resume and empty memory suggestions also surface possible mappings.
+
 Resume a project from captured events and explicit memory:
 
 ```sh

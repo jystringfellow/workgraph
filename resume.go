@@ -100,6 +100,7 @@ func Resume(config ResumeConfig) (ResumeResult, error) {
 			return result, nil
 		}
 		result.Message = resumeProjectsMessage(result.Projects, location)
+		result.Message += memoryDiscoveryHints(db, events, MemoryDoctorConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir})
 		return result, nil
 	}
 	project = canonicalResumeProjectName(project, events)
@@ -122,6 +123,7 @@ func Resume(config ResumeConfig) (ResumeResult, error) {
 		return ResumeResult{}, err
 	}
 	result.Message = resumeProjectMessage(result, location)
+	result.Message += memoryDiscoveryHints(db, events, MemoryDoctorConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir, Project: config.Project})
 	return result, nil
 }
 
