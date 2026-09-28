@@ -8,6 +8,13 @@ import (
 )
 
 var publicCommandPaths = []string{
+	"memory doctor",
+	"memory link",
+	"memory unlink",
+	"service",
+	"service install",
+	"service status",
+	"service uninstall",
 	"ai",
 	"ai archive",
 	"ai checkpoint",

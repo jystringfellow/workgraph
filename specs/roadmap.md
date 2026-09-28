@@ -57,6 +57,19 @@ Priority labels used below:
 
 ## Recently Delivered
 
+- [x] Explainable project-name and acronym candidates in memory doctor, today,
+  resume and empty suggestions, with explicit interactive acceptance. [spec:
+  `specs/memory.md`; #138]
+
+- [x] Explicit, reversible many-source memory project mappings across suggest,
+  resume and promotion. [spec: `specs/memory.md`; #138]
+
+- [x] Opt-in launchd and systemd user capture services with explicit lifecycle
+  controls. [spec: `specs/capture-reliability.md`; #139]
+
+- [x] Keep capture running when transient watched files disappear. [spec:
+  `specs/capture-reliability.md`; #139]
+
 - Signed-in client config-dir bindings shared by bridge workers and LLM
   profiles, with runtime enforcement and inspectable diagnostics. [spec:
   `specs/signed-in-client-binding.md`]

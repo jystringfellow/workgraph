@@ -137,6 +137,22 @@ workgraph start
 connector polling settings. Capture is explicit: `init` never starts background
 capture silently.
 
+For automatic restart and startup at login on macOS or Linux, opt into a user
+service (stop manually started capture first):
+
+```sh
+workgraph stop
+workgraph service install
+workgraph service status
+```
+
+With a service installed, `workgraph stop` also disables login startup;
+`workgraph start` enables it again. `workgraph service uninstall` stops and
+removes the service while preserving your data. Reinstall the service if the
+executable moves. Linux requires a working systemd user session; workgraph does
+not enable lingering. Service logs use `daemon.log` on macOS and the user
+journal on Linux. See [capture reliability](specs/capture-reliability.md).
+
 Use these commands to check or stop the daemon:
 
 ```sh
@@ -192,6 +208,22 @@ Create a starter memory file for a project:
 ```sh
 workgraph memory init "workgraph"
 ```
+
+Thematic memory projects can include evidence from multiple captured projects:
+
+```sh
+workgraph memory init "MMO Harness"
+workgraph memory link --source Mindbody.Modernization.Orchestration --source mmo-ui "MMO Harness"
+workgraph memory suggest "MMO Harness"
+workgraph memory links "MMO Harness"
+```
+
+`memory unlink --source mmo-ui "MMO Harness"` removes a mapping. Linking and
+unlinking preserve authored memory, raw events, and existing promoted evidence.
+
+Use `workgraph memory doctor` to inspect possible name or acronym matches, or
+`workgraph memory doctor --interactive` to review and accept them individually.
+Today, resume and empty memory suggestions also surface possible mappings.
 
 Resume a project from captured events and explicit memory:
 

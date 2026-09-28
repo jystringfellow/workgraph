@@ -23,6 +23,13 @@ type helpTopic struct {
 }
 
 var helpTopics = map[string]helpTopic{
+	"memory doctor":           {"workgraph memory doctor [--interactive] [project] [options]", "Inspect project mappings and review possible captured project matches."},
+	"memory link":             {"workgraph memory link --source <captured-project> <memory-project> [options]", "Associate captured project evidence with an existing memory project."},
+	"memory unlink":           {"workgraph memory unlink --source <captured-project> <memory-project> [options]", "Remove a captured project mapping, preserving promoted evidence."},
+	"service":                 {"workgraph service <install|status|uninstall>", "Manage opt-in supervised capture on macOS and Linux."},
+	"service install":         {"workgraph service install [--home path]", "Enable login startup and automatic capture restart."},
+	"service status":          {"workgraph service status [--home path]", "Inspect supervisor state and capture health."},
+	"service uninstall":       {"workgraph service uninstall [--home path]", "Stop and remove the user service, preserving captured data."},
 	"ai":                      {"workgraph ai <subcommand>", "Capture and resume durable local CLI AI session context."},
 	"ai archive":              {"workgraph ai archive <session-id> [<session-id>...] [options]", "Hide AI sessions from the default list without deleting their events."},
 	"ai checkpoint":           {"workgraph ai checkpoint [session-id] --stdin [options]", "Append a validated structured checkpoint to an AI session."},
@@ -347,6 +354,8 @@ func runCommandForOptionHelp(args []string, stdout io.Writer, stderr io.Writer) 
 		return runAI(args[1:], os.Stdin, stdout, stderr)
 	case "init":
 		return runInit(args[1:], stdout, stderr)
+	case "service":
+		return runService(args[1:], stdout, stderr)
 	case "settings":
 		return runSettings(args[1:], stdout, stderr)
 	case "network":

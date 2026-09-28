@@ -92,6 +92,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runMemory(args[1:], stdout, stderr)
 	case "start":
 		return runCaptureStart(args[1:], stdout, stderr)
+	case "service":
+		return runService(args[1:], stdout, stderr)
 	case "status":
 		return runCaptureStatus(args[1:], stdout, stderr)
 	case "stop":
@@ -2757,6 +2759,12 @@ func runMemory(args []string, stdout io.Writer, stderr io.Writer) int {
 	switch args[0] {
 	case "init":
 		return runMemoryInit(args[1:], stdout, stderr)
+	case "link":
+		return runMemorySourceLink(args[1:], false, stdout, stderr)
+	case "doctor":
+		return runMemoryDoctor(args[1:], os.Stdin, stdout, stderr)
+	case "unlink":
+		return runMemorySourceLink(args[1:], true, stdout, stderr)
 	case "links":
 		return runMemoryLinks(args[1:], stdout, stderr)
 	case "promote":
@@ -3296,6 +3304,7 @@ func runToday(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 
 	homeDir := flags.String("home", "", "workgraph home directory")
+	memoryDir := flags.String("memory", "", "workgraph memory directory")
 	databasePath := flags.String("database", "", "workgraph SQLite database path")
 	actor := flags.String("actor", "", "Exact event actor to include")
 	involvement := flags.String("involvement", "", "Exact user involvement to include")
@@ -3306,6 +3315,7 @@ func runToday(args []string, stdout io.Writer, stderr io.Writer) int {
 
 	result, err := workgraph.Today(workgraph.TodayConfig{
 		HomeDir:      *homeDir,
+		MemoryDir:    *memoryDir,
 		DatabasePath: *databasePath,
 		Actor:        *actor,
 		Involvement:  *involvement,
