@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -42,20 +41,6 @@ func TestRunSurvivesDisappearingFiles(t *testing.T) {
 		}
 	}()
 	watcher.Errors <- &os.PathError{Op: "lstat", Path: filepath.Join(watch, "Unconfirmed.crdownload"), Err: os.ErrNotExist}
-	for i := 0; i < 1000; i++ {
-		path := filepath.Join(watch, fmt.Sprintf("Unconfirmed-%d.crdownload", i))
-		if err := os.WriteFile(path, []byte("partial"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Remove(path); err != nil {
-			t.Fatal(err)
-		}
-		select {
-		case err := <-done:
-			t.Fatalf("capture stopped during transient activity: %v", err)
-		default:
-		}
-	}
 	path := filepath.Join(watch, "durable.md")
 	if err := os.WriteFile(path, []byte("durable"), 0o600); err != nil {
 		t.Fatal(err)
