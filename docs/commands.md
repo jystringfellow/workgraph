@@ -91,6 +91,33 @@ workgraph connectors poll --help
 `help`, `-h`, and `--help` are read-only and exit successfully. They can be
 placed after a public command path without running that command.
 
+## AI Session Handoff
+
+Continue a wrapped AI coding session in another verified local CLI:
+
+```sh
+workgraph ai handoff codex
+workgraph ai handoff claude --from <session-id>
+workgraph ai handoff copilot --stdin < checkpoint.json
+workgraph ai handoff opencode --from <session-id>
+```
+
+The supported destinations are `codex`, `claude`, `copilot`, and `opencode`.
+Without `--from`, handoff uses `WORKGRAPH_AI_SESSION_ID`. It reuses the source
+session's latest structured checkpoint, or `--stdin` can append a fresh
+checkpoint while the source is still active. Ended sessions cannot accept a
+new checkpoint but can hand off from their latest stored one. Same-agent
+handoff starts a new linked Workgraph lifetime; it does not resume or copy the
+provider conversation.
+
+The destination receives a deliberately constructed prompt containing only
+the six checkpoint fields and bounded repository metadata already permitted by
+the AI-session model. Workgraph does not persist or transport transcripts,
+source prompts, terminal output, shell history, environment values, complete
+command arguments, file contents, or source diffs. The destination start event
+records `predecessor_session_id`, while the continuation prompt itself is not
+stored in Workgraph events.
+
 ## Init
 
 Initialize local state:

@@ -223,10 +223,14 @@ type aiEventEnvelope struct {
 }
 
 func RunAISession(config AIRunConfig) (AIRunResult, error) {
+	return runAISession(config, "")
+}
+
+func runAISession(config AIRunConfig, permittedParentSessionID string) (AIRunResult, error) {
 	if len(config.Command) == 0 {
 		return AIRunResult{}, errors.New("agent command is required")
 	}
-	if _, present := os.LookupEnv("WORKGRAPH_AI_SESSION_ID"); present {
+	if inheritedSessionID, present := os.LookupEnv("WORKGRAPH_AI_SESSION_ID"); present && (permittedParentSessionID == "" || strings.TrimSpace(inheritedSessionID) != permittedParentSessionID) {
 		message := "nested AI sessions are not supported"
 		if config.PredecessorSessionID != "" {
 			message += "; run resume outside the wrapped agent, or unset it if it is stale"
