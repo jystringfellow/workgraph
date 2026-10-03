@@ -271,7 +271,11 @@ When the Adversarial Reviewer identifies a material finding:
 4. If verification fails, return failure evidence to the Developer.
 5. Once verification passes, review the corrected state again as appropriate.
 
-Continue until material findings are resolved.
+The review correction limit bounds Developer correction cycles, not review
+assessments. Every correction is followed by deterministic verification and a
+fresh review that determines whether it resolved the finding. If the final
+allowed correction has already been assessed and material findings remain, the
+workflow fails unresolved without another correction.
 
 The stopping condition is evidence, not agreement between agents.
 
@@ -311,6 +315,11 @@ If a release blocker is found:
 4. Repeat substantive review when the correction materially changes reviewed
    behavior.
 5. Run the Release Gate again.
+
+The release-gate correction limit likewise bounds Developer correction cycles.
+Every correction receives a subsequent Release Gate assessment; if blockers
+remain after that assessment of the final allowed correction, the workflow
+fails unresolved.
 
 ## Release-Ready Criteria
 

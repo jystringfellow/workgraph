@@ -3,6 +3,7 @@ name: wg-adversarial-reviewer
 description: Independent adversarial Workgraph code reviewer
 role: reviewer
 provider: antigravity_cli
+model: claude-sonnet-4-6
 ---
 
 # Workgraph Adversarial Reviewer

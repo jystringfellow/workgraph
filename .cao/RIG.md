@@ -96,6 +96,14 @@ failure evidence needed to diagnose and correct the problem.
 
 Do not feed large successful logs into model context without a specific reason.
 
+## Operator Observation
+
+Use `.cao/observe.sh <run-id>` to view a compact, read-only projection of a
+workflow run. It reports CAO status metadata, known step/seat progress,
+iteration counts, working-tree counts, and an active CAO terminal when CAO
+exposes one. It never displays prompts, transcripts, source, diffs, or
+environment variables.
+
 ## Work Flow
 
 Prefer a sequential evidence-driven loop:
@@ -111,6 +119,11 @@ Prefer a sequential evidence-driven loop:
 9. Perform the release gate.
 10. Finish only when objective release criteria and substantive review are
     satisfied.
+
+When correction cycles are bounded, the bound applies to Developer
+corrections. Each permitted correction must still receive the subsequent
+review or release-gate assessment needed to establish whether it resolved the
+finding.
 
 Parallel execution is appropriate when work is genuinely independent.
 

@@ -309,12 +309,13 @@ def main() -> None:
     # -------------------------------------------------------------------------
     # Stage 5: Adversarial Reviewer Loop
     # -------------------------------------------------------------------------
-    review_attempts = 0
+    review_assessments = 0
+    review_fixes = 0
     review_clean = False
     reviewer_output = ""
 
-    while review_attempts < max_review_attempts:
-        review_attempts += 1
+    while True:
+        review_assessments += 1
 
         # NOTE: Reviewer independently assesses the change without seeing Jev telemetry.
         reviewer_prompt = (
@@ -340,7 +341,7 @@ def main() -> None:
             "wg-adversarial-reviewer",
             reviewer_prompt,
             recovery="idempotent",
-            step_id=f"reviewer-{review_attempts}",
+            step_id=f"reviewer-{review_assessments}",
             working_directory=working_dir_str,
         )
         reviewer_output = reviewer_step.output
@@ -349,9 +350,13 @@ def main() -> None:
             review_clean = True
             break
 
-        # Material findings found -> Developer fix loop
+        if review_fixes >= max_review_attempts:
+            break
+
+        review_fixes += 1
         dev_review_fix_prompt = (
-            f"The Adversarial Reviewer identified material findings (review attempt {review_attempts}/{max_review_attempts}):\n\n"
+            f"The Adversarial Reviewer identified material findings (assessment {review_assessments}; "
+            f"correction cycle {review_fixes}/{max_review_attempts}):\n\n"
             f"{reviewer_output}\n\n"
             "Make the smallest coherent correction addressing these findings.\n"
             "Preserve compatibility and privacy invariants.\n"
@@ -362,7 +367,7 @@ def main() -> None:
             "wg-developer",
             dev_review_fix_prompt,
             recovery="manual",
-            step_id=f"developer-fix-review-{review_attempts}",
+            step_id=f"developer-fix-review-{review_fixes}",
             working_directory=working_dir_str,
         )
 
@@ -376,7 +381,7 @@ def main() -> None:
                     "wg-developer",
                     f"Deterministic verification failed after review fix:\n{v_ev}\nFix the failure.",
                     recovery="manual",
-                    step_id=f"developer-fix-rev-verify-{review_attempts}-{v_fix_i}",
+                    step_id=f"developer-fix-rev-verify-{review_fixes}-{v_fix_i}",
                     working_directory=working_dir_str,
                 )
                 v_passed, v_ev = run_verification(repo_path)
@@ -394,7 +399,10 @@ def main() -> None:
         verification_evidence = v_ev
 
     if not review_clean:
-        err_msg = f"Unresolved adversarial reviewer findings after {max_review_attempts} attempts."
+        err_msg = (
+            "Unresolved adversarial reviewer findings after "
+            f"{max_review_attempts} correction cycles."
+        )
         print(f"ERROR: {err_msg}", file=sys.stderr)
         emit_output({
             "status": "failed",
@@ -407,12 +415,13 @@ def main() -> None:
     # -------------------------------------------------------------------------
     # Stage 6: Release Gate
     # -------------------------------------------------------------------------
-    gate_attempts = 0
+    gate_assessments = 0
+    gate_fixes = 0
     gate_passed = False
     gate_output = ""
 
-    while gate_attempts < max_gate_attempts:
-        gate_attempts += 1
+    while True:
+        gate_assessments += 1
 
         gate_prompt = (
             f"You occupy the Release Gate seat in the Workgraph Feature Engineering pod.\n\n"
@@ -441,7 +450,7 @@ def main() -> None:
             "wg-release-gate",
             gate_prompt,
             recovery="idempotent",
-            step_id=f"release-gate-{gate_attempts}",
+            step_id=f"release-gate-{gate_assessments}",
             working_directory=working_dir_str,
         )
         gate_output = gate_step.output
@@ -450,9 +459,13 @@ def main() -> None:
             gate_passed = True
             break
 
-        # Release blocked -> Developer fix
+        if gate_fixes >= max_gate_attempts:
+            break
+
+        gate_fixes += 1
         dev_gate_fix_prompt = (
-            f"The Release Gate identified release blockers (gate attempt {gate_attempts}/{max_gate_attempts}):\n\n"
+            f"The Release Gate identified release blockers (assessment {gate_assessments}; "
+            f"correction cycle {gate_fixes}/{max_gate_attempts}):\n\n"
             f"{gate_output}\n\n"
             "Correct the release blockers.\n"
             "Report your changes.\n"
@@ -462,7 +475,7 @@ def main() -> None:
             "wg-developer",
             dev_gate_fix_prompt,
             recovery="manual",
-            step_id=f"developer-fix-gate-{gate_attempts}",
+            step_id=f"developer-fix-gate-{gate_fixes}",
             working_directory=working_dir_str,
         )
 
@@ -480,7 +493,10 @@ def main() -> None:
         verification_evidence = v_ev
 
     if not gate_passed:
-        err_msg = f"Release Gate found unresolved blockers after {max_gate_attempts} attempts."
+        err_msg = (
+            "Release Gate found unresolved blockers after "
+            f"{max_gate_attempts} correction cycles."
+        )
         print(f"ERROR: {err_msg}", file=sys.stderr)
         emit_output({
             "status": "failed",
