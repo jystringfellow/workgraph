@@ -114,6 +114,9 @@ func HandoffAISession(config AIHandoffConfig) (AIHandoffResult, error) {
 	} else {
 		result.ReusedCheckpoint = true
 	}
+	if source.newestCheckpointID != "" && source.newestCheckpointID != source.latestCheckpointID {
+		return AIHandoffResult{}, errors.New("source session's latest checkpoint is unsupported or invalid and cannot be handed off safely")
+	}
 	if source.LatestCheckpoint == nil {
 		return AIHandoffResult{}, errors.New("source session has no structured checkpoint; record one first or use --stdin while it is active")
 	}

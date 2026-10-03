@@ -208,6 +208,8 @@ type aiSessionProjection struct {
 	Warnings           []string
 	latestEventID      string
 	latestCheckpointID string
+	newestCheckpointAt time.Time
+	newestCheckpointID string
 	latestNativeID     string
 	ArchiveEventAt     time.Time
 	archiveEventID     string
@@ -788,6 +790,10 @@ func loadAISessionProjections(homeDir string, databasePath string, inspector AIP
 			projection.Summary.LatestEventAt = timestamp
 			projection.latestEventID = id
 		}
+		if eventType == "ai.session_checkpointed" && (projection.newestCheckpointAt.IsZero() || timestamp.After(projection.newestCheckpointAt) || (timestamp.Equal(projection.newestCheckpointAt) && id > projection.newestCheckpointID)) {
+			projection.newestCheckpointAt = timestamp
+			projection.newestCheckpointID = id
+		}
 		if envelope.SchemaVersion != aiSchemaVersion {
 			projection.Warnings = append(projection.Warnings, fmt.Sprintf("unsupported schema version %d at %s", envelope.SchemaVersion, timestamp.Format(time.RFC3339Nano)))
 			if eventType == "ai.session_ended" {
@@ -856,12 +862,15 @@ func loadAISessionProjections(homeDir string, databasePath string, inspector AIP
 	}
 	projections := make([]aiSessionProjection, 0, len(byID))
 	for _, projection := range byID {
-		if projection.LatestNative != nil {
-			projection.Summary.NativeSessionID = projection.LatestNative.NativeSessionID
-			projection.Summary.PredecessorSessionID = projection.LatestNative.PredecessorSessionID
-		} else if projection.Started != nil {
+		if projection.Started != nil {
 			projection.Summary.NativeSessionID = projection.Started.NativeSessionID
 			projection.Summary.PredecessorSessionID = projection.Started.PredecessorSessionID
+		}
+		if projection.LatestNative != nil {
+			projection.Summary.NativeSessionID = projection.LatestNative.NativeSessionID
+			if projection.Summary.PredecessorSessionID == "" {
+				projection.Summary.PredecessorSessionID = projection.LatestNative.PredecessorSessionID
+			}
 		}
 		projection.Summary.Status = deriveAIStatus(projection, inspector)
 		if projection.LatestCheckpoint != nil {
