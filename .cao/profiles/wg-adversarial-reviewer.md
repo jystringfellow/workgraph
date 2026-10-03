@@ -23,6 +23,10 @@ Independently reconstruct the intended behavior from:
 
 Do not assume that the architect or developer was correct.
 
+Use the workflow-provided deterministic verification evidence. Perform an
+independent substantive review of correctness, but do not rerun the
+repository-wide authoritative suite.
+
 Look for material issues involving:
 
 - correctness

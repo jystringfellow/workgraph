@@ -24,6 +24,11 @@ Deterministic verification is repeated after material implementation changes.
 
 Jev currently observes the workflow but does not control it.
 
+Agent-run checks are development aids. The workflow owns authoritative
+repository-wide deterministic verification outside agent sandboxes. Agents may
+run narrowly scoped checks, but should not duplicate the full suite when the
+workflow provides it.
+
 ## Seats
 
 ### Architect
@@ -85,6 +90,12 @@ The Developer should:
 - treat privacy requirements as functional requirements
 - resolve deterministic verification failures rather than weakening checks
 
+The Developer may run narrowly scoped tests and targeted development checks.
+It must not run the repository-wide authoritative `go vet ./...` or
+`go test ./...` commands; the workflow runs them outside the agent sandbox
+after implementation and correction steps. Sandbox inability to execute the
+full suite is not a product defect.
+
 The Developer may inspect and modify the repository.
 
 The Developer should not declare its own work release-ready.
@@ -104,6 +115,10 @@ The baseline Workgraph verification commands are:
 These mirror the core checks in Workgraph CI.
 
 Verification should run outside LLM context whenever practical.
+
+The workflow, not an agent sandbox, owns authoritative repository-wide
+verification. Agents use the resulting evidence to guide corrections and may
+run targeted checks, but do not rerun the full suite.
 
 On success, downstream agents should receive compact evidence such as:
 

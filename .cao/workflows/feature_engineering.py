@@ -245,8 +245,11 @@ def main() -> None:
         "- Follow existing Workgraph conventions and privacy boundaries.\n"
         "- Add or update tests for changed behavior.\n"
         "- Update documentation/help if user-visible behavior changes.\n"
-        "- Ensure `go vet ./...` and `go test ./...` pass.\n"
-        "Report concise implementation notes upon completion.\n"
+        "- Do not run `go vet ./...` or `go test ./...`; the workflow runs authoritative "
+        "verification outside your sandbox.\n"
+        "- You may run narrowly scoped tests or targeted checks while developing.\n"
+        "Report implementation changes and targeted checks performed; the workflow will "
+        "independently run authoritative verification.\n"
     )
     developer_step = step(
         "codex",
@@ -274,9 +277,10 @@ def main() -> None:
         fix_prompt = (
             f"Deterministic verification failed (attempt {verify_attempts}/{max_verify_attempts}):\n\n"
             f"{verification_evidence}\n\n"
-            "Correct the code and tests so that all deterministic checks pass.\n"
+            "Correct the code and tests so workflow-owned deterministic verification can pass.\n"
+            "Do not run `go vet ./...` or `go test ./...`; you may run targeted checks.\n"
             "Never weaken a test or check merely to make it pass.\n"
-            "Report what you corrected.\n"
+            "Report what you corrected and any targeted checks performed.\n"
         )
         step(
             "codex",
@@ -325,6 +329,8 @@ def main() -> None:
             f"Deterministic Verification Evidence:\n{verification_evidence}\n\n"
             "Independently inspect the repository changes and tests.\n"
             "Do not assume the architect or developer was correct.\n"
+            "Use the supplied deterministic verification evidence; do not rerun the "
+            "repository-wide authoritative suite.\n"
             "Look for material issues involving correctness, architecture, edge cases,\n"
             "backward compatibility, privacy boundaries, data integrity, and tests.\n"
             "Do not report stylistic preference as a defect.\n\n"
@@ -360,7 +366,9 @@ def main() -> None:
             f"{reviewer_output}\n\n"
             "Make the smallest coherent correction addressing these findings.\n"
             "Preserve compatibility and privacy invariants.\n"
-            "Report your changes.\n"
+            "Do not run `go vet ./...` or `go test ./...`; the workflow will verify the "
+            "correction outside your sandbox. You may run targeted checks.\n"
+            "Report your changes and any targeted checks performed.\n"
         )
         step(
             "codex",
@@ -379,7 +387,9 @@ def main() -> None:
                 step(
                     "codex",
                     "wg-developer",
-                    f"Deterministic verification failed after review fix:\n{v_ev}\nFix the failure.",
+                    f"Deterministic verification failed after review fix:\n{v_ev}\n"
+                    "Fix the failure. Do not run `go vet ./...` or `go test ./...`; the "
+                    "workflow will rerun authoritative verification. You may run targeted checks.",
                     recovery="manual",
                     step_id=f"developer-fix-rev-verify-{review_fixes}-{v_fix_i}",
                     working_directory=working_dir_str,
@@ -430,6 +440,8 @@ def main() -> None:
             f"Deterministic Verification Evidence:\n{verification_evidence}\n\n"
             f"Adversarial Review Outcome:\n{reviewer_output}\n\n"
             "Perform an independent final release-readiness assessment against repository evidence.\n"
+            "Use the supplied deterministic verification evidence; do not rerun the "
+            "repository-wide authoritative suite.\n"
             "Verify:\n"
             "- Requested behavior is implemented and acceptance criteria are satisfied\n"
             "- Tests cover changed behavior\n"
@@ -468,7 +480,9 @@ def main() -> None:
             f"correction cycle {gate_fixes}/{max_gate_attempts}):\n\n"
             f"{gate_output}\n\n"
             "Correct the release blockers.\n"
-            "Report your changes.\n"
+            "Do not run `go vet ./...` or `go test ./...`; the workflow will verify the "
+            "correction outside your sandbox. You may run targeted checks.\n"
+            "Report your changes and any targeted checks performed.\n"
         )
         step(
             "codex",

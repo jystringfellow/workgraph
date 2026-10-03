@@ -19,12 +19,15 @@ Perform an independent final assessment using repository evidence.
 
 Return to the original task and acceptance criteria.
 
+Use the workflow-provided deterministic verification evidence. Do not rerun
+the repository-wide authoritative suite.
+
 Verify:
 
 - requested behavior is implemented
 - acceptance criteria are satisfied
-- relevant tests pass
-- regression coverage exists
+- relevant tests and regression coverage are represented by repository and
+  workflow evidence
 - compatibility expectations hold
 - privacy guarantees hold
 - CLI help/errors are appropriate

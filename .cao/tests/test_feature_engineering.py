@@ -28,6 +28,20 @@ def load_workflow(inputs, responses):
 
 
 class FeatureEngineeringWorkflowTest(unittest.TestCase):
+    def test_prompts_delegate_repository_wide_verification_to_workflow(self):
+        workflow_text = WORKFLOW_PATH.read_text()
+        developer_profile = (WORKFLOW_PATH.parents[1] / "profiles" / "wg-developer.md").read_text()
+        reviewer_profile = (WORKFLOW_PATH.parents[1] / "profiles" / "wg-adversarial-reviewer.md").read_text()
+        gate_profile = (WORKFLOW_PATH.parents[1] / "profiles" / "wg-release-gate.md").read_text()
+
+        self.assertIn("Do not run the repository-wide authoritative verification commands", developer_profile)
+        self.assertIn("`go vet ./...` or `go test ./...`", developer_profile)
+        self.assertIn("runs outside the agent sandbox", developer_profile)
+        self.assertIn("do not rerun the\nrepository-wide authoritative suite", reviewer_profile)
+        self.assertIn("Do not rerun\nthe repository-wide authoritative suite", gate_profile)
+        self.assertIn("model: claude-sonnet-4-6", reviewer_profile)
+        self.assertEqual(workflow_text.count("Do not run `go vet ./...` or `go test ./...`"), 5)
+
     def test_review_assesses_the_third_review_fix(self):
         workflow, calls = load_workflow(
             {

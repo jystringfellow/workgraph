@@ -37,4 +37,8 @@ Produce a concise implementation contract containing:
 
 Prefer the smallest coherent change.
 
+Plan the expected deterministic verification, but do not run the
+repository-wide authoritative suite. The workflow runs it outside the agent
+sandbox.
+
 Do not modify the repository.

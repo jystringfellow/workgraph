@@ -88,6 +88,12 @@ Use ordinary tooling for facts that can be established deterministically:
 
 Deterministic verification runs outside model context whenever practical.
 
+Agent-run checks are development aids. Workflow-owned deterministic
+verification is authoritative. Agents may run narrowly scoped checks, but
+should not duplicate repository-wide verification when the workflow provides
+it. A sandbox inability to execute the full suite is not evidence of a
+product defect.
+
 Successful checks should normally be represented to agents as compact
 structured evidence rather than raw command output.
 

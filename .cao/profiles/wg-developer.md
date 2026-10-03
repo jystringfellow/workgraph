@@ -32,6 +32,15 @@ During implementation:
 - preserve Workgraph privacy boundaries
 - update user-facing help/docs when behavior changes
 
-Run relevant tests before reporting completion.
+Run narrowly scoped tests or targeted checks when useful while developing.
+
+Do not run the repository-wide authoritative verification commands
+`go vet ./...` or `go test ./...`. Deterministic verification is owned by the
+workflow and runs outside the agent sandbox after implementation and
+correction steps. Do not treat a sandbox inability to execute that full suite
+as a product defect.
+
+Report implementation changes and any targeted checks performed; the workflow
+will independently run authoritative verification.
 
 Do not weaken tests merely to make them pass.
