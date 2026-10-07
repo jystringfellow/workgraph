@@ -197,26 +197,28 @@ type AIShowResult struct {
 }
 
 type aiSessionProjection struct {
-	Summary            AISessionSummary
-	Started            *aiStartedPayload
-	LatestCheckpoint   *aiCheckpointPayload
-	CheckpointAt       time.Time
-	Ended              *aiEndedPayload
-	LatestNative       *aiNativeBoundPayload
-	NativeBoundAt      time.Time
-	EndedExists        bool
-	Warnings           []string
-	latestEventID      string
-	latestCheckpointID string
-	newestCheckpointAt time.Time
-	newestCheckpointID string
-	latestNativeID     string
-	ArchiveEventAt     time.Time
-	archiveEventID     string
-	LatestObserved     *AIObservedState
-	ObservedEventAt    time.Time
-	ObservedSource     string
-	observedEventID    string
+	Summary             AISessionSummary
+	Started             *aiStartedPayload
+	LatestCheckpoint    *aiCheckpointPayload
+	CheckpointAt        time.Time
+	Ended               *aiEndedPayload
+	LatestNative        *aiNativeBoundPayload
+	NativeBoundAt       time.Time
+	EndedExists         bool
+	Warnings            []string
+	latestEventID       string
+	latestCheckpointID  string
+	newestCheckpointAt  time.Time
+	newestCheckpointID  string
+	newestObservationAt time.Time
+	newestObservationID string
+	latestNativeID      string
+	ArchiveEventAt      time.Time
+	archiveEventID      string
+	LatestObserved      *AIObservedState
+	ObservedEventAt     time.Time
+	ObservedSource      string
+	observedEventID     string
 }
 
 type aiEventEnvelope struct {
@@ -796,6 +798,9 @@ func loadAISessionProjections(homeDir string, databasePath string, inspector AIP
 		}
 		if envelope.SchemaVersion != aiSchemaVersion {
 			projection.Warnings = append(projection.Warnings, fmt.Sprintf("unsupported schema version %d at %s", envelope.SchemaVersion, timestamp.Format(time.RFC3339Nano)))
+			if aiEventCanCarryObservation(eventType) {
+				selectAINewestObservationEvidence(projection, timestamp, id)
+			}
 			if eventType == "ai.session_ended" {
 				projection.EndedExists = true
 			}
@@ -806,8 +811,10 @@ func loadAISessionProjections(homeDir string, databasePath string, inspector AIP
 			var started aiStartedPayload
 			if err := json.Unmarshal([]byte(payloadText), &started); err != nil {
 				projection.Warnings = append(projection.Warnings, "invalid supported start payload")
+				selectAINewestObservationEvidence(projection, timestamp, id)
 				continue
 			}
+			selectAINewestObservationEvidence(projection, timestamp, id)
 			projection.Started = &started
 			projection.Summary.Tool = started.Tool
 			projection.Summary.StartedAt = timestamp
@@ -816,8 +823,10 @@ func loadAISessionProjections(homeDir string, databasePath string, inspector AIP
 			var checkpoint aiCheckpointPayload
 			if err := json.Unmarshal([]byte(payloadText), &checkpoint); err != nil {
 				projection.Warnings = append(projection.Warnings, "invalid supported checkpoint payload")
+				selectAINewestObservationEvidence(projection, timestamp, id)
 				continue
 			}
+			selectAINewestObservationEvidence(projection, timestamp, id)
 			if projection.LatestCheckpoint == nil || timestamp.After(projection.CheckpointAt) || (timestamp.Equal(projection.CheckpointAt) && id > projection.latestCheckpointID) {
 				projection.LatestCheckpoint = &checkpoint
 				projection.CheckpointAt = timestamp
@@ -841,10 +850,12 @@ func loadAISessionProjections(homeDir string, databasePath string, inspector AIP
 			if err := json.Unmarshal([]byte(payloadText), &ended); err == nil {
 				projection.Ended = &ended
 				if ended.Observed != nil {
+					selectAINewestObservationEvidence(projection, timestamp, id)
 					selectAILatestObserved(projection, ended.Observed, timestamp, id, "end")
 				}
 			} else {
 				projection.Warnings = append(projection.Warnings, "invalid supported end payload")
+				selectAINewestObservationEvidence(projection, timestamp, id)
 			}
 		case "ai.session_archived", "ai.session_unarchived":
 			if projection.ArchiveEventAt.IsZero() || timestamp.After(projection.ArchiveEventAt) || (timestamp.Equal(projection.ArchiveEventAt) && id > projection.archiveEventID) {
@@ -881,6 +892,17 @@ func loadAISessionProjections(homeDir string, databasePath string, inspector AIP
 		projections = append(projections, *projection)
 	}
 	return projections, warnings, nil
+}
+
+func aiEventCanCarryObservation(eventType string) bool {
+	return eventType == "ai.session_started" || eventType == "ai.session_checkpointed" || eventType == "ai.session_ended"
+}
+
+func selectAINewestObservationEvidence(projection *aiSessionProjection, eventAt time.Time, eventID string) {
+	if projection.newestObservationAt.IsZero() || eventAt.After(projection.newestObservationAt) || (eventAt.Equal(projection.newestObservationAt) && eventID > projection.newestObservationID) {
+		projection.newestObservationAt = eventAt
+		projection.newestObservationID = eventID
+	}
 }
 
 func selectAILatestObserved(projection *aiSessionProjection, observed *AIObservedState, eventAt time.Time, eventID string, source string) {
@@ -1162,6 +1184,41 @@ func validateAICheckpointInput(input io.Reader) (map[string]any, error) {
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return nil, errors.New("checkpoint contains trailing JSON data")
+	}
+	if !meaningful {
+		return nil, errors.New("checkpoint must contain meaningful text")
+	}
+	return result, nil
+}
+
+func validateAIStoredCheckpoint(fields map[string]any) (map[string]any, error) {
+	allowed := map[string]bool{"goal": true, "current_state": true, "completed": true, "next_actions": true, "blockers": true, "decisions": true}
+	arrayField := map[string]bool{"completed": true, "next_actions": true, "blockers": true, "decisions": true}
+	result := make(map[string]any)
+	meaningful := false
+	for field, value := range fields {
+		if !allowed[field] {
+			return nil, fmt.Errorf("checkpoint field %q is unknown", field)
+		}
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("checkpoint field %q is invalid", field)
+		}
+		if arrayField[field] {
+			values, hasText, err := validateAIStringArray(field, raw)
+			if err != nil {
+				return nil, err
+			}
+			result[field] = values
+			meaningful = meaningful || hasText
+			continue
+		}
+		normalized, err := validateAIString(field, raw, 16*1024)
+		if err != nil {
+			return nil, err
+		}
+		result[field] = normalized
+		meaningful = meaningful || normalized != ""
 	}
 	if !meaningful {
 		return nil, errors.New("checkpoint must contain meaningful text")

@@ -36,7 +36,17 @@ The primary interface is:
 A handoff starts from the current/selected Workgraph AI session and launches
 the destination AI tool with compact continuation context.
 
-The exact CLI shape should follow existing Workgraph command conventions.
+The supported destinations are `codex`, `claude`, `copilot`, and `opencode`.
+`--from` selects the source explicitly; otherwise the command uses
+`WORKGRAPH_AI_SESSION_ID`. Without `--stdin`, handoff reuses the latest valid
+structured checkpoint. With `--stdin`, it first appends a checkpoint through
+the existing checkpoint contract while the source remains active. An ended
+source can reuse a stored checkpoint but cannot accept a new one.
+
+Handoff invoked inside its selected wrapped source is an intentional, private
+exception to the nested-session guard. The launched destination receives a new
+Workgraph session identity. Ordinary `ai run` and `ai resume` retain the
+existing nested-session rejection.
 
 ## Handoff contract
 
@@ -82,6 +92,10 @@ Handoff must not automatically persist or transport:
 The destination receives only deliberately constructed continuation context,
 not the source tool's conversation history.
 
+This boundary limits what Workgraph captures, persists, and places in the
+continuation context. It does not sandbox the launched destination or remove
+the filesystem, process, or network capabilities the child tool normally has.
+
 ## Failure behavior
 
 A failed handoff must not destroy or invalidate the source session.
@@ -90,6 +104,19 @@ Failures should be explicit and actionable.
 
 Partial failures must not leave misleading lineage or a destination session
 that appears to have been successfully handed off when it was not.
+
+Failures before child launch create no destination lifecycle or lineage. When
+`--stdin` has already appended a valid source checkpoint and destination launch
+then fails, the append remains as truthful, inspectable source history. The
+source can reuse it on a later handoff. Once a child has launched and its start
+event has been persisted, a nonzero child exit records the real end outcome and
+is returned to the caller.
+
+Handoff must not silently fall back to older projected context when a newer
+checkpoint or newer observation-bearing start, checkpoint, or end event is
+unsupported or invalid. It rejects that source before launch with an
+actionable compatibility error. A valid end event that contains no final
+observation does not invalidate the last captured repository observation.
 
 Unsupported source/destination combinations should fail safely.
 
@@ -113,6 +140,12 @@ special-case only the tools used during development.
 - No transcript or other prohibited data is persisted or transported.
 - Same-agent handoff behavior is defined and tested.
 - Unsupported/error cases fail safely without corrupting session state.
+- Newer unsupported or invalid checkpoint and repository evidence cannot be
+  hidden by an older compatible projection.
+- A checkpoint explicitly appended before a later launch failure remains on
+  the source, while no destination lifecycle or lineage is recorded.
+- The handoff nesting exception does not change nested-session rejection for
+  ordinary run or native resume.
 - Existing AI-session behavior remains compatible.
 - User-facing command help and documentation explain the feature and its
   privacy behavior.

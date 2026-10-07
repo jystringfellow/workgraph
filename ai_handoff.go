@@ -117,6 +117,9 @@ func HandoffAISession(config AIHandoffConfig) (AIHandoffResult, error) {
 	if source.newestCheckpointID != "" && source.newestCheckpointID != source.latestCheckpointID {
 		return AIHandoffResult{}, errors.New("source session's latest checkpoint is unsupported or invalid and cannot be handed off safely")
 	}
+	if source.newestObservationID != "" && source.newestObservationID != source.observedEventID {
+		return AIHandoffResult{}, errors.New("source session's latest repository observation is unsupported or invalid and cannot be handed off safely")
+	}
 	if source.LatestCheckpoint == nil {
 		return AIHandoffResult{}, errors.New("source session has no structured checkpoint; record one first or use --stdin while it is active")
 	}
@@ -155,11 +158,7 @@ func findAIHandoffSource(homeDir, databasePath, sessionID string) (*aiSessionPro
 }
 
 func buildAIHandoffContext(sessionID string, checkpoint *aiCheckpointPayload, observed *AIObservedState) (string, error) {
-	encodedCheckpoint, err := json.Marshal(checkpoint.AgentStated)
-	if err != nil {
-		return "", errors.New("stored checkpoint cannot be handed off safely")
-	}
-	normalizedCheckpoint, err := validateAICheckpointInput(bytes.NewReader(encodedCheckpoint))
+	normalizedCheckpoint, err := validateAIStoredCheckpoint(checkpoint.AgentStated)
 	if err != nil {
 		return "", fmt.Errorf("stored checkpoint cannot be handed off safely: %w", err)
 	}
@@ -174,11 +173,13 @@ func buildAIHandoffContext(sessionID string, checkpoint *aiCheckpointPayload, ob
 			DirtyPathsTruncated: observed.DirtyPathsTruncated,
 		},
 	}
-	encoded, err := json.Marshal(context)
-	if err != nil {
+	var encoded bytes.Buffer
+	encoder := json.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(context); err != nil {
 		return "", fmt.Errorf("encode handoff context: %w", err)
 	}
-	return string(encoded), nil
+	return strings.TrimSuffix(encoded.String(), "\n"), nil
 }
 
 func aiHandoffArguments(destination, continuation string) []string {

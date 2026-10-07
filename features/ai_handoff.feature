@@ -19,6 +19,7 @@ Feature: Privacy-bounded AI session handoff
     When I run "workgraph ai handoff <destination> --stdin" with a valid structured checkpoint
     Then workgraph appends the checkpoint through the existing checkpoint contract
     And launches the destination with that normalized checkpoint
+    And permits only this handoff to cross the wrapped-session nesting guard
 
   Scenario: Continue from an ended source
     Given the source AI session has ended with a durable structured checkpoint
@@ -31,6 +32,19 @@ Feature: Privacy-bounded AI session handoff
     Or the destination is unsupported or cannot be launched
     When I request a handoff
     Then workgraph reports an actionable error
+    And no destination session or predecessor lineage is recorded
+
+  Scenario: Reject stale compatibility fallback
+    Given a source has valid handoff context followed by newer unsupported checkpoint or repository evidence
+    When I request a handoff
+    Then workgraph rejects the source before launch
+    And does not silently transport the older compatible projection
+
+  Scenario: Preserve a checkpoint when later launch fails
+    Given an active source accepts a fresh checkpoint during handoff
+    And the destination cannot be launched
+    When I request a handoff with "--stdin"
+    Then the source checkpoint remains durable
     And no destination session or predecessor lineage is recorded
 
   Scenario: Hand work to the same supported agent

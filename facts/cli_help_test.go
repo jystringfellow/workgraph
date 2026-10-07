@@ -212,6 +212,7 @@ func TestAIHandoffHelpExplainsContextAndPrivacy(t *testing.T) {
 	for _, expected := range []string{
 		"workgraph ai handoff <codex|claude|copilot|opencode>",
 		"--from", "--stdin", "structured checkpoint", "transcripts", "environment", "diffs",
+		"unsupported newer source evidence", "normal child-process capabilities",
 	} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("AI handoff help omitted %q:\n%s", expected, output)
@@ -280,6 +281,10 @@ func TestBridgeAndAIClientCommandsAreDocumented(t *testing.T) {
 		{filepath.Join(root, "docs", "commands.md"), []string{
 			"workgraph ai handoff codex",
 			"does not persist or transport transcripts",
+			"handoff-only exception to the nested-session guard",
+			"appended checkpoint remains",
+			"silently using an older projection",
+			"filesystem or network access",
 			"workgraph plugin install --client codex",
 			"workgraph plugin install --client claude-code",
 			"workgraph capture requests --claim",

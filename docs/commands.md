@@ -110,13 +110,31 @@ new checkpoint but can hand off from their latest stored one. Same-agent
 handoff starts a new linked Workgraph lifetime; it does not resume or copy the
 provider conversation.
 
+Handoff is the deliberate handoff-only exception to the nested-session guard:
+it may be invoked from the wrapped source session so that the destination gets
+its own Workgraph session identity. Ordinary `ai run` and `ai resume` continue
+to reject nested sessions. A reused checkpoint and repository observation must
+be the latest compatible evidence. If a newer checkpoint or repository
+observation is unsupported or invalid, handoff stops before launch instead of
+silently using an older projection.
+
+With `--stdin`, checkpoint validation and append happen before destination
+launch. If that append succeeds but launch later fails, the successfully
+appended checkpoint remains on the source session for inspection or retry; no
+destination lifecycle or lineage is created. A destination that does launch
+and exits nonzero retains its truthful start and end events and returns the
+tool's exit outcome.
+
 The destination receives a deliberately constructed prompt containing only
 the six checkpoint fields and bounded repository metadata already permitted by
 the AI-session model. Workgraph does not persist or transport transcripts,
 source prompts, terminal output, shell history, environment values, complete
 command arguments, file contents, or source diffs. The destination start event
 records `predecessor_session_id`, while the continuation prompt itself is not
-stored in Workgraph events.
+stored in Workgraph events. These exclusions bound the context Workgraph
+captures and constructs. The launched tool retains normal child-process
+capabilities, including whatever filesystem or network access it ordinarily
+has.
 
 ## Init
 
