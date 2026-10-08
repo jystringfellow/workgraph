@@ -3,15 +3,15 @@
 Implements the sequential multi-agent engineering workflow defined in
 .cao/RIG.md and .cao/pods/feature-engineering.md:
 
-    Architect (wg-architect, Codex / GPT-6 Astra)
-      -> Developer (wg-developer, Codex / GPT-5.6 Sol)
+    Architect (wg-architect)
+      -> Developer (wg-developer)
       -> Deterministic Verification (verify.sh: go vet, go test)
          -> on failure: Developer fixes -> verify again
       -> Jev Shadow Evaluation (collect_change_metadata.py + jev_shadow.py)
          -> observational telemetry only; NEVER affects control flow
-      -> Adversarial Reviewer (wg-adversarial-reviewer, antigravity_cli)
+      -> Adversarial Reviewer (wg-adversarial-reviewer, profile-selected provider)
          -> findings: Developer fixes -> verify -> review again
-      -> Release Gate (wg-release-gate, Codex / GPT-5.6 Sol)
+      -> Release Gate (wg-release-gate)
          -> blockers: Developer fixes -> verify -> review -> gate again
       -> Done
 """
@@ -72,6 +72,20 @@ def git_bytes(repo: Path, *args: str) -> bytes:
         ["git", *args], cwd=repo, stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, check=True,
     ).stdout
+
+
+def load_profile_config(repo: Path, name: str) -> dict:
+    text = (repo / ".cao" / "profiles" / f"{name}.md").read_text()
+    parts = text.split("---", 2)
+    if len(parts) != 3 or parts[0].strip():
+        raise ValueError("invalid profile frontmatter")
+    config = {}
+    for key in ("provider", "model"):
+        matches = re.findall(rf"^{key}: ([A-Za-z0-9_.-]{{1,100}})$", parts[1], re.MULTILINE)
+        if len(matches) != 1:
+            raise ValueError("profile requires explicit provider and model")
+        config[key] = matches[0]
+    return config
 
 
 def repository_state(repo: Path) -> dict:
@@ -386,7 +400,7 @@ def main() -> None:
         evidence.write("verification", evidence.verification)
         return passed, output
 
-    def agent_step(provider, profile, prompt, *, format_attempt=0, **opts):
+    def agent_step(profile, prompt, *, format_attempt=0, **opts):
         step_id = opts["step_id"]
         correction = step_id.startswith("developer-fix-")
         assessment = step_id.startswith(("reviewer-", "release-gate-"))
@@ -400,14 +414,11 @@ def main() -> None:
             prompt += "\nIndependently inspect current primary sources and resolve each material finding; do not merely agree with the developer.\n"
         if assessment and evidence.verification.get("repository") != before:
             evidence.fail(f"Repository changed since authoritative verification before {step_id}")
-        profile_path = repo_path / ".cao" / "profiles" / f"{profile}.md"
-        configured = {}
-        if profile_path.exists():
-            frontmatter = profile_path.read_text().split("---", 2)
-            if len(frontmatter) == 3:
-                for key in ("provider", "model", "codexProfile"):
-                    match = re.search(rf"^{key}: ([A-Za-z0-9_.-]{{1,100}})$", frontmatter[1], re.MULTILINE)
-                    configured[key] = match.group(1) if match else None
+        try:
+            configured = load_profile_config(repo_path, profile)
+        except (OSError, ValueError):
+            evidence.fail(f"Invalid or missing provider/model configuration for {profile}")
+        provider = configured["provider"]
         evidence.write("step-start", {"seat": profile, "step_id": step_id,
                        "requested_provider": provider, "requested_profile": profile,
                        "configured_profile": configured,
@@ -478,7 +489,7 @@ def main() -> None:
                         "Never suppress material findings or invent approval to satisfy formatting. "
                         "Do not modify the repository. This consumes no developer correction.\n"
                     )
-                    return agent_step(provider, profile, retry_prompt, format_attempt=1,
+                    return agent_step(profile, retry_prompt, format_attempt=1,
                                       recovery="idempotent", **{**opts, "step_id": f"{step_id}-format-1"})
                 evidence.fail(f"Invalid assessment at {step_id}: {exc}")
             evidence.assessment = {**parsed, "seat": profile, "assessment": assessment_number,
@@ -513,7 +524,6 @@ def main() -> None:
         "Do not modify the repository.\n"
     )
     architect_step = agent_step(
-        "codex",
         "wg-architect",
         architect_prompt,
         recovery="idempotent",
@@ -541,7 +551,6 @@ def main() -> None:
         "independently run authoritative verification.\n"
     )
     developer_step = agent_step(
-        "codex",
         "wg-developer",
         developer_prompt,
         recovery="manual",
@@ -575,7 +584,6 @@ def main() -> None:
             "Report what you corrected and any targeted checks performed.\n"
         )
         agent_step(
-            "codex",
             "wg-developer",
             fix_prompt,
             recovery="manual",
@@ -623,7 +631,6 @@ def main() -> None:
             )
 
             reviewer_step = agent_step(
-                "antigravity_cli",
                 "wg-adversarial-reviewer",
                 reviewer_prompt,
                 recovery="idempotent",
@@ -652,7 +659,6 @@ def main() -> None:
                 "Report your changes and any targeted checks performed.\n"
             )
             agent_step(
-                "codex",
                 "wg-developer",
                 dev_review_fix_prompt,
                 recovery="manual",
@@ -666,7 +672,6 @@ def main() -> None:
                 # Quick bounded re-verification loop
                 for v_fix_i in range(1, max_verify_attempts + 1):
                     agent_step(
-                        "codex",
                         "wg-developer",
                         f"Deterministic verification failed after review fix:\n{v_ev}\n"
                         "Fix the failure. Do not run `go vet ./...` or `go test ./...`; the "
@@ -723,7 +728,6 @@ def main() -> None:
         )
 
         gate_step = agent_step(
-            "codex",
             "wg-release-gate",
             gate_prompt,
             recovery="idempotent",
@@ -751,7 +755,6 @@ def main() -> None:
             "Report your changes and any targeted checks performed.\n"
         )
         agent_step(
-            "codex",
             "wg-developer",
             dev_gate_fix_prompt,
             recovery="manual",

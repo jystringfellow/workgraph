@@ -3,7 +3,7 @@ name: wg-developer
 description: Workgraph Feature Engineering developer
 role: developer
 provider: codex
-model: gpt-5.6-sol
+model: gpt-6.1-sol
 codexProfile: cao_workspace
 codexConfig:
   model_reasoning_effort: "high"

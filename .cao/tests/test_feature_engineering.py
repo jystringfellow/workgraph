@@ -15,6 +15,7 @@ WORKFLOW_PATH = Path(__file__).parents[1] / "workflows" / "feature_engineering.p
 def load_workflow(inputs, responses):
     calls = []
     prompts = {}
+    assignments = {}
     cao_workflow = types.ModuleType("cao_workflow")
     cao_workflow.get_inputs = lambda: inputs
     cao_workflow.emit_output = lambda output: None
@@ -23,6 +24,7 @@ def load_workflow(inputs, responses):
         key = kwargs["step_id"]
         calls.append(key)
         prompts[key] = args[2]
+        assignments[key] = (args[0], args[1])
         response = responses[key]
         if callable(response):
             response = response()
@@ -34,6 +36,7 @@ def load_workflow(inputs, responses):
         workflow = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(workflow)
     workflow.prompts = prompts
+    workflow.assignments = assignments
     return workflow, calls
 
 
@@ -54,8 +57,12 @@ class FeatureEngineeringWorkflowTest(unittest.TestCase):
         self.git("init", "-q")
         self.git("config", "user.email", "test@example.invalid")
         self.git("config", "user.name", "Test")
+        profiles = self.repo / ".cao" / "profiles"
+        profiles.mkdir(parents=True)
+        for path in (WORKFLOW_PATH.parents[1] / "profiles").glob("wg-*.md"):
+            (profiles / path.name).write_text(path.read_text())
         (self.repo / "test.txt").write_text("initial\n")
-        self.git("add", "test.txt")
+        self.git("add", ".")
         self.git("commit", "-qm", "initial")
         self.change_count = 0
 
@@ -84,7 +91,8 @@ class FeatureEngineeringWorkflowTest(unittest.TestCase):
         self.assertIn("runs outside the agent sandbox", developer_profile)
         self.assertIn("do not rerun the\nrepository-wide authoritative suite", reviewer_profile)
         self.assertIn("Do not rerun\nthe repository-wide authoritative suite", gate_profile)
-        self.assertIn("model: claude-sonnet-4-6", reviewer_profile)
+        self.assertRegex(reviewer_profile, r"(?m)^model: [A-Za-z0-9_.-]+$")
+        self.assertRegex(reviewer_profile, r"(?m)^provider: [A-Za-z0-9_.-]+$")
         self.assertEqual(workflow_text.count("Do not run `go vet ./...` or `go test ./...`"), 5)
 
     def test_review_assesses_the_third_review_fix(self):
@@ -570,3 +578,10 @@ class FeatureEngineeringWorkflowTest(unittest.TestCase):
         workflow, calls = self.run_case({"reviewer-1": "malformed", "reviewer-1-format-1": "FINDINGS: NO"}, task=task)
         for key in ("architect", "developer-initial", "reviewer-1", "reviewer-1-format-1", "release-gate-1"):
             self.assertIn(task, workflow.prompts[key])
+
+    def test_reviewer_provider_comes_from_profile_including_format_retry(self):
+        profile = self.repo / '.cao/profiles/wg-adversarial-reviewer.md'
+        profile.write_text(profile.read_text().replace('provider: copilot_cli', 'provider: configured_cli'))
+        workflow, _ = self.run_case({'reviewer-1': 'malformed', 'reviewer-1-format-1': 'FINDINGS: NO'})
+        self.assertEqual(workflow.assignments['reviewer-1'], ('configured_cli', 'wg-adversarial-reviewer'))
+        self.assertEqual(workflow.assignments['reviewer-1-format-1'], ('configured_cli', 'wg-adversarial-reviewer'))

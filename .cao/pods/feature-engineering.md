@@ -358,12 +358,17 @@ Objective evidence is.
 
 ## Current Seat Assignment
 
-The current intended assignments are:
+Provider/model assignments are declared in `.cao/profiles/`:
 
-- Architect — Codex / GPT-6 Astra
-- Developer — Codex / GPT-5.6 Sol
-- Adversarial Reviewer — antigravity_cli / Claude Sonnet 4.6
-- Release Gate — Codex / GPT-5.6 Sol
+- Architect — `wg-architect.md`
+- Developer — `wg-developer.md`
+- Adversarial Reviewer — `wg-adversarial-reviewer.md`
+- Release Gate — `wg-release-gate.md`
+
+The workflow reads the provider from each selected profile; CAO uses that
+profile's model and standing instructions. Workflow prompts supply the task,
+evidence and per-step output contract. Run `.cao/sync.sh` after profile edits so
+the installed provider/model settings match the repository.
 
 These assignments are implementation details of the current rig.
 
@@ -373,6 +378,6 @@ change.
 Failure evidence, curated output, no-op/dispute handling, recovery and the
 disabled fallback policy are defined in `.cao/RIG.md`. Review corrections are
 shared across initial review and all post-gate reviews; gate corrections never
-reset the review budget. The Developer and Release Gate explicitly share the
-current GPT-5.6 Sol assignment; the Adversarial Reviewer uses a different model.
+reset the review budget. The Developer and Release Gate may explicitly share a Sol assignment;
+the Adversarial Reviewer is assigned a different model.
 No provider/model assignment changes are authorized by fallback configuration.

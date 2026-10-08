@@ -3,7 +3,7 @@ name: wg-release-gate
 description: Final Workgraph release-readiness gate
 role: reviewer
 provider: codex
-model: gpt-5.6-sol
+model: gpt-6.1-sol
 codexProfile: cao_readonly
 codexConfig:
   model_reasoning_effort: "high"

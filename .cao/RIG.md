@@ -429,3 +429,58 @@ automatic continuation: the workflow still requires reconciled repository state
 and a fresh run after a failure/replay halt. The workflow preserves supplied
 task text in initial and formatting-retry prompts; it cannot recover text that
 the invoking shell already removed.
+
+## Fast Live Profile Smoke Test
+
+`profile_smoke.py` is an opt-in integration probe. It uses the real CLI/provider
+interfaces, models and standing profile instructions, with tightly scoped
+synthetic task prompts. It does not run `feature_engineering`, Go verification,
+Jev, or product implementation work. It checks interoperability and output
+capture; a pass is not evidence of engineering quality or release readiness.
+
+The workflow takes five short, sequential agent steps:
+
+1. Architect writes a tiny contract for an inclusive age-18 boundary.
+2. Developer returns a JSON comparison expression without modifying files.
+3. Reviewer inspects a planted strict-comparison bug and must identify age 18.
+4. Reviewer independently inspects the developer's verified correct expression
+   and must report no material findings.
+5. Gate independently assesses the corrected synthetic fixture and must approve.
+
+Workflow-owned verification accepts only the safe, inclusive comparison grammar;
+it never executes model-generated code. The workflow writes two tiny synthetic
+source fixtures inside its private Git evidence directory. These are generated
+test data, not Workgraph source or user content. Agent output is not retained
+raw; assessments/dispositions follow the existing curated privacy boundary.
+Any worktree or HEAD modification, replayed result, incomplete step, execution
+failure, unexpected finding outcome, or failed deterministic check stops the
+probe. There are no developer correction loops. Each reviewer/gate assessment
+allows one formatting retry, making five calls normally and at most eight.
+
+Only the Architect profile is substituted: `wg-architect-smoke` uses GPT-6.1 Sol
+with low reasoning effort. The normal `wg-architect` remains unchanged. Developer,
+reviewer and gate use their existing profiles. Before any call, the probe reads
+all four selected profiles, rejects Astra anywhere, and requires a reviewer
+model different from developer/gate. Profiles are the source of provider/model
+choices in both workflows; the workflow controls order and adds task/evidence
+prompts. Requested assignments are recorded, while actual model attestation
+remains unavailable through CAO's current step API. Sync before running so the
+installed model settings match these checks.
+
+Run after `.cao/sync.sh`:
+
+```bash
+cao workflow run profile_smoke.py \
+  --input 'repo_path=/Volumes/Craig/Code/workgraph'
+```
+
+`step_timeout_seconds` defaults to 90 and may be set from 1 through 120. CLI
+startup overhead may dominate this small task; five steps do not guarantee a
+particular duration or price. A timeout does not prove that CAO terminated the
+underlying session: inspect it before repeating a failed probe. Tests under
+`.cao/tests/` mock every agent call; only the explicit live command uses models.
+
+The smoke workflow imports the repository's `feature_engineering.py` helpers,
+not a frozen copy of those helpers. Replays are rejected. Run from a stable
+checkout and sync both scripts together; no continuation across source edits
+is supported by this probe.
