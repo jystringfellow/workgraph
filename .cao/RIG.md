@@ -262,7 +262,9 @@ Numbered JSON records contain step starts/results, correction before/after
 state, deterministic verification status, and assessments. Each assessment
 records the logical seat, assessment number, explicit outcome, curated findings,
 verification result, review/gate correction counts, HEAD and state fingerprint.
-Invalid assessments record a reason and output digest instead of agent text.
+Invalid assessments record a reason and response-shape diagnostics instead of
+agent text. `failure.json` embeds the latest invalid assessment separately from
+the last valid assessment, which remains null until one has been parsed.
 `failure.json` retains the final assessment and correction context, even if
 `emit_output()` fails. Its absolute location appears in the failure message.
 A completion record is also written before CAO output. Files are written by
@@ -289,8 +291,24 @@ Each finding has exactly four nonempty string fields: `id`, `summary`,
 `evidence`, and `requirement`. Use stable IDs and repository/spec/test references.
 There are at most 12 findings; each field is at most 240 characters. A YES
 requires findings; a NO requires none. Empty, malformed, missing, quoted,
-conflicting, or prose-only assessments fail as invalid, with no developer
-correction consumed and no automatic assessment retry.
+conflicting, or prose-only assessments remain invalid; the parser never
+normalizes Markdown or guesses approval. The workflow permits exactly one
+replacement assessment for formatting, using the same provider/profile/seat,
+original task, correction context and verified Git state. Its separate CAO step
+ID ends in `-format-1`; the logical assessment number stays unchanged and no
+developer correction is consumed. CAO creates a new step/session, so the retry
+must independently reconstruct findings from primary sources rather than
+assuming access to its previous response. No raw invalid response is forwarded.
+Material findings in a valid replacement enter the usual correction loop.
+A second invalid response fails closed. Execution failures, incomplete steps,
+replays and repository modifications are not eligible for formatting retries.
+Each logical review/gate assessment therefore costs at most two agent calls.
+
+Diagnostics retain only output kind, text/byte/line counts, digest, marker counts,
+conflicting-marker flag, whether a marker was final, last-line category, finding
+line count, code-fence presence and a truncation-indicator flag. They distinguish
+empty/non-text capture from protocol rejection without retaining text or arbitrary
+object fields. A truncation indicator is a clue, not proof of truncation.
 
 Corrections end with `DISPOSITION: <JSON>` containing `status` (`corrected`,
 `rejected`, or `unable`) and `evidence` (a nonempty repository/spec/test reference,
@@ -385,3 +403,29 @@ or attested actual-model metadata in this return value. Requested provider/
 profile and available profile configuration are recorded; actual provider, CLI,
 model and profile remain explicitly unknown rather than inferred from the
 request. Do not invent a switch mechanism around these limitations.
+
+## Preserve Literal Task Text When Launching
+
+Shell backticks inside double-quoted task arguments execute command
+substitution before CAO receives the task. Use a single-quoted heredoc for a
+multiline task, then pass its variable expansion in double quotes. Backticks
+inside the variable's value are preserved literally; they are not executed.
+For example (replace the task body with the complete intended request):
+
+```bash
+cao_task=$(cat <<'TASK'
+Continue the implementation described in `specs/ai-handoff.md`.
+Verify the acceptance criteria for `workgraph ai handoff`.
+TASK
+)
+printf '%s\n' "$cao_task"
+cao workflow run feature_engineering.py \
+  --input "task=$cao_task" \
+  --input 'repo_path=/Volumes/Craig/Code/workgraph'
+```
+
+Inspect the printed text before submitting. This is a launch example, not an
+automatic continuation: the workflow still requires reconciled repository state
+and a fresh run after a failure/replay halt. The workflow preserves supplied
+task text in initial and formatting-retry prompts; it cannot recover text that
+the invoking shell already removed.

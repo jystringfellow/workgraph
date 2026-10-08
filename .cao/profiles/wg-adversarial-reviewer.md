@@ -49,3 +49,8 @@ Follow the curated assessment format in `.cao/RIG.md`: only bounded
 or `FINDINGS: NO` line. Include no secrets, source excerpts or user content.
 Independently reassess every supplied previous material finding and dispute
 against current primary sources; do not certify a developer claim.
+
+The outcome marker must be the very last standalone line. Do not repeat the
+instructions or alternative marker, quote the marker, wrap it in Markdown, or
+append text after it. A formatting retry must reconstruct the assessment from
+primary sources without suppressing findings to satisfy the output contract.

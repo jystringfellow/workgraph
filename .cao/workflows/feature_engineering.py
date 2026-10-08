@@ -132,13 +132,44 @@ def parse_assessment(output: str, marker: str) -> dict:
     return {"marker": lines[-1], "blocked": blocked, "findings": findings}
 
 
+def assessment_diagnostics(output: Any, marker: str) -> dict:
+    if not isinstance(output, str):
+        return {"output_kind": "non_text", "empty": output is None}
+    lines = output.strip().splitlines()
+    canonical = [line for line in lines if line in (f"{marker}: YES", f"{marker}: NO")]
+    last = lines[-1] if lines else ""
+    mentions = re.findall(rf"\b{marker}\s*:", output, re.IGNORECASE)
+    if last in (f"{marker}: YES", f"{marker}: NO"):
+        last_kind = "canonical_marker"
+    elif re.fullmatch(rf"\s*(?:\*\*|`|>\s*){marker}: (?:YES|NO)(?:\*\*|`)?\s*", last):
+        last_kind = "decorated_marker"
+    elif re.search(rf"\b{marker}\s*:", last, re.IGNORECASE):
+        last_kind = "contains_marker"
+    else:
+        last_kind = "other" if last else "empty"
+    return {
+        "output_kind": "text", "empty": not output.strip(),
+        "characters": len(output), "bytes": len(output.encode("utf-8")), "lines": len(lines),
+        "output_sha256": hashlib.sha256(output.encode("utf-8")).hexdigest(),
+        "canonical_marker_count": len(canonical), "marker_mention_count": len(mentions),
+        "canonical_marker_is_final": last_kind == "canonical_marker",
+        "conflicting_canonical_markers": len(set(canonical)) > 1,
+        "code_fence_present": any(line.lstrip().startswith(("```", "~~~")) for line in lines),
+        "finding_line_count": sum(line.startswith("FINDING: ") for line in lines),
+        "truncation_indicator": "truncated" in output.lower() or "cao_output_dropped" in output,
+        "last_line_kind": last_kind,
+    }
+
+
 ASSESSMENT_FORMAT = (
     "Return only curated findings, then exactly one final outcome marker. "
     'Each finding is one FINDING: {"id":"stable-id","summary":"defect",'
     '"evidence":"repository location/test evidence","requirement":"violated requirement"} line. '
     "At most 12 findings, each field at most 240 characters. "
     "Exclude secrets, user content, source excerpts, prompts and transcripts. "
-    "For approval, return only the NO marker. No quoted/example markers.\n"
+    "The very last line must be the exact standalone outcome marker specified above. "
+    "For approval, return only the NO marker. Do not repeat the instructions or alternative "
+    "marker. Do not quote markers, wrap them in Markdown, or put anything after the marker.\n"
 )
 CORRECTION_FORMAT = (
     "End with exactly one DISPOSITION: JSON line with fields status and evidence. "
@@ -175,6 +206,7 @@ class RunEvidence:
         self.path.mkdir(parents=True, mode=0o700)
         self.sequence = 0
         self.assessment = None
+        self.invalid_assessment = None
         self.context = {}
         self.disputed = False
         self.review_corrections = 0
@@ -198,6 +230,7 @@ class RunEvidence:
 
     def fail(self, reason: str) -> None:
         record = {"reason": reason, "last_assessment": self.assessment,
+                  "invalid_assessment": self.invalid_assessment,
                   "correction_context": self.context, "verification": self.verification,
                   "review_corrections": self.review_corrections,
                   "gate_corrections": self.gate_corrections}
@@ -353,14 +386,14 @@ def main() -> None:
         evidence.write("verification", evidence.verification)
         return passed, output
 
-    def agent_step(provider, profile, prompt, **opts):
+    def agent_step(provider, profile, prompt, *, format_attempt=0, **opts):
         step_id = opts["step_id"]
         correction = step_id.startswith("developer-fix-")
         assessment = step_id.startswith(("reviewer-", "release-gate-"))
         before = repository_state(repo_path)
         if correction:
             prompt += "\n" + CORRECTION_FORMAT
-        if assessment:
+        if assessment and format_attempt == 0:
             prompt += "\n" + ASSESSMENT_FORMAT
             prompt += "\nPrevious material findings and correction context (navigation only):\n"
             prompt += json.dumps(evidence.context, sort_keys=True)
@@ -419,18 +452,37 @@ def main() -> None:
             evidence.disputed = not changed
         if assessment:
             marker = "FINDINGS" if step_id.startswith("reviewer-") else "RELEASE_BLOCKED"
+            assessment_number = int(step_id.split("-format-", 1)[0].rsplit("-", 1)[1])
+            if before != after:
+                evidence.fail(f"Read-only assessment {step_id} modified repository state")
             try:
                 parsed = parse_assessment(result.output, marker)
             except InvalidAssessment as exc:
-                evidence.write("invalid-assessment", {"seat": profile, "step_id": step_id,
-                               "assessment": int(step_id.rsplit("-", 1)[1]),
+                evidence.invalid_assessment = {"seat": profile, "step_id": step_id,
+                               "assessment": assessment_number, "format_attempt": format_attempt,
                                "marker": "INVALID", "verification": evidence.verification,
                                "review_corrections": evidence.review_corrections,
                                "gate_corrections": evidence.gate_corrections,
-                               "repository": repository_state(repo_path),
-                               "reason": str(exc), "output_sha256": hashlib.sha256(str(result.output).encode()).hexdigest()})
+                               "repository": after, "reason": str(exc),
+                               "diagnostics": assessment_diagnostics(result.output, marker)}
+                evidence.write("invalid-assessment", evidence.invalid_assessment)
+                if format_attempt == 0:
+                    retry_prompt = (
+                        prompt + "\nOne bounded formatting retry: the previous assessment was invalid.\n"
+                        + f"Parser reason: {exc}\n"
+                        + "Response-shape diagnostics (no raw output):\n"
+                        + json.dumps(evidence.invalid_assessment["diagnostics"], sort_keys=True)
+                        + "\nReturn a complete replacement assessment using the required curated format. "
+                        "This is a new CAO step in the same seat; the prior response is not supplied. "
+                        "Independently reconstruct any findings from the same task and verified repository. "
+                        "Never suppress material findings or invent approval to satisfy formatting. "
+                        "Do not modify the repository. This consumes no developer correction.\n"
+                    )
+                    return agent_step(provider, profile, retry_prompt, format_attempt=1,
+                                      recovery="idempotent", **{**opts, "step_id": f"{step_id}-format-1"})
                 evidence.fail(f"Invalid assessment at {step_id}: {exc}")
-            evidence.assessment = {**parsed, "seat": profile, "assessment": int(step_id.rsplit("-", 1)[1]),
+            evidence.assessment = {**parsed, "seat": profile, "assessment": assessment_number,
+                "format_attempt": format_attempt,
                 "repository": after, "verification": evidence.verification,
                 "review_corrections": evidence.review_corrections, "gate_corrections": evidence.gate_corrections}
             evidence.write("assessment", evidence.assessment)

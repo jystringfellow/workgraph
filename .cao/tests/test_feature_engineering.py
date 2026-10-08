@@ -229,7 +229,8 @@ class FeatureEngineeringWorkflowTest(unittest.TestCase):
     def run_case(self, responses, fail=False, **inputs):
         defaults = {"architect": "Acceptance criteria: test", "developer-initial": "implemented",
                     "reviewer-1": finding(), "developer-fix-review-1": self.correct,
-                    "reviewer-2": "FINDINGS: NO", "release-gate-1": "RELEASE_BLOCKED: NO"}
+                    "reviewer-2": "FINDINGS: NO", "release-gate-1": "RELEASE_BLOCKED: NO",
+                    "reviewer-1-format-1": "LGTM"}
         defaults.update(responses)
         workflow, calls = load_workflow({"task": "test", "repo_path": str(self.repo), **inputs}, defaults)
         with patch.object(workflow, "run_verification", return_value=(True, "go_vet: pass\ngo_test: pass")), patch.object(
@@ -499,3 +500,73 @@ class FeatureEngineeringWorkflowTest(unittest.TestCase):
                          ["correction", "verification", "assessment", "assessment"])
         self.assertEqual(json.loads(stage_records[-2].read_text())["seat"], "wg-adversarial-reviewer")
         self.assertEqual(json.loads(stage_records[-1].read_text())["seat"], "wg-release-gate")
+
+    def test_invalid_review_gets_one_format_retry_without_developer_correction(self):
+        workflow, calls = self.run_case({"reviewer-1": "**FINDINGS: NO**",
+                                        "reviewer-1-format-1": "FINDINGS: NO"})
+        self.assertEqual(calls, ["architect", "developer-initial", "reviewer-1",
+                                 "reviewer-1-format-1", "release-gate-1"])
+        retry_prompt = workflow.prompts["reviewer-1-format-1"]
+        self.assertIn("formatting", retry_prompt.lower())
+        self.assertIn("Do not modify the repository", retry_prompt)
+        records = list((self.repo / ".git/cao-evidence").glob("*/*/*-assessment.json"))
+        review = [json.loads(path.read_text()) for path in records if json.loads(path.read_text())["seat"] == "wg-adversarial-reviewer" and json.loads(path.read_text())["marker"] != "INVALID"]
+        self.assertEqual(review[0]["assessment"], 1)
+        self.assertEqual(review[0]["format_attempt"], 1)
+        self.assertEqual(review[0]["review_corrections"], 0)
+
+    def test_format_retry_material_findings_follow_normal_correction_loop(self):
+        _, calls = self.run_case({"reviewer-1": "FINDINGS: YES\nmalformed finding",
+                                 "reviewer-1-format-1": finding()})
+        self.assertEqual(calls[2:5], ["reviewer-1", "reviewer-1-format-1", "developer-fix-review-1"])
+        self.assertIn("reviewer-2", calls)
+
+    def test_invalid_twice_retains_diagnostics_and_stops(self):
+        _, calls = self.run_case({"reviewer-1": "secret output\n**FINDINGS: NO**",
+                                 "reviewer-1-format-1": "```\nFINDINGS: NO\n```"}, fail=True)
+        self.assertEqual(calls[-2:], ["reviewer-1", "reviewer-1-format-1"])
+        data = self.failure()
+        self.assertEqual(data["review_corrections"], 0)
+        invalid = data["invalid_assessment"]
+        self.assertEqual(invalid["format_attempt"], 1)
+        self.assertTrue(invalid["diagnostics"]["code_fence_present"])
+        self.assertEqual(invalid["diagnostics"]["canonical_marker_count"], 1)
+        self.assertEqual(invalid["diagnostics"]["last_line_kind"], "other")
+        for path in (self.repo / ".git/cao-evidence").glob("*/*/*.json"):
+            self.assertNotIn("secret output", path.read_text())
+
+    def test_gate_format_retry_preserves_seat_and_assessment_number(self):
+        _, calls = self.run_case({"reviewer-1": "FINDINGS: NO", "release-gate-1": "release-ready",
+                                 "release-gate-1-format-1": "RELEASE_BLOCKED: NO"})
+        self.assertEqual(calls[-2:], ["release-gate-1", "release-gate-1-format-1"])
+        records = list((self.repo / ".git/cao-evidence").glob("*/*/*-assessment.json"))
+        gates = [json.loads(path.read_text()) for path in records if json.loads(path.read_text())["seat"] == "wg-release-gate" and json.loads(path.read_text())["marker"] != "INVALID"]
+        self.assertEqual(gates[0]["assessment"], 1)
+        self.assertEqual(gates[0]["gate_corrections"], 0)
+
+    def test_invalid_review_that_modifies_repository_is_not_retried(self):
+        def modify():
+            self.correct()
+            return "malformed"
+        _, calls = self.run_case({"reviewer-1": modify}, fail=True)
+        self.assertNotIn("reviewer-1-format-1", calls)
+        self.assertIn("modified repository", self.failure()["reason"])
+
+    def test_diagnostics_distinguish_empty_conflicting_and_markdown_without_text(self):
+        workflow, _ = load_workflow({}, {})
+        self.assertTrue(workflow.assessment_diagnostics(" \n", "FINDINGS")["empty"])
+        self.assertEqual(workflow.assessment_diagnostics(None, "FINDINGS")["output_kind"], "non_text")
+        conflicting = workflow.assessment_diagnostics("FINDINGS: YES\nFINDINGS: NO", "FINDINGS")
+        self.assertTrue(conflicting["conflicting_canonical_markers"])
+        self.assertEqual(conflicting["canonical_marker_count"], 2)
+        markdown = workflow.assessment_diagnostics("secret text\n**FINDINGS: YES**", "FINDINGS")
+        self.assertEqual(markdown["last_line_kind"], "decorated_marker")
+        self.assertNotIn("secret text", json.dumps(markdown))
+        not_final = workflow.assessment_diagnostics("FINDINGS: NO\nextra prose", "FINDINGS")
+        self.assertFalse(not_final["canonical_marker_is_final"])
+
+    def test_retry_prompt_preserves_literal_task_references(self):
+        task = 'Continue `specs/ai-handoff.md` and `workgraph ai handoff`.'
+        workflow, calls = self.run_case({"reviewer-1": "malformed", "reviewer-1-format-1": "FINDINGS: NO"}, task=task)
+        for key in ("architect", "developer-initial", "reviewer-1", "reviewer-1-format-1", "release-gate-1"):
+            self.assertIn(task, workflow.prompts[key])
