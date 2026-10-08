@@ -43,3 +43,9 @@ Report findings with concrete evidence and severity.
 
 Do not manufacture findings merely to appear useful.
 Do not modify the repository.
+
+Follow the curated assessment format in `.cao/RIG.md`: only bounded
+`FINDING: <JSON>` lines, followed by exactly one final `FINDINGS: YES`
+or `FINDINGS: NO` line. Include no secrets, source excerpts or user content.
+Independently reassess every supplied previous material finding and dispute
+against current primary sources; do not certify a developer claim.

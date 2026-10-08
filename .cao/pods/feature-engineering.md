@@ -284,7 +284,7 @@ When the Adversarial Reviewer identifies a material finding:
 2. Developer makes the smallest coherent correction.
 3. Run Deterministic Verification again.
 4. If verification fails, return failure evidence to the Developer.
-5. Once verification passes, review the corrected state again as appropriate.
+5. Once verification passes, independently review the corrected state again.
 
 The review correction limit bounds Developer correction cycles, not review
 assessments. Every correction is followed by deterministic verification and a
@@ -327,8 +327,8 @@ If a release blocker is found:
 1. Return it to the Developer.
 2. Correct the implementation.
 3. Re-run Deterministic Verification.
-4. Repeat substantive review when the correction materially changes reviewed
-   behavior.
+4. Run independent adversarial review after every gate correction.
+   New material findings consume the remaining shared review correction budget.
 5. Run the Release Gate again.
 
 The release-gate correction limit likewise bounds Developer correction cycles.
@@ -362,10 +362,17 @@ The current intended assignments are:
 
 - Architect — Codex / GPT-6 Astra
 - Developer — Codex / GPT-5.6 Sol
-- Adversarial Reviewer — GitHub Copilot CLI / independent capable model
+- Adversarial Reviewer — antigravity_cli / Claude Sonnet 4.6
 - Release Gate — Codex / GPT-5.6 Sol
 
 These assignments are implementation details of the current rig.
 
 The responsibilities defined by this pod remain stable if models or providers
 change.
+
+Failure evidence, curated output, no-op/dispute handling, recovery and the
+disabled fallback policy are defined in `.cao/RIG.md`. Review corrections are
+shared across initial review and all post-gate reviews; gate corrections never
+reset the review budget. The Developer and Release Gate explicitly share the
+current GPT-5.6 Sol assignment; the Adversarial Reviewer uses a different model.
+No provider/model assignment changes are authorized by fallback configuration.

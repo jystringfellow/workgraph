@@ -44,3 +44,9 @@ Report implementation changes and any targeted checks performed; the workflow
 will independently run authoritative verification.
 
 Do not weaken tests merely to make them pass.
+
+For every correction, follow the bounded `DISPOSITION: <JSON>` format in
+`.cao/RIG.md`. Address every supplied finding with repository/spec/test evidence.
+Report corrected, rejected, or unable explicitly; a rejection requires
+independent assessment and is not your own approval. Exclude secrets, source
+excerpts and user content.

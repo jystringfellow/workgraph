@@ -18,13 +18,15 @@ Implements the sequential multi-agent engineering workflow defined in
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
+import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 from cao_workflow import emit_output, get_inputs, step
 
@@ -42,11 +44,168 @@ INPUTS = {
     "max_gate_attempts": {"type": "int", "required": False, "default": 2},
 }
 
-_FINDINGS_YES_RE = re.compile(r"\bFINDINGS:\s*YES\b", re.IGNORECASE)
-_FINDINGS_NO_RE = re.compile(r"\bFINDINGS:\s*NO\b", re.IGNORECASE)
+FALLBACK_POLICY = {
+    "enabled": False,
+    "chains": {},
+    "max_switches": 0,
+}
 
-_BLOCKED_YES_RE = re.compile(r"\bRELEASE_BLOCKED:\s*YES\b", re.IGNORECASE)
-_BLOCKED_NO_RE = re.compile(r"\bRELEASE_BLOCKED:\s*NO\b", re.IGNORECASE)
+
+def classify_failure(category: str) -> dict:
+    infrastructure = {
+        "provider_unavailable", "authentication_or_quota", "rate_limit", "session_startup",
+    }
+    return {
+        "category": category if category in infrastructure | {
+            "execution_uncertain", "engineering_findings", "verification_failure",
+        } else "execution_uncertain",
+        "fallback_candidate": category in infrastructure,
+        "automatic_fallback": False,
+        "requires_reconciliation": category not in infrastructure | {
+            "engineering_findings", "verification_failure",
+        },
+    }
+
+
+def git_bytes(repo: Path, *args: str) -> bytes:
+    return subprocess.run(
+        ["git", *args], cwd=repo, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, check=True,
+    ).stdout
+
+
+def repository_state(repo: Path) -> dict:
+    head = git_bytes(repo, "rev-parse", "HEAD").decode().strip()
+    parts = [git_bytes(repo, "ls-files", "--stage", "-z"),
+             git_bytes(repo, "diff", "--binary", "--no-ext-diff", "--no-textconv")]
+    paths = git_bytes(repo, "ls-files", "--others", "--exclude-standard", "-z").split(b"\0")
+    for raw in sorted(path for path in paths if path):
+        path = repo / os.fsdecode(raw)
+        content = os.fsencode(os.readlink(path)) if path.is_symlink() else path.read_bytes()
+        parts.extend([raw, str(path.lstat().st_mode).encode(), content])
+    digest = hashlib.sha256()
+    for part in parts:
+        digest.update(len(part).to_bytes(8, "big"))
+        digest.update(part)
+    return {"head": head, "fingerprint": digest.hexdigest()}
+
+
+class InvalidAssessment(ValueError):
+    pass
+
+
+def unique_json_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON field")
+        result[key] = value
+    return result
+
+
+def parse_assessment(output: str, marker: str) -> dict:
+    if not isinstance(output, str) or not output.strip():
+        raise InvalidAssessment("empty assessment")
+    if len(output) > 20000:
+        raise InvalidAssessment("assessment exceeds curated size limit")
+    lines = output.strip().splitlines()
+    if lines[-1] not in (f"{marker}: YES", f"{marker}: NO"):
+        raise InvalidAssessment("expected one unquoted final outcome marker")
+    findings = []
+    for line in lines[:-1]:
+        if not line.startswith("FINDING: "):
+            raise InvalidAssessment("assessment must contain only curated findings and final marker")
+        try:
+            item = json.loads(line[len("FINDING: "):], object_pairs_hook=unique_json_object)
+        except (ValueError, RecursionError) as exc:
+            raise InvalidAssessment("invalid curated finding JSON") from exc
+        if not isinstance(item, dict) or set(item) != {"id", "summary", "evidence", "requirement"}:
+            raise InvalidAssessment("invalid curated finding fields")
+        if any(not isinstance(v, str) or not v.strip() or len(v) > 240 for v in item.values()):
+            raise InvalidAssessment("finding fields must be nonempty strings of at most 240 characters")
+        findings.append(item)
+    if len(findings) > 12 or len({f["id"] for f in findings}) != len(findings):
+        raise InvalidAssessment("too many or duplicate findings")
+    blocked = lines[-1].endswith("YES")
+    if blocked != bool(findings):
+        raise InvalidAssessment("outcome and curated findings disagree")
+    return {"marker": lines[-1], "blocked": blocked, "findings": findings}
+
+
+ASSESSMENT_FORMAT = (
+    "Return only curated findings, then exactly one final outcome marker. "
+    'Each finding is one FINDING: {"id":"stable-id","summary":"defect",'
+    '"evidence":"repository location/test evidence","requirement":"violated requirement"} line. '
+    "At most 12 findings, each field at most 240 characters. "
+    "Exclude secrets, user content, source excerpts, prompts and transcripts. "
+    "For approval, return only the NO marker. No quoted/example markers.\n"
+)
+CORRECTION_FORMAT = (
+    "End with exactly one DISPOSITION: JSON line with fields status and evidence. "
+    "Status is corrected, rejected, or unable. Evidence is a concise repository/spec/test "
+    "reference (at most 480 characters); never include secrets or source excerpts. "
+    "A rejection requires concrete evidence for every finding and independent reassessment; "
+    "your assertion alone cannot resolve it.\n"
+)
+
+
+def parse_disposition(output: str) -> dict:
+    if not isinstance(output, str) or not output.strip():
+        raise ValueError("missing correction disposition")
+    lines = output.strip().splitlines()
+    if sum("DISPOSITION:" in line for line in lines) != 1 or not lines[-1].startswith("DISPOSITION: "):
+        raise ValueError("expected one final correction disposition")
+    item = json.loads(lines[-1][len("DISPOSITION: "):], object_pairs_hook=unique_json_object)
+    if not isinstance(item, dict) or set(item) != {"status", "evidence"}:
+        raise ValueError("invalid disposition fields")
+    if not isinstance(item["status"], str) or item["status"] not in {"corrected", "rejected", "unable"}:
+        raise ValueError("invalid disposition status")
+    if not isinstance(item["evidence"], str) or not item["evidence"].strip() or len(item["evidence"]) > 480:
+        raise ValueError("disposition requires concise concrete evidence")
+    return item
+
+
+class RunEvidence:
+    def __init__(self, repo: Path):
+        run_id = os.environ.get("CAO_WORKFLOW_RUN_ID", "local")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", run_id):
+            raise ValueError("invalid CAO run identity")
+        root = Path(os.fsdecode(git_bytes(repo, "rev-parse", "--absolute-git-dir")).strip())
+        self.path = root / "cao-evidence" / run_id / uuid.uuid4().hex
+        self.path.mkdir(parents=True, mode=0o700)
+        self.sequence = 0
+        self.assessment = None
+        self.context = {}
+        self.disputed = False
+        self.review_corrections = 0
+        self.gate_corrections = 0
+        self.verification = {"passed": None}
+        self.write("start", {"run_id": run_id, "fallback": FALLBACK_POLICY})
+
+    def write(self, kind: str, record: dict) -> None:
+        self.sequence += 1
+        target = self.path / f"{self.sequence:04d}-{kind}.json"
+        self.atomic_write(target, record)
+
+    def atomic_write(self, target: Path, record: dict) -> None:
+        temporary = target.with_suffix(".tmp")
+        with temporary.open("x", encoding="utf-8") as stream:
+            os.chmod(temporary, 0o600)
+            json.dump(record, stream, sort_keys=True, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, target)
+
+    def fail(self, reason: str) -> None:
+        record = {"reason": reason, "last_assessment": self.assessment,
+                  "correction_context": self.context, "verification": self.verification,
+                  "review_corrections": self.review_corrections,
+                  "gate_corrections": self.gate_corrections}
+        self.atomic_write(self.path / "failure.json", record)
+        message = f"{reason}; failure evidence: {self.path / 'failure.json'}"
+        print(f"ERROR: {message}", file=sys.stderr)
+        emit_output({"status": "failed", "error": message})
+        raise SystemExit(1)
 
 
 def run_verification(repo_path: Path) -> Tuple[bool, str]:
@@ -157,39 +316,11 @@ def extract_acceptance_criteria(architect_text: str) -> str:
 
 
 def has_material_findings(review_text: str) -> bool:
-    """Determine if reviewer reported material findings.
-
-    Checks explicit markers first:
-      FINDINGS: YES -> True
-      FINDINGS: NO  -> False
-    Fallback: check for non-empty finding headers or failure indications.
-    """
-    if _FINDINGS_YES_RE.search(review_text):
-        return True
-    if _FINDINGS_NO_RE.search(review_text):
-        return False
-    # If agent did not output explicit marker, check for obvious signals
-    lower = review_text.lower()
-    if "no material finding" in lower or "no material issues" in lower or "lgtm" in lower:
-        return False
-    return True
+    return parse_assessment(review_text, "FINDINGS")["blocked"]
 
 
 def is_release_blocked(gate_text: str) -> bool:
-    """Determine if release gate blocked the release.
-
-    Checks explicit markers:
-      RELEASE_BLOCKED: YES -> True
-      RELEASE_BLOCKED: NO  -> False
-    """
-    if _BLOCKED_YES_RE.search(gate_text):
-        return True
-    if _BLOCKED_NO_RE.search(gate_text):
-        return False
-    lower = gate_text.lower()
-    if "release-ready" in lower and "not release-ready" not in lower:
-        return False
-    return True
+    return parse_assessment(gate_text, "RELEASE_BLOCKED")["blocked"]
 
 
 def main() -> None:
@@ -202,7 +333,113 @@ def main() -> None:
     max_review_attempts = int(inputs.get("max_review_attempts", 3))
     max_gate_attempts = int(inputs.get("max_gate_attempts", 2))
 
+    if max_verify_attempts < 1 or not 0 <= max_review_attempts <= 3 or not 0 <= max_gate_attempts <= 2:
+        raise ValueError("verification attempts must be positive; review/gate correction caps are 3/2")
+    evidence = RunEvidence(repo_path)
+    if FALLBACK_POLICY != {"enabled": False, "chains": {}, "max_switches": 0}:
+        evidence.fail("Automatic fallback is unsupported; keep the configuration seam disabled")
     working_dir_str = str(repo_path)
+
+    def verify():
+        try:
+            passed, output = run_verification(repo_path)
+        except Exception as exc:
+            evidence.write("verification-error", {"exception_type": type(exc).__name__})
+            evidence.fail("Verification harness failed to execute; rerun .cao/verification/verify.sh")
+        evidence.verification = {"passed": passed, "checks": {
+            name: ("pass" if f"{name}: pass" in output else "fail" if f"{name}: fail" in output else "unknown")
+            for name in ("go_vet", "go_test")}}
+        evidence.verification["repository"] = repository_state(repo_path)
+        evidence.write("verification", evidence.verification)
+        return passed, output
+
+    def agent_step(provider, profile, prompt, **opts):
+        step_id = opts["step_id"]
+        correction = step_id.startswith("developer-fix-")
+        assessment = step_id.startswith(("reviewer-", "release-gate-"))
+        before = repository_state(repo_path)
+        if correction:
+            prompt += "\n" + CORRECTION_FORMAT
+        if assessment:
+            prompt += "\n" + ASSESSMENT_FORMAT
+            prompt += "\nPrevious material findings and correction context (navigation only):\n"
+            prompt += json.dumps(evidence.context, sort_keys=True)
+            prompt += "\nIndependently inspect current primary sources and resolve each material finding; do not merely agree with the developer.\n"
+        if assessment and evidence.verification.get("repository") != before:
+            evidence.fail(f"Repository changed since authoritative verification before {step_id}")
+        profile_path = repo_path / ".cao" / "profiles" / f"{profile}.md"
+        configured = {}
+        if profile_path.exists():
+            frontmatter = profile_path.read_text().split("---", 2)
+            if len(frontmatter) == 3:
+                for key in ("provider", "model", "codexProfile"):
+                    match = re.search(rf"^{key}: ([A-Za-z0-9_.-]{{1,100}})$", frontmatter[1], re.MULTILINE)
+                    configured[key] = match.group(1) if match else None
+        evidence.write("step-start", {"seat": profile, "step_id": step_id,
+                       "requested_provider": provider, "requested_profile": profile,
+                       "configured_profile": configured,
+                       "actual_provider": None, "actual_cli": None, "actual_model": None,
+                       "actual_profile": None,
+                       "repository": before})
+        try:
+            result = step(provider, profile, prompt, recovery=opts.pop("recovery"), **opts)
+        except Exception as exc:
+            evidence.write("execution-failure", {"step_id": step_id, "exception_type": type(exc).__name__,
+                           "classification": classify_failure("execution_uncertain"),
+                           "before": before, "after": repository_state(repo_path)})
+            evidence.fail(f"Agent execution failed at {step_id}; inspect CAO status and reconcile side effects before recovery")
+        after = repository_state(repo_path)
+        evidence.write("step-result", {"seat": profile, "step_id": step_id,
+                       "completed": getattr(result, "status", None) == "completed",
+                       "replayed": getattr(result, "replayed", False), "repository": after})
+        if getattr(result, "status", None) != "completed":
+            evidence.fail(f"Agent step {step_id} did not complete; side effects uncertain")
+        if (correction or assessment) and getattr(result, "replayed", False):
+            evidence.write("replay-halt", {"step_id": step_id, "repository": repository_state(repo_path)})
+            evidence.fail(f"Replayed {step_id} cannot establish fresh repository evidence; reconcile and start a new CAO run")
+        if profile == "wg-architect" and before != after:
+            evidence.fail("Architect modified repository state")
+        if correction:
+            changed = before["fingerprint"] != after["fingerprint"]
+            try:
+                disposition = parse_disposition(result.output)
+            except (ValueError, TypeError, RecursionError):
+                disposition = {"status": "invalid", "evidence": "missing or invalid disposition"}
+            record = {"step_id": step_id, "before": before, "after": after,
+                      "changed": changed, "disposition": disposition,
+                      "replayed": getattr(result, "replayed", False)}
+            evidence.write("correction", record)
+            evidence.context = {"previous_findings": (evidence.assessment or {}).get("findings", []), **record}
+            if disposition["status"] in {"invalid", "unable"}:
+                evidence.fail(f"Correction {step_id} has no supported resolution")
+            if not changed and disposition["status"] != "rejected":
+                evidence.fail(f"No effective repository change at {step_id}; findings remain unresolved")
+            if not changed and "verify" in step_id:
+                evidence.fail(f"Verification correction {step_id} requires a repository change")
+            evidence.disputed = not changed
+        if assessment:
+            marker = "FINDINGS" if step_id.startswith("reviewer-") else "RELEASE_BLOCKED"
+            try:
+                parsed = parse_assessment(result.output, marker)
+            except InvalidAssessment as exc:
+                evidence.write("invalid-assessment", {"seat": profile, "step_id": step_id,
+                               "assessment": int(step_id.rsplit("-", 1)[1]),
+                               "marker": "INVALID", "verification": evidence.verification,
+                               "review_corrections": evidence.review_corrections,
+                               "gate_corrections": evidence.gate_corrections,
+                               "repository": repository_state(repo_path),
+                               "reason": str(exc), "output_sha256": hashlib.sha256(str(result.output).encode()).hexdigest()})
+                evidence.fail(f"Invalid assessment at {step_id}: {exc}")
+            evidence.assessment = {**parsed, "seat": profile, "assessment": int(step_id.rsplit("-", 1)[1]),
+                "repository": after, "verification": evidence.verification,
+                "review_corrections": evidence.review_corrections, "gate_corrections": evidence.gate_corrections}
+            evidence.write("assessment", evidence.assessment)
+            if before != evidence.assessment["repository"]:
+                evidence.fail(f"Read-only assessment {step_id} modified repository state")
+            if evidence.disputed and parsed["blocked"]:
+                evidence.fail(f"Independent assessment {step_id} did not accept the no-change dispute")
+            evidence.disputed = False
+        return result
 
     # -------------------------------------------------------------------------
     # Stage 1: Architect (Understanding and Planning)
@@ -223,7 +460,7 @@ def main() -> None:
         "Prefer the smallest coherent solution.\n"
         "Do not modify the repository.\n"
     )
-    architect_step = step(
+    architect_step = agent_step(
         "codex",
         "wg-architect",
         architect_prompt,
@@ -251,7 +488,7 @@ def main() -> None:
         "Report implementation changes and targeted checks performed; the workflow will "
         "independently run authoritative verification.\n"
     )
-    developer_step = step(
+    developer_step = agent_step(
         "codex",
         "wg-developer",
         developer_prompt,
@@ -269,8 +506,11 @@ def main() -> None:
 
     while verify_attempts < max_verify_attempts:
         verify_attempts += 1
-        verification_passed, verification_evidence = run_verification(repo_path)
+        verification_passed, verification_evidence = verify()
         if verification_passed:
+            break
+
+        if verify_attempts >= max_verify_attempts:
             break
 
         # Verification failed -> ask Developer to fix
@@ -282,7 +522,7 @@ def main() -> None:
             "Never weaken a test or check merely to make it pass.\n"
             "Report what you corrected and any targeted checks performed.\n"
         )
-        step(
+        agent_step(
             "codex",
             "wg-developer",
             fix_prompt,
@@ -292,18 +532,8 @@ def main() -> None:
         )
 
     if not verification_passed:
-        err_msg = (
-            f"Deterministic verification failed after {max_verify_attempts} attempts:\n"
-            f"{verification_evidence}"
-        )
-        print(f"ERROR: {err_msg}", file=sys.stderr)
-        emit_output({
-            "status": "failed",
-            "stage": "verification",
-            "error": err_msg,
-            "evidence": verification_evidence,
-        })
-        sys.exit(1)
+        err_msg = f"Deterministic verification failed after {max_verify_attempts} attempts; rerun .cao/verification/verify.sh for diagnostics"
+        evidence.fail(err_msg)
 
     # -------------------------------------------------------------------------
     # Stage 4: Jev Shadow Evaluation (Observational Telemetry Only)
@@ -318,109 +548,96 @@ def main() -> None:
     review_clean = False
     reviewer_output = ""
 
-    while True:
-        review_assessments += 1
+    def assess_review():
+        nonlocal review_assessments, review_fixes, review_clean, reviewer_output, verification_evidence
+        review_clean = False
+        while True:
+            review_assessments += 1
 
-        # NOTE: Reviewer independently assesses the change without seeing Jev telemetry.
-        reviewer_prompt = (
-            f"You occupy the Adversarial Reviewer seat in the Workgraph Feature Engineering pod.\n\n"
-            f"Original Task:\n{task}\n\n"
-            f"Architect Acceptance Criteria:\n{acceptance_criteria}\n\n"
-            f"Deterministic Verification Evidence:\n{verification_evidence}\n\n"
-            "Independently inspect the repository changes and tests.\n"
-            "Do not assume the architect or developer was correct.\n"
-            "Use the supplied deterministic verification evidence; do not rerun the "
-            "repository-wide authoritative suite.\n"
-            "Look for material issues involving correctness, architecture, edge cases,\n"
-            "backward compatibility, privacy boundaries, data integrity, and tests.\n"
-            "Do not report stylistic preference as a defect.\n\n"
-            "Conclude your review with an explicit marker line:\n"
-            "FINDINGS: NO\n"
-            "(if there are no material findings, stating why it is sound)\n"
-            "or:\n"
-            "FINDINGS: YES\n"
-            "(followed by each concrete finding, where it occurs, and violated requirement)\n"
-        )
+            # NOTE: Reviewer independently assesses the change without seeing Jev telemetry.
+            reviewer_prompt = (
+                f"You occupy the Adversarial Reviewer seat in the Workgraph Feature Engineering pod.\n\n"
+                f"Original Task:\n{task}\n\n"
+                f"Architect Acceptance Criteria:\n{acceptance_criteria}\n\n"
+                f"Deterministic Verification Evidence:\n{verification_evidence}\n\n"
+                "Independently inspect the repository changes and tests.\n"
+                "Do not assume the architect or developer was correct.\n"
+                "Use the supplied deterministic verification evidence; do not rerun the "
+                "repository-wide authoritative suite.\n"
+                "Look for material issues involving correctness, architecture, edge cases,\n"
+                "backward compatibility, privacy boundaries, data integrity, and tests.\n"
+                "Do not report stylistic preference as a defect.\n\n"
+                "Use FINDINGS: YES for material blockers or FINDINGS: NO for approval.\n"
+            )
 
-        reviewer_step = step(
-            "antigravity_cli",
-            "wg-adversarial-reviewer",
-            reviewer_prompt,
-            recovery="idempotent",
-            step_id=f"reviewer-{review_assessments}",
-            working_directory=working_dir_str,
-        )
-        reviewer_output = reviewer_step.output
+            reviewer_step = agent_step(
+                "antigravity_cli",
+                "wg-adversarial-reviewer",
+                reviewer_prompt,
+                recovery="idempotent",
+                step_id=f"reviewer-{review_assessments}",
+                working_directory=working_dir_str,
+            )
+            reviewer_output = reviewer_step.output
 
-        if not has_material_findings(reviewer_output):
-            review_clean = True
-            break
+            if not has_material_findings(reviewer_output):
+                review_clean = True
+                break
 
-        if review_fixes >= max_review_attempts:
-            break
+            if review_fixes >= max_review_attempts:
+                break
 
-        review_fixes += 1
-        dev_review_fix_prompt = (
-            f"The Adversarial Reviewer identified material findings (assessment {review_assessments}; "
-            f"correction cycle {review_fixes}/{max_review_attempts}):\n\n"
-            f"{reviewer_output}\n\n"
-            "Make the smallest coherent correction addressing these findings.\n"
-            "Preserve compatibility and privacy invariants.\n"
-            "Do not run `go vet ./...` or `go test ./...`; the workflow will verify the "
-            "correction outside your sandbox. You may run targeted checks.\n"
-            "Report your changes and any targeted checks performed.\n"
-        )
-        step(
-            "codex",
-            "wg-developer",
-            dev_review_fix_prompt,
-            recovery="manual",
-            step_id=f"developer-fix-review-{review_fixes}",
-            working_directory=working_dir_str,
-        )
+            review_fixes += 1
+            evidence.review_corrections = review_fixes
+            dev_review_fix_prompt = (
+                f"The Adversarial Reviewer identified material findings (assessment {review_assessments}; "
+                f"correction cycle {review_fixes}/{max_review_attempts}):\n\n"
+                f"{reviewer_output}\n\n"
+                "Make the smallest coherent correction addressing these findings.\n"
+                "Preserve compatibility and privacy invariants.\n"
+                "Do not run `go vet ./...` or `go test ./...`; the workflow will verify the "
+                "correction outside your sandbox. You may run targeted checks.\n"
+                "Report your changes and any targeted checks performed.\n"
+            )
+            agent_step(
+                "codex",
+                "wg-developer",
+                dev_review_fix_prompt,
+                recovery="manual",
+                step_id=f"developer-fix-review-{review_fixes}",
+                working_directory=working_dir_str,
+            )
 
-        # Re-run verification after developer modifications
-        v_passed, v_ev = run_verification(repo_path)
-        if not v_passed:
-            # Quick bounded re-verification loop
-            for v_fix_i in range(1, max_verify_attempts + 1):
-                step(
-                    "codex",
-                    "wg-developer",
-                    f"Deterministic verification failed after review fix:\n{v_ev}\n"
-                    "Fix the failure. Do not run `go vet ./...` or `go test ./...`; the "
-                    "workflow will rerun authoritative verification. You may run targeted checks.",
-                    recovery="manual",
-                    step_id=f"developer-fix-rev-verify-{review_fixes}-{v_fix_i}",
-                    working_directory=working_dir_str,
-                )
-                v_passed, v_ev = run_verification(repo_path)
-                if v_passed:
-                    break
+            # Re-run verification after developer modifications
+            v_passed, v_ev = verify()
             if not v_passed:
-                err_msg = f"Deterministic verification failed after review fix: {v_ev}"
-                print(f"ERROR: {err_msg}", file=sys.stderr)
-                emit_output({
-                    "status": "failed",
-                    "stage": "verification_after_review",
-                    "error": err_msg,
-                })
-                sys.exit(1)
-        verification_evidence = v_ev
+                # Quick bounded re-verification loop
+                for v_fix_i in range(1, max_verify_attempts + 1):
+                    agent_step(
+                        "codex",
+                        "wg-developer",
+                        f"Deterministic verification failed after review fix:\n{v_ev}\n"
+                        "Fix the failure. Do not run `go vet ./...` or `go test ./...`; the "
+                        "workflow will rerun authoritative verification. You may run targeted checks.",
+                        recovery="manual",
+                        step_id=f"developer-fix-rev-verify-{review_fixes}-{v_fix_i}",
+                        working_directory=working_dir_str,
+                    )
+                    v_passed, v_ev = verify()
+                    if v_passed:
+                        break
+                if not v_passed:
+                    evidence.fail("Deterministic verification failed after review fix")
+            verification_evidence = v_ev
 
-    if not review_clean:
-        err_msg = (
-            "Unresolved adversarial reviewer findings after "
-            f"{max_review_attempts} correction cycles."
-        )
-        print(f"ERROR: {err_msg}", file=sys.stderr)
-        emit_output({
-            "status": "failed",
-            "stage": "review",
-            "error": err_msg,
-            "last_review": reviewer_output,
-        })
-        sys.exit(1)
+        if not review_clean:
+            err_msg = (
+                "Unresolved adversarial reviewer findings after "
+                f"{max_review_attempts} correction cycles."
+            )
+            evidence.fail(err_msg)
+
+    assess_review()
 
     # -------------------------------------------------------------------------
     # Stage 6: Release Gate
@@ -439,6 +656,7 @@ def main() -> None:
             f"Architect Acceptance Criteria:\n{acceptance_criteria}\n\n"
             f"Deterministic Verification Evidence:\n{verification_evidence}\n\n"
             f"Adversarial Review Outcome:\n{reviewer_output}\n\n"
+            f"Previous gate blockers (independently reassess):\n{gate_output}\n\n"
             "Perform an independent final release-readiness assessment against repository evidence.\n"
             "Use the supplied deterministic verification evidence; do not rerun the "
             "repository-wide authoritative suite.\n"
@@ -449,15 +667,10 @@ def main() -> None:
             "- Privacy guarantees and backward compatibility hold\n"
             "- No unintended repository artifacts remain\n\n"
             "Distinguish release-blocking findings from non-blocking observations.\n"
-            "Conclude your assessment with an explicit marker line:\n"
-            "RELEASE_BLOCKED: NO\n"
-            "(if the change is release-ready with no blocking defects)\n"
-            "or:\n"
-            "RELEASE_BLOCKED: YES\n"
-            "(followed by each blocker, evidence, and unmet requirement)\n"
+            "Use RELEASE_BLOCKED: YES for material blockers or RELEASE_BLOCKED: NO for approval.\n"
         )
 
-        gate_step = step(
+        gate_step = agent_step(
             "codex",
             "wg-release-gate",
             gate_prompt,
@@ -475,6 +688,7 @@ def main() -> None:
             break
 
         gate_fixes += 1
+        evidence.gate_corrections = gate_fixes
         dev_gate_fix_prompt = (
             f"The Release Gate identified release blockers (assessment {gate_assessments}; "
             f"correction cycle {gate_fixes}/{max_gate_attempts}):\n\n"
@@ -484,7 +698,7 @@ def main() -> None:
             "correction outside your sandbox. You may run targeted checks.\n"
             "Report your changes and any targeted checks performed.\n"
         )
-        step(
+        agent_step(
             "codex",
             "wg-developer",
             dev_gate_fix_prompt,
@@ -494,37 +708,26 @@ def main() -> None:
         )
 
         # Re-run verification
-        v_passed, v_ev = run_verification(repo_path)
+        v_passed, v_ev = verify()
         if not v_passed:
-            err_msg = f"Deterministic verification failed after release gate fix: {v_ev}"
-            print(f"ERROR: {err_msg}", file=sys.stderr)
-            emit_output({
-                "status": "failed",
-                "stage": "verification_after_gate",
-                "error": err_msg,
-            })
-            sys.exit(1)
+            evidence.fail("Deterministic verification failed after release gate fix")
         verification_evidence = v_ev
+        assess_review()
 
     if not gate_passed:
         err_msg = (
             "Release Gate found unresolved blockers after "
             f"{max_gate_attempts} correction cycles."
         )
-        print(f"ERROR: {err_msg}", file=sys.stderr)
-        emit_output({
-            "status": "failed",
-            "stage": "release_gate",
-            "error": err_msg,
-            "last_gate_output": gate_output,
-        })
-        sys.exit(1)
+        evidence.fail(err_msg)
 
     # -------------------------------------------------------------------------
     # Stage 7: Done — Emit structured outcome
     # -------------------------------------------------------------------------
+    evidence.write("completed", {"verification": evidence.verification, "last_assessment": evidence.assessment})
     emit_output({
         "status": "completed",
+        "evidence_directory": str(evidence.path),
         "task": task,
         "repo_path": working_dir_str,
         "verification": verification_evidence,

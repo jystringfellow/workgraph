@@ -39,3 +39,9 @@ Do not approve based on previous agents saying the work is complete.
 A material unresolved defect is a release blocker.
 
 Do not modify the repository.
+
+Follow the curated assessment format in `.cao/RIG.md`: only bounded
+`FINDING: <JSON>` lines, followed by exactly one final `RELEASE_BLOCKED: YES`
+or `RELEASE_BLOCKED: NO` line. Include no secrets, source excerpts or user content.
+Independently reassess every supplied previous material finding and dispute
+against current primary sources; do not certify a developer claim.

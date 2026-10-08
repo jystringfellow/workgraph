@@ -241,3 +241,147 @@ At minimum:
 - the release gate finds no unresolved material blocker
 
 The repository and its observable behavior are the final evidence.
+
+## Feature Engineering Failure Evidence
+
+The workflow writes local evidence directly, before emitting CAO output. Locate
+it under `git rev-parse --absolute-git-dir`:
+
+    cao-evidence/<CAO_WORKFLOW_RUN_ID>/<execution-id>/
+
+Each script execution receives a fresh UUID directory, including recovery of
+the same CAO run. `local` is used only when CAO's run identity is absent (tests
+or direct invocation). Invalid run identities fail before launching agents.
+Every execution is retained separately; recovery never overwrites prior
+executions. This is evidence isolation, not permission to replay a developer.
+No evidence is added to the worktree or synced by `.cao/sync.sh`. CAO lint
+warns about UUID nondeterminism; UUIDs isolate artifact directories only, never
+step identities, budgets, seat selection or engineering decisions.
+
+Numbered JSON records contain step starts/results, correction before/after
+state, deterministic verification status, and assessments. Each assessment
+records the logical seat, assessment number, explicit outcome, curated findings,
+verification result, review/gate correction counts, HEAD and state fingerprint.
+Invalid assessments record a reason and output digest instead of agent text.
+`failure.json` retains the final assessment and correction context, even if
+`emit_output()` fails. Its absolute location appears in the failure message.
+A completion record is also written before CAO output. Files are written by
+atomic replacement with file fsync, mode 0600, inside a mode 0700 execution
+directory. A process interrupted during a write may leave a `.tmp` file; the
+previous JSON records remain readable. Storage errors fail visibly.
+
+The fingerprint hashes index entries (including staged blobs and modes), the
+unstaged binary Git diff, and the names, modes and bytes of non-ignored untracked
+files. No diff or file contents are stored. HEAD is recorded separately; committed
+content changes appear in index blobs. Staging changes alter index/diff evidence;
+untracked content hashes distinguish edits to existing untracked files. A change
+followed by restoration of the original effective index/worktree state is a
+no-op, even when commit/revert commits changed HEAD. Ignored files, reflog history, and external state are outside
+this boundary. Run against an established Git HEAD, in an exclusively used
+worktree; concurrent edits invalidate workflow evidence. Read-only assessment
+changes or a changed state since verification halt the workflow.
+
+### Curated Output and Privacy
+
+Review and gate output must contain only `FINDING: <JSON>` lines followed by
+exactly one final `FINDINGS: YES/NO` or `RELEASE_BLOCKED: YES/NO` line, respectively.
+Each finding has exactly four nonempty string fields: `id`, `summary`,
+`evidence`, and `requirement`. Use stable IDs and repository/spec/test references.
+There are at most 12 findings; each field is at most 240 characters. A YES
+requires findings; a NO requires none. Empty, malformed, missing, quoted,
+conflicting, or prose-only assessments fail as invalid, with no developer
+correction consumed and no automatic assessment retry.
+
+Corrections end with `DISPOSITION: <JSON>` containing `status` (`corrected`,
+`rejected`, or `unable`) and `evidence` (a nonempty repository/spec/test reference,
+at most 480 characters). The disposition must address every material finding.
+Do not put secrets, user content, source excerpts, complete prompts, environment
+values, or terminal transcripts in either format. The workflow retains only
+these bounded curated fields, Git digests/HEADs, check statuses, safe exception
+type names, and requested configuration metadata. It does not retain raw
+assessment output, correction summaries, verification failure logs, or diffs.
+Raw failure diagnostics remain transient input to the correcting developer;
+rerun `.cao/verification/verify.sh` to investigate deterministic failures.
+
+Curating and length limits reduce retention; they are **not secret detection**.
+A model can still put sensitive material into a valid field. Treat the local
+evidence as confidential. Do not upload it automatically, commit it, or send
+it to Jev. Retention is operator controlled: no automatic expiry or deletion;
+after investigating a run, remove its evidence directory when no longer needed.
+CAO's own diagnostics and output have separate retention behavior.
+
+### Corrections, Independence, and Bounds
+
+Every developer correction has workflow-owned Git snapshots immediately before
+and after execution. `corrected` without an effective change stops before
+another paid review. Missing/invalid dispositions and `unable` also stop.
+A no-change `rejected` disposition permits one independent reassessment with
+fresh verification and concrete dispute evidence. The reviewer inspects primary
+sources, including every previous material finding; it must not merely agree
+with the developer. If that reassessment reports material issues, the workflow
+halts instead of spending another correction. Verification failures cannot be
+resolved by a no-change rejection.
+
+Subsequent reviews receive compact previous findings, the disposition, before/
+after fingerprints and HEAD identifiers, and fresh verification evidence.
+Jev shadow results never enter these prompts or control this loop.
+
+Review corrections share a single budget across the entire run: at most three
+(default three), each followed by verification and an independent assessment,
+including a final assessment after correction three. Gate corrections are
+separately capped at two (default two), each followed by verification,
+independent adversarial review, and another gate assessment. Renewed review
+issues use the **remaining** review budget, never a reset or nested fresh budget.
+Exhaustion retains the final unresolved findings and prevents further agent
+calls. Verification repairs remain separately bounded by `max_verify_attempts`;
+all corrections, including verification repairs, require Git/disposition evidence.
+Gate-fix verification failure halts immediately. Initial verification stops
+after the final failed attempt without launching an unassessed extra repair.
+
+CAO replay cannot establish a fresh correction or independent assessment.
+Replayed correction/review/gate results halt with an evidence artifact. Inspect
+prior execution records and reconcile the worktree before starting a new CAO
+run. Do not blindly resume a potentially side-effecting developer step.
+
+## Provider Fallback Policy (Disabled)
+
+`FALLBACK_POLICY` in the workflow is a disabled configuration seam: `enabled`
+is false, `chains` is empty, and `max_switches` is zero. Changing it fails before
+any agent is launched. This pass introduces no production model switching,
+retry wrapper, environment forwarding, or new local-model requirement.
+
+`classify_failure()` is a deterministic policy function for **explicitly
+established categories**, not a classifier of model prose or generic exceptions:
+
+| Category | Future fallback candidate | Current action |
+| --- | --- | --- |
+| Provider/CLI unavailable | Yes | Stop; establish availability outside the run |
+| Authentication or quota | Yes | Stop; repair authorization/quota or approve another provider |
+| Rate limit | Yes | Stop; bounded wait/switch would require typed evidence |
+| Terminal/session startup | Yes | Stop; establish that execution never began |
+| Agent execution / unknown failure | No | Stop; reconcile uncertain side effects |
+| Valid material findings | No | Follow bounded engineering correction policy |
+| Failed deterministic tests | No | Follow bounded verification policy |
+
+A future chain must explicitly name provider, CLI, model, profile, interface/
+permission validation and assurance level for each candidate, with a finite
+switch cap and no cycles. Logical seat identity remains fixed. Reviewer and gate
+assurance cannot silently decrease. Models assigned to supposedly independent
+seats cannot silently become identical; any already shared assignments must be
+explicit. Local models are optional candidates only after CAO terminal and tool
+permission compatibility is verified. Provider-specific credential boundaries
+and CAO environment sanitization must remain in force. A developer cannot be
+retried/switched until reliable evidence establishes that it did not execute,
+or a human has reconciled its side effects. Availability alone is insufficient.
+
+The installed `cao_workflow.step()` accepts provider/profile and recovery policy,
+but returns only step ID, terminal ID, output, status and `replayed`. It exposes
+transport/HTTP errors, not reliable typed provider-auth/quota/rate-limit/startup
+versus execution failures. A generic HTTP status is not provider evidence; 409
+also represents recovery halt/divergence. Consequently all step exceptions are
+conservatively recorded as `execution_uncertain`, without retaining exception
+messages/bodies. There is no supported transactional provider-switch handshake
+or attested actual-model metadata in this return value. Requested provider/
+profile and available profile configuration are recorded; actual provider, CLI,
+model and profile remain explicitly unknown rather than inferred from the
+request. Do not invent a switch mechanism around these limitations.
