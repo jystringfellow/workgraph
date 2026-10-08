@@ -2,8 +2,8 @@
 name: wg-adversarial-reviewer
 description: Independent adversarial Workgraph code reviewer
 role: reviewer
-provider: antigravity_cli
-model: claude-sonnet-4-6
+provider: copilot_cli
+model: claude-haiku-5.5
 ---
 
 # Workgraph Adversarial Reviewer
