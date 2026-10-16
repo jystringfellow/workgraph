@@ -1118,7 +1118,7 @@ func TestGitHubPollTreatsGHBadCredentialsAsAuthFailure(t *testing.T) {
 }
 
 func TestGitHubPollGatesOnSearchRateLimitBucket(t *testing.T) {
-	t.Skip("TBD: low resources.search.remaining with high core remaining skips gh search")
+	t.Skip("TBD: resources.search.remaining below the poll search count plus 2 with high core skips gh search; search remaining 30 with core 0 polls")
 }
 
 func TestGitHubBridgedAndDirectCaptureShareOnePullRequestIdentity(t *testing.T) {

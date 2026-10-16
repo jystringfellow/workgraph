@@ -497,7 +497,7 @@ Mutable provider objects must include a provider revision marker in
 | Slack message/reply | `<channel>:<ts>`; append `:edit:<edited-ts>` for an edited revision |
 | Slack List item | `<list-id>:<item-id>:<updated-ts-or-revision>` |
 | Notion page | `<page-id>:<last-edited-at>` |
-| GitHub PR/issue | `<repo>#<kind>:<number>:<updated-at>` |
+| GitHub PR/issue | `<repo>#<kind>:<number>:<updated-at>` (proposed: normalized onto the direct snapshot id `github.<kind>:<repo>:<number>` with newer-wins refresh; see `specs/github-connector.md` Slice 0) |
 | Mail message | Stable message id when the event represents receipt; add a revision only if later mailbox state is captured |
 | Calendar event | `<event-id>:change:<change-key-or-last-modified-at>` |
 | Azure Boards item | `azdo:<org>:<id>:rev:<revision>` |

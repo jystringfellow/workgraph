@@ -103,6 +103,11 @@ The generic stop-token set is exactly: `a`, `an`, `and`, `are`, `as`, `at`,
 `meeting`, `message`, `of`, `on`, `or`, `project`, `pull`, `request`, `status`,
 `task`, `the`, `to`, `update`, `updated`, `with`, `work`, and `working`.
 
+Proposed with `specs/github-connector.md`, not yet implemented: signal
+extraction skips any payload subtree named `untrusted`, and of the
+`github.pull_request.*` transition events only `github.pull_request.observed`
+is an association candidate.
+
 Current mail thread ids, Slack thread timestamps, calendar ids, and provider
 object ids are provider-scoped. They are not compared across sources in this
 slice because current payloads do not establish a shared namespace. Their
