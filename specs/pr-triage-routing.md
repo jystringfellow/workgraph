@@ -1,8 +1,9 @@
 # PR Triage And Routing
 
-Status: proposed. No behavior described here is implemented until its facts in
-`facts/pr_triage_routing_test.go` are active. It depends on
-`specs/github-connector.md` slice 1.
+Status: draft, parked. This design was split out of the authored PR watch
+work (PR #142) so capture could ship first. It must be revised against the
+review findings below before it is proposed again. No behavior described here
+is implemented.
 
 ## Intent
 
@@ -553,6 +554,84 @@ nothing. It is the main tuning and adoption tool.
 - **Repository policy is the union of the default branch and the PR head.**
   Tightening in a PR applies at once. Loosening applies after merge. Runs may
   not edit the policy file.
+
+## Review Findings To Resolve
+
+Independent Claude and Codex reviews of PR #142 found these problems. Items
+marked "both" were raised by both reviewers.
+
+### Dispatch safety
+
+- **Guards are not enforcement (both).** The agent holds the user's full `gh`
+  and `git` credentials. Post-run guards cannot stop a merge, a push to
+  another branch or repository, or exfiltration. `pause` lets active runs
+  finish, which contradicts "can be paused at once". Options: a narrow tool
+  allowlist for the runner, a write-mediating executor that checks scope and
+  revocation before each operation, or draft-only dispatch.
+- **The default runner cannot push.** `claude -p --permission-mode
+  acceptEdits` does not auto-approve Bash, so `git push` and `gh api` are
+  denied headlessly. Users would reach for permission bypass flags. `doctor`
+  must refuse to dispatch with bypass flags, not just warn.
+- **Trust gate is weak (both).** `dispatch_bots: true` trusts every bot,
+  including bots that relay third-party text. `MEMBER` is organization
+  membership, not repository write access. The agent can still read held
+  comments through `gh`. Use an empty-by-default bot allowlist and tell the
+  recipe to read only packet items. Backlog children need per-comment trust.
+- **No launch idempotency or recovery (both).** Event dedupe does not make
+  launches or GitHub writes idempotent. A restart mid-run leaves
+  `run_started` without `run_finished`, which blocks concurrency forever.
+  Needs transactional item claims, one durable lease per PR, atomic budget
+  reservation, and startup reconciliation.
+- **Stale heads can lose the user's commits (Codex).** With packet head A, a
+  human push B, and an agent push C descending from A, C passes the ancestry
+  guard. Require a fresh complete observation of the exact launch head and
+  fast-forward-only publication.
+- **Forked PRs (Codex).** The head may live in another repository. Hold
+  cross-repository PRs in v1.
+- **`ai run` is the wrong launch surface (Claude).** It passes stdio through
+  and inherits `os.Environ()`. Dispatch needs an internal launch API with an
+  explicit environment.
+- `specs/ai-sessions.md` says workgraph never manages worktrees, not only
+  `ai run`. Amend it explicitly.
+
+### Attribution
+
+- **The marker is not run attribution (Claude).** The user's global agent
+  instructions put `[Robots on behalf of Stringfellow]` on every agent
+  comment, so interactive sessions count as router replies and falsely verify
+  outcomes. A router agent that omits the marker is counted as the user,
+  clearing attention and triggering the user-active hold. Use a per-run
+  nonce such as `<!-- workgraph-run:<id> -->` and treat comments in a run
+  window as run-originated.
+- **`human_after_agent` cannot fire (both).** It needs the responder before
+  the comment, not the thread's current last responder. The watch now
+  records `previous_responder` per comment.
+- **Verification is weak (both).** Correlate reply ids and observed commit
+  deltas to run and item ids. Report "push observed" separately from "fix
+  verified". Resolution time is not observable.
+
+### Policy and classification
+
+- **Repository policy (both).** `origin/HEAD` may be missing or stale; fetch
+  `baseRefName`. Re-evaluate queued items at launch, because classification
+  is frozen in `item_classified`. `hold_paths` only matches comment paths;
+  add a post-run diff guard so CI fixes cannot edit held paths.
+- **User-active hold ignores local work (Claude).** Use captured `git.commit`
+  and `ai.session_*` events for the repository and branch.
+- **`approved` with a body** ("LGTM") falls to `unclassified` and dispatches.
+  Drop that item kind.
+- Enum and id contradictions: `timed_out` versus `failed`, `superseded`
+  before any run, `not_handled` and `confirmed` outside the outcome list,
+  `attention_done` id collisions on re-raise, undefined retry of `budget` and
+  `run_failed` holds.
+- Facts need an injectable clock. Feature scenarios should not assert LLM
+  behavior.
+
+### Principle 6
+
+The standing-approval amendment should name permitted action classes
+explicitly in configuration, such as `permits: [...]`, rather than relying on
+recipe wording, and should land with dispatch, not before.
 
 ## Delivery Slices
 
