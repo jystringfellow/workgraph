@@ -107,6 +107,8 @@ The recipe states these permissions. The router enforces what it can verify.
     routing.
   - The result's `pushed_head` is attributed to the run only when it equals
     the remote head after the run.
+  - The run's diff must not touch `.workgraph/pr-routing.json`. Otherwise
+    the router records guard `policy_edited` and pauses routing.
   - On the next poll, a thread from the packet that has `may_resolve:
     false` and is now resolved by `identity_login` records
     `pr_routing.guard_violated` with guard `resolved_human_thread` and raises
@@ -170,12 +172,31 @@ The recipe states these permissions. The router enforces what it can verify.
 
 ### Repository policy
 
-A repository may contain `.workgraph/pr-routing.json` on its default branch.
-The router reads it with `git show origin/HEAD:.workgraph/pr-routing.json`
-after fetching. It can only **tighten**: add `hold_paths`, add `hold_actors`,
-or set `"dispatch": false`. Other keys are ignored and reported by `pr route
-doctor`. A team can therefore share norms such as "migrations always go to a
-human" without a repository granting any agent new powers.
+A repository may contain `.workgraph/pr-routing.json`. A policy file can
+only **tighten**: add `hold_paths`, add `hold_actors`, or set `"dispatch":
+false`. Other keys are ignored and reported by `pr route doctor`. A team can
+therefore share norms such as "migrations always go to a human" without a
+repository granting any agent new powers.
+
+After fetching, the router reads two copies:
+
+- the default branch, with `git show origin/HEAD:.workgraph/pr-routing.json`
+- the PR head being responded to, with `git show
+  <head_sha>:.workgraph/pr-routing.json`
+
+The effective policy is their **union**. Holds from either copy apply, and
+`dispatch: false` in either copy stops dispatch. As a result:
+
+- A PR that adds or tightens a rule is respected on that PR immediately.
+- A PR that removes or loosens a rule takes effect only once it is merged to
+  the default branch. Until then, the default branch's rule still applies.
+- Policy edits by people are always respected. A run can never loosen the
+  rules for the next run, because loosening requires a merge.
+
+Runs may not edit the policy file. If the diff from the packet `head_sha` to
+the remote head after a run touches `.workgraph/pr-routing.json`, the router
+records `pr_routing.guard_violated` with guard `policy_edited` and pauses
+routing.
 
 ## Work Items
 
@@ -529,10 +550,9 @@ nothing. It is the main tuning and adoption tool.
   not suggestion rows. See Attention lifecycle.
 - **Only bot threads are resolved by the agent**, and only when it pushed a
   fix. Human reviewers resolve their own threads.
-- **Repository policy is read only from the default branch.** The PR branch
-  is exactly what the agent pushes to, so reading policy from it would let a
-  run change the rules that govern the next run. The default branch holds
-  rules the team has already reviewed and merged.
+- **Repository policy is the union of the default branch and the PR head.**
+  Tightening in a PR applies at once. Loosening applies after merge. Runs may
+  not edit the policy file.
 
 ## Delivery Slices
 
@@ -603,9 +623,12 @@ the watch facts, a fake runner executable that writes a scripted
     list`.
 21. **Runs are AI sessions.** `ai sessions` lists the run with
     `launched_by.kind = pr_routing`.
-22. **Repository policy only tightens.** A repository file adding
-    `hold_paths` holds a matching comment. One setting `max_runs_per_day: 999`
-    is ignored and reported by `doctor`.
+22. **Repository policy only tightens, from either copy.** A `hold_paths`
+    rule on the default branch holds a matching comment. A `hold_paths` rule
+    added only on the PR head also holds one. A PR head that deletes a
+    default-branch rule does not release it. `max_runs_per_day: 999` is
+    ignored and reported by `doctor`. A run whose diff edits the policy file
+    records `policy_edited` and pauses routing.
 23. **Simulate writes nothing.** `simulate` over stored events prints
     decisions, and the event count is unchanged.
 24. **Classification never calls an LLM or GitHub.** With no runner, no

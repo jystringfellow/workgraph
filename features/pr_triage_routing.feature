@@ -92,3 +92,19 @@ Scenario: A repository can only tighten routing
   Given a repository's default branch contains a routing policy that holds "migrations/**"
   When a teammate comments on migrations/0001.sql
   Then the comment is classified hold with the rule "hold_path"
+
+Scenario: Policy changes in the pull request are respected
+  Given my pull request adds a routing policy rule that holds "api/**"
+  When a teammate comments on api/routes.go in that pull request
+  Then the comment is classified hold with the rule "hold_path"
+
+Scenario: A pull request cannot loosen policy before it merges
+  Given the default branch holds "migrations/**"
+  And my pull request removes that rule
+  When a teammate comments on migrations/0001.sql in that pull request
+  Then the comment is classified hold with the rule "hold_path"
+
+Scenario: Agent runs cannot edit routing policy
+  Given PR routing is in dispatch mode
+  When an agent run pushes a change to .workgraph/pr-routing.json
+  Then workgraph records a guard violation and pauses routing

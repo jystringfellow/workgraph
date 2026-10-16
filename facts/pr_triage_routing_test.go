@@ -91,7 +91,7 @@ func TestPRRoutingRunsAreAISessions(t *testing.T) {
 }
 
 func TestPRRoutingRepositoryPolicyOnlyTightens(t *testing.T) {
-	t.Skip("TBD: a repository policy adding hold_paths holds a matching comment; max_runs_per_day 999 is ignored and reported by doctor")
+	t.Skip("TBD: default-branch and PR-head hold_paths both hold matching comments; a PR head deleting a default-branch rule does not release it; max_runs_per_day 999 is ignored and reported by doctor; a run editing the policy file records policy_edited and pauses")
 }
 
 func TestPRRoutingSimulateWritesNothing(t *testing.T) {
