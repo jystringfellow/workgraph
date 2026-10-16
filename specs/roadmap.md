@@ -41,6 +41,16 @@ Priority labels used below:
 - `P1` Expand connector coverage to meetings, work tracking, and knowledge
   bases as user-verifiable integrations. [specs: `specs/calendar.md`,
   `specs/azure-boards.md`, and `specs/notion.md`]
+- `P1` Watch open authored GitHub pull requests and record deterministic,
+  read-only review, check, readiness, reply, and merge transitions through
+  the existing `gh` CLI auth, with fixed-interval polling, untrusted comment
+  handling, and `AB#` work item associations. [spec:
+  `specs/github-connector.md`]
+- `P1` Route PR feedback without an LLM listener: deterministic rules decide
+  what needs the user, batch the rest, and launch one bounded local agent run
+  per PR under an explicit standing approval, with every run and outcome
+  recorded for `today` and `resume`. Starts in shadow mode. [spec:
+  `specs/pr-triage-routing.md`]
 - `P1` Add preference modeling and locally resettable ranking weights while
   preserving the explicit suggestion lifecycle. [spec:
   `specs/personalization-feedback.md`]

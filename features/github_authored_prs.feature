@@ -1,0 +1,146 @@
+Feature: GitHub authored pull request watch
+
+Scenario: Connect the authored pull request watch through the GitHub CLI
+  Given the GitHub CLI is authenticated
+  When I run "workgraph github prs connect"
+  Then workgraph validates the local GitHub CLI authentication
+  And workgraph records the resolved GitHub login without storing a token
+  And github.authored_prs is enabled for shared connector polling
+  And workgraph reports how to disable or change github.authored_prs polling
+
+Scenario: Connecting GitHub participant capture does not enable the watch
+  Given the GitHub CLI is authenticated
+  When I run "workgraph github connect"
+  Then github.authored_prs remains disabled
+
+Scenario: First sight of a pull request emits one observed event
+  Given github.authored_prs is connected
+  And I have open authored pull requests with existing reviews, comments, and check results
+  When the first poll runs
+  Then workgraph stores one github.pull_request.observed event per open authored pull request
+  And each observed event includes the current review, check, and awaiting-author thread state
+  And workgraph stores no per-comment, per-review, or check events for existing activity
+
+Scenario: A newly opened pull request is observed
+  Given workgraph is watching my open authored pull requests
+  When I open a new pull request
+  Then workgraph stores one github.pull_request.observed event for it
+
+Scenario: Unchanged pull request state produces no events
+  Given workgraph has observed my open pull request
+  When a poll reports the same head commit and the same review, check, and thread state
+  Then workgraph stores no new transition events
+
+Scenario: Checks failing on my pull request appear in today
+  Given workgraph has observed my open pull request with pending checks
+  When a poll reports failed checks for the same head commit
+  Then workgraph stores one github.pull_request.checks_failed event
+  And "workgraph today" shows the pull request title, number, and "checks failed" with the short head commit
+
+Scenario: A new commit resets check state
+  Given workgraph has observed failed checks on my pull request
+  When a poll reports a new head commit with pending checks
+  Then workgraph stores no check event
+  When a poll reports passing checks for the new head commit
+  Then workgraph stores exactly one github.pull_request.checks_passed event for the new head commit
+
+Scenario: Review feedback from a collaborator is captured
+  Given workgraph has observed my open pull request
+  When a collaborator requests changes
+  Then workgraph stores one github.pull_request.changes_requested event with the collaborator as actor
+  And the event involvement is authored
+
+Scenario: Review bot feedback is captured and configured actors are silenced
+  Given github.authored_prs ignores the actor "my-automation"
+  When a poll reports review comments from me, from "my-automation", and from a review bot
+  Then workgraph stores one github.pull_request.review_comment event for the review bot marked as a bot
+  And workgraph stores no review_comment events for me or "my-automation"
+  And workgraph stores one github.pull_request.author_replied event for my comment
+
+Scenario: Replying to a review thread marks it as awaiting the reviewer
+  Given a review thread on my pull request is awaiting my response
+  When I reply to the thread
+  Then workgraph stores one github.pull_request.author_replied event attributed to me
+  And the thread state shows it is awaiting the reviewer
+
+Scenario: Agent replies are told apart from my own replies
+  Given github.authored_prs uses the agent reply marker "[Robots on behalf of Stringfellow]"
+  When an agent replies to a review thread as me and ends the reply with the marker
+  Then workgraph stores one github.pull_request.author_replied event attributed to an agent
+  And the thread state counts one agent reply
+  When I reply to the same thread without the marker
+  Then workgraph stores one github.pull_request.author_replied event attributed to me
+
+Scenario: Review comment text is stored as untrusted data
+  Given workgraph has observed my open pull request
+  When a collaborator leaves a long review comment containing instructions and control characters
+  Then workgraph stores the comment excerpt only under an untrusted payload field
+  And the comment body keeps its line structure and suggestion blocks with control characters removed
+  And the body is truncated to the configured limit
+  And the event summary and today label do not contain the comment text
+
+Scenario: Ready to merge is reported once
+  Given my pull request is approved with passing checks and one unresolved thread
+  When the thread is resolved
+  Then workgraph stores one github.pull_request.ready_to_merge event for the head commit
+  When the next poll reports the same state
+  Then workgraph stores no additional ready_to_merge event
+  When a reviewer opens a new unresolved thread
+  Then workgraph stores one github.pull_request.readiness_lost event naming unresolved threads as the reason
+  When that thread is resolved
+  Then workgraph stores another github.pull_request.ready_to_merge event
+
+Scenario: Merged pull requests stop being watched
+  Given workgraph has observed my open pull request
+  When the pull request is merged
+  Then workgraph stores one github.pull_request.merged event
+  And workgraph no longer watches that pull request
+
+Scenario: List only pull request transitions
+  Given workgraph captured pull request transitions and other GitHub events today
+  When I run "workgraph events today --type github.pull_request.*"
+  Then workgraph lists only github.pull_request transition events
+
+Scenario: Resume shows the current state of my pull requests
+  Given workgraph has observed my open pull requests for a project
+  When I run "workgraph resume <project>"
+  Then workgraph shows each pull request with its review, check, and unresolved-thread state
+  And workgraph makes no GitHub request
+
+Scenario: Rate-limited polls defer without losing state
+  Given the GitHub CLI reports a low remaining GraphQL rate limit
+  When github.authored_prs polling runs
+  Then workgraph does not query pull requests
+  And workgraph keeps the previous observations
+  And "workgraph connectors status" shows when polling resumes
+
+Scenario: Expired GitHub CLI login stops only this connector
+  Given github.authored_prs is connected
+  When the GitHub CLI reports bad credentials
+  Then github.authored_prs setup state is error with reconnect guidance
+  And other connectors and file capture keep running
+
+Scenario: Pull requests link to work items and commits
+  Given workgraph has captured an Azure Boards work item 1234 and a local git commit
+  And my pull request title contains "AB#1234" and its head commit is that local commit
+  When I run "workgraph associations explain <pull-request-event-id>"
+  Then workgraph shows the Azure Boards work item and the git commit as related
+
+Scenario: Ambiguous Azure Boards mentions are not matched
+  Given workgraph has captured Azure Boards work item 1234 in two organizations
+  And my pull request title contains "AB#1234"
+  When I run "workgraph associations explain <pull-request-event-id>"
+  Then workgraph reports the AB#1234 mention as ambiguous
+  And workgraph does not associate either work item
+
+Scenario: Watched pull requests enrich captured GitHub pull request snapshots
+  Given workgraph has captured my pull request through GitHub participant search
+  When github.authored_prs observes that pull request
+  Then the captured pull request snapshot includes its branch and head commit
+  And the snapshot keeps its matched query provenance
+
+Scenario: Failed checks carry the failing check names for triage
+  Given workgraph has observed my open pull request with pending checks
+  When checks named "lint" and "unit" fail
+  Then the github.pull_request.checks_failed event lists "lint" and "unit" with their details links
+  And the event is marked as needing the author

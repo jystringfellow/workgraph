@@ -1108,3 +1108,19 @@ func githubEvent(t *testing.T, dbPath, eventType, repository string, number int)
 	}
 	return event
 }
+
+func TestGitHubPollFailsVisiblyWhenRateLimitCheckFails(t *testing.T) {
+	t.Skip("TBD: a failing gh api rate_limit records a github poll error and increments consecutive_failures instead of a successful empty poll")
+}
+
+func TestGitHubPollTreatsGHBadCredentialsAsAuthFailure(t *testing.T) {
+	t.Skip("TBD: gh HTTP 401 Bad credentials marks github setup error and stops its poller")
+}
+
+func TestGitHubPollGatesOnSearchRateLimitBucket(t *testing.T) {
+	t.Skip("TBD: low resources.search.remaining with high core remaining skips gh search")
+}
+
+func TestGitHubBridgedAndDirectCaptureShareOnePullRequestIdentity(t *testing.T) {
+	t.Skip("TBD: two bridged revisions plus a direct capture of one PR leave exactly one github.pull_request row with the newest state, repository, and branch")
+}

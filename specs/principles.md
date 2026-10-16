@@ -48,6 +48,10 @@ Critical behavior must be enforced via executable tests, not just specs.
 ## 6. Assist, don’t override
 The system suggests and drafts; it does not act without explicit approval.
 
+A standing approval is explicit approval: a user-authored, scoped, revocable
+rule that names the action class it permits. Every action taken under one is
+recorded as events, can be paused at once, and is off by default.
+
 ## 7. Fast context restoration
 Resuming work should be near-instant and require minimal input.
 
