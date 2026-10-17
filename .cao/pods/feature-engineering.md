@@ -1,424 +1,98 @@
-# Feature Engineering Pod
-
-## Mission
-
-Take a Workgraph feature from human intent through a tested, reviewed,
-release-ready implementation.
-
-The pod uses agents where judgment is valuable and deterministic tooling where
-facts can be established directly.
-
-## Flow
-
-The normal feature flow is:
-
-1. Architect
-2. Developer
-3. Deterministic Verification
-4. Jev Shadow Evaluation
-5. Adversarial Reviewer
-6. Developer Fix Loop, when necessary
-7. Release Gate
-
-Deterministic verification is repeated after material implementation changes.
-
-Jev currently observes the workflow but does not control it.
-
-Agent-run checks are development aids. The workflow owns authoritative
-repository-wide deterministic verification outside agent sandboxes. Agents may
-run narrowly scoped checks, but should not duplicate the full suite when the
-workflow provides it.
-
-## Seats
-
-### Supervisor-driven execution lane
-
-The CAO supervisor lane uses `wg-pod-lead`, `wg-pod-developer`,
-`wg-pod-reviewer`, and `wg-pod-gate` as stable seat definitions. The lead owns
-delegation and closure; workers own their assigned responsibilities. Seats are
-activated sequentially when needed. This lane uses CAO assign/send_message and
-ordinary prose, without the Python workflow's assessment marker protocol.
-The scripted workflow and its existing profiles retain their own contracts.
-
-A run-scoped execution packet binds the task to its existing specification,
-plan validity hashes, Git HEAD, repository fingerprint, check evidence and
-budgets. A valid plan is reused; the architect is activated only after an
-explicit request to revise it. Unclear requirements stop for human clarification.
-Existing completed implementation can enter verification and review directly.
-
-The external host runner executes deterministic checks outside all agent
-sandboxes. The lead writes a permitted verification request and ends its turn;
-the runner returns a compact receipt or bounded failing evidence. Developers
-write a failing fact first, wait for host verification, then implement. Neither
-passing logs nor test execution are delegated to a model. Any changed candidate
-invalidates earlier checks and approvals.
-
-The lead preserves the three review corrections plus final assessment and two
-gate corrections, sharing these budgets across renewed review after gate fixes.
-Every fix returns through verification and review. No nested loop resets a
-budget. Empty or ambiguous verdicts do not approve a candidate. Startup failures,
-uncertain execution, unchanged unsupported corrections, and exhausted budgets
-stop with unresolved findings recorded. There is no provider fallback or Jev
-decision authority. Jev remains observational when used.
-
-Private local evidence lives under ignored `.cao/pod-runs/<run-id>/` with no
-automatic expiration: task references, selected seat profiles, identities,
-verification receipts and concise curated findings/dispositions. Do not copy
-transcripts, complete provider prompts, environment values, secrets, or source
-diffs into evidence. The execution packet is human-authored task input, not a
-terminal capture. Review text needs the same privacy care as other user content.
-Ready for human review requires full current checks, independent review and an
-explicit release gate for the same candidate. It does not authorize a commit,
-push, PR or merge. This lane's lead-enforced budgets are not a transactional
-orchestration engine; the host observer provides an additional overall bound.
-
-### Architect
-
-Owns understanding and planning.
-
-The Architect begins from primary sources rather than assuming the requested
-change is already well understood.
-
-Produces:
-
-- problem statement
-- relevant existing behavior
-- relevant specifications and invariants
-- proposed design
-- affected components
-- non-goals
-- compatibility considerations
-- privacy considerations
-- risks and edge cases
-- concrete acceptance criteria
-
-Acceptance criteria should be observable and testable whenever practical.
-
-The Architect should identify uncertainties explicitly rather than silently
-inventing requirements.
-
-The Architect does not implement and does not modify the repository.
-
-The Architect's output is a plan, not authority. Later agents should verify
-its assumptions against primary sources.
-
-### Developer
-
-Owns implementation of the agreed feature.
-
-The Developer starts from:
-
-- task intent
-- Architect plan
-- acceptance criteria
-- relevant specifications
-- current repository state
-
-Produces:
-
-- the smallest coherent implementation
-- appropriate tests
-- documentation and help changes when required
-- compatibility handling when required
-- concise implementation notes useful to later stages
-
-The Developer should:
-
-- preserve existing behavior outside the intended change
-- follow existing repository conventions where appropriate
-- avoid unrelated cleanup
-- add or update tests for changed behavior
-- treat privacy requirements as functional requirements
-- resolve deterministic verification failures rather than weakening checks
-
-The Developer may run narrowly scoped tests and targeted development checks.
-It must not run the repository-wide authoritative `go vet ./...` or
-`go test ./...` commands; the workflow runs them outside the agent sandbox
-after implementation and correction steps. Sandbox inability to execute the
-full suite is not a product defect.
-
-The Developer may inspect and modify the repository.
-
-The Developer should not declare its own work release-ready.
-
-## Deterministic Verification
-
-Deterministic Verification is a workflow stage, not an agent seat.
-
-Its purpose is to establish machine-verifiable facts without spending model
-context on discovering them.
-
-The baseline Workgraph verification commands are:
-
-- `go vet ./...`
-- `go test ./...`
-
-These mirror the core checks in Workgraph CI.
-
-Verification should run outside LLM context whenever practical.
-
-The workflow, not an agent sandbox, owns authoritative repository-wide
-verification. Agents use the resulting evidence to guide corrections and may
-run targeted checks, but do not rerun the full suite.
-
-On success, downstream agents should receive compact evidence such as:
-
-    go_vet: pass
-    go_test: pass
-
-Successful raw logs should not normally be placed into model context.
-
-On failure, the Developer should receive the smallest useful diagnostic
-evidence, including:
-
-- failing check
-- exit status
-- relevant error output
-- failing test names when available
-
-The Developer fixes the problem and verification runs again.
-
-A feature does not advance past this stage while required deterministic checks
-are failing.
-
-Additional deterministic checks may be added when required by the feature or
-repository, including:
-
-- formatting
-- generated-file consistency
-- CLI smoke tests
-- migration validation
-- repository cleanliness
-- targeted privacy invariants
-- targeted compatibility tests
-
-Checks should be concrete and reproducible.
-
-## Jev Shadow Evaluation
-
-Jev provides inexpensive bounded judgments about the change after deterministic
-state has been collected.
-
-Jev is currently experimental and operates only in shadow mode.
-
-It does not control the workflow.
-
-Its output must not:
-
-- skip the Adversarial Reviewer
-- bypass deterministic verification
-- send work back to the Developer
-- approve a release
-- reject a release
-- change release-gate behavior
-
-Initial shadow questions may include:
-
-### Change Risk
-
-Classify the change as:
-
-- low
-- medium
-- high
-
-### Review Focus
-
-Select the most useful primary review focus from:
-
-- privacy
-- compatibility
-- data integrity
-- CLI behavior
-- architecture
-- general
-
-### Deep Review Probability
-
-Estimate whether the change warrants deep substantive review.
-
-This is recorded as telemetry even though substantive review is currently
-required regardless of the result.
-
-Jev should receive minimal structured state such as:
-
-- deterministic verification results
-- number of changed files
-- changed paths
-- insertion/deletion counts
-- whether tests changed
-- whether specifications changed
-- other explicitly derived non-sensitive signals
-
-Do not send source code, complete diffs, prompts, Workgraph memory, verbose test
-logs, credentials, or unrelated user context merely to improve a shadow
-prediction.
-
-Record enough information to later compare Jev's prediction with:
-
-- actual Adversarial Reviewer findings
-- finding categories
-- whether Developer rework was required
-- Release Gate outcome
-
-Shadow data exists to determine empirically whether Jev deserves a future role
-in workflow control.
-
-## Adversarial Reviewer
-
-Performs an independent substantive review after deterministic verification
-passes.
-
-The reviewer reconstructs intended behavior from primary sources rather than
-trusting the Developer's explanation.
-
-Primary inputs include:
-
-- original task intent
-- acceptance criteria
-- relevant specifications
-- actual repository changes
-- tests
-- deterministic verification results
-
-Jev output should not bias the review.
-
-During the shadow period, do not tell the Adversarial Reviewer what Jev
-predicted before the reviewer completes its independent assessment.
-
-Focus on:
-
-- correctness
-- architectural fit
-- edge cases
-- backward compatibility
-- privacy boundaries
-- data integrity
-- CLI behavior and ergonomics
-- failure and recovery behavior
-- unnecessary complexity
-- missing requirements
-- insufficient tests for material behavior
-
-Report concrete findings with evidence.
-
-For each material finding, identify:
-
-- what is wrong
-- where it occurs
-- why it matters
-- what requirement, invariant, or observable behavior is violated
-- enough evidence for the Developer to investigate
-
-Do not report stylistic preference as a defect.
-
-Do not propose unrelated refactoring merely because another design is
-possible.
-
-If no material findings exist, say so explicitly.
-
-### Review Fix Loop
-
-When the Adversarial Reviewer identifies a material finding:
-
-1. Send the finding and supporting evidence to the Developer.
-2. Developer makes the smallest coherent correction.
-3. Run Deterministic Verification again.
-4. If verification fails, return failure evidence to the Developer.
-5. Once verification passes, independently review the corrected state again.
-
-The review correction limit bounds Developer correction cycles, not review
-assessments. Every correction is followed by deterministic verification and a
-fresh review that determines whether it resolved the finding. If the final
-allowed correction has already been assessed and material findings remain, the
-workflow fails unresolved without another correction.
-
-The stopping condition is evidence, not agreement between agents.
-
-## Release Gate
-
-Performs final independent release-readiness assessment.
-
-The Release Gate does not assume that earlier agents were correct merely
-because the workflow reached this stage.
-
-It checks the actual repository state against:
-
-- original task intent
-- acceptance criteria
-- relevant specifications and invariants
-- deterministic verification evidence
-- resolved substantive review findings
-- documentation/help requirements
-- privacy requirements
-- compatibility requirements
-
-The Release Gate should distinguish:
-
-- release-blocking findings
-- non-blocking observations
-
-A release-blocking finding must identify concrete evidence and the unmet
-requirement or invariant.
-
-The Release Gate does not modify the implementation.
-
-If a release blocker is found:
-
-1. Return it to the Developer.
-2. Correct the implementation.
-3. Re-run Deterministic Verification.
-4. Run independent adversarial review after every gate correction.
-   New material findings consume the remaining shared review correction budget.
-5. Run the Release Gate again.
-
-The release-gate correction limit likewise bounds Developer correction cycles.
-Every correction receives a subsequent Release Gate assessment; if blockers
-remain after that assessment of the final allowed correction, the workflow
-fails unresolved.
-
-## Release-Ready Criteria
-
-A feature is release-ready only when:
-
-- acceptance criteria are satisfied
-- `go vet ./...` passes
-- `go test ./...` passes
-- feature-specific deterministic checks pass
-- material Adversarial Reviewer findings are resolved
-- no Release Gate blocker remains
-- relevant tests cover changed behavior
-- documentation/help reflects user-visible behavior
-- compatibility changes are intentional and documented
-- privacy boundaries remain satisfied
-- no unintended repository artifacts remain
-
-Agent consensus is not a release criterion.
-
-Objective evidence is.
-
-## Current Seat Assignment
-
-Provider/model assignments are declared in `.cao/profiles/`:
-
-- Architect — `wg-architect.md`
-- Developer — `wg-developer.md`
-- Adversarial Reviewer — `wg-adversarial-reviewer.md`
-- Release Gate — `wg-release-gate.md`
-
-The workflow reads the provider from each selected profile; CAO uses that
-profile's model and standing instructions. Workflow prompts supply the task,
-evidence and per-step output contract. Run `.cao/sync.sh` after profile edits so
-the installed provider/model settings match the repository.
-
-These assignments are implementation details of the current rig.
-
-The responsibilities defined by this pod remain stable if models or providers
-change.
-
-Failure evidence, curated output, no-op/dispute handling, recovery and the
-disabled fallback policy are defined in `.cao/RIG.md`. Review corrections are
-shared across initial review and all post-gate reviews; gate corrections never
-reset the review budget. The Developer and Release Gate may explicitly share a Sol assignment;
-the Adversarial Reviewer is assigned a different model.
-No provider/model assignment changes are authorized by fallback configuration.
+# Feature Engineering pod
+
+## Mission and seats
+
+Finish a human-defined Workgraph change against its specification, executable
+facts and compatibility/privacy requirements. Prefer small, sequential steps.
+
+| Seat | Profile | Responsibility |
+| --- | --- | --- |
+| Lead | `wg-pod-lead` | Delegate, interpret evidence, enforce correction budgets, retain current handoff |
+| Developer | `wg-pod-developer` | Write regression facts, implement, report finding-to-change dispositions |
+| Independent reviewer | `wg-pod-reviewer` | Inspect primary sources, close findings and investigate regressions |
+| Release gate | `wg-pod-gate` | Independently assess acceptance criteria and final readiness |
+
+CAO profiles define provider, model and standing instructions. Run-specific aliases
+preserve those assignments. The lead uses CAO assign/send_message and ends its
+turn for callbacks; no built-in subagents, polling or model substitutions.
+
+## Supervisor-driven execution protocol
+
+1. Read AGENTS.md, the human brief, the plan sources, and host receipt. Reuse the
+   plan while its hashes match. No architect activation is automatic. Missing
+   requirements or changed plans stop for human clarification. Assess the whole
+   requested feature, not only currently dirty files. Preserve pre-existing edits.
+2. If implementation exists and baseline full checks pass, begin independent
+   review. Otherwise assign initial developer fact-only work. For any behavior
+   change, the developer writes/strengthens a fact and replies with its exact
+   name, without changing implementation. Request host red verification; inspect
+   its failure and the fact to establish the intended assertion failed. A setup
+   failure is not a red fact. Then authorize implementation in the same seat.
+3. After implementation, obtain a concrete disposition and compare repository
+   evidence. Request full host verification. Failed checks require bounded
+   corrections; they never authorize approval or provider fallback. No agent
+   runs tests. Successful logs stay outside model context.
+4. Give the reviewer the brief, source references, current HEAD/fingerprint and
+   compact fresh verification evidence. The first assessment is independent of
+   other reviewers' opinions. It must inspect correctness, privacy, lineage,
+   failure paths, compatibility, edge cases and facts. Require concrete material
+   findings with location, scenario, violated requirement and supporting evidence,
+   or explicit approval of the supplied candidate. Ordinary prose is sufficient.
+5. Permit at most **three developer review corrections**, each followed by host
+   verification and a fresh independent assessment, including the third correction.
+   This budget also covers verification corrections after initial implementation.
+   Subsequent reviewers receive compact prior findings, developer dispositions
+   and change identity, then independently verify closure and regressions.
+6. Effective no-op corrections and changed-then-reverted corrections require an
+   explicit disposition: corrected with change evidence, disputed with concrete
+   repository/spec/test evidence, or unable to resolve. An unchanged candidate
+   with unresolved or unsupported findings stops. The developer cannot dismiss
+   its own finding; an independent assessment must accept any evidence-backed
+   no-code-change resolution. Such an assessment remains within the assignment
+   budget. No retry loop is created by a disagreement.
+7. After full checks and independent approval, assign the gate. It independently
+   inspects the full contract and current repository; another seat's approval is
+   not proof. Require explicit readiness approval naming the same HEAD/fingerprint.
+8. Permit at most **two developer gate corrections**. Each follows fact → host
+   red → implementation → full host checks → fresh independent review → gate
+   reassessment. Renewed review findings consume the remaining global three-review
+   correction budget. Never reset budgets or create nested correction loops.
+9. On missing/ambiguous assessments, startup/tool failure, uncertain execution,
+   exhausted budgets or unsupported dispositions, retain final unresolved evidence
+   in `handoff.md` and write `Stage: stopped`. Do not spend developer correction
+   cycles repairing output formatting or retry a possibly side-effecting step.
+10. Write `Stage: ready for human review` only after full current verification,
+    independent review, and explicit gate approval of the same candidate. Include
+    current identity, check receipt, findings and dispositions, both budgets,
+    assignment count and terminal provenance. Keep history concise and identify
+    current evidence clearly. Do not commit, push, publish or open a PR.
+
+## Host protocol and bounds
+
+The [runner](../pod.py) prepares a private execution packet under
+`.cao/pod-runs/pod-<id>/`. `plan-state.json` binds AGENTS.md and explicit plan
+sources. `seats.json` provides exact run-specific profile names. `checks.json`
+is the latest host receipt; numbered receipts retain prior results.
+
+The lead requests checks by writing `verify.request` in that run directory:
+`1 red TestExactFactName`, then `2 full`, increasing the number each time. End
+its turn immediately; the host runs the command and sends a compact callback.
+Never edit check receipts, host configuration, plan bindings or seat profiles.
+Read failing test locations for triage; stop for insufficient evidence.
+
+The host additionally bounds the run to 14 worker assignments, 12 check requests
+and 40 minutes of supervision. Individual checks are time-limited. Engineering
+correction budgets are enforced by the lead's protocol; the host is not a
+transactional workflow engine. Requested provider/model identity is recorded;
+actual model identity may remain unverified and is not a reason to invent work.
+
+No Jev decision authority or automatic fallback is enabled. Shadow telemetry
+must not enter independent review. Native provider permissions remain distinct
+from task instructions; prompt-only grants are not OS write isolation. Reviewers
+must use host-supplied identity without requiring shell access to hash files.
+
+Keep only curated, privacy-bounded findings and evidence. Do not save raw terminal
+transcripts, complete provider prompts, secrets, environment values or source
+diffs. Run evidence has no automatic expiration; source cleanup must not remove
+it. Operator inspection of actual verdicts remains required before acceptance.
+See [RIG.md](../RIG.md) for operation, limitations, recovery and retention.

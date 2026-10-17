@@ -129,7 +129,7 @@ def main() -> None:
             )
     except Exception as exc:
         # Shadow evaluation must fail visibly rather than fabricate a judgment.
-        fail(f"Jev request failed: {type(exc).__name__}: {exc}")
+        fail(f"Jev request failed: {type(exc).__name__}")
 
     risk = response.answers["change_risk"]
     focus = response.answers["review_focus"]
