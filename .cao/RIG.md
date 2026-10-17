@@ -728,6 +728,31 @@ Unlike the scripted trials, this experiment has no workflow result or automatic
 failure.json; inspect the retained handoff, receipt, and CAO terminal status.
 It is fresh-run only: no automatic replay or retry of side-effecting workers.
 
+### Reviewer-led correction trial
+
+`python3 -I .cao/verification/correction_smoke.py prepare` creates a fresh
+private local Git repository with a supplied plan and candidate. The fixture
+has one local commit and no remotes, so normal repository inspection works.
+It starts with independent
+review, skips initial implementation and the architect, and permits one
+developer correction followed by regression verification and a fresh review.
+At most three worker assignments are permitted by the supervisor instructions.
+If the first reviewer approves the seed, the trial stops without claiming that
+correction was exercised. Findings are discovered by the reviewer; no expected
+finding is supplied in its assignment.
+
+The baseline check deliberately covers ordinary integer inputs and several
+invalid types. Regression verification additionally covers booleans and an
+integer subclass, which Python accepts as instances of `int`. The plan requires
+exact built-in integers.
+`check DIRECTORY --regression` writes the expanded receipt; `finish DIRECTORY`
+requires that receipt to match fresh regression results for the current candidate.
+A passing baseline receipt cannot satisfy final verification. The checker
+recognizes a small set of equivalent input-guard AST shapes and evaluates those
+known shapes without executing agent-authored code. This is a synthetic protocol
+trial, not a general Python test runner. It uses the same privacy, retention,
+fresh-run, hash evidence, and independent approval boundaries as the basic trial.
+
 ### Copilot Assessment Display Framing
 
 Copilot can capture a `●` response cell, wrapped JSON, read/thinking/MCP status

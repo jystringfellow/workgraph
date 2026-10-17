@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	workgraph "github.com/jystringfellow/workgraph"
 )
@@ -463,13 +464,55 @@ func TestAIHandoffRejectsAnOlderCheckpointWhenTheLatestIsUnsupported(t *testing.
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fixture")
 	}
+	for _, test := range []struct {
+		name    string
+		version string
+	}{
+		{name: "unsupported integer", version: `2`},
+		{name: "string version", version: `"1"`},
+		{name: "boolean version", version: `true`},
+		{name: "object version", version: `{}`},
+		{name: "array version", version: `[]`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assertAIHandoffRejectsUnsafeEvidence(t, "ai.session_checkpointed", test.version, "latest checkpoint is unsupported or invalid")
+		})
+	}
+}
+
+func TestAIHandoffRejectsOlderObservationWhenNewerEvidenceIsUnsupportedOrInvalid(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	for _, eventType := range []string{"ai.session_started", "ai.session_ended"} {
+		t.Run(eventType, func(t *testing.T) {
+			for _, test := range []struct {
+				name    string
+				version string
+			}{
+				{name: "unsupported integer", version: `2`},
+				{name: "string version", version: `"1"`},
+				{name: "boolean version", version: `true`},
+				{name: "object version", version: `{}`},
+				{name: "array version", version: `[]`},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					assertAIHandoffRejectsUnsafeEvidence(t, eventType, test.version, "latest repository observation is unsupported or invalid")
+				})
+			}
+		})
+	}
+}
+
+func assertAIHandoffRejectsUnsafeEvidence(t *testing.T, eventType, schemaVersion, want string) {
+	t.Helper()
 	homeDir := filepath.Join(t.TempDir(), ".workgraph")
 	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
 	if err != nil {
 		t.Fatalf("init workgraph: %v", err)
 	}
 	workingDir := t.TempDir()
-	writeAIFactExecutable(t, workingDir, "codex", "exit 0")
+	writeAIFactExecutable(t, workingDir, "codex", `touch "$0.launched"`)
 	sourceID := "00000000-0000-4000-8000-000000000335"
 	insertAINativeFactSession(t, initialized.DatabasePath, sourceID, "claude", "/usr/local/bin/claude", "claude-native", "", workingDir, "2026-08-03T12:00:00Z", true)
 	insertAIHandoffCheckpoint(t, initialized.DatabasePath, sourceID, workingDir)
@@ -478,76 +521,67 @@ func TestAIHandoffRejectsAnOlderCheckpointWhenTheLatestIsUnsupported(t *testing.
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
-	unsupported := `{"schema_version":2,"session_id":"` + sourceID + `","agent_stated":{"goal":"must not be handed off"}}`
+	defer db.Close()
+	unsupported := `{"schema_version":` + schemaVersion + `,"session_id":"` + sourceID + `","agent_stated":{"goal":"must not be handed off"},"observation_status":"captured","observed":{"cwd":"must-not-be-used"}}`
 	if _, err := db.Exec(`INSERT INTO events (id, source, type, timestamp, payload_json, project, actor, summary, created_at)
-		VALUES (?, 'ai', 'ai.session_checkpointed', '2026-08-03T12:00:45Z', ?, '', '', 'AI session checkpointed', '2026-08-03T12:00:45Z')`,
-		"ai.session_checkpointed:"+sourceID+":unsupported", unsupported); err != nil {
-		db.Close()
-		t.Fatalf("insert unsupported checkpoint: %v", err)
+		VALUES ('opaque-newer-evidence', 'ai', ?, '2026-08-03T12:02:00Z', ?, '', '', 'Newer AI evidence', '2026-08-03T12:02:00Z')`,
+		eventType, unsupported); err != nil {
+		t.Fatalf("insert unsupported or invalid evidence: %v", err)
 	}
-	db.Close()
+	listed, err := workgraph.ListAISessions(workgraph.AISessionsConfig{
+		HomeDir: homeDir, DatabasePath: initialized.DatabasePath,
+	})
+	if err != nil {
+		t.Fatalf("list sessions with invalid newer evidence: %v", err)
+	}
+	if len(listed.Sessions) != 1 || listed.Known != 1 {
+		t.Fatalf("session listing reconstructed identity or lost the source: %#v", listed.Sessions)
+	}
+	source := listed.Sessions[0]
+	if source.SessionID != sourceID || source.Tool != "claude" || source.NativeSessionID != "claude-native" || source.Status != "ended" ||
+		source.LatestCheckpointAt == nil || source.LatestCheckpointAt.UTC().Format(time.RFC3339) != "2026-08-03T12:00:30Z" || len(listed.Warnings) == 0 {
+		t.Fatalf("session listing lost valid source context or integrity warnings: %#v", listed)
+	}
+	if _, err := db.Exec(`INSERT INTO events (id, source, type, timestamp, payload_json, project, actor, summary, created_at)
+		VALUES ('ai.session_checkpointed:00000000-0000-4000-8000-000000000999:invalid', 'ai', 'ai.session_checkpointed',
+		'2026-08-03T12:03:00Z', '{"schema_version":"invalid"}', '', '', 'Unassociated AI evidence', '2026-08-03T12:03:00Z')`); err != nil {
+		t.Fatalf("insert unassociated invalid envelope: %v", err)
+	}
+	listed, err = workgraph.ListAISessions(workgraph.AISessionsConfig{
+		HomeDir: homeDir, DatabasePath: initialized.DatabasePath,
+	})
+	if err != nil || len(listed.Sessions) != 1 || listed.Known != 1 || listed.Sessions[0].SessionID != sourceID {
+		t.Fatalf("unassociated invalid envelope changed session identities: sessions=%#v err=%v", listed.Sessions, err)
+	}
+	const eventSnapshotQuery = `SELECT json_group_array(json_object(
+		'id', id, 'source', source, 'type', type, 'timestamp', timestamp, 'payload_json', payload_json,
+		'project', project, 'actor', actor, 'summary', summary, 'created_at', created_at))
+		FROM (SELECT * FROM events WHERE source = 'ai' ORDER BY id)`
+	var before string
+	if err := db.QueryRow(eventSnapshotQuery).Scan(&before); err != nil {
+		t.Fatalf("read source event history before handoff: %v", err)
+	}
 
 	output, err := runWorkgraphCommandAllowError([]string{
 		"PATH=" + workingDir + string(os.PathListSeparator) + os.Getenv("PATH"),
 	}, "ai", "handoff", "codex", "--from", sourceID, "--home", homeDir, "--database", initialized.DatabasePath)
-	if err == nil || !strings.Contains(output, "latest checkpoint is unsupported or invalid") {
-		t.Fatalf("expected unsafe stored checkpoint to fail, got %v\n%s", err, output)
+	if err == nil || !strings.Contains(output, want) {
+		t.Errorf("expected unsafe newer evidence rejection containing %q, got %v\n%s", want, err, output)
 	}
-
-	db, err = sql.Open("sqlite3", initialized.DatabasePath)
-	if err != nil {
-		t.Fatalf("reopen database: %v", err)
+	if _, err := os.Stat(filepath.Join(workingDir, "codex.launched")); !os.IsNotExist(err) {
+		t.Errorf("unsafe newer evidence launched the destination: stat error=%v", err)
 	}
-	defer db.Close()
-	var starts int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type = 'ai.session_started'`).Scan(&starts); err != nil || starts != 1 {
-		t.Fatalf("unsupported checkpoint launched a destination, starts=%d err=%v", starts, err)
+	var destinations int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE source = 'ai' AND
+		(json_extract(payload_json, '$.session_id') <> ? OR json_extract(payload_json, '$.predecessor_session_id') IS NOT NULL)`, sourceID).Scan(&destinations); err != nil || destinations != 0 {
+		t.Errorf("unsafe evidence created destination lifecycle or lineage, count=%d err=%v", destinations, err)
 	}
-}
-
-func TestAIHandoffRejectsOlderObservationWhenNewerEndEvidenceIsUnsupported(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell fixture")
+	var after string
+	if err := db.QueryRow(eventSnapshotQuery).Scan(&after); err != nil {
+		t.Fatalf("read source event history after handoff: %v", err)
 	}
-	homeDir := filepath.Join(t.TempDir(), ".workgraph")
-	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
-	if err != nil {
-		t.Fatalf("init workgraph: %v", err)
-	}
-	workingDir := t.TempDir()
-	writeAIFactExecutable(t, workingDir, "codex", "exit 0")
-	sourceID := "00000000-0000-4000-8000-000000000337"
-	insertAINativeFactSession(t, initialized.DatabasePath, sourceID, "claude", "/usr/local/bin/claude", "claude-native", "", workingDir, "2026-08-03T12:00:00Z", true)
-	insertAIHandoffCheckpoint(t, initialized.DatabasePath, sourceID, workingDir)
-
-	db, err := sql.Open("sqlite3", initialized.DatabasePath)
-	if err != nil {
-		t.Fatalf("open database: %v", err)
-	}
-	unsupported := `{"schema_version":2,"session_id":"` + sourceID + `","observation_status":"captured","observed":{"cwd":"must-not-be-used"}}`
-	if _, err := db.Exec(`INSERT INTO events (id, source, type, timestamp, payload_json, project, actor, summary, created_at)
-		VALUES (?, 'ai', 'ai.session_ended', '2026-08-03T12:02:00Z', ?, '', '', 'AI session ended', '2026-08-03T12:02:00Z')`,
-		"ai.session_ended:"+sourceID+":unsupported", unsupported); err != nil {
-		db.Close()
-		t.Fatalf("insert unsupported end evidence: %v", err)
-	}
-	db.Close()
-
-	output, err := runWorkgraphCommandAllowError([]string{
-		"PATH=" + workingDir + string(os.PathListSeparator) + os.Getenv("PATH"),
-	}, "ai", "handoff", "codex", "--from", sourceID, "--home", homeDir, "--database", initialized.DatabasePath)
-	if err == nil || !strings.Contains(output, "latest repository observation is unsupported or invalid") {
-		t.Fatalf("expected unsupported newer observation to fail, got %v\n%s", err, output)
-	}
-
-	db, err = sql.Open("sqlite3", initialized.DatabasePath)
-	if err != nil {
-		t.Fatalf("reopen database: %v", err)
-	}
-	defer db.Close()
-	var starts int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type = 'ai.session_started'`).Scan(&starts); err != nil || starts != 1 {
-		t.Fatalf("unsupported end evidence launched a destination, starts=%d err=%v", starts, err)
+	if after != before {
+		t.Error("rejected handoff changed source history or appended destination events")
 	}
 }
 

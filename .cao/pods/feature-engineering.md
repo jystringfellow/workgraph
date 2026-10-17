@@ -31,6 +31,47 @@ workflow provides it.
 
 ## Seats
 
+### Supervisor-driven execution lane
+
+The CAO supervisor lane uses `wg-pod-lead`, `wg-pod-developer`,
+`wg-pod-reviewer`, and `wg-pod-gate` as stable seat definitions. The lead owns
+delegation and closure; workers own their assigned responsibilities. Seats are
+activated sequentially when needed. This lane uses CAO assign/send_message and
+ordinary prose, without the Python workflow's assessment marker protocol.
+The scripted workflow and its existing profiles retain their own contracts.
+
+A run-scoped execution packet binds the task to its existing specification,
+plan validity hashes, Git HEAD, repository fingerprint, check evidence and
+budgets. A valid plan is reused; the architect is activated only after an
+explicit request to revise it. Unclear requirements stop for human clarification.
+Existing completed implementation can enter verification and review directly.
+
+The external host runner executes deterministic checks outside all agent
+sandboxes. The lead writes a permitted verification request and ends its turn;
+the runner returns a compact receipt or bounded failing evidence. Developers
+write a failing fact first, wait for host verification, then implement. Neither
+passing logs nor test execution are delegated to a model. Any changed candidate
+invalidates earlier checks and approvals.
+
+The lead preserves the three review corrections plus final assessment and two
+gate corrections, sharing these budgets across renewed review after gate fixes.
+Every fix returns through verification and review. No nested loop resets a
+budget. Empty or ambiguous verdicts do not approve a candidate. Startup failures,
+uncertain execution, unchanged unsupported corrections, and exhausted budgets
+stop with unresolved findings recorded. There is no provider fallback or Jev
+decision authority. Jev remains observational when used.
+
+Private local evidence lives under ignored `.cao/pod-runs/<run-id>/` with no
+automatic expiration: task references, selected seat profiles, identities,
+verification receipts and concise curated findings/dispositions. Do not copy
+transcripts, complete provider prompts, environment values, secrets, or source
+diffs into evidence. The execution packet is human-authored task input, not a
+terminal capture. Review text needs the same privacy care as other user content.
+Ready for human review requires full current checks, independent review and an
+explicit release gate for the same candidate. It does not authorize a commit,
+push, PR or merge. This lane's lead-enforced budgets are not a transactional
+orchestration engine; the host observer provides an additional overall bound.
+
 ### Architect
 
 Owns understanding and planning.

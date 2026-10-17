@@ -778,15 +778,17 @@ func loadAISessionProjections(homeDir string, databasePath string, inspector AIP
 			warnings = append(warnings, "ignored AI event with invalid timestamp: "+id)
 			continue
 		}
-		var envelope aiEventEnvelope
-		if err := json.Unmarshal([]byte(payloadText), &envelope); err != nil || envelope.SessionID == "" {
+		var identity struct {
+			SessionID string `json:"session_id"`
+		}
+		if err := json.Unmarshal([]byte(payloadText), &identity); err != nil || identity.SessionID == "" {
 			warnings = append(warnings, "ignored AI event with invalid envelope: "+id)
 			continue
 		}
-		projection := byID[envelope.SessionID]
+		projection := byID[identity.SessionID]
 		if projection == nil {
-			projection = &aiSessionProjection{Summary: AISessionSummary{SessionID: envelope.SessionID, Project: project, Tool: "unknown"}}
-			byID[envelope.SessionID] = projection
+			projection = &aiSessionProjection{Summary: AISessionSummary{SessionID: identity.SessionID, Project: project, Tool: "unknown"}}
+			byID[identity.SessionID] = projection
 		}
 		if projection.Summary.LatestEventAt.IsZero() || timestamp.After(projection.Summary.LatestEventAt) || (timestamp.Equal(projection.Summary.LatestEventAt) && id > projection.latestEventID) {
 			projection.Summary.LatestEventAt = timestamp
@@ -795,6 +797,14 @@ func loadAISessionProjections(homeDir string, databasePath string, inspector AIP
 		if eventType == "ai.session_checkpointed" && (projection.newestCheckpointAt.IsZero() || timestamp.After(projection.newestCheckpointAt) || (timestamp.Equal(projection.newestCheckpointAt) && id > projection.newestCheckpointID)) {
 			projection.newestCheckpointAt = timestamp
 			projection.newestCheckpointID = id
+		}
+		var envelope aiEventEnvelope
+		if err := json.Unmarshal([]byte(payloadText), &envelope); err != nil {
+			projection.Warnings = append(projection.Warnings, "invalid envelope at "+timestamp.Format(time.RFC3339Nano))
+			if aiEventCanCarryObservation(eventType) {
+				selectAINewestObservationEvidence(projection, timestamp, id)
+			}
+			continue
 		}
 		if envelope.SchemaVersion != aiSchemaVersion {
 			projection.Warnings = append(projection.Warnings, fmt.Sprintf("unsupported schema version %d at %s", envelope.SchemaVersion, timestamp.Format(time.RFC3339Nano)))
