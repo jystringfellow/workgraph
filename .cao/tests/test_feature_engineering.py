@@ -523,6 +523,37 @@ class FeatureEngineeringWorkflowTest(unittest.TestCase):
         self.assertEqual(review[0]["format_attempt"], 1)
         self.assertEqual(review[0]["review_corrections"], 0)
 
+    def test_ambiguous_gate_capture_uses_format_budget_without_selecting_approval(self):
+        captured = '• Ran read fixture\n  └ private tool output\n\n• RELEASE_BLOCKED: NO'
+        workflow, calls = self.run_case({'release-gate-1': captured,
+                                        'release-gate-1-format-1': 'RELEASE_BLOCKED: NO'})
+        self.assertEqual(calls[-2:], ['release-gate-1', 'release-gate-1-format-1'])
+        records = list((self.repo / '.git/cao-evidence').glob('*/*/*-assessment.json'))
+        gate = [json.loads(p.read_text()) for p in records if json.loads(p.read_text())['seat'] == 'wg-release-gate'
+                and json.loads(p.read_text())['marker'] != 'INVALID']
+        self.assertEqual(len(gate), 1)
+        self.assertEqual(gate[0]['format_attempt'], 1)
+        self.assertEqual(gate[0]['gate_corrections'], 0)
+        self.assertNotIn('private tool output', workflow.prompts['release-gate-1-format-1'])
+
+    def test_two_ambiguous_gate_captures_fail_with_current_diagnostics(self):
+        captured = '• Ran read fixture\n  └ private tool output\n\n• RELEASE_BLOCKED: NO'
+        _, calls = self.run_case({'release-gate-1': captured,
+                                 'release-gate-1-format-1': captured}, fail=True)
+        self.assertEqual(calls[-2:], ['release-gate-1', 'release-gate-1-format-1'])
+        data = self.failure()
+        self.assertEqual(data['invalid_assessment']['seat'], 'wg-release-gate')
+        self.assertEqual(data['invalid_assessment']['diagnostics']['response_cell_count'], 2)
+        self.assertEqual(data['gate_corrections'], 0)
+
+    def test_assessment_mutation_with_ambiguous_capture_is_not_retried(self):
+        def mutate():
+            self.correct()
+            return '• Ran read fixture\n  └ output\n\n• RELEASE_BLOCKED: NO'
+        _, calls = self.run_case({'release-gate-1': mutate}, fail=True)
+        self.assertNotIn('release-gate-1-format-1', calls)
+        self.assertIn('modified repository', self.failure()['reason'])
+
     def test_format_retry_material_findings_follow_normal_correction_loop(self):
         _, calls = self.run_case({"reviewer-1": "FINDINGS: YES\nmalformed finding",
                                  "reviewer-1-format-1": finding()})
@@ -585,3 +616,100 @@ class FeatureEngineeringWorkflowTest(unittest.TestCase):
         workflow, _ = self.run_case({'reviewer-1': 'malformed', 'reviewer-1-format-1': 'FINDINGS: NO'})
         self.assertEqual(workflow.assignments['reviewer-1'], ('configured_cli', 'wg-adversarial-reviewer'))
         self.assertEqual(workflow.assignments['reviewer-1-format-1'], ('configured_cli', 'wg-adversarial-reviewer'))
+
+    def test_codex_transport_unwraps_one_response_cell_and_timing_only(self):
+        workflow, _ = load_workflow({}, {})
+        output, metadata = workflow.normalize_agent_output('codex', '• {"expression":"age >= 18"}\n\n  Worked for 6s • 6:08 AM')
+        self.assertEqual(output, '{"expression":"age >= 18"}')
+        self.assertTrue(metadata['bullet_removed'])
+        self.assertTrue(metadata['timing_removed'])
+        output, _ = workflow.normalize_agent_output('codex', '• FINDINGS: NO\n\n Worked for 1m 2s • 6:08 AM')
+        self.assertFalse(workflow.parse_assessment(output, 'FINDINGS')['blocked'])
+
+    def test_copilot_transport_unwraps_agreeing_assessment_cells(self):
+        workflow, _ = load_workflow({}, {})
+        assessment = finding()
+        captured = ('⌄ Thought for 1s\n PY Read candidate-bug.py 2 lines read\n'
+                    ' ● ' + assessment.replace('\n', '\n   ') + '\n'
+                    ' ● MCP Servers reloaded: 3 servers connected\n ● Task complete\n'
+                    '   └ ' + assessment.replace('\n', '\n     '))
+        normalized, metadata = workflow.normalize_agent_output('copilot_cli', captured)
+        self.assertEqual(workflow.parse_assessment(normalized, 'FINDINGS'),
+                         workflow.parse_assessment(assessment, 'FINDINGS'))
+        self.assertTrue(metadata['copilot_assessment_unwrapped'])
+        self.assertEqual(metadata['assessment_cell_count'], 2)
+
+    def test_copilot_transport_joins_wrapped_curated_json(self):
+        workflow, _ = load_workflow({}, {})
+        assessment = finding(summary='Boundary is excluded')
+        wrapped = assessment.replace('Boundary is excluded', 'Boundary is\n   excluded')
+        normalized, _ = workflow.normalize_agent_output('copilot_cli', ' ● ' + wrapped.replace('\nFINDINGS', '\n   FINDINGS'))
+        self.assertEqual(workflow.parse_assessment(normalized, 'FINDINGS'),
+                         workflow.parse_assessment(assessment, 'FINDINGS'))
+
+    def test_copilot_transport_does_not_choose_between_conflicting_or_unknown_cells(self):
+        workflow, _ = load_workflow({}, {})
+        for captured in (
+            ' ● FINDINGS: NO\n ● Task complete\n   └ ' + finding().replace('\n', '\n     '),
+            ' ● ' + finding().replace('\n', '\n   ') + '\n ● Task complete\n   └ '
+            + finding(summary='different defect').replace('\n', '\n     '),
+            ' ● FINDINGS: NO\n ● FINDINGS: NO',
+            ' ● Task complete\n   └ FINDINGS: NO',
+            ' ● FINDINGS: NO\n ● Unknown tool status',
+            ' ● **FINDINGS: NO**',
+            ' ● FINDINGS: NO\n   additional prose',
+            ' ● FINDINGS: NO\n   FINDINGS: YES',
+            'Earlier discussion\n ● FINDINGS: NO',
+            ' ● FINDINGS: NO\n ● Task complete\n   └ Approval summary\n     FINDINGS: NO',
+            ' ● FINDINGS: NO\n ● Task complete\n   └ FINDINGS: NO\n ● Task complete\n   └ FINDINGS: NO',
+        ):
+            with self.subTest(captured=captured):
+                normalized, _ = workflow.normalize_agent_output('copilot_cli', captured)
+                with self.assertRaises(workflow.InvalidAssessment):
+                    workflow.parse_assessment(normalized, 'FINDINGS')
+
+    def test_copilot_transport_supports_approval_and_gate_without_changing_other_providers(self):
+        workflow, _ = load_workflow({}, {})
+        for marker in ('FINDINGS', 'RELEASE_BLOCKED'):
+            captured = f' ● {marker}: NO\n ● Task complete\n   └ {marker}: NO'
+            normalized, _ = workflow.normalize_agent_output('copilot_cli', captured)
+            self.assertFalse(workflow.parse_assessment(normalized, marker)['blocked'])
+            untouched, _ = workflow.normalize_agent_output('other_cli', captured)
+            self.assertEqual(untouched, captured)
+
+    def test_codex_transport_rejects_prompt_echo_plus_second_response(self):
+        workflow, _ = load_workflow({}, {})
+        captured = '• Inclusive contract for age 18\n\n  Return JSON only.\n\n• {"expression":"age >= 18"}\n\n Worked for 6s • 6:08 AM'
+        with self.assertRaises(workflow.InvalidAgentCapture):
+            workflow.normalize_agent_output('codex', captured)
+
+    def test_transport_does_not_strip_markdown_quotes_other_provider_or_prose(self):
+        workflow, _ = load_workflow({}, {})
+        for provider, output in [('copilot_cli', '• FINDINGS: NO'), ('codex', '**FINDINGS: NO**'),
+                                 ('codex', '> FINDINGS: NO'), ('codex', '• FINDINGS: NO\nextra prose')]:
+            with self.subTest(provider=provider, output=output):
+                normalized, _ = workflow.normalize_agent_output(provider, output)
+                with self.assertRaises(workflow.InvalidAssessment):
+                    workflow.parse_assessment(normalized, 'FINDINGS')
+
+    def test_architect_display_bullet_and_timing_are_not_forwarded_to_developer(self):
+        plan = 'Acceptance criteria: include age 18.'
+        workflow, _ = self.run_case({'architect': '• ' + plan + '\n\n Worked for 6s • 6:08 AM'})
+        self.assertIn(plan, workflow.prompts['developer-initial'])
+        self.assertNotIn('• ' + plan, workflow.prompts['developer-initial'])
+        self.assertNotIn('Worked for', workflow.prompts['developer-initial'])
+
+    def test_startup_failure_diagnostics_are_allowlisted_without_http_body_retention(self):
+        workflow, _ = load_workflow({}, {})
+        error = RuntimeError('secret exception message')
+        error.status = 500
+        error.body = json.dumps({'detail': 'Copilot initialization timed out after 60 seconds'})
+        diagnostic = workflow.execution_diagnostics(error)
+        self.assertEqual(diagnostic['category'], 'session_startup')
+        self.assertEqual(diagnostic['provider_startup_timeout_seconds'], 60)
+        self.assertFalse(diagnostic['retry_safe'])
+        self.assertNotIn('secret exception message', json.dumps(diagnostic))
+        error.body = json.dumps({'detail': 'secret provider error text'})
+        diagnostic = workflow.execution_diagnostics(error)
+        self.assertEqual(diagnostic['category'], 'execution_uncertain')
+        self.assertNotIn('secret provider error text', json.dumps(diagnostic))

@@ -26,6 +26,7 @@ import subprocess
 import sys
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, Tuple
 
 from cao_workflow import emit_output, get_inputs, step
@@ -67,6 +68,28 @@ def classify_failure(category: str) -> dict:
     }
 
 
+def execution_diagnostics(exc: Exception) -> dict:
+    diagnostic = {"exception_type": type(exc).__name__, "category": "execution_uncertain",
+                  "retry_safe": False}
+    status = getattr(exc, "status", None)
+    if isinstance(status, int) and 400 <= status <= 599:
+        diagnostic["http_status"] = status
+    body = getattr(exc, "body", None)
+    if not isinstance(body, str) or len(body) > 20000 or "http_status" not in diagnostic:
+        return diagnostic
+    try:
+        payload = json.loads(body)
+    except (ValueError, RecursionError):
+        return diagnostic
+    detail = payload.get("detail") if isinstance(payload, dict) else None
+    message = detail.get("message") if isinstance(detail, dict) else detail
+    if message == "Copilot initialization timed out after 60 seconds":
+        diagnostic.update({"category": "session_startup", "signal": "copilot_initialization_timeout",
+            "provider_startup_timeout_seconds": 60,
+            "action": "Inspect Copilot readiness and CAO unrecognized-footer logs; workflow timeout does not change the provider startup timeout"})
+    return diagnostic
+
+
 def git_bytes(repo: Path, *args: str) -> bytes:
     return subprocess.run(
         ["git", *args], cwd=repo, stdout=subprocess.PIPE,
@@ -106,6 +129,76 @@ def repository_state(repo: Path) -> dict:
 
 class InvalidAssessment(ValueError):
     pass
+
+
+class InvalidAgentCapture(ValueError):
+    pass
+
+
+def normalize_agent_output(provider: str, output: Any) -> Tuple[Any, dict]:
+    metadata = {"bullet_removed": False, "timing_removed": False}
+    if provider == "copilot_cli" and isinstance(output, str):
+        return normalize_copilot_assessment(output)
+    if provider != "codex" or not isinstance(output, str) or not output.strip().startswith("• "):
+        return output, metadata
+    lines = output.strip().splitlines()
+    if re.fullmatch(r"\s*Worked for \d+(?:\.\d+)?[hms](?: \d+[hms])* • \d{1,2}:\d{2} (?:AM|PM)\s*", lines[-1]):
+        lines.pop()
+        metadata["timing_removed"] = True
+    if any(line.lstrip().startswith("• ") for line in lines[1:]):
+        raise InvalidAgentCapture("Ambiguous Codex capture contains multiple response cells")
+    lines[0] = lines[0][2:]
+    lines[1:] = [line[2:] if line.startswith("  ") else line for line in lines[1:]]
+    metadata["bullet_removed"] = True
+    return "\n".join(lines).strip(), metadata
+
+
+def normalize_copilot_assessment(output: str) -> Tuple[str, dict]:
+    metadata = {"copilot_assessment_unwrapped": False, "assessment_cell_count": 0}
+    if len(output) > 20000:
+        return output, metadata
+    cells = []
+    completion = False
+    for raw in output.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        startup = re.fullmatch(r"⌄ Thought for \d+(?:\.\d+)?[hms]", line)
+        read = re.fullmatch(r"PY Read [^\r\n]{1,240} \d+ lines? read", line)
+        mcp = re.fullmatch(r"● MCP Servers reloaded: \d+ servers? connected", line)
+        if ((startup or read) and not cells) or (mcp and not completion):
+            continue
+        if line == "● Task complete" and len(cells) == 1 and not completion:
+            completion = True
+            continue
+        if not cells and line.startswith("● "):
+            cells.append([line[2:]])
+        elif completion and len(cells) == 1 and line.startswith("└ "):
+            cells.append([line[2:]])
+        elif cells and len(raw) - len(raw.lstrip()) >= (5 if completion else 3):
+            if line.startswith(("FINDING: ", "FINDINGS: ", "RELEASE_BLOCKED: ")):
+                cells[-1].append(line)
+            elif cells[-1][-1].startswith("FINDING: "):
+                cells[-1][-1] += " " + line
+            else:
+                return output, metadata
+        else:
+            return output, metadata
+    metadata["assessment_cell_count"] = len(cells)
+    if not cells or completion and len(cells) != 2:
+        return output, metadata
+    try:
+        assessments = []
+        for cell in cells:
+            marker = "RELEASE_BLOCKED" if cell[-1].startswith("RELEASE_BLOCKED:") else "FINDINGS"
+            assessments.append(parse_assessment("\n".join(cell), marker))
+    except InvalidAssessment:
+        return output, metadata
+    if any(item != assessments[0] for item in assessments[1:]):
+        metadata["copilot_assessment_conflict"] = True
+        return output, metadata
+    metadata["copilot_assessment_unwrapped"] = True
+    return "\n".join(cells[0]), metadata
 
 
 def unique_json_object(pairs):
@@ -170,6 +263,11 @@ def assessment_diagnostics(output: Any, marker: str) -> dict:
         "conflicting_canonical_markers": len(set(canonical)) > 1,
         "code_fence_present": any(line.lstrip().startswith(("```", "~~~")) for line in lines),
         "finding_line_count": sum(line.startswith("FINDING: ") for line in lines),
+        "response_cell_count": sum(line.lstrip().startswith("• ") for line in lines),
+        "copilot_response_cell_count": sum(line.lstrip().startswith("● ") for line in lines),
+        "copilot_completion_count": sum(line.strip() == "● Task complete" for line in lines),
+        "copilot_completion_branch_count": sum(line.lstrip().startswith("└ ") for line in lines),
+        "copilot_side_border_present": any("┃" in line or "│" in line for line in lines),
         "truncation_indicator": "truncated" in output.lower() or "cao_output_dropped" in output,
         "last_line_kind": last_kind,
     }
@@ -221,6 +319,7 @@ class RunEvidence:
         self.sequence = 0
         self.assessment = None
         self.invalid_assessment = None
+        self.execution_failure = None
         self.context = {}
         self.disputed = False
         self.review_corrections = 0
@@ -245,6 +344,7 @@ class RunEvidence:
     def fail(self, reason: str) -> None:
         record = {"reason": reason, "last_assessment": self.assessment,
                   "invalid_assessment": self.invalid_assessment,
+                  "execution_failure": self.execution_failure,
                   "correction_context": self.context, "verification": self.verification,
                   "review_corrections": self.review_corrections,
                   "gate_corrections": self.gate_corrections}
@@ -428,9 +528,12 @@ def main() -> None:
         try:
             result = step(provider, profile, prompt, recovery=opts.pop("recovery"), **opts)
         except Exception as exc:
-            evidence.write("execution-failure", {"step_id": step_id, "exception_type": type(exc).__name__,
-                           "classification": classify_failure("execution_uncertain"),
-                           "before": before, "after": repository_state(repo_path)})
+            diagnostic = execution_diagnostics(exc)
+            evidence.execution_failure = {"step_id": step_id, "seat": profile,
+                "requested_provider": provider, **diagnostic,
+                "classification": classify_failure(diagnostic["category"]),
+                "before": before, "after": repository_state(repo_path)}
+            evidence.write("execution-failure", evidence.execution_failure)
             evidence.fail(f"Agent execution failed at {step_id}; inspect CAO status and reconcile side effects before recovery")
         after = repository_state(repo_path)
         evidence.write("step-result", {"seat": profile, "step_id": step_id,
@@ -443,10 +546,22 @@ def main() -> None:
             evidence.fail(f"Replayed {step_id} cannot establish fresh repository evidence; reconcile and start a new CAO run")
         if profile == "wg-architect" and before != after:
             evidence.fail("Architect modified repository state")
+        capture_error = None
+        try:
+            output, transport = normalize_agent_output(provider, result.output)
+        except InvalidAgentCapture as exc:
+            evidence.write("capture-failure", {"step_id": step_id, "reason": str(exc),
+                           "diagnostics": assessment_diagnostics(result.output,
+                               "RELEASE_BLOCKED" if profile == "wg-release-gate" else "FINDINGS")})
+            if not assessment:
+                evidence.fail(f"Invalid agent capture at {step_id}: {exc}")
+            output, capture_error = result.output, str(exc)
+        else:
+            evidence.write("agent-capture", {"step_id": step_id, **transport})
         if correction:
             changed = before["fingerprint"] != after["fingerprint"]
             try:
-                disposition = parse_disposition(result.output)
+                disposition = parse_disposition(output)
             except (ValueError, TypeError, RecursionError):
                 disposition = {"status": "invalid", "evidence": "missing or invalid disposition"}
             record = {"step_id": step_id, "before": before, "after": after,
@@ -467,7 +582,9 @@ def main() -> None:
             if before != after:
                 evidence.fail(f"Read-only assessment {step_id} modified repository state")
             try:
-                parsed = parse_assessment(result.output, marker)
+                if capture_error:
+                    raise InvalidAssessment(capture_error)
+                parsed = parse_assessment(output, marker)
             except InvalidAssessment as exc:
                 evidence.invalid_assessment = {"seat": profile, "step_id": step_id,
                                "assessment": assessment_number, "format_attempt": format_attempt,
@@ -475,7 +592,7 @@ def main() -> None:
                                "review_corrections": evidence.review_corrections,
                                "gate_corrections": evidence.gate_corrections,
                                "repository": after, "reason": str(exc),
-                               "diagnostics": assessment_diagnostics(result.output, marker)}
+                               "diagnostics": assessment_diagnostics(output, marker)}
                 evidence.write("invalid-assessment", evidence.invalid_assessment)
                 if format_attempt == 0:
                     retry_prompt = (
@@ -492,6 +609,7 @@ def main() -> None:
                     return agent_step(profile, retry_prompt, format_attempt=1,
                                       recovery="idempotent", **{**opts, "step_id": f"{step_id}-format-1"})
                 evidence.fail(f"Invalid assessment at {step_id}: {exc}")
+            evidence.invalid_assessment = None
             evidence.assessment = {**parsed, "seat": profile, "assessment": assessment_number,
                 "format_attempt": format_attempt,
                 "repository": after, "verification": evidence.verification,
@@ -502,7 +620,7 @@ def main() -> None:
             if evidence.disputed and parsed["blocked"]:
                 evidence.fail(f"Independent assessment {step_id} did not accept the no-change dispute")
             evidence.disputed = False
-        return result
+        return SimpleNamespace(output=output)
 
     # -------------------------------------------------------------------------
     # Stage 1: Architect (Understanding and Planning)

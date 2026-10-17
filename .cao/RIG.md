@@ -293,14 +293,18 @@ There are at most 12 findings; each field is at most 240 characters. A YES
 requires findings; a NO requires none. Empty, malformed, missing, quoted,
 conflicting, or prose-only assessments remain invalid; the parser never
 normalizes Markdown or guesses approval. The workflow permits exactly one
-replacement assessment for formatting, using the same provider/profile/seat,
+replacement assessment for formatting or ambiguous completed capture, using the same provider/profile/seat,
 original task, correction context and verified Git state. Its separate CAO step
 ID ends in `-format-1`; the logical assessment number stays unchanged and no
 developer correction is consumed. CAO creates a new step/session, so the retry
 must independently reconstruct findings from primary sources rather than
 assuming access to its previous response. No raw invalid response is forwarded.
 Material findings in a valid replacement enter the usual correction loop.
-A second invalid response fails closed. Execution failures, incomplete steps,
+A second invalid response/capture fails closed. An ambiguous capture is never
+accepted by selecting its final marker; the replacement must independently pass
+the whole protocol. This retry applies only to read-only assessment seats, never
+architect/developer outputs or potentially side-effecting corrections.
+Execution failures, incomplete steps,
 replays and repository modifications are not eligible for formatting retries.
 Each logical review/gate assessment therefore costs at most two agent calls.
 
@@ -396,9 +400,11 @@ The installed `cao_workflow.step()` accepts provider/profile and recovery policy
 but returns only step ID, terminal ID, output, status and `replayed`. It exposes
 transport/HTTP errors, not reliable typed provider-auth/quota/rate-limit/startup
 versus execution failures. A generic HTTP status is not provider evidence; 409
-also represents recovery halt/divergence. Consequently all step exceptions are
-conservatively recorded as `execution_uncertain`, without retaining exception
-messages/bodies. There is no supported transactional provider-switch handshake
+also represents recovery halt/divergence. Unknown step exceptions are conservatively recorded as
+`execution_uncertain`. A narrowly allowlisted Copilot initialization timeout
+records a startup signal, HTTP status and operator action; neither exception
+messages nor HTTP bodies are retained. The signal does not authorize a retry
+or provider switch. There is no supported transactional provider-switch handshake
 or attested actual-model metadata in this return value. Requested provider/
 profile and available profile configuration are recorded; actual provider, CLI,
 model and profile remain explicitly unknown rather than inferred from the
@@ -430,57 +436,395 @@ and a fresh run after a failure/replay halt. The workflow preserves supplied
 task text in initial and formatting-retry prompts; it cannot recover text that
 the invoking shell already removed.
 
-## Fast Live Profile Smoke Test
+## Artifact Smoke v1
 
-`profile_smoke.py` is an opt-in integration probe. It uses the real CLI/provider
-interfaces, models and standing profile instructions, with tightly scoped
-synthetic task prompts. It does not run `feature_engineering`, Go verification,
-Jev, or product implementation work. It checks interoperability and output
-capture; a pass is not evidence of engineering quality or release readiness.
+`profile_smoke.py` is an opt-in, sequential synthetic bug-fix probe. It uses
+real CAO profiles only when explicitly launched; tests mock every agent call.
+It does not run feature engineering, Go checks, Jev, or product work. A pass
+establishes synthetic interoperability, not engineering/release assurance.
 
-The workflow takes five short, sequential agent steps:
+The sequence is:
 
-1. Architect writes a tiny contract for an inclusive age-18 boundary.
-2. Developer returns a JSON comparison expression without modifying files.
-3. Reviewer inspects a planted strict-comparison bug and must identify age 18.
-4. Reviewer independently inspects the developer's verified correct expression
-   and must report no material findings.
-5. Gate independently assesses the corrected synthetic fixture and must approve.
+1. Validate/reuse a cached plan, or ask the architect for a bounded brief.
+2. Developer writes a handoff reproducing the planted `age > 18` defect.
+3. Workflow runs fixed boundary checks in a separate Python process.
+4. Reviewer independently inspects the failing candidate and records findings.
+5. Developer proposes one correction with a finding-to-change map.
+6. Workflow checks the corrected candidate, then runs fresh review and gate.
 
-Workflow-owned verification accepts only the safe, inclusive comparison grammar;
-it never executes model-generated code. The workflow writes two tiny synthetic
-source fixtures inside its private Git evidence directory. These are generated
-test data, not Workgraph source or user content. Agent output is not retained
-raw; assessments/dispositions follow the existing curated privacy boundary.
-Any worktree or HEAD modification, replayed result, incomplete step, execution
-failure, unexpected finding outcome, or failed deterministic check stops the
-probe. There are no developer correction loops. Each reviewer/gate assessment
-allows one formatting retry, making five calls normally and at most eight.
+The failing reproduction is intentional test data. Initial review of that
+candidate exercises finding capture; it does not authorize advancement of
+failing product tests. The shared developer correction budget is exactly one.
+No-op, unable/rejected, unmapped findings, failed post-fix checks, renewed
+findings, or gate blockers stop with retained evidence. A plan challenge
+invalidates the cache and stops for human clarification rather than launching
+an architect loop. Reviewer/gate artifact errors allow one replacement per
+logical assessment; architect/developer output and execution failures do not.
+Normal execution uses six calls, or five with a reused plan; the maxima are
+nine and eight with all three assessment replacements.
 
-Only the Architect profile is substituted: `wg-architect-smoke` uses GPT-6.1 Sol
-with low reasoning effort. The normal `wg-architect` remains unchanged. Developer,
-reviewer and gate use their existing profiles. Before any call, the probe reads
-all four selected profiles, rejects Astra anywhere, and requires a reviewer
-model different from developer/gate. Profiles are the source of provider/model
-choices in both workflows; the workflow controls order and adds task/evidence
-prompts. Requested assignments are recorded, while actual model attestation
-remains unavailable through CAO's current step API. Sync before running so the
-installed model settings match these checks.
+### Artifacts and Identity
 
-Run after `.cao/sync.sh`:
+Agents write only their individually assigned JSON output file under a private
+`.cao/smoke-work/<run-token>/` directory, ignored by Git. The envelope has exactly
+`schema_version`, `run_token`, `step_id`, `brief_id`, `candidate_id`, and `payload`.
+The workflow supplies the identity fields; output must match them exactly.
+Missing, stale, duplicate-key, oversized, linked or malformed files cannot
+advance the run. Terminal replies are ignored: no bullet stripping or outcome
+searching is used by this smoke. CAO still must initialize a terminal and return
+a fresh completed step; errors in its own output extraction can still fail a
+step even if a file exists. Replayed steps are rejected.
+
+The architect payload matches the fixed objective, scope, non-goals, acceptance
+criteria, check identifiers and invalidation conditions, plus a bounded summary.
+The developer payload contains an allowlisted expression, disposition and
+addressed finding IDs. The workflow materializes synthetic Python fixtures;
+it never executes arbitrary agent code or plan-proposed commands.
+Reviewer/gate payloads contain `outcome` (the existing explicit YES/NO marker),
+`plan_valid`, and `findings`. Findings retain the four-field curated contract.
+A YES requires findings; a NO requires none. A plan challenge requires a finding.
+
+Candidate identity hashes the brief, repository HEAD/state fingerprint, and
+synthetic source. Every verification receipt, finding and gate decision binds
+to it. Each call guards repository state, cached plan content, and input files
+against modification; only the current output path may change. These guards
+are evidence checks, not an OS security sandbox: writes to arbitrary ignored
+or external locations cannot be proven absent by the Git fingerprint.
+
+### Plan Reuse and Verification
+
+The accepted plan is cached at `.git/cao-plans/profile-smoke/plan.json` (using the
+actual Git directory for worktrees). Reuse requires an exact schema, fixed task/
+contract and check-script digest, valid state, and matching plan content digest.
+Git HEAD changes alone do not invalidate it. Successful runs archive completion
+without invalidating the reusable plan. Review and gate approvals are never
+reused. `plan_policy=refresh` explicitly replans. A corrupted or outdated cache
+also replans before any developer work. v1 has one fixed smoke task, not a
+cache of arbitrary human feature plans.
+
+`.cao/verification/smoke_checks.py` is the only executable check entrypoint.
+The workflow runs it with isolated Python, a ten-second timeout, and one of two
+allowed expressions. It checks ages 17/18/19 without `eval` or executing the
+candidate source. Receipts retain check IDs, command, tool/script versions,
+exit status, skipped checks, brief and candidate identity. Full synthetic
+check results stay local; only failing cases go to agents for triage, and
+successful checks become compact receipts. Harness failure stops the run.
+
+### Profiles, Retention and Recovery
+
+Dedicated `wg-architect-smoke`, `wg-developer-smoke`, `wg-reviewer-smoke`, and
+`wg-gate-smoke` profiles retain the current providers/models and reasoning
+settings: no Astra, with a distinct reviewer model. Codex smoke seats use the
+existing `cao_workspace` profile because artifact output needs workspace write
+access; normal feature seats retain their existing permissions and behavior.
+The smoke profiles scope writes to the requested handoff. CAO's credential and
+environment boundaries remain unchanged. Requested assignments are recorded;
+actual-model attestation is not available through the current step API.
+
+Copilot smoke explicitly grants `fs_read`, `fs_list`, and `fs_write`.
+Reviewer role defaults deny writes, so selecting a workspace sandbox alone is
+insufficient for artifact handoffs. Codex smoke grants native `exec`, `wait`,
+`exec_command`, `write_stdin`, and `apply_patch` entrypoints under `cao_workspace`.
+CAO injects Codex grants literally into a soft-enforcement instruction; its
+abstract `fs_read`/`fs_write` names are not native Codex tools. Code-mode sessions
+use `exec`/`wait` to call file access tools. Codex command access is necessary for
+artifact reads and is constrained by the workspace sandbox and task instructions,
+not a native file-only allowlist. Tests remain workflow-owned. The preflight
+requires the provider-specific policy before any call. Web tools, unrestricted
+`*` and MCP orchestration grants are absent. These policies do not enforce
+requested-path isolation; requested-path restrictions and input integrity checks
+still belong to the workflow. Existing feature-engineering policies are unchanged.
+
+The installed CAO profile validator warns that `fs_write` is unrecognized,
+although its runtime tool mapper supports that grant and maps it to Copilot's
+`write` tool. A launch preview must allow `write` and block `shell`; the static
+validator warning alone does not establish the effective permissions.
+Codex native tool names also produce vocabulary warnings in that validator.
+Artifact errors retain only the requested path, logical seat, profile configuration,
+repository fingerprint and curated error category, distinguishing missing and
+empty files from malformed JSON without saving terminal output.
+
+Validated briefs, candidate representations/hashes, findings, dispositions,
+verification receipts/logs and gate decisions are archived in the existing
+run-scoped Git evidence directory. These are synthetic data and bounded curated
+fields, never raw terminal transcripts, prompts, environments or source diffs.
+Length/schema validation is not secret detection. Accepted text must exclude
+sensitive material. Pending output files are removed after ingestion, including
+invalid or partial output on handled failure. Success removes workflow-owned
+scratch files; failure preserves input fixtures/receipts for inspection.
+Unknown files are not recursively deleted. Retention has no automatic expiry;
+archive deletion requires explicit operator action.
+
+A local plan lock prevents simultaneous runs from modifying the same cache.
+Handled failure releases it; an abrupt process kill can leave it and partially
+written output behind. Inspect the lock's `owner.json`, the CAO terminal, and
+its referenced evidence before manually removing a stale lock or sensitive
+pending scratch output. Never infer safe developer retry from a timeout.
+Fresh runs, including recovery under the same CAO run ID, use distinct UUIDs
+and cannot reuse old review/gate artifacts. The scripts provide no automatic
+continuation of potentially side-effecting steps.
+
+Sync copies CAO profiles/workflows, validates them, and runs `cao install` for
+smoke profiles declaring `provider: copilot_cli`. Other provider installations
+remain operator-managed. Copilot discovers the generated
+`~/.copilot/agents/<name>.agent.md` file, not CAO's profile-store copy. Missing
+that install can leave an idle Copilot terminal reporting “Custom agent not
+found”; terminal readiness alone does not attest that the requested seat loaded.
+Installation requires CAO's explicit success confirmation; the installed CLI
+can print an install error while returning exit code zero. Failure stops sync.
+Restart an existing Copilot session to load the
+newly installed agent; a session reporting that error is not a valid reviewer.
+
+Sync, then explicitly launch:
 
 ```bash
+.cao/sync.sh
 cao workflow run profile_smoke.py \
   --input 'repo_path=/Volumes/Craig/Code/workgraph'
 ```
 
-`step_timeout_seconds` defaults to 90 and may be set from 1 through 120. CLI
-startup overhead may dominate this small task; five steps do not guarantee a
-particular duration or price. A timeout does not prove that CAO terminated the
-underlying session: inspect it before repeating a failed probe. Tests under
-`.cao/tests/` mock every agent call; only the explicit live command uses models.
+Run the same command again to demonstrate plan reuse with fresh checks/review.
+To invalidate the plan deliberately, add `--input 'plan_policy=refresh'`.
+`step_timeout_seconds` defaults to 90 (allowed range 1–120). The workflow imports
+repository helpers and checks, so launch from a stable checkout. CLI startup
+still contributes time and cost. No real workflow is launched by the unit suite.
 
-The smoke workflow imports the repository's `feature_engineering.py` helpers,
-not a frozen copy of those helpers. Replays are rejected. Run from a stable
-checkout and sync both scripts together; no continuation across source edits
-is supported by this probe.
+### Three-provider collaboration trial
+
+`collaboration_trial.py` is a smaller fresh-run experiment alongside the existing
+smoke. It uses a supplied synthetic plan, a Codex developer (`gpt-6.1-sol`),
+Copilot reviewer (`claude-haiku-5.5`), advisory Claude Code reviewer, and a final
+Codex assessment using an explicitly supplied distinct non-Astra `gate_model`.
+There is no architect call, plan cache, Jev, clef classifier, provider fallback,
+or automatic PR. Production feature engineering is unchanged.
+
+The Claude profile omits its model and endpoint so native Claude Code settings
+choose them. No credentials or environment values are copied into profiles or
+evidence. Confirm the launched Claude session uses the intended local endpoint
+and model; CAO completion does not attest to either. Local findings are retained
+but do not veto acceptance or dismiss Copilot findings. A local execution or
+invalid-output failure stops the collaboration trial because all three clients
+must demonstrate participation.
+
+Agents get ordinary file-based tasks. The developer edits a tiny Python candidate
+directly; it does not produce a JSON envelope. Reviewers write bounded curated
+findings and the existing explicit outcome marker to a fresh file. Terminal output
+is ignored. The runner validates the candidate's AST and invokes the existing
+external age-boundary checker; it never executes agent-authored arbitrary code.
+Only failed checks go back to the developer. This limited synthetic checker does
+not demonstrate running developer-authored tests or arbitrary project code.
+
+One correction is shared across test and reviewer failures. Every reviewer fix
+gets fresh checks and both renewed reviews; the final assessment can still block.
+Normal success uses four agent calls, with at most seven when correcting review
+findings. Missing or malformed review files fail without formatting retries.
+Steps declare manual recovery; resume is rejected before dispatch. Reconcile any
+uncertain side effects and use a fresh run instead.
+
+The trial uses a private system-temporary directory outside Workgraph's instruction
+hierarchy. It retains synthetic fixtures there for inspection on success and failure;
+curated findings, candidate hashes, requested seat/model assignments, and verification
+receipts live in the normal private run-scoped Git evidence directory. Actual model
+identities remain unattested. Pending malformed review files are deleted after handled
+validation failures; execution interruptions can leave partial files, requiring operator
+inspection. Neither temporary directories nor evidence expire automatically. This
+retention is for tiny synthetic fixtures only, not a policy for real project source.
+
+```bash
+bash .cao/sync.sh
+cao workflow run collaboration_trial.py \
+  --input 'repo_path=/Volumes/Craig/Code/workgraph' \
+  --input 'gate_model=<your second Codex model>'
+```
+
+The Codex profiles still carry the documented native-tool-name workaround for CAO's
+soft restriction instruction. This trial reduces handoff complexity; it does not
+prove that adapter issue has been fixed. It remains a reason to switch execution
+backends if the bounded live experiment requires further tool/terminal patches.
+
+### Supervisor-driven cross-model smoke (no Python workflow)
+
+This separate experiment follows CAO's `assign` and `orchestration` examples:
+`wg-coordinator-smoke` uses Codex `gpt-6.1-sol`, `wg-codex-worker-smoke`
+uses Codex `gpt-6-luna`, and `wg-copilot-peer-smoke` uses Copilot
+`claude-haiku-5.5`. These explicit assignments are for this user-selected trial;
+production seats and the existing smoke workflows are unchanged. All three
+profiles configure the CAO MCP server. The developer and reviewer return ordinary
+prose through `send_message`; the supervisor uses `assign` and ends its turn to
+receive replies. Missing MCP tools are a failure, not permission to use built-in
+subagents. A successful `assign` response means dispatched, not completed.
+
+```bash
+bash .cao/sync.sh
+python3 -I .cao/verification/supervisor_smoke.py prepare
+```
+
+Preparation creates a fresh private system-temporary directory and prints the
+exact `cao launch` command to run. It does not launch agents. The generated
+command uses `--headless --async`: this CAO version delivers the positional task
+only on its headless path, then returns after confirmed delivery. Attach from a
+real terminal with `tmux attach-session -t SESSION_NAME`, using the session name
+printed by CAO. An interactive launch attaches without sending its positional
+task; enter the instruction manually in that case.
+The supplied `plan.md` avoids an architect call; it demonstrates reuse of a provided plan,
+not general plan-cache validation. `start.md` supplies bounded coordination
+instructions. The supervisor can read it via native tools. No working-directory
+feature flag is needed: assigned workers inherit the supervisor's directory.
+Do not add `--yolo` or forward credentials/environment overrides. The Codex
+profiles retain the native-tool-name workaround and `cao_workspace` sandbox
+profile. Their `codexConfig` overrides preapprove only the necessary local CAO
+MCP tools: skill loading and replies on both Codex seats, plus assignment and
+terminal cleanup on the supervisor. Other MCP tools retain their existing approval
+policy. CAO forwards these scalar overrides at launch; adding approval fields only
+to the `mcpServers` block would not forward them in the current Codex adapter.
+`approval_policy = "never"` rejects calls requiring approval; it does not grant
+MCP approval. `--auto-approve` skips CAO's launch confirmation and does not change
+Codex tool approval or its workspace sandbox. Restart the blocked supervisor
+after syncing these launch-time overrides; an existing session keeps its old
+configuration. A launch from a shell without a TTY can create the session and then
+fail to attach; attach to that existing session from a real terminal instead of
+creating duplicates. Neither this test nor CAO completion attests to the actual model used.
+Check the three native CLI displays before treating the requested identities as
+observed identities.
+Missing runtime model attestation is recorded as `actual model unverified`,
+not a reason for the supervisor to stop before review. Agents' self-reports
+cannot attest their exact models. Profile discovery and native `cao` shell
+commands are not required trial tools and receive no additional approvals or
+network permissions. A successful trial establishes configured cross-model
+dispatch and collaboration; actual model identity needs separate operator
+confirmation. Stop on execution uncertainty, unclear requirements, or a missing
+required coordination tool instead.
+
+The supervisor runs the external `supervisor_smoke.py check DIRECTORY` command
+after implementation and every correction. The checker accepts only two fixed
+Python AST shapes, tests ages 17/18/19 without executing agent-authored code, and
+saves a compact receipt with candidate, plan, and checker SHA-256 hashes. Only
+failures or a compact pass receipt reach the agents. `finish DIRECTORY` rejects
+missing, failed, or stale receipts, but does not attest reviewer approval or
+release readiness. The supervisor must obtain independent approval of the same
+candidate hash, including renewed review after any fix. Human approval remains
+required. This does not demonstrate running arbitrary project or developer-authored
+tests, OS-enforced separation of test execution, or a production release gate.
+
+One developer correction total and four worker assignments maximum are supervisor
+instructions, not hard execution limits. The supervisor compares candidate hashes
+and stops on no effective change, outstanding findings, unavailable tools, or
+uncertain execution. Disagreement or plan ambiguity goes to the human. This
+experiment deliberately tests agent-driven coordination; use the existing scripted
+workflow when mechanically enforced budgets and resumable run evidence are needed.
+There is no automatic fallback, Jev adjudication, architect escalation loop, PR,
+or production workflow change. Copilot still uses CAO's provider initialization:
+asynchronous assignment can return promptly while initialization later fails.
+Inspect the terminal on failure and reconcile side effects before retrying.
+
+Keep only the tiny synthetic candidate, plan, receipts, and a concise curated
+`handoff.md` in the private trial directory. The handoff contains stage, candidate
+hash, correction count, check status, unresolved findings with evidence, and
+review approval provenance. Do not copy raw transcripts, complete prompts,
+environment values, secrets, or unrelated source into it. The fixed generated
+`start.md` is a synthetic instruction fixture. These files remain after success
+or failure for human inspection; there is no automatic cleanup or expiration.
+Unlike the scripted trials, this experiment has no workflow result or automatic
+failure.json; inspect the retained handoff, receipt, and CAO terminal status.
+It is fresh-run only: no automatic replay or retry of side-effecting workers.
+
+### Copilot Assessment Display Framing
+
+Copilot can capture a `●` response cell, wrapped JSON, read/thinking/MCP status
+rows, and a `Task complete` branch repeating the assessment. Completion status
+does not make this a valid protocol response. Feature engineering uses a narrow adapter
+before its strict assessment parser; artifact smoke ignores terminal framing. It accepts one complete curated
+assessment cell and optionally one completion branch containing an exactly
+agreeing parsed assessment. It joins indented JSON continuation rows with a
+space; wraps that cannot be reconstructed as valid curated JSON remain invalid.
+Only the observed thinking, read, and MCP lifecycle row formats are recognized.
+
+Conflicting or additional response cells, summary prose, quoted/Markdown
+markers, sidebar contamination, unknown display rows and incomplete branches
+remain invalid and use the existing single formatting retry. The adapter never
+selects a convenient marker from a transcript or drops a material finding to
+obtain approval. Evidence records normalization status and cell counts; invalid
+assessment diagnostics also count Copilot response/completion rows and identify
+side-border characters. No tool paths, display rows or raw response text are
+persisted by these diagnostics. Only accepted curated findings cross the
+existing retention boundary. This is a rig compatibility adapter, not an
+upstream response-provenance guarantee; unfamiliar layouts fail closed.
+
+### Codex Display Framing and Prompt Echoes
+
+The installed CAO Codex extractor can return a displayed response with its
+leading `•` response-cell bullet and trailing `Worked for … • … AM/PM` timing
+line. Forwarding that bullet into the next multiline task prompt can also make
+CAO mistake the echoed contract for a new assistant response and capture both
+prompt text and the real answer. Completion status does not validate capture.
+
+Feature engineering removes that narrowly recognized Codex display framing before
+validating or forwarding replies. Artifact smoke consumes files instead. This is provider transport handling, not an
+assessment approval heuristic: Markdown, quoted markers, arbitrary prose and
+other providers' output remain subject to the original strict parser. Multiple
+Codex response cells are ambiguous and remain invalid without extracting a convenient JSON
+substring or last approval marker. A completed read-only assessment may use its
+one formatting retry for a fresh clean capture; other seats halt immediately.
+Capture records retain only framing flags or
+sanitized shape diagnostics. Artifact smoke distinguishes invalid
+handoffs from failed deterministic checks in `failure.json`.
+
+The failed `run-1dcfb7ed348c4188` contained a correct developer expression inside
+an ambiguous captured response. Its records remain unchanged; they cannot be
+replayed as fresh verification. Sync the corrected scripts and start a new smoke
+run. This workaround addresses the observed framing/capture defect; an upstream
+CAO extractor fix would remove the need for it. No external CAO package files
+are changed by this workaround.
+
+
+### Copilot Startup Update-Banner Compatibility
+
+A timeout can also report that the idle prompt was recognized but the status
+did not settle to idle. That is a readiness/status-monitor failure, not an
+unrecognized footer or malformed handoff. Artifact smoke reports an allowlisted
+Copilot startup timeout directly and performs no automatic retry. The workflow
+step timeout does not change the provider's 60-second initialization deadline.
+If INFO logs cannot distinguish the cause, restart the server with
+`CAO_LOG_LEVEL=DEBUG cao-server` using its existing host/port/backend options,
+then explicitly reproduce the startup. DEBUG output can contain screen text:
+inspect it locally, do not export raw logs into handoff artifacts. Preserve
+active sessions when scheduling a server restart.
+
+`cao launch` also has a separate HTTP client deadline: by default it reads for
+30 seconds, shorter than Copilot's 60-second initialization loop. A client
+timeout can leave a successfully initialized server-side terminal behind.
+Inspect server logs/session state before launching another copy. For a deliberate
+startup probe, `CAO_MCP_REQUEST_TIMEOUT=90 cao launch --agents wg-reviewer-smoke
+--provider copilot_cli` gives the CLI more time without changing provider readiness
+policy. It does not fix a provider that never becomes ready.
+
+`run-345960ab6fb64bfc` passed architect/developer steps, then failed before the
+reviewer task with `Copilot initialization timed out after 60 seconds`. The
+server found an idle prompt but rejected the next row: a version-download notice
+preceded the normal `← open sidebar` status hints. Increasing the workflow's
+90-second timeout does not change CAO's separate 60-second readiness loop.
+
+`.cao/verification/copilot_footer_compat.py` checks a narrow compatibility fix
+against the installed CAO provider without launching Copilot or calling models.
+Use the Python interpreter from CAO's own environment:
+
+```bash
+~/.local/share/uv/tools/cli-agent-orchestrator/bin/python -B \
+  .cao/verification/copilot_footer_compat.py
+```
+
+Adding `--apply` changes only `COPILOT_HINT_BAR_PATTERN` in the installed
+`copilot_cli.py`, accepting the specific version-download prefix before the
+existing status row. It refuses unfamiliar source, is idempotent, and retains
+an original backup as `copilot_cli.py.workgraph-original`. Busy/login/trust/error
+screens remain non-idle. This is an explicit, local external-tool compatibility
+patch, not fallback or a workflow monkeypatch; `.cao/sync.sh` does not apply it.
+Restart the running CAO server to load the changed provider, then launch a new
+smoke run. Preserve active runs when scheduling the restart. A CAO package
+upgrade may replace this patch; rerun the check instead of blindly reapplying.
+
+Both workflows now embed sanitized execution-failure metadata directly in
+`failure.json`. The known Copilot initialization-timeout signal includes the
+provider startup limit and a next action. Unknown errors retain only safe type/
+HTTP metadata and remain uncertain. No raw exception message/body is persisted,
+and no execution failure is automatically retried or switched to another model.

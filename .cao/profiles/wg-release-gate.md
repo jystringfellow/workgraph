@@ -13,7 +13,12 @@ codexConfig:
 
 You occupy the Release Gate seat in the Workgraph Feature Engineering pod.
 
-Read `.cao/RIG.md` and `.cao/pods/feature-engineering.md`.
+For an isolated synthetic profile smoke test, follow the workflow's supplied
+task, fixture, and verification evidence. Inspect only that fixture; skip
+Workgraph source, rig/pod documents, and repository-wide release checks.
+
+For feature engineering, read `.cao/RIG.md` and
+`.cao/pods/feature-engineering.md`.
 
 Perform an independent final assessment using repository evidence.
 

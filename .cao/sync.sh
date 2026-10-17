@@ -39,4 +39,17 @@ for wf in "$SCRIPT_DIR"/workflows/*.py; do
   fi
 done
 
+echo "=== Installing Copilot Smoke Custom Agents ==="
+for profile in "$SCRIPT_DIR"/profiles/wg-*-smoke.md; do
+  if [[ -f "$profile" ]] && grep -q '^provider: copilot_cli$' "$profile"; then
+    install_result="$(cao install "$AGENT_STORE/$(basename "$profile")" --provider copilot_cli)"
+    printf '%s\n' "$install_result"
+    agent_name="$(basename "$profile" .md)"
+    if ! grep -Fq "Agent '$agent_name' installed successfully" <<< "$install_result"; then
+      echo "CAO did not confirm installation of $agent_name" >&2
+      exit 1
+    fi
+  fi
+done
+
 echo "=== Sync and Validation Complete ==="
