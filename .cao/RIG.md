@@ -75,8 +75,11 @@ profiles. Never overwrite a Copilot agent whose ownership CAO cannot verify.
 ## Verification and evidence
 
 The host runs the prepared snapshot of `verification/verify.sh`: `go vet ./...`
-and `go test ./...`. It checks the snapshot hash before execution and executes
-those checked bytes, so edits to the source verifier do not alter a run's checks.
+and `go test ./...`. At run startup, before registration, baseline checks, or
+seat launches, it reads the snapshot once and checks its hash against the in-memory
+manifest. Every full check executes those retained bytes; later edits to the source,
+snapshot, or manifest cannot replace the command. Preparation artifacts must be
+trusted when the run starts.
 It removes active Workgraph AI session bindings from the child environment.
 The test process uses umask 022 so permission-sensitive fixtures are predictable;
 run directories remain private. Native compiler/toolchain settings remain
@@ -92,17 +95,20 @@ A lead writes `verify.request` with an increasing request number:
 ```
 
 It ends its turn. The host waits up to 90 seconds, within the supervision
-deadline, for every session terminal to be idle or completed before checking the
-exact Go fact or the full suite. It writes numbered receipts and `checks.json`,
-then wakes the lead. Repeated requests are not rerun; malformed, out-of-order, or over-budget requests stop execution.
-An expected red fact must fail its intended assertion. A compiler/setup failure
-or missing fact is not evidence of a reproduced defect. After a candidate change,
-the host requires a successful red receipt before another full request: the named
-fact must have failed without a timeout or concurrent candidate changes, on a
-candidate different from the last full check. Each full request consumes that
-red evidence; another correction needs fresh red evidence. The initial baseline
-and repeat full checks of an unchanged candidate are exempt. The lead still
-inspects the fact and failure to establish that the intended assertion failed.
+deadline, for every session terminal to be idle, completed, or in error before
+checking the exact Go fact or the full suite. An error terminal has yielded;
+this does not establish successful work or an approving verdict. Overall deadline
+exhaustion takes precedence over a terminal yield timeout. It writes numbered
+receipts and `checks.json`, then wakes the lead. Repeated requests are not rerun;
+malformed, out-of-order, or over-budget requests stop execution.
+The lead enforces red-first for behavioral changes: inspect the fact and failure
+to establish that the intended assertion failed before authorizing implementation.
+A compiler/setup failure or missing fact is not evidence of a reproduced defect.
+The host records evidence but does not gate full checks on prior red receipts.
+Failed full checks can be corrected and retried, confirming green red requests do
+not block subsequent full checks, and behavior-preserving refactor corrections
+need proportionate verification rather than a new failing fact. Correction and
+request budgets still apply.
 Receipts record `changed_paths` relative to HEAD, including pre-existing changes
 and non-ignored untracked paths. Nested repositories appear as directory paths.
 
@@ -127,7 +133,10 @@ judgment is correct.** Inspect the actual verdicts and handoff before accepting 
 result; `verdicts_require_human_inspection` remains true. There is no automatic PR,
 commit, publication, merge, or release. Stage matching begins at the stage value,
 so `Stage: fixing failed full checks` and `Stage: not ready for human review`
-neither stop nor approve the run. Indentation and `**Stage:**` are accepted.
+neither stop nor approve the run. Terminal stage values must occupy the whole
+line, with an optional trailing period; put explanations on separate lines.
+Indentation and `**Stage:**` are accepted. Final readiness also waits for every
+session terminal to yield, using the same statuses as host checks.
 
 ## Recovery and retention
 
@@ -136,10 +145,14 @@ claim: a run directory can be executed once, including when its first attempt
 fails. Do not remove that claim to retry a possibly side-effecting step. Reconcile
 the retained CAO session and worktree, then prepare a fresh run. Host assignment
 or elapsed-time exhaustion requests cleanup of that run's session; cleanup errors
-are recorded. The runner's exit cleanup removes the run-specific profiles it
-registered in the CAO agent store and its Copilot custom agent from
-`~/.copilot/agents/`. Existing registrations are preserved; collisions stop the
-run. Cleanup errors are retained in `result.json` and prevent a successful result.
+are recorded. The runner removes its run-specific profiles and Copilot custom
+agent only if no session launched or session deletion was confirmed. Retained
+sessions keep their registrations so live leads can still assign workers; failed
+or unconfirmed deletion also preserves them. Operators remove these registrations
+after ending retained sessions. The Copilot path remains `~/.copilot/agents/`;
+no installer path override was discoverable in the available local code or docs.
+Existing registrations are preserved; collisions stop the run. Registration
+cleanup errors are retained in `result.json` and prevent a successful result.
 The private run directory remains available for inspection. Other failures
 preserve the session for inspection. A host crash or interrupt can leave agents alive; inspect CAO before another launch.
 

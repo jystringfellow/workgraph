@@ -191,16 +191,12 @@ def review_evidence(receipt, current, callbacks, actors, seats):
     return required
 
 
-def verify(root, number, mode='full', fact=None):
+def verify(root, number, mode='full', fact=None, *, verifier):
     before = state()
     paths = subprocess.check_output(['git', '-C', str(REPO), 'diff', '--name-only', '-z', 'HEAD'])
     paths += subprocess.check_output(['git', '-C', str(REPO), 'ls-files', '--others', '--exclude-standard', '-z'])
     changed_paths = sorted(set(os.fsdecode(p) for p in paths.split(b'\0') if p))
     env = clean_env()
-    verifier = (root / 'verify.sh').read_bytes()
-    expected = json.loads((root / 'manifest.json').read_text())['verifier_sha256']
-    if hashlib.sha256(verifier).hexdigest() != expected:
-        raise RuntimeError('Verifier snapshot changed; prepare a fresh run')
     command = ['bash', '-c', verifier.decode()] if mode == 'full' else [
         'go', 'test', './facts', '-count=1', '-run', '^' + fact + '$']
     print(f'Host verification {number}: {mode}' + ((' ' + fact) if fact else ''), flush=True)
@@ -243,6 +239,16 @@ def verify(root, number, mode='full', fact=None):
     return receipt
 
 
+def session_yielded(session, lead_id):
+    if not lead_id:
+        return False
+    with closing(sqlite3.connect('file:' + str(HOME / 'db/cli-agent-orchestrator.db') + '?mode=ro', uri=True)) as db:
+        terminals = db.execute('select id from terminals where tmux_session=?', (session,)).fetchall()
+    return bool(terminals) and all(
+        api('GET', '/terminals/' + identifier).get('status') in ('idle', 'completed', 'error')
+        for identifier, in terminals)
+
+
 def run(root):
     root = root.resolve()
     root.relative_to(REPO / '.cao/pod-runs')
@@ -253,31 +259,23 @@ def run(root):
     session = lead_id = None
     actors = {}
     registrations = []
-    last_full = red_receipt = None
+    session_deleted = False
     command = [sys.executable, '-m', 'cli_agent_orchestrator.cli.main']
 
     def host_verify(number, mode='full', fact=None):
-        nonlocal last_full, red_receipt
-        current = state() if number and mode == 'full' else None
-        if current is not None and current != last_full['candidate']:
-            if (not red_receipt or not red_receipt['expected_fact_failed']
-                    or red_receipt['candidate'] == last_full['candidate']
-                    or red_receipt['candidate']['head'] != current['head']):
-                raise RuntimeError('Changed candidate requires a passing red receipt before full checks')
-        receipt = verify(root, number, mode, fact)
+        receipt = verify(root, number, mode, fact, verifier=verifier)
         if mode == 'full' and receipt['passed']:
             with closing(sqlite3.connect('file:' + str(HOME / 'db/cli-agent-orchestrator.db') + '?mode=ro', uri=True)) as db:
                 receipt['inbox_rowid'] = db.execute('select coalesce(max(rowid), 0) from inbox').fetchone()[0]
             save(root / f'{number:02d}-checks.json', receipt)
             save(root / 'checks.json', receipt)
-        if mode == 'full':
-            last_full, red_receipt = receipt, None
-        else:
-            red_receipt = receipt
         return receipt
 
     try:
         manifest = json.loads((root / 'manifest.json').read_text())
+        verifier = (root / 'verify.sh').read_bytes()
+        if hashlib.sha256(verifier).hexdigest() != manifest['verifier_sha256']:
+            raise RuntimeError('Verifier snapshot changed; prepare a fresh run')
         seats = json.loads((root / 'seats.json').read_text())
         plan = json.loads((root / 'plan-state.json').read_text())['sources']
         if api('GET', '/health').get('status') != 'ok':
@@ -333,7 +331,7 @@ def run(root):
             if stage != previous or time.monotonic() - notice > 30:
                 print(stage, flush=True)
                 notice, previous = time.monotonic(), stage
-            with sqlite3.connect('file:' + str(HOME / 'db/cli-agent-orchestrator.db') + '?mode=ro', uri=True) as db:
+            with closing(sqlite3.connect('file:' + str(HOME / 'db/cli-agent-orchestrator.db') + '?mode=ro', uri=True)) as db:
                 rows = db.execute('select id,agent_profile,provider,model,model_honored from terminals where tmux_session=?', (session,)).fetchall()
                 actors.update((identifier, profile) for identifier, profile, provider, model, honored in rows)
                 runtime_path = root / 'runtime-seats.json'
@@ -350,7 +348,7 @@ def run(root):
                 raise RuntimeError('Overall pod assignment bound exceeded')
             if subprocess.check_output(['git', '-C', str(REPO), 'rev-parse', 'HEAD'], text=True).strip() != baseline['candidate']['head']:
                 raise RuntimeError('Git HEAD changed during a no-commit run; human reconciliation required')
-            if re.search(r'(?i)^stage:\s*(?:stopped|blocked|failed)\b', stage):
+            if re.search(r'(?i)^stage:\s*(?:stopped|blocked|failed)\.?$', stage):
                 raise RuntimeError('Lead stopped; unresolved findings are in handoff.md')
             check_plan(plan)
             request = root / 'verify.request'
@@ -358,17 +356,18 @@ def run(root):
             if text and text not in seen_requests:
                 number, mode, fact = parse_request(text, len(seen_requests), manifest['max_check_requests'])
                 seen_requests.add(text)
-                ready_deadline = min(deadline, time.monotonic() + 90)
-                while time.monotonic() < ready_deadline:
-                    with closing(sqlite3.connect('file:' + str(HOME / 'db/cli-agent-orchestrator.db') + '?mode=ro', uri=True)) as db:
-                        terminals = db.execute('select id from terminals where tmux_session=?', (session,)).fetchall()
-                    if lead_id and terminals and all(
-                            api('GET', '/terminals/' + identifier).get('status') in ('idle', 'completed')
-                            for identifier, in terminals):
+                ready_deadline = time.monotonic() + 90
+                while True:
+                    now = time.monotonic()
+                    if now >= deadline:
+                        raise TimeoutError('Overall pod time bound exhausted')
+                    if now >= ready_deadline:
+                        raise RuntimeError('Pod terminals did not yield for host verification; no wakeup retry')
+                    if session_yielded(session, lead_id):
                         break
                     time.sleep(2)
-                else:
-                    raise RuntimeError('Pod terminals did not yield for host verification; no wakeup retry')
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('Overall pod time bound exhausted')
                 receipt = host_verify(number, mode, fact)
                 cue = (f'Host verification request {number} completed. Read {root / "checks.json"}. '
                        f'Mode={mode}; passed={receipt["passed"]}; expected_fact_failed={receipt["expected_fact_failed"]}. '
@@ -377,10 +376,10 @@ def run(root):
                 if delivery.get('success') is not True:
                     raise RuntimeError('CAO did not confirm host receipt delivery; inspect the retained session')
                 ready_since = None
-            if re.search(r'(?i)^stage:\s*ready for human review\b', stage):
+            if re.search(r'(?i)^stage:\s*ready for human review\.?$', stage):
                 current = state()
                 required = review_evidence(receipt, current, callbacks, actors, seats)
-                if api('GET', '/terminals/' + lead_id).get('status') not in ('idle', 'completed'):
+                if not session_yielded(session, lead_id):
                     ready_since = None
                 else:
                     ready_since = ready_since or time.monotonic()
@@ -401,19 +400,21 @@ def run(root):
         if session and ('bound exceeded' in str(exc) or isinstance(exc, TimeoutError)):
             try:
                 result['bound_cleanup'] = api('DELETE', '/sessions/' + session)
+                session_deleted = result['bound_cleanup'].get('success') is True
             except Exception as cleanup_error:
                 result['bound_cleanup_error'] = type(cleanup_error).__name__
     finally:
-        for path in reversed(registrations):
-            try:
-                path.unlink(missing_ok=True)
-            except OSError as exc:
-                result.setdefault('registration_cleanup_errors', []).append(
-                    {'path': str(path), 'error': type(exc).__name__})
-                result['status'] = 'stopped'
+        if not session or session_deleted:
+            for path in reversed(registrations):
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError as exc:
+                    result.setdefault('registration_cleanup_errors', []).append(
+                        {'path': str(path), 'error': type(exc).__name__})
+                    result['status'] = 'stopped'
         save(root / 'result.json', result)
         print('Run evidence: ' + str(root), flush=True)
-        if session:
+        if session and not session_deleted:
             print('Session retained: ' + session, flush=True)
     return 0 if result['status'] == 'ready_for_human_review' else 1
 

@@ -53,10 +53,11 @@ turn for callbacks; no built-in subagents, polling or model substitutions.
 7. After full checks and independent approval, assign the gate. It independently
    inspects the full contract and current repository; another seat's approval is
    not proof. Require explicit readiness approval naming the same HEAD/fingerprint.
-8. Permit at most **two developer gate corrections**. Each follows fact → host
-   red → implementation → full host checks → fresh independent review → gate
-   reassessment. Renewed review findings consume the remaining global three-review
-   correction budget. Never reset budgets or create nested correction loops.
+8. Permit at most **two developer gate corrections**. Behavioral corrections follow
+   fact → host red → implementation → full host checks → fresh independent review
+   → gate reassessment. Behavior-preserving refactors need proportionate checks
+   without inventing a failing fact. Renewed review findings consume the remaining
+   global three-review correction budget. Never reset budgets or create nested correction loops.
 9. On missing/ambiguous assessments, startup/tool failure, uncertain execution,
    exhausted budgets or unsupported dispositions, retain final unresolved evidence
    in `handoff.md` and write `Stage: stopped`. Do not spend developer correction
@@ -73,18 +74,24 @@ The [runner](../pod.py) prepares a private execution packet under
 `.cao/pod-runs/pod-<id>/`. `plan-state.json` binds AGENTS.md and explicit plan
 sources. `seats.json` provides exact run-specific profile names. `checks.json`
 is the latest host receipt; numbered receipts retain prior results. The prepared
-`verify.sh` snapshot and its manifest hash bind the full verification command.
+`verify.sh` snapshot is read once and checked against the in-memory manifest hash
+at run startup, before registration, baseline checks, or seat launches. All full
+checks use those retained bytes; later disk edits cannot replace the command.
 
 The lead requests checks by writing `verify.request` in that run directory:
 `1 red TestExactFactName`, then `2 full`, increasing the number each time. End
-its turn immediately; the host waits for every session terminal to be idle or
-completed, runs the command, and sends a compact callback. A changed candidate
-requires a successful red receipt before full verification. The initial baseline
-and unchanged full-check retries are exempt. A full request consumes red evidence;
-subsequent corrections need a new red receipt. Receipts record changed paths
-relative to HEAD. The lead must still confirm the intended assertion failed.
+its turn immediately; the host waits for every session terminal to be idle,
+completed, or in error, runs the command, and sends a compact callback. Error
+means yielded, not successful. The lead enforces red-first for behavioral changes
+and confirms the intended assertion failed before authorizing implementation.
+The host records changed paths relative to HEAD and red evidence, but does not
+require a red receipt before full verification. Failed full checks can be corrected
+and retried within the budgets; confirming green reds and behavior-preserving
+refactor corrections do not prevent another full check.
 Final readiness requires each independent seat's latest delivered callback to
-name the candidate and follow the latest full receipt's inbox boundary.
+name the candidate and follow the latest full receipt's inbox boundary, with
+every session terminal yielded. Ready/stopped stage values must occupy the entire
+line, with an optional trailing period; put explanations on separate lines.
 Never edit check receipts, host configuration, plan bindings or seat profiles.
 Read failing test locations for triage; stop for insufficient evidence.
 
