@@ -33,6 +33,8 @@ type AIRunConfig struct {
 	Stdin                io.Reader
 	Stdout               io.Writer
 	Stderr               io.Writer
+
+	expectedResolvedExecutable string
 }
 
 type AIRunResult struct {
@@ -57,6 +59,7 @@ type aiStartedPayload struct {
 	SessionID            string          `json:"session_id"`
 	Tool                 string          `json:"tool"`
 	ToolPath             string          `json:"tool_path,omitempty"`
+	ToolResolvedPath     string          `json:"tool_resolved_path,omitempty"`
 	NativeSessionID      string          `json:"native_session_id,omitempty"`
 	PredecessorSessionID string          `json:"predecessor_session_id,omitempty"`
 	PID                  int             `json:"pid"`
@@ -270,6 +273,10 @@ func runAISession(config AIRunConfig, permittedParentSessionID string) (AIRunRes
 	if err != nil {
 		return AIRunResult{}, fmt.Errorf("resolve AI tool path %q: %w", filepath.Base(config.Command[0]), err)
 	}
+	if config.expectedResolvedExecutable != "" && resolvedExecutable != config.expectedResolvedExecutable {
+		return AIRunResult{}, fmt.Errorf("AI tool %s no longer resolves to the recorded executable %s (now %s); refusing to launch a changed executable. To continue with it deliberately, run `workgraph ai run -- %s`",
+			invokedExecutable, config.expectedResolvedExecutable, resolvedExecutable, aiShellCommand(append([]string{invokedExecutable}, config.Command[1:]...)))
+	}
 	tool := aiToolIdentity(invokedExecutable, resolvedExecutable)
 	now := time.Now().UTC()
 	observed, project, err := observeAIWorkingState(workingDir, now)
@@ -302,7 +309,8 @@ func runAISession(config AIRunConfig, permittedParentSessionID string) (AIRunRes
 		}
 	}
 
-	command := exec.Command(invokedExecutable, nativeLaunch.Args...)
+	command := exec.Command(resolvedExecutable, nativeLaunch.Args...)
+	command.Args[0] = invokedExecutable
 	command.Dir = workingDir
 	command.Stdin = config.Stdin
 	command.Stdout = config.Stdout
@@ -318,6 +326,7 @@ func runAISession(config AIRunConfig, permittedParentSessionID string) (AIRunRes
 		SessionID:            sessionID,
 		Tool:                 tool,
 		ToolPath:             invokedExecutable,
+		ToolResolvedPath:     resolvedExecutable,
 		NativeSessionID:      nativeSessionID,
 		PredecessorSessionID: predecessorSessionID,
 		PID:                  command.Process.Pid,
@@ -1522,6 +1531,21 @@ func parseAIDirtyPaths(output []byte) ([]string, error) {
 	}
 	sort.Strings(result)
 	return result, nil
+}
+
+func aiShellCommand(arguments []string) string {
+	quoted := make([]string, len(arguments))
+	for index, argument := range arguments {
+		quoted[index] = aiShellQuote(argument)
+	}
+	return strings.Join(quoted, " ")
+}
+
+func aiShellQuote(value string) string {
+	if value != "" && strings.Trim(value, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_./=:@+,") == "" {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
 func aiToolIdentity(invokedPath, resolvedPath string) string {

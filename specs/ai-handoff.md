@@ -47,9 +47,9 @@ source can reuse a stored checkpoint but cannot accept a new one.
 inherits that consumed standard input. Instead the destination's standard
 input is the controlling terminal (`/dev/tty`, or `CONIN$` on Windows). When
 no controlling terminal is available, the validated checkpoint stays on the
-source and handoff fails before launch with an error naming the
-`ai handoff <destination> --from <session-id>` command to rerun from a
-terminal. Without `--stdin`, the destination inherits standard input
+source and handoff fails before launch with an error naming the shell-quoted
+`ai handoff <destination> --from <session-id>` command, including any
+non-default `--home` and `--database`, to rerun from a terminal. Without `--stdin`, the destination inherits standard input
 unchanged.
 
 Handoff invoked inside its selected wrapped source is an intentional, private

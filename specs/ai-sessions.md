@@ -200,12 +200,12 @@ a verified adapter, otherwise the basename of the symlink-resolved executable
 when that names a verified adapter, otherwise the symlink-resolved basename.
 A `claude` launcher that links to a versioned file such as
 `versions/2.1.302` is therefore recorded as `claude`. The absolute, cleaned
-invoked executable path is launched and stored separately as `tool_path`; it
-keeps symlinks so a later native resume follows the tool's own launcher rather
-than a versioned file that an update may remove, and it never trusts a
-changed `PATH`. The invoked path must still resolve before launch. If the user
-explicitly launches `sh -c ...` or `npx ...`, the tool is `sh` or `npx`.
-Workgraph never persists the remaining arguments.
+invoked executable path is stored as `tool_path`, keeping symlinks so the
+adapter identity can be derived again. The symlink-resolved executable is
+stored as `tool_resolved_path` and is the file workgraph executes, with the
+invoked path as the child's `argv[0]`. Neither path trusts a changed `PATH`.
+If the user explicitly launches `sh -c ...` or `npx ...`, the tool is `sh` or
+`npx`. Workgraph never persists the remaining arguments.
 
 Native behavior comes from a small verified adapter registry. An adapter
 defines the executable basename, how to capture a native session ID, how to
@@ -522,6 +522,7 @@ Every payload begins with the stable envelope fields `schema_version` and
   "session_id": "00000000-0000-4000-8000-000000000000",
   "tool": "codex",
   "tool_path": "/usr/local/bin/codex",
+  "tool_resolved_path": "/opt/codex/bin/codex",
   "native_session_id": "native-id-if-known-at-launch",
   "predecessor_session_id": "prior-workgraph-id-if-known",
   "pid": 1234,
@@ -802,6 +803,15 @@ Resume requires:
 - a stored latest observed cwd that still resolves locally
 - an absolute, resolvable stored `tool_path` whose tool identity, derived as
   for `ai run`, still matches the stored tool
+- a `tool_path` that still resolves to the stored `tool_resolved_path`, checked
+  immediately before launch; sessions recorded without `tool_resolved_path`
+  stored the resolved executable as `tool_path` itself
+
+Resume never follows a launcher that was repointed after the session started,
+even to a newer version of the same tool, because the adapter name alone does
+not prove the new target is that tool. It refuses before recording a session
+and names the explicit `workgraph ai run -- <tool-path> <native resume argv>`
+command the user can run to continue deliberately with the new executable.
 
 Running and `unknown` sessions are rejected conservatively. Missing native
 identity or adapter support produces an actionable nonzero error and does not

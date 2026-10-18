@@ -129,7 +129,14 @@ func HandoffAISession(config AIHandoffConfig) (AIHandoffResult, error) {
 	if config.CheckpointInput != nil {
 		terminal, err := openAIControllingTerminal()
 		if err != nil {
-			return AIHandoffResult{}, fmt.Errorf("--stdin consumed standard input and no controlling terminal is available for the destination (%v); the checkpoint is recorded on the source, so rerun `workgraph ai handoff %s --from %s` from a terminal", err, destination, sourceSessionID)
+			retry := []string{"workgraph", "ai", "handoff", destination, "--from", sourceSessionID}
+			if config.HomeDir != "" {
+				retry = append(retry, "--home", config.HomeDir)
+			}
+			if config.DatabasePath != "" {
+				retry = append(retry, "--database", config.DatabasePath)
+			}
+			return AIHandoffResult{}, fmt.Errorf("--stdin consumed standard input and no controlling terminal is available for the destination (%v); the checkpoint is recorded on the source, so rerun `%s` from a terminal", err, aiShellCommand(retry))
 		}
 		defer terminal.Close()
 		destinationStdin = terminal

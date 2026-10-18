@@ -192,6 +192,10 @@ func ResumeAISession(config AIResumeConfig) (AIResumeResult, error) {
 	if !filepath.IsAbs(toolPath) || aiToolIdentity(toolPath, resolvedToolPath) != selected.Summary.Tool {
 		return AIResumeResult{}, errors.New("stored AI tool path does not match the verified adapter")
 	}
+	expectedResolvedToolPath := selected.Started.ToolResolvedPath
+	if expectedResolvedToolPath == "" {
+		expectedResolvedToolPath = resolvedToolPath
+	}
 	if selected.LatestObserved == nil || selected.LatestObserved.CWD == "" {
 		return AIResumeResult{}, errors.New("native resume is unavailable: no working directory was recorded")
 	}
@@ -202,6 +206,7 @@ func ResumeAISession(config AIResumeConfig) (AIResumeResult, error) {
 		Command:              append([]string{toolPath}, resumeArgs...),
 		PredecessorSessionID: selected.Summary.SessionID,
 		Stdin:                config.Stdin, Stdout: config.Stdout, Stderr: config.Stderr,
+		expectedResolvedExecutable: expectedResolvedToolPath,
 	})
 	if err != nil {
 		return AIResumeResult{}, err

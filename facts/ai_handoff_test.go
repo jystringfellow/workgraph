@@ -175,8 +175,9 @@ func TestAIHandoffStdinWithoutTerminalKeepsCheckpointAndDoesNotLaunch(t *testing
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fixture")
 	}
-	homeDir := filepath.Join(t.TempDir(), ".workgraph")
-	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	storageDir := filepath.Join(t.TempDir(), "custom work graph")
+	homeDir := filepath.Join(storageDir, "home")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir, DatabasePath: filepath.Join(storageDir, "data's", "events.db")})
 	if err != nil {
 		t.Fatalf("init workgraph: %v", err)
 	}
@@ -185,22 +186,23 @@ func TestAIHandoffStdinWithoutTerminalKeepsCheckpointAndDoesNotLaunch(t *testing
 		t.Fatalf("resolve working directory: %v", err)
 	}
 	launchedPath := filepath.Join(workingDir, "launched.txt")
-	writeAIFactExecutable(t, workingDir, "codex", `cat > "$WORKGRAPH_AI_TEST_LAUNCHED"`)
+	writeAIFactExecutable(t, workingDir, "codex", `printf '%s\n' "$@" > "$WORKGRAPH_AI_TEST_LAUNCHED"`)
 	sourceID := "00000000-0000-4000-8000-000000000321"
 	insertAINativeFactSession(t, initialized.DatabasePath, sourceID, "claude", "/usr/local/bin/claude", "claude-native", "", workingDir, "2026-08-03T12:00:00Z", false)
+	environment := daemonCommandEnv([]string{
+		"PATH=" + filepath.Dir(workgraphFactsBinary) + string(os.PathListSeparator) + workingDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"WORKGRAPH_AI_TEST_LAUNCHED=" + launchedPath,
+	})
 
 	command := exec.Command(workgraphFactsBinary,
 		"ai", "handoff", "codex", "--from", sourceID, "--stdin", "--home", homeDir, "--database", initialized.DatabasePath,
 	)
 	command.Dir = workingDir
-	command.Env = daemonCommandEnv([]string{
-		"PATH=" + workingDir + string(os.PathListSeparator) + os.Getenv("PATH"),
-		"WORKGRAPH_AI_TEST_LAUNCHED=" + launchedPath,
-	})
+	command.Env = environment
 	detachFromControllingTerminal(command)
 	command.Stdin = strings.NewReader(`{"goal":"Recorded before terminal check"}`)
 	output, err := command.CombinedOutput()
-	if err == nil || !strings.Contains(string(output), "no controlling terminal") || !strings.Contains(string(output), "ai handoff codex --from "+sourceID) {
+	if err == nil || !strings.Contains(string(output), "no controlling terminal") {
 		t.Fatalf("expected actionable missing-terminal failure, got %v\n%s", err, output)
 	}
 	if _, err := os.Stat(launchedPath); !os.IsNotExist(err) {
@@ -219,6 +221,21 @@ func TestAIHandoffStdinWithoutTerminalKeepsCheckpointAndDoesNotLaunch(t *testing
 	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type = 'ai.session_started'`).Scan(&starts); err != nil || starts != 1 {
 		t.Fatalf("missing terminal created destination lifecycle, starts=%d err=%v", starts, err)
 	}
+
+	parts := strings.Split(string(output), "`")
+	if len(parts) != 3 || !strings.HasPrefix(parts[1], "workgraph ai handoff codex --from "+sourceID) {
+		t.Fatalf("missing-terminal failure did not suggest one handoff command:\n%s", output)
+	}
+	retry := exec.Command("/bin/sh", "-c", parts[1])
+	retry.Dir = workingDir
+	retry.Env = environment
+	if retryOutput, err := retry.CombinedOutput(); err != nil {
+		t.Fatalf("suggested retry %q failed: %v\n%s", parts[1], err, retryOutput)
+	}
+	launchedArgs, err := os.ReadFile(launchedPath)
+	if err != nil || !strings.Contains(string(launchedArgs), "Recorded before terminal check") {
+		t.Fatalf("suggested retry did not hand off the recorded checkpoint: %v\n%s", err, launchedArgs)
+	}
 }
 
 func runWorkgraphInAIFactTerminal(t *testing.T, dir, stdinPath string, env []string, args ...string) (string, error) {
@@ -234,8 +251,13 @@ func runWorkgraphInAIFactTerminal(t *testing.T, dir, stdinPath string, env []str
 	for _, argument := range args {
 		quoted = append(quoted, quote(argument))
 	}
+	const terminalUnavailable = "workgraph-fact-terminal-unavailable"
 	wrapper := filepath.Join(t.TempDir(), "in-terminal.sh")
-	contents := "#!/bin/sh\ncd " + quote(dir) + " || exit 97\nexec " + strings.Join(quoted, " ") + " < " + quote(stdinPath) + "\n"
+	contents := "#!/bin/sh\n" +
+		"if ! { exec 3<>/dev/tty; } 2>/dev/null || ! [ -t 3 ]; then echo " + terminalUnavailable + "; exit 98; fi\n" +
+		"exec 3>&-\n" +
+		"cd " + quote(dir) + " || exit 97\n" +
+		"exec " + strings.Join(quoted, " ") + " < " + quote(stdinPath) + "\n"
 	if err := os.WriteFile(wrapper, []byte(contents), 0o755); err != nil {
 		t.Fatalf("write terminal wrapper: %v", err)
 	}
@@ -247,7 +269,7 @@ func runWorkgraphInAIFactTerminal(t *testing.T, dir, stdinPath string, env []str
 	}
 	command.Env = daemonCommandEnv(env)
 	output, err := command.CombinedOutput()
-	if strings.Contains(string(output), "openpty") {
+	if strings.Contains(string(output), "openpty") || strings.Contains(string(output), terminalUnavailable) {
 		t.Skipf("terminal allocation is unavailable: %s", output)
 	}
 	return string(output), err
@@ -986,4 +1008,75 @@ func TestAIHandoffAcceptsCheckpointedSourceFromAnyWrappedTool(t *testing.T) {
 	if err != nil || !strings.Contains(string(argsBytes), "Ship the handoff feature") {
 		t.Fatalf("aider source checkpoint not delivered: %v\n%s", err, argsBytes)
 	}
+}
+
+func TestAIResumeRefusesLauncherRepointedAfterRun(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init workgraph: %v", err)
+	}
+	workingDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve working directory: %v", err)
+	}
+	argsPath := filepath.Join(workingDir, "args.txt")
+	impostorPath := filepath.Join(workingDir, "impostor.txt")
+	binDir, launcher := writeVersionedClaudeFixture(t, `printf '%s\n' "$@" > "$WORKGRAPH_AI_TEST_ARGS"`)
+	environment := []string{
+		"PATH=" + binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"WORKGRAPH_AI_TEST_ARGS=" + argsPath,
+		"WORKGRAPH_AI_TEST_IMPOSTOR=" + impostorPath,
+	}
+	nativeID := "51111111-1111-4111-8111-111111111111"
+	run := exec.Command(workgraphFactsBinary, "ai", "run", "--home", homeDir, "--database", initialized.DatabasePath, "--", "claude", "--resume", nativeID)
+	run.Dir = workingDir
+	run.Env = daemonCommandEnv(environment)
+	if output, err := run.CombinedOutput(); err != nil {
+		t.Fatalf("run versioned claude: %v\n%s", err, output)
+	}
+	sessionID := latestAIStartedSessionID(t, initialized.DatabasePath)
+
+	if output, err := runWorkgraphCommandAllowError(environment, "ai", "resume", "--home", homeDir, "--database", initialized.DatabasePath, sessionID); err != nil {
+		t.Fatalf("resume through unchanged launcher: %v\n%s", err, output)
+	}
+	if argsBytes, err := os.ReadFile(argsPath); err != nil || !strings.Contains(string(argsBytes), "--resume\n"+nativeID+"\n") {
+		t.Fatalf("unchanged launcher did not resume natively: %v\n%s", err, argsBytes)
+	}
+
+	impostor := writeAIFactExecutable(t, t.TempDir(), "unrelated-tool", `echo launched > "$WORKGRAPH_AI_TEST_IMPOSTOR"`)
+	if err := os.Remove(launcher); err != nil {
+		t.Fatalf("remove launcher: %v", err)
+	}
+	if err := os.Symlink(impostor, launcher); err != nil {
+		t.Fatalf("repoint launcher: %v", err)
+	}
+	startsBefore := countAIStartedSessions(t, initialized.DatabasePath)
+	output, err := runWorkgraphCommandAllowError(environment, "ai", "resume", "--home", homeDir, "--database", initialized.DatabasePath, sessionID)
+	if err == nil || !strings.Contains(output, "no longer resolves to the recorded executable") {
+		t.Fatalf("expected repointed launcher refusal, got %v\n%s", err, output)
+	}
+	if _, err := os.Stat(impostorPath); !os.IsNotExist(err) {
+		t.Fatalf("repointed launcher target was executed: %v", err)
+	}
+	if startsAfter := countAIStartedSessions(t, initialized.DatabasePath); startsAfter != startsBefore {
+		t.Fatalf("refused resume recorded a new session, starts %d -> %d", startsBefore, startsAfter)
+	}
+}
+
+func countAIStartedSessions(t *testing.T, databasePath string) int {
+	t.Helper()
+	db, err := sql.Open("sqlite3", databasePath)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	var starts int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type = 'ai.session_started'`).Scan(&starts); err != nil {
+		t.Fatalf("count started sessions: %v", err)
+	}
+	return starts
 }
