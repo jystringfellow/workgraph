@@ -1342,6 +1342,13 @@ func TestAIHandoffRejectsCheckpointTooLargeForTheCommandLine(t *testing.T) {
 			if _, err := os.Stat(launchedPath); !os.IsNotExist(err) {
 				t.Fatalf("oversized context launched the destination: %v", err)
 			}
+			if test.stdin {
+				for _, want := range []string{"checkpoint was saved", "without --stdin", "ai handoff codex --from " + sourceID, "--home " + homeDir, "--database " + initialized.DatabasePath} {
+					if !strings.Contains(string(output), want) {
+						t.Errorf("context rejection omitted %q: %s", want, output)
+					}
+				}
+			}
 
 			db, err := sql.Open("sqlite3", initialized.DatabasePath)
 			if err != nil {
@@ -1671,6 +1678,81 @@ func TestAIHandoffRejectsUnorderableSessionEvidence(t *testing.T) {
 				listed, err := workgraph.ListAISessions(workgraph.AISessionsConfig{HomeDir: homeDir, DatabasePath: initialized.DatabasePath})
 				if err != nil || len(listed.Warnings) == 0 {
 					t.Errorf("unorderable evidence lost integrity warning: %#v %v", listed, err)
+				}
+			})
+		}
+	}
+}
+
+func TestAIHandoffDistinguishesNotionTokensFromRepositoryNames(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	for _, field := range []string{"branch", "cwd", "worktree_root", "dirty_paths"} {
+		for _, test := range []struct {
+			name, value string
+			reject      bool
+		}{
+			{name: "ordinary", value: "secret_rotation_for_service_accounts"},
+			{name: "ordinary_file", value: "secret_management_helpers_test.go"},
+			{name: "legacy_token", value: "secret_" + strings.Repeat("a1B", 14) + "x", reject: true},
+			{name: "token", value: "ntn_" + strings.Repeat("b2C", 14) + "y", reject: true},
+		} {
+			t.Run(field+"/"+test.name, func(t *testing.T) {
+				homeDir := filepath.Join(t.TempDir(), ".workgraph")
+				initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+				if err != nil {
+					t.Fatal(err)
+				}
+				workingDir := t.TempDir()
+				writeAIFactExecutable(t, workingDir, "codex", aiHandoffDestinationRecorder)
+				sourceID := "00000000-0000-4000-8000-000000000372"
+				insertAINativeFactSession(t, initialized.DatabasePath, sourceID, "claude", "/usr/local/bin/claude", "claude-native", "", workingDir, "2026-08-03T12:00:00Z", false)
+				insertAIHandoffCheckpoint(t, initialized.DatabasePath, sourceID, workingDir)
+				value := filepath.Join(workingDir, test.value)
+				if err := os.MkdirAll(value, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if field == "branch" {
+					value = "feat/" + test.value
+				}
+				if field == "dirty_paths" {
+					value = "internal/" + test.value
+				}
+				db, err := sql.Open("sqlite3", initialized.DatabasePath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer db.Close()
+				jsonPath := "$.observed." + field
+				if field == "dirty_paths" {
+					jsonPath += "[0]"
+				}
+				if _, err := db.Exec(`UPDATE events SET payload_json = json_set(payload_json, ?, ?) WHERE id = ?`, jsonPath, value, "ai.session_checkpointed:"+sourceID+":handoff"); err != nil {
+					t.Fatal(err)
+				}
+				output, err := runWorkgraphCommandAllowError([]string{"PATH=" + workingDir + string(os.PathListSeparator) + os.Getenv("PATH")}, "ai", "handoff", "codex", "--from", sourceID, "--home", homeDir, "--database", initialized.DatabasePath)
+				if test.reject {
+					if err == nil || !strings.Contains(output, "notion-token credential pattern") {
+						t.Fatalf("expected token rejection: %v %s", err, output)
+					}
+					if strings.Contains(output, test.value) {
+						t.Fatal("rejection leaked token")
+					}
+					if countAIStartedSessions(t, initialized.DatabasePath) != 1 {
+						t.Fatal("token launched destination")
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("ordinary repository name blocked handoff: %v %s", err, output)
+				}
+				launchDir := workingDir
+				if field == "cwd" {
+					launchDir = value
+				}
+				if context := readAIFactFile(t, launchDir, "context.json"); !strings.Contains(context, value) {
+					t.Fatalf("repository name missing from context: %s", context)
 				}
 			})
 		}

@@ -270,3 +270,10 @@ Feature: Local AI coding session continuity
     Then workgraph does not silently clear the nested-session guard
     And workgraph tells me to resume outside the wrapped agent or unset a known-stale value
     And workgraph launches no child process
+
+  Scenario: Omit sessions with only unorderable evidence
+    Given a session has only events with invalid timestamps
+    When I list AI sessions
+    Then no session row or session count is created for that session
+    And an integrity warning remains visible
+    And handoff cannot select that session

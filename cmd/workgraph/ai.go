@@ -59,9 +59,7 @@ func runAIHandoff(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wr
 		fmt.Fprintln(stderr, "usage: workgraph ai handoff <codex|claude|copilot|opencode> [--from <session-id>] [--stdin]")
 		return 2
 	}
-	switch strings.TrimSpace(positional[0]) {
-	case "codex", "claude", "copilot", "opencode":
-	default:
+	if !workgraph.IsAIHandoffDestination(positional[0]) {
 		fmt.Fprintf(stderr, "workgraph ai handoff: destination %q is unsupported; choose codex, claude, copilot, or opencode\n", positional[0])
 		return 2
 	}

@@ -70,7 +70,7 @@ func HandoffAISession(config AIHandoffConfig) (AIHandoffResult, error) {
 	}
 
 	destination := strings.TrimSpace(config.Destination)
-	if _, supported := aiNativeAdapters[destination]; !supported {
+	if !IsAIHandoffDestination(destination) {
 		return AIHandoffResult{}, fmt.Errorf("destination %q is unsupported; choose codex, claude, copilot, or opencode", destination)
 	}
 	destinationPath, err := exec.LookPath(destination)
@@ -134,11 +134,11 @@ func HandoffAISession(config AIHandoffConfig) (AIHandoffResult, error) {
 
 	contextBudget, err := aiHandoffContextBudget(config.HomeDir, config.DatabasePath, destination, destinationPath)
 	if err != nil {
-		return AIHandoffResult{}, err
+		return AIHandoffResult{}, aiHandoffCheckpointRetryError(config, destination, sourceSessionID, err)
 	}
 	continuation, err := buildAIHandoffContext(sourceSessionID, source.LatestCheckpoint, source.LatestObserved, contextBudget)
 	if err != nil {
-		return AIHandoffResult{}, err
+		return AIHandoffResult{}, aiHandoffCheckpointRetryError(config, destination, sourceSessionID, err)
 	}
 	destinationStdin := config.Stdin
 	if config.CheckpointInput != nil {
@@ -170,7 +170,15 @@ func HandoffAISession(config AIHandoffConfig) (AIHandoffResult, error) {
 	return result, nil
 }
 
+func IsAIHandoffDestination(destination string) bool {
+	_, supported := aiNativeAdapters[strings.TrimSpace(destination)]
+	return supported
+}
+
 func aiHandoffCheckpointRetryError(config AIHandoffConfig, destination, sourceSessionID string, err error) error {
+	if config.CheckpointInput == nil {
+		return err
+	}
 	retry := []string{"workgraph", "ai", "handoff", destination, "--from", sourceSessionID}
 	if config.HomeDir != "" {
 		retry = append(retry, "--home", config.HomeDir)
@@ -222,11 +230,11 @@ func buildAIHandoffContext(sessionID string, checkpoint *aiCheckpointPayload, ob
 	for _, field := range []struct{ name, value string }{
 		{"branch", observed.Branch}, {"cwd", observed.CWD}, {"worktree_root", observed.WorktreeRoot},
 	} {
-		if err := validateAICredentialPatterns("repository field "+field.name, field.value); err != nil {
+		if err := validateAIHandoffMetadataCredentials("repository field "+field.name, field.value); err != nil {
 			return "", err
 		}
 	}
-	if err := validateAICredentialPatterns("repository field dirty_paths", observed.DirtyPaths...); err != nil {
+	if err := validateAIHandoffMetadataCredentials("repository field dirty_paths", observed.DirtyPaths...); err != nil {
 		return "", err
 	}
 	context := aiHandoffContext{
@@ -260,6 +268,19 @@ func buildAIHandoffContext(sessionID string, checkpoint *aiCheckpointPayload, ob
 		return "", fmt.Errorf("handoff context needs %d bytes, over the %d bytes left on the destination command line even without dirty paths; record a shorter checkpoint while the source is active, for example with --stdin", cost, budget)
 	}
 	return encoded, nil
+}
+
+func validateAIHandoffMetadataCredentials(field string, values ...string) error {
+	patterns, _, err := llmOutboundRedactionPatterns()
+	if err != nil {
+		return fmt.Errorf("load AI sensitive patterns: %w", err)
+	}
+	for index, pattern := range patterns {
+		if pattern.Name == "notion-token" {
+			patterns[index] = mustLLMRedactionPattern("notion-token", `\b(?:secret|ntn)_[A-Za-z0-9]{20,}\b`)
+		}
+	}
+	return validateAICredentialPatternMatches(patterns, field, values...)
 }
 
 func encodeAIHandoffContext(context aiHandoffContext) (string, error) {

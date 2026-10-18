@@ -43,7 +43,7 @@ Feature: Privacy-bounded AI session handoff
 
   Scenario: Preserve a checkpoint when later launch fails
     Given an active source accepts a fresh checkpoint during handoff
-    And the destination cannot be launched
+    And context preparation fails or the destination cannot be launched
     When I request a handoff with "--stdin"
     Then the source checkpoint remains durable
     And the error says it was saved and provides a retry command without "--stdin"
@@ -72,3 +72,9 @@ Feature: Privacy-bounded AI session handoff
   Scenario: Reject an unknown destination as usage
     When I request a handoff to an unsupported destination
     Then the command exits with usage status 2
+
+  Scenario: Hand off ordinary repository names containing secret
+    Given a source branch and dirty paths use ordinary underscore-separated secret names
+    When I request a handoff
+    Then workgraph delivers those repository names unchanged
+    But token-shaped credentials still prevent launch without being echoed

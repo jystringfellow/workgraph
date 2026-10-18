@@ -127,8 +127,12 @@ Handoff must not automatically persist or transport:
 The destination receives only deliberately constructed continuation context,
 not the source tool's conversation history. Before constructing that context,
 handoff checks branch, cwd, worktree root, and every dirty path against the
-same credential patterns used by checkpoint validation. Any match rejects the
-handoff before launch; values are not redacted or echoed in diagnostics. This
+credential patterns used by checkpoint validation, with the built-in Notion
+pattern restricted to alphanumeric token suffixes in repository metadata.
+Ordinary underscore-separated names such as `secret_rotation_for_service_accounts`
+and `secret_management_helpers_test.go` remain usable. Checkpoint validation
+and hosted LLM outbound redaction retain their broader patterns. Any match
+rejects the handoff before launch; values are not redacted or echoed in diagnostics. This
 check also covers dirty paths that would otherwise be removed to fit the
 command-line budget.
 
@@ -146,8 +150,8 @@ Partial failures must not leave misleading lineage or a destination session
 that appears to have been successfully handed off when it was not.
 
 Failures before child launch create no destination lifecycle or lineage. When
-`--stdin` has already appended a valid source checkpoint and destination launch
-then fails, the append remains as truthful, inspectable source history. The
+`--stdin` has already appended a valid source checkpoint and context preparation
+or destination launch then fails, the append remains as truthful, inspectable source history. The
 source can reuse it on a later handoff. The error explicitly says the checkpoint
 was saved and gives a shell-quoted retry command without `--stdin`, preserving
 any selected home and database. Once a child has launched and its start

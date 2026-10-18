@@ -1839,3 +1839,44 @@ func TestAICommandEnvironmentIsolatesWrappedSession(t *testing.T) {
 		}
 	}
 }
+
+func TestAISessionsOmitsSessionsWithOnlyUnorderableEvidence(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workingDir := t.TempDir()
+	writeAIFactExecutable(t, workingDir, "codex", `touch "$0.launched"`)
+	sourceID := "00000000-0000-4000-8000-000000000373"
+	insertAINativeFactSession(t, initialized.DatabasePath, sourceID, "claude", "/usr/local/bin/claude", "claude-native", "", workingDir, "not-a-timestamp", false)
+	listed, err := workgraph.ListAISessions(workgraph.AISessionsConfig{HomeDir: homeDir, DatabasePath: initialized.DatabasePath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Sessions) != 0 || listed.Known != 0 {
+		t.Errorf("unorderable-only evidence created phantom session: %#v", listed)
+	}
+	if len(listed.Warnings) != 1 || !strings.Contains(listed.Warnings[0], "invalid timestamp") {
+		t.Errorf("lost integrity warning: %#v", listed.Warnings)
+	}
+	history := readAISessionHistory(t, initialized.DatabasePath, sourceID)
+	command := exec.Command(workgraphFactsBinary, "ai", "handoff", "codex", "--from", sourceID, "--stdin", "--home", homeDir, "--database", initialized.DatabasePath)
+	command.Env = daemonCommandEnv([]string{"PATH=" + workingDir + string(os.PathListSeparator) + os.Getenv("PATH")})
+	command.Stdin = strings.NewReader(`{"goal":"Must not append"}`)
+	if output, err := command.CombinedOutput(); err == nil {
+		t.Fatalf("unorderable-only session accepted: %s", output)
+	}
+	if after := readAISessionHistory(t, initialized.DatabasePath, sourceID); after != history {
+		t.Fatal("handoff modified unorderable session")
+	}
+	if countAIStartedSessions(t, initialized.DatabasePath) != 1 {
+		t.Fatal("handoff created destination lifecycle")
+	}
+	if _, err := os.Stat(filepath.Join(workingDir, "codex.launched")); !os.IsNotExist(err) {
+		t.Fatalf("destination launched: %v", err)
+	}
+}

@@ -87,8 +87,10 @@ Priority labels used below:
   `specs/effectiveness-review.md`]
 - AI session continuity, native continuation, privacy-bounded handoff,
   lifecycle controls, and agent plugin installation. Handoff rejects credential
-  patterns in repository context and unorderable session evidence, identifies
-  reused checkpoints, and gives saved-checkpoint retry guidance. [specs:
+  patterns in repository context while accepting ordinary underscore-separated
+  names, rejects unorderable session evidence without creating phantom rows,
+  identifies reused checkpoints, and gives saved-checkpoint retry guidance for
+  context preparation and launch failures. [specs:
   `specs/ai-sessions.md`, `specs/ai-handoff.md`, and `specs/agent-plugin.md`]
 - Managed settings, enterprise security reporting, local LLM filtering, CI,
   and cross-platform release packaging. [specs:

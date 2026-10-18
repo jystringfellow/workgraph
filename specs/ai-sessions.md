@@ -517,7 +517,12 @@ or schema version. Readers retain an integrity warning and exclude it from
 time-ordered projections. Handoff rejects the session before appending a
 checkpoint or launching a destination: it cannot prove that the selected
 checkpoint and observation are current. Unassociated invalid envelopes do not
-create or block an unrelated session.
+create or block an unrelated session. A session whose only events have invalid
+timestamps has no projected row and is omitted from `ai sessions`, including
+its session counts; the listing still reports integrity warnings. Selecting
+that session for handoff fails as not found. If any timestamp is valid, the
+session retains its row and unorderable-evidence warning regardless of event
+read order.
 
 Every payload begins with the stable envelope fields `schema_version` and
 `session_id`. V1 writes schema version 1.

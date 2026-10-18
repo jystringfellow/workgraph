@@ -781,6 +781,7 @@ func loadAISessionProjections(homeDir string, databasePath string, inspector AIP
 	}
 	defer rows.Close()
 	byID := make(map[string]*aiSessionProjection)
+	unorderableWarnings := make(map[string][]string)
 	var warnings []string
 	for rows.Next() {
 		var id, eventType, timestampText, project, payloadText string
@@ -794,16 +795,15 @@ func loadAISessionProjections(homeDir string, databasePath string, inspector AIP
 			warnings = append(warnings, "ignored AI event with invalid envelope: "+id)
 			continue
 		}
+		timestamp, err := time.Parse(time.RFC3339Nano, timestampText)
+		if err != nil {
+			unorderableWarnings[identity.SessionID] = append(unorderableWarnings[identity.SessionID], "ignored AI event with invalid timestamp: "+id)
+			continue
+		}
 		projection := byID[identity.SessionID]
 		if projection == nil {
 			projection = &aiSessionProjection{Summary: AISessionSummary{SessionID: identity.SessionID, Project: project, Tool: "unknown"}}
 			byID[identity.SessionID] = projection
-		}
-		timestamp, err := time.Parse(time.RFC3339Nano, timestampText)
-		if err != nil {
-			projection.unorderableEvidence = true
-			projection.Warnings = append(projection.Warnings, "ignored AI event with invalid timestamp: "+id)
-			continue
 		}
 		if projection.Summary.LatestEventAt.IsZero() || timestamp.After(projection.Summary.LatestEventAt) || (timestamp.Equal(projection.Summary.LatestEventAt) && id > projection.latestEventID) {
 			projection.Summary.LatestEventAt = timestamp
@@ -892,6 +892,14 @@ func loadAISessionProjections(homeDir string, databasePath string, inspector AIP
 	}
 	if err := rows.Err(); err != nil {
 		return nil, nil, fmt.Errorf("iterate AI events: %w", err)
+	}
+	for sessionID, invalidWarnings := range unorderableWarnings {
+		if projection := byID[sessionID]; projection != nil {
+			projection.unorderableEvidence = true
+			projection.Warnings = append(projection.Warnings, invalidWarnings...)
+		} else {
+			warnings = append(warnings, invalidWarnings...)
+		}
 	}
 	if inspector == nil {
 		inspector = localAIProcessInspector{}
@@ -1302,6 +1310,10 @@ func validateAICredentialPatterns(field string, values ...string) error {
 	if err != nil {
 		return fmt.Errorf("load AI sensitive patterns: %w", err)
 	}
+	return validateAICredentialPatternMatches(patterns, field, values...)
+}
+
+func validateAICredentialPatternMatches(patterns []llmRedactionPattern, field string, values ...string) error {
 	for _, value := range values {
 		for _, pattern := range patterns {
 			if pattern.Pattern.MatchString(value) {
