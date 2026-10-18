@@ -8,11 +8,15 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 )
 
-const aiHandoffContextLimit = 30 * 1024
+const (
+	aiHandoffContextLimit     = 30 * 1024
+	aiWindowsCommandLineLimit = 32767
+)
 
 type AIHandoffConfig struct {
 	HomeDir          string
@@ -127,7 +131,11 @@ func HandoffAISession(config AIHandoffConfig) (AIHandoffResult, error) {
 		return AIHandoffResult{}, errors.New("source session has no structured checkpoint; record one first or use --stdin while it is active")
 	}
 
-	continuation, err := buildAIHandoffContext(sourceSessionID, source.LatestCheckpoint, source.LatestObserved)
+	contextBudget, err := aiHandoffContextBudget(config.HomeDir, config.DatabasePath, destination, destinationPath)
+	if err != nil {
+		return AIHandoffResult{}, err
+	}
+	continuation, err := buildAIHandoffContext(sourceSessionID, source.LatestCheckpoint, source.LatestObserved, contextBudget)
 	if err != nil {
 		return AIHandoffResult{}, err
 	}
@@ -176,7 +184,24 @@ func findAIHandoffSource(homeDir, databasePath, sessionID string) (*aiSessionPro
 	return nil, fmt.Errorf("AI session %q was not found", sessionID)
 }
 
-func buildAIHandoffContext(sessionID string, checkpoint *aiCheckpointPayload, observed *AIObservedState) (string, error) {
+func aiHandoffContextBudget(homeDir, databasePath, destination, destinationPath string) (int, error) {
+	status, err := prepareRunStatus(RunConfig{HomeDir: homeDir, DatabasePath: databasePath})
+	if err != nil {
+		return 0, err
+	}
+	invokedPath, err := filepath.Abs(destinationPath)
+	if err != nil {
+		return 0, fmt.Errorf("resolve destination AI tool path: %w", err)
+	}
+	prepared, err := aiPrepareNativeLaunch(destination, aiHandoffArguments(destination, ""), status.HomeDir)
+	if err != nil {
+		return 0, fmt.Errorf("prepare destination native binding: %w", err)
+	}
+	overhead := aiWindowsCommandLineCost(append([]string{invokedPath}, prepared.Args...)) - aiWindowsArgumentCost("")
+	return min(aiHandoffContextLimit, aiWindowsCommandLineLimit-overhead), nil
+}
+
+func buildAIHandoffContext(sessionID string, checkpoint *aiCheckpointPayload, observed *AIObservedState, budget int) (string, error) {
 	normalizedCheckpoint, err := validateAIStoredCheckpoint(checkpoint.AgentStated)
 	if err != nil {
 		return "", fmt.Errorf("stored checkpoint cannot be handed off safely: %w", err)
@@ -196,20 +221,20 @@ func buildAIHandoffContext(sessionID string, checkpoint *aiCheckpointPayload, ob
 	if err != nil {
 		return "", err
 	}
-	if aiHandoffContextCost(encoded) > aiHandoffContextLimit && len(observed.DirtyPaths) > 0 {
+	if aiWindowsArgumentCost(encoded) > budget && len(observed.DirtyPaths) > 0 {
 		context.Repository.DirtyPathsTruncated = true
-		kept := sort.Search(len(observed.DirtyPaths), func(count int) bool {
+		kept := sort.Search(len(observed.DirtyPaths)-1, func(count int) bool {
 			context.Repository.DirtyPaths = observed.DirtyPaths[:count+1]
 			candidate, err := encodeAIHandoffContext(context)
-			return err != nil || aiHandoffContextCost(candidate) > aiHandoffContextLimit
+			return err != nil || aiWindowsArgumentCost(candidate) > budget
 		})
 		context.Repository.DirtyPaths = append([]string{}, observed.DirtyPaths[:kept]...)
 		if encoded, err = encodeAIHandoffContext(context); err != nil {
 			return "", err
 		}
 	}
-	if cost := aiHandoffContextCost(encoded); cost > aiHandoffContextLimit {
-		return "", fmt.Errorf("handoff context needs %d bytes, over the %d-byte command-line limit even without dirty paths; record a shorter checkpoint while the source is active, for example with --stdin", cost, aiHandoffContextLimit)
+	if cost := aiWindowsArgumentCost(encoded); cost > budget {
+		return "", fmt.Errorf("handoff context needs %d bytes, over the %d bytes left on the destination command line even without dirty paths; record a shorter checkpoint while the source is active, for example with --stdin", cost, budget)
 	}
 	return encoded, nil
 }
@@ -224,8 +249,16 @@ func encodeAIHandoffContext(context aiHandoffContext) (string, error) {
 	return strings.TrimSuffix(encoded.String(), "\n"), nil
 }
 
-func aiHandoffContextCost(encoded string) int {
-	return len(encoded) + strings.Count(encoded, `"`) + strings.Count(encoded, `\`)
+func aiWindowsArgumentCost(argument string) int {
+	return len(argument) + strings.Count(argument, `"`) + strings.Count(argument, `\`) + 2
+}
+
+func aiWindowsCommandLineCost(arguments []string) int {
+	cost := len(arguments)
+	for _, argument := range arguments {
+		cost += aiWindowsArgumentCost(argument)
+	}
+	return cost
 }
 
 func aiHandoffArguments(destination, continuation string) []string {

@@ -82,16 +82,20 @@ architecture rather than create a second continuity model.
 ## Continuation context size
 
 The destination receives the continuation context as one command-line
-argument, so its encoded JSON is limited to 30,720 bytes, counting each `"` and
-`\` twice to bound Windows command-line quoting. This stays below the Linux
-per-argument limit and the Windows command-line limit.
+argument. Each argument's command-line cost is its UTF-8 byte length plus two
+surrounding quotes, with each `"` and `\` counted twice to bound Windows
+quoting. The context may cost at most 30,720 bytes, which stays below the Linux
+per-argument limit. It is further limited so that the whole prepared
+destination command line, including the executable path, adapter arguments,
+one separator per argument, and the terminating NUL, costs at most 32,767,
+the Windows `CreateProcess` limit.
 
-When the context exceeds the limit, handoff keeps the leading dirty paths that
-fit, drops the rest, and sets `dirty_paths_truncated` while leaving
-`dirty_path_count` unchanged. When the context still exceeds the limit without
-any dirty paths, handoff fails before launch with an error naming the size and
-asking for a shorter checkpoint. A checkpoint that `--stdin` appended before
-that failure remains on the source.
+When the context exceeds its budget, handoff drops at least one dirty path and
+keeps the longest leading list that fits, sets `dirty_paths_truncated`, and
+leaves `dirty_path_count` unchanged. When the context still exceeds the budget
+without any dirty paths, handoff fails before launch with an error naming the
+size and asking for a shorter checkpoint. A checkpoint that `--stdin` appended
+before that failure remains on the source.
 
 With `--stdin`, the handed-off checkpoint is the one just appended. If the
 source already holds a checkpoint dated after it, handoff fails before launch

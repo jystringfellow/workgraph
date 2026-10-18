@@ -1250,7 +1250,7 @@ func TestAIHandoffTrimsDirtyPathsToFitTheCommandLine(t *testing.T) {
 		t.Fatalf("handoff with many dirty paths: %v\n%s", err, output)
 	}
 	encoded := readAIFactFile(t, workingDir, "context.json")
-	if cost := len(encoded) + strings.Count(encoded, `"`) + strings.Count(encoded, `\`); cost > 30*1024 {
+	if cost := aiWindowsArgumentCost(encoded); cost > 30*1024 {
 		t.Fatalf("continuation context costs %d bytes on the command line, over 30720", cost)
 	}
 	var delivered struct {
@@ -1327,7 +1327,7 @@ func TestAIHandoffRejectsCheckpointTooLargeForTheCommandLine(t *testing.T) {
 			detachFromControllingTerminal(command)
 			command.Stdin = strings.NewReader(string(encodedCheckpoint))
 			output, err := command.CombinedOutput()
-			if err == nil || !strings.Contains(string(output), "over the 30720-byte command-line limit") || !strings.Contains(string(output), "shorter checkpoint") {
+			if err == nil || !strings.Contains(string(output), "bytes left on the destination command line") || !strings.Contains(string(output), "shorter checkpoint") {
 				t.Fatalf("expected actionable context size rejection, got %v\n%s", err, output)
 			}
 			if _, err := os.Stat(launchedPath); !os.IsNotExist(err) {
@@ -1404,4 +1404,141 @@ func TestAIHandoffStdinRefusesWhenALaterDatedCheckpointExists(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type = 'ai.session_started'`).Scan(&starts); err != nil || starts != 1 {
 		t.Fatalf("refused handoff created destination lifecycle, starts=%d err=%v", starts, err)
 	}
+}
+
+func TestAIHandoffBudgetsContextAgainstTheFullWindowsCommandLine(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init workgraph: %v", err)
+	}
+	workgraphDir := longAIFactDirectory(t, 450)
+	workgraphBinary, err := os.ReadFile(workgraphFactsBinary)
+	if err != nil {
+		t.Fatalf("read workgraph binary: %v", err)
+	}
+	workgraphPath := filepath.Join(workgraphDir, "workgraph")
+	if err := os.WriteFile(workgraphPath, workgraphBinary, 0o755); err != nil {
+		t.Fatalf("copy workgraph binary: %v", err)
+	}
+	toolDir := longAIFactDirectory(t, 450)
+	codexPath := writeAIFactExecutable(t, toolDir, "codex", `printf '%s\0' "$@" > "$WORKGRAPH_AI_TEST_ARGS"`)
+	workingDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve working directory: %v", err)
+	}
+	argsPath := filepath.Join(workingDir, "args.bin")
+	sourceID := "00000000-0000-4000-8000-000000000364"
+	insertAINativeFactSession(t, initialized.DatabasePath, sourceID, "claude", "/usr/local/bin/claude", "claude-native", "", workingDir, "2026-08-03T12:00:00Z", true)
+	dirtyPaths := make([]string, 500)
+	for index := range dirtyPaths {
+		dirtyPaths[index] = fmt.Sprintf("src/%03d/\"quoted\"\\%s.go", index, strings.Repeat("p", 80))
+	}
+	insertAIHandoffCheckpointWith(t, initialized.DatabasePath, sourceID, workingDir, dirtyPaths, map[string]any{"goal": "Fit the Windows command line"})
+
+	command := exec.Command(workgraphPath, "ai", "handoff", "codex", "--from", sourceID, "--home", homeDir, "--database", initialized.DatabasePath)
+	command.Env = daemonCommandEnv([]string{
+		"PATH=" + toolDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"WORKGRAPH_AI_TEST_ARGS=" + argsPath,
+	})
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("handoff with long executable paths: %v\n%s", err, output)
+	}
+	recorded, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatalf("read destination arguments: %v", err)
+	}
+	arguments := strings.Split(strings.TrimSuffix(string(recorded), "\x00"), "\x00")
+	if !strings.Contains(strings.Join(arguments, "\n"), workgraphPath) {
+		t.Fatalf("destination adapter arguments did not reference the long workgraph path:\n%s", strings.Join(arguments, "\n"))
+	}
+	if cost := aiWindowsCommandLineCost(append([]string{codexPath}, arguments...)); cost > 32767 {
+		t.Fatalf("prepared destination command line costs %d UTF-16 units including NUL, over 32767", cost)
+	}
+	var delivered struct {
+		Repository struct {
+			DirtyPaths          []string `json:"dirty_paths"`
+			DirtyPathsTruncated bool     `json:"dirty_paths_truncated"`
+		} `json:"repository"`
+	}
+	if err := json.Unmarshal([]byte(arguments[len(arguments)-1]), &delivered); err != nil {
+		t.Fatalf("decode delivered context: %v", err)
+	}
+	if !delivered.Repository.DirtyPathsTruncated || len(delivered.Repository.DirtyPaths) == 0 {
+		t.Fatalf("expected a trimmed but nonempty dirty path list, truncated=%v kept=%d", delivered.Repository.DirtyPathsTruncated, len(delivered.Repository.DirtyPaths))
+	}
+}
+
+func TestAIHandoffTruncationAlwaysDropsADirtyPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init workgraph: %v", err)
+	}
+	workingDir := t.TempDir()
+	writeAIFactExecutable(t, workingDir, "codex", aiHandoffDestinationRecorder)
+	handoff := func(sourceID, currentState string) map[string]any {
+		t.Helper()
+		insertAINativeFactSession(t, initialized.DatabasePath, sourceID, "claude", "/usr/local/bin/claude", "claude-native", "", workingDir, "2026-08-03T12:00:00Z", true)
+		insertAIHandoffCheckpointWith(t, initialized.DatabasePath, sourceID, workingDir, []string{"changed.go"}, map[string]any{
+			"goal": strings.Repeat("Reach the exact boundary. ", 600), "current_state": currentState,
+		})
+		output, err := runWorkgraphCommandAllowError([]string{
+			"PATH=" + workingDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		}, "ai", "handoff", "codex", "--from", sourceID, "--home", homeDir, "--database", initialized.DatabasePath)
+		if err != nil {
+			t.Fatalf("handoff: %v\n%s", err, output)
+		}
+		encoded := readAIFactFile(t, workingDir, "context.json")
+		var delivered map[string]any
+		if err := json.Unmarshal([]byte(encoded), &delivered); err != nil {
+			t.Fatalf("decode delivered context: %v", err)
+		}
+		delivered["cost"] = aiWindowsArgumentCost(encoded)
+		return delivered
+	}
+
+	calibration := handoff("00000000-0000-4000-8000-000000000365", "s")
+	padding := 30*1024 + 1 - calibration["cost"].(int)
+	if padding <= 0 {
+		t.Fatalf("calibration context already costs %d", calibration["cost"])
+	}
+	boundary := handoff("00000000-0000-4000-8000-000000000366", strings.Repeat("s", padding+1))
+	repository := boundary["repository"].(map[string]any)
+	if repository["dirty_paths_truncated"] != true || len(repository["dirty_paths"].([]any)) != 0 || repository["dirty_path_count"] != float64(1) {
+		t.Fatalf("a context one unit over the limit was marked truncated without dropping a path: %v", repository)
+	}
+}
+
+func longAIFactDirectory(t *testing.T, length int) string {
+	t.Helper()
+	directory, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve temporary directory: %v", err)
+	}
+	for len(directory) < length {
+		directory = filepath.Join(directory, strings.Repeat("d", min(60, max(1, length-len(directory)-1))))
+	}
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		t.Fatalf("create long directory: %v", err)
+	}
+	return directory
+}
+
+func aiWindowsArgumentCost(argument string) int {
+	return len(argument) + strings.Count(argument, `"`) + strings.Count(argument, `\`) + 2
+}
+
+func aiWindowsCommandLineCost(arguments []string) int {
+	cost := len(arguments)
+	for _, argument := range arguments {
+		cost += aiWindowsArgumentCost(argument)
+	}
+	return cost
 }
