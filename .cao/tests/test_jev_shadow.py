@@ -2,13 +2,18 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
+import tempfile
 import types
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
 
 SCRIPT = Path(__file__).parents[1] / 'experiments/jev/jev_shadow.py'
+COLLECTOR = Path(__file__).parents[1] / 'experiments/jev/collect_change_metadata.py'
 
 
 class JevShadowTest(unittest.TestCase):
@@ -61,6 +66,60 @@ class JevShadowTest(unittest.TestCase):
                 module.main()
         self.assertNotIn('private request details', output.getvalue())
         self.assertEqual(json.loads(output.getvalue())['error'], 'Jev request failed: RuntimeError')
+
+    def test_incomplete_provider_response_fails_visibly(self):
+        module, sdk = self.load()
+        client = sdk.TypeSafeClient.return_value.__enter__.return_value
+        client.system_one.return_value = types.SimpleNamespace(model='fake-model', answers={})
+        output = io.StringIO()
+        with patch.dict('os.environ', {'TYPESAFE_API_KEY': 'fake-test-key'}), \
+                patch('sys.stdin', io.StringIO('{}')), contextlib.redirect_stdout(output):
+            with self.assertRaises(SystemExit):
+                module.main()
+        result = json.loads(output.getvalue())
+        self.assertEqual(result['status'], 'error')
+        self.assertEqual(result['error'], 'Jev response incomplete: KeyError')
+
+
+class CollectChangeMetadataTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.repo = Path(temporary.name).resolve()
+        (self.repo / 'specs').mkdir()
+        (self.repo / 'internal').mkdir()
+        (self.repo / 'specs/feature.md').write_text('one\ntwo\n')
+        (self.repo / 'internal/code.go').write_text('package internal\n')
+        (self.repo / '.gitignore').write_text('ignored.txt\n')
+        for args in [('init', '-q'), ('add', '.'),
+                     ('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                      '-c', 'commit.gpgsign=false', 'commit', '-qm', 'initial')]:
+            subprocess.run(['git', *args], cwd=self.repo, check=True)
+
+    def collect(self, cwd):
+        result = subprocess.run([sys.executable, '-I', str(COLLECTOR)], cwd=cwd,
+                                capture_output=True, text=True, check=True)
+        return json.loads(result.stdout)
+
+    def test_metadata_covers_the_whole_repository_from_a_subdirectory(self):
+        (self.repo / 'specs/feature.md').write_text('one\nchanged\nthree\n')
+        (self.repo / 'internal/code_test.go').write_text('secret source contents\n')
+        (self.repo / 'ignored.txt').write_text('ignored\n')
+        change = self.collect(self.repo / 'internal')
+        self.assertEqual(change['change']['paths'], ['internal/code_test.go', 'specs/feature.md'])
+        self.assertEqual((change['change']['tracked_files_changed'], change['change']['untracked_files']), (1, 1))
+        self.assertEqual((change['change']['tracked_insertions'], change['change']['tracked_deletions']), (2, 1))
+        self.assertEqual(change['signals'], {'specs_changed': True, 'tests_changed': True})
+        self.assertNotIn('secret source contents', json.dumps(change))
+
+    def test_outside_a_repository_fails_without_output(self):
+        outside = tempfile.TemporaryDirectory()
+        self.addCleanup(outside.cleanup)
+        result = subprocess.run([sys.executable, '-I', str(COLLECTOR)], cwd=outside.name,
+                                capture_output=True, text=True, env={**os.environ, 'GIT_CEILING_DIRECTORIES': outside.name})
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, '')
+        self.assertIn('unable to determine repository root', result.stderr)
 
 
 if __name__ == '__main__':

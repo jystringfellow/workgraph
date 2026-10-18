@@ -11,14 +11,14 @@ values. **Paths and metadata can still disclose sensitive project information.**
 Inspect and curate the JSON locally before explicitly sending it anywhere:
 
 ```sh
-python3 .cao/experiments/jev/collect_change_metadata.py > /private/tmp/change-metadata.json
+python3 .cao/experiments/jev/collect_change_metadata.py > /tmp/change-metadata.json
 ```
 
 Only if you deliberately want an external Jev request, use an environment where
 `typesafe_sdk` is installed and `TYPESAFE_API_KEY` is configured:
 
 ```sh
-/path/to/experiment/python .cao/experiments/jev/jev_shadow.py < /private/tmp/change-metadata.json
+/path/to/experiment/python .cao/experiments/jev/jev_shadow.py < /tmp/change-metadata.json
 ```
 
 That second command sends the supplied JSON to the service and may incur cost.

@@ -52,10 +52,6 @@ def main() -> None:
 
     state = read_state()
 
-    # Deliberately bounded questions.
-    #
-    # These judgments are recorded only. Nothing in this script branches
-    # workflow execution based on the answers.
     questions = {
         "change_risk": Choice(
             instructions=(
@@ -128,20 +124,13 @@ def main() -> None:
                 questions=questions,
             )
     except Exception as exc:
-        # Shadow evaluation must fail visibly rather than fabricate a judgment.
         fail(f"Jev request failed: {type(exc).__name__}")
 
-    risk = response.answers["change_risk"]
-    focus = response.answers["review_focus"]
-    deep_review = response.answers["needs_deep_review"]
-
-    result = {
-        "schema_version": 1,
-        "mode": "shadow",
-        "status": "ok",
-        "authoritative": False,
-        "model": getattr(response, "model", None),
-        "judgments": {
+    try:
+        risk = response.answers["change_risk"]
+        focus = response.answers["review_focus"]
+        deep_review = response.answers["needs_deep_review"]
+        judgments = {
             "change_risk": {
                 "choice": risk.choice,
                 "confidence": risk.confidence,
@@ -155,7 +144,17 @@ def main() -> None:
             "needs_deep_review": {
                 "probability": deep_review.noul,
             },
-        },
+        }
+    except (AttributeError, KeyError, TypeError) as exc:
+        fail(f"Jev response incomplete: {type(exc).__name__}")
+
+    result = {
+        "schema_version": 1,
+        "mode": "shadow",
+        "status": "ok",
+        "authoritative": False,
+        "model": getattr(response, "model", None),
+        "judgments": judgments,
     }
 
     print(json.dumps(result, indent=2, sort_keys=True))

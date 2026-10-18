@@ -1,6 +1,7 @@
 """Prepare and supervise a bounded CAO pod with external verification."""
 
 import argparse
+from contextlib import closing
 import hashlib
 import json
 import os
@@ -22,6 +23,7 @@ API_HOST = os.environ.get('CAO_API_HOST', '127.0.0.1')
 API_PORT = os.environ.get('CAO_API_PORT', '9889')
 BASE = f'http://{API_HOST}:{API_PORT}'
 RIG = Path(__file__).resolve().parent
+COPILOT_AGENTS = Path.home() / '.copilot/agents'
 
 
 def state():
@@ -30,10 +32,23 @@ def state():
     head = git('rev-parse', 'HEAD').decode().strip()
     parts = [git('ls-files', '--stage', '-z'),
              git('diff', '--binary', '--no-ext-diff', '--no-textconv')]
+    def append_path(path):
+        raw = os.fsencode(path.relative_to(REPO))
+        parts.extend([raw, str(path.lstat().st_mode).encode()])
+        if path.is_symlink():
+            parts.append(os.fsencode(os.readlink(path)))
+        elif path.is_dir():
+            children = subprocess.check_output(['git', '-C', str(path), 'ls-files',
+                                                '--cached', '--others', '--exclude-standard', '-z'])
+            for child in sorted(set(filter(None, children.split(b'\0')))):
+                nested = path / os.fsdecode(child)
+                if nested.exists() or nested.is_symlink():
+                    append_path(nested)
+        else:
+            parts.append(path.read_bytes())
+
     for raw in sorted(filter(None, git('ls-files', '--others', '--exclude-standard', '-z').split(b'\0'))):
-        path = REPO / os.fsdecode(raw)
-        content = os.fsencode(os.readlink(path)) if path.is_symlink() else path.read_bytes()
-        parts.extend([raw, str(path.lstat().st_mode).encode(), content])
+        append_path(REPO / os.fsdecode(raw))
     digest = hashlib.sha256()
     for part in parts:
         digest.update(len(part).to_bytes(8, 'big'))
@@ -66,13 +81,15 @@ def prepare(brief_path, plan_paths):
     run_id = uuid.uuid4().hex[:10]
     root = REPO / '.cao/pod-runs' / ('pod-' + run_id)
     root.mkdir(parents=True, mode=0o700)
+    verifier = (RIG / 'verification/verify.sh').read_bytes()
+    (root / 'verify.sh').write_bytes(verifier)
     seats = {}
     for seat in ('lead', 'developer', 'reviewer', 'gate'):
         text = (RIG / 'profiles' / ('wg-pod-' + seat + '.md')).read_text()
         _, header, body = text.split('---', 2)
         cfg = yaml.safe_load(header)
         cfg['name'] += '-' + run_id
-        if cfg['provider'] == 'codex':
+        if 'cao-mcp-server' in cfg.get('mcpServers', {}):
             cfg['mcpServers']['cao-mcp-server']['env'] = {
                 'CAO_HOME_DIR': str(HOME), 'CAO_API_HOST': API_HOST, 'CAO_API_PORT': API_PORT}
         (root / (cfg['name'] + '.md')).write_text('---\n' + yaml.safe_dump(cfg, sort_keys=False) + '---' + body)
@@ -80,7 +97,7 @@ def prepare(brief_path, plan_paths):
     save(root / 'plan-state.json', {'sources': plan, 'status': 'existing plan reused'})
     save(root / 'seats.json', seats)
     save(root / 'manifest.json', {'run_id': run_id, 'repo': str(REPO),
-                                'review_corrections': 3, 'gate_corrections': 2,
+                                'verifier_sha256': hashlib.sha256(verifier).hexdigest(),
                                 'max_worker_assignments': 14, 'max_check_requests': 12})
     (root / 'packet.md').write_text(f'''# Execution packet
 
@@ -161,32 +178,39 @@ def review_evidence(receipt, current, callbacks, actors, seats):
         raise RuntimeError('Ready claim has stale or non-full verification evidence')
     required = {}
     for seat in ('reviewer', 'gate'):
-        found = [sender for sender, status, body in callbacks
-                 if actors.get(sender) == seats[seat]['name'] and status == 'delivered'
-                 and current['fingerprint'] in body and current['head'] in body]
-        if not found:
+        latest = next((callback for callback in sorted(callbacks, reverse=True)
+                       if actors.get(callback[1]) == seats[seat]['name']), None)
+        if latest is None:
             raise RuntimeError('Ready claim lacks candidate-bound ' + seat + ' callback')
-        required[seat] = found[-1]
+        rowid, sender, status, body = latest
+        if (rowid <= receipt['inbox_rowid'] or status != 'delivered'
+                or current['fingerprint'] not in body or current['head'] not in body):
+            raise RuntimeError('Ready claim lacks fresh candidate-bound ' + seat + ' callback')
+        required[seat] = sender
     return required
 
 
-def verify(root, number, mode='full', fact=None):
+def verify(root, number, mode='full', fact=None, *, verifier, time_limit=900):
     before = state()
+    paths = subprocess.check_output(['git', '-C', str(REPO), 'diff', '--name-only', '-z', 'HEAD'])
+    paths += subprocess.check_output(['git', '-C', str(REPO), 'ls-files', '--others', '--exclude-standard', '-z'])
+    changed_paths = sorted(set(os.fsdecode(p) for p in paths.split(b'\0') if p))
     env = clean_env()
-    command = ['bash', '.cao/verification/verify.sh'] if mode == 'full' else [
+    command = ['bash', '-c', verifier.decode()] if mode == 'full' else [
         'go', 'test', './facts', '-count=1', '-run', '^' + fact + '$']
     print(f'Host verification {number}: {mode}' + ((' ' + fact) if fact else ''), flush=True)
     child = subprocess.Popen(command, cwd=REPO, env=env, stdout=subprocess.PIPE,
                              stderr=subprocess.STDOUT, text=True, start_new_session=True, umask=0o022)
-    started = time.monotonic()
+    expires = time.monotonic() + time_limit
     timed_out = False
     while True:
         try:
-            output, _ = child.communicate(timeout=25)
+            output, _ = child.communicate(timeout=max(0, min(25, expires - time.monotonic())))
+            timed_out = time.monotonic() > expires
             break
         except subprocess.TimeoutExpired:
             print(f'Host verification {number}: still running', flush=True)
-            if time.monotonic() - started > 900:
+            if time.monotonic() >= expires:
                 import signal
                 timed_out = True
                 os.killpg(child.pid, signal.SIGTERM)
@@ -194,7 +218,10 @@ def verify(root, number, mode='full', fact=None):
                     output, _ = child.communicate(timeout=15)
                 except subprocess.TimeoutExpired:
                     os.killpg(child.pid, signal.SIGKILL)
-                    output, _ = child.communicate(timeout=15)
+                    try:
+                        output, _ = child.communicate(timeout=15)
+                    except subprocess.TimeoutExpired:
+                        output = ''
                 break
     after = state()
     failed_tests = sorted(set(re.findall(r'--- FAIL: ([A-Za-z0-9_/]+)', output)))
@@ -202,9 +229,10 @@ def verify(root, number, mode='full', fact=None):
     receipt = {'request': number, 'mode': mode, 'fact': fact, 'candidate': before,
                'passed': child.returncode == 0 and before == after and not timed_out,
                'exit_code': child.returncode, 'changed_during_checks': before != after,
-               'timed_out': timed_out,
+               'timed_out': timed_out, 'changed_paths': changed_paths,
                'failed_tests': failed_tests, 'failure_locations': locations,
-               'expected_fact_failed': mode == 'red' and fact in failed_tests and not timed_out,
+               'expected_fact_failed': (mode == 'red' and fact in failed_tests
+                                        and child.returncode != 0 and before == after and not timed_out),
                'go_vet': ('pass' if 'go_vet: pass' in output else 'fail') if mode == 'full' else None,
                'go_test': ('pass' if 'go_test: pass' in output else 'fail') if mode == 'full'
                           else ('pass' if child.returncode == 0 else 'fail')}
@@ -212,6 +240,16 @@ def verify(root, number, mode='full', fact=None):
     save(root / 'checks.json', receipt)
     print(json.dumps(receipt), flush=True)
     return receipt
+
+
+def session_yielded(session, lead_id):
+    if not lead_id:
+        return False
+    with closing(sqlite3.connect('file:' + str(HOME / 'db/cli-agent-orchestrator.db') + '?mode=ro', uri=True)) as db:
+        terminals = db.execute('select id from terminals where tmux_session=?', (session,)).fetchall()
+    return bool(terminals) and all(
+        api('GET', '/terminals/' + identifier).get('status') in ('idle', 'completed', 'error')
+        for identifier, in terminals)
 
 
 def run(root):
@@ -223,10 +261,24 @@ def run(root):
     result = {'status': 'running', 'run_directory': str(root), 'session': None}
     session = lead_id = None
     actors = {}
+    registrations = []
+    session_deleted = False
     command = [sys.executable, '-m', 'cli_agent_orchestrator.cli.main']
+
+    def host_verify(number, mode='full', fact=None, time_limit=900):
+        receipt = verify(root, number, mode, fact, verifier=verifier, time_limit=time_limit)
+        if mode == 'full' and receipt['passed']:
+            with closing(sqlite3.connect('file:' + str(HOME / 'db/cli-agent-orchestrator.db') + '?mode=ro', uri=True)) as db:
+                receipt['inbox_rowid'] = db.execute('select coalesce(max(rowid), 0) from inbox').fetchone()[0]
+            save(root / f'{number:02d}-checks.json', receipt)
+            save(root / 'checks.json', receipt)
+        return receipt
 
     try:
         manifest = json.loads((root / 'manifest.json').read_text())
+        verifier = (root / 'verify.sh').read_bytes()
+        if hashlib.sha256(verifier).hexdigest() != manifest['verifier_sha256']:
+            raise RuntimeError('Verifier snapshot changed; prepare a fresh run')
         seats = json.loads((root / 'seats.json').read_text())
         plan = json.loads((root / 'plan-state.json').read_text())['sources']
         if api('GET', '/health').get('status') != 'ok':
@@ -238,21 +290,26 @@ def run(root):
         for seat, cfg in seats.items():
             target = HOME / 'agent-store' / (cfg['name'] + '.md')
             with target.open('x') as f:
+                registrations.append(target)
                 f.write((root / target.name).read_text())
             checked = subprocess.run(command + ['profile', 'validate', str(target)], env=env,
                                      capture_output=True, text=True, timeout=30)
             if checked.returncode:
                 raise RuntimeError('Invalid profile for seat ' + seat)
             if cfg['provider'] == 'copilot_cli':
+                native = COPILOT_AGENTS / (cfg['name'] + '.agent.md')
+                if native.exists() or native.is_symlink():
+                    raise RuntimeError('Copilot agent already exists: ' + cfg['name'])
+                registrations.append(native)
                 installed = subprocess.run(command + ['install', str(target), '--provider', 'copilot_cli'],
                                            env=env, capture_output=True, text=True, timeout=60)
                 if installed.returncode or f"Agent '{cfg['name']}' installed successfully" not in installed.stdout:
                     raise RuntimeError('Copilot profile registration not confirmed')
-        baseline = verify(root, 0)
+        baseline = host_verify(0)
         if not baseline['passed']:
             raise RuntimeError('Full baseline verification failed; no paid seats launched')
         launched = subprocess.run(command + ['launch', '--headless', '--async', '--auto-approve',
-                                 '--agents', seats['lead']['name'], '--provider', 'codex',
+                                 '--agents', seats['lead']['name'], '--provider', seats['lead']['provider'],
                                  '--working-directory', str(REPO),
                                  f'Read {root / "packet.md"} and supervise this bounded engineering task.'],
                                   env=env, capture_output=True, text=True, timeout=180)
@@ -272,11 +329,12 @@ def run(root):
         while time.monotonic() < deadline:
             handoff_path = root / 'handoff.md'
             handoff = handoff_path.read_text() if handoff_path.exists() else ''
-            stage = next((s for s in handoff.splitlines() if s.lower().startswith('stage:')), 'Awaiting lead handoff')
+            stage = next((s.strip().replace('**', '') for s in handoff.splitlines()
+                          if re.match(r'(?i)^stage:', s.strip().replace('**', ''))), 'Awaiting lead handoff')
             if stage != previous or time.monotonic() - notice > 30:
                 print(stage, flush=True)
                 notice, previous = time.monotonic(), stage
-            with sqlite3.connect('file:' + str(HOME / 'db/cli-agent-orchestrator.db') + '?mode=ro', uri=True) as db:
+            with closing(sqlite3.connect('file:' + str(HOME / 'db/cli-agent-orchestrator.db') + '?mode=ro', uri=True)) as db:
                 rows = db.execute('select id,agent_profile,provider,model,model_honored from terminals where tmux_session=?', (session,)).fetchall()
                 actors.update((identifier, profile) for identifier, profile, provider, model, honored in rows)
                 runtime_path = root / 'runtime-seats.json'
@@ -287,13 +345,13 @@ def run(root):
                                            'actual_model': 'unverified'}
                 save(runtime_path, runtime)
                 lead_id = next((key for key, profile in actors.items() if profile == seats['lead']['name']), lead_id)
-                callbacks = db.execute('select sender_id,status,message from inbox where receiver_id=? ORDER BY rowid', (lead_id,)).fetchall() if lead_id else []
+                callbacks = db.execute('select rowid,sender_id,status,message from inbox where receiver_id=? ORDER BY rowid', (lead_id,)).fetchall() if lead_id else []
             save(root / 'actors.json', actors)
             if len(actors) > manifest['max_worker_assignments'] + 1:
                 raise RuntimeError('Overall pod assignment bound exceeded')
             if subprocess.check_output(['git', '-C', str(REPO), 'rev-parse', 'HEAD'], text=True).strip() != baseline['candidate']['head']:
                 raise RuntimeError('Git HEAD changed during a no-commit run; human reconciliation required')
-            if re.search(r'(?i)stage:.*(?:stopped|blocked|failed)', stage):
+            if re.search(r'(?i)^stage:\s*(?:stopped|blocked|failed)\.?$', stage):
                 raise RuntimeError('Lead stopped; unresolved findings are in handoff.md')
             check_plan(plan)
             request = root / 'verify.request'
@@ -301,14 +359,21 @@ def run(root):
             if text and text not in seen_requests:
                 number, mode, fact = parse_request(text, len(seen_requests), manifest['max_check_requests'])
                 seen_requests.add(text)
-                receipt = verify(root, number, mode, fact)
+                if not lead_id:
+                    raise RuntimeError('Lead terminal is not registered in CAO; inspect the retained session')
                 ready_deadline = time.monotonic() + 90
-                while time.monotonic() < ready_deadline:
-                    if api('GET', '/terminals/' + lead_id).get('status') in ('idle', 'completed'):
+                while True:
+                    now = time.monotonic()
+                    if now >= deadline:
+                        raise TimeoutError('Overall pod time bound exhausted')
+                    if now >= ready_deadline:
+                        raise RuntimeError('Pod terminals did not yield for host verification; no wakeup retry')
+                    if session_yielded(session, lead_id):
                         break
                     time.sleep(2)
-                else:
-                    raise RuntimeError('Lead did not yield for host verification; no wakeup retry')
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('Overall pod time bound exhausted')
+                receipt = host_verify(number, mode, fact, time_limit=min(900, deadline - time.monotonic()))
                 cue = (f'Host verification request {number} completed. Read {root / "checks.json"}. '
                        f'Mode={mode}; passed={receipt["passed"]}; expected_fact_failed={receipt["expected_fact_failed"]}. '
                        f'Candidate fingerprint={receipt["candidate"]["fingerprint"]}. Continue packet within remaining budgets.')
@@ -316,16 +381,16 @@ def run(root):
                 if delivery.get('success') is not True:
                     raise RuntimeError('CAO did not confirm host receipt delivery; inspect the retained session')
                 ready_since = None
-            if re.search(r'(?i)stage:.*ready for human review', stage):
+            if re.search(r'(?i)^stage:\s*ready for human review\.?$', stage):
                 current = state()
                 required = review_evidence(receipt, current, callbacks, actors, seats)
-                if api('GET', '/terminals/' + lead_id).get('status') not in ('idle', 'completed'):
+                if not session_yielded(session, lead_id):
                     ready_since = None
                 else:
                     ready_since = ready_since or time.monotonic()
                 if ready_since and time.monotonic() - ready_since > 8:
                     for seat in ('reviewer', 'gate'):
-                        print(seat + ' verdict: ' + next(body for sender,status,body in reversed(callbacks)
+                        print(seat + ' verdict: ' + next(body for rowid,sender,status,body in reversed(callbacks)
                               if sender == required[seat] and current['fingerprint'] in body)[:2200], flush=True)
                     result.update(status='ready_for_human_review', candidate=current,
                                   verification_receipt=str(root / 'checks.json'), verdict_terminals=required,
@@ -340,12 +405,24 @@ def run(root):
         if session and ('bound exceeded' in str(exc) or isinstance(exc, TimeoutError)):
             try:
                 result['bound_cleanup'] = api('DELETE', '/sessions/' + session)
+                session_deleted = result['bound_cleanup'].get('success') is True
             except Exception as cleanup_error:
                 result['bound_cleanup_error'] = type(cleanup_error).__name__
+    except BaseException as exc:
+        result.update(status='interrupted', failure=type(exc).__name__)
+        raise
     finally:
+        if not session or session_deleted:
+            for path in reversed(registrations):
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError as exc:
+                    result.setdefault('registration_cleanup_errors', []).append(
+                        {'path': str(path), 'error': type(exc).__name__})
+                    result['status'] = 'stopped'
         save(root / 'result.json', result)
         print('Run evidence: ' + str(root), flush=True)
-        if session:
+        if session and not session_deleted:
             print('Session retained: ' + session, flush=True)
     return 0 if result['status'] == 'ready_for_human_review' else 1
 

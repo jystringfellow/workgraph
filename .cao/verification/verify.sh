@@ -14,7 +14,6 @@ test_status="pass"
 # `workgraph ai run` tests don't falsely fail the nested-session guard.
 unset WORKGRAPH_AI_SESSION_ID WORKGRAPH_AI_HOME WORKGRAPH_AI_DATABASE
 
-
 if ! go vet ./... >"$vet_log" 2>&1; then
   vet_status="fail"
 fi

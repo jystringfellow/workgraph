@@ -19,9 +19,10 @@ import sys
 from pathlib import Path
 
 
-def git(*args: str) -> str:
+def git(root: Path | None, *args: str) -> str:
+    location = ["-C", str(root)] if root else []
     result = subprocess.run(
-        ["git", *args],
+        ["git", *location, *args],
         check=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -32,7 +33,7 @@ def git(*args: str) -> str:
 
 def repository_root() -> Path:
     try:
-        return Path(git("rev-parse", "--show-toplevel").strip())
+        return Path(git(None, "rev-parse", "--show-toplevel").strip())
     except subprocess.CalledProcessError as exc:
         print(
             f"unable to determine repository root: {exc.stderr.strip()}",
@@ -41,22 +42,19 @@ def repository_root() -> Path:
         raise SystemExit(1)
 
 
-def tracked_changed_paths() -> list[str]:
-    """Return tracked files changed relative to HEAD."""
-
+def tracked_changed_paths(root: Path) -> list[str]:
     return sorted(
         path
-        for path in git("diff", "--name-only", "HEAD").splitlines()
+        for path in git(root, "diff", "--name-only", "HEAD").splitlines()
         if path
     )
 
 
-def untracked_paths() -> list[str]:
-    """Return untracked, non-ignored files without reading their contents."""
-
+def untracked_paths(root: Path) -> list[str]:
     return sorted(
         path
         for path in git(
+            root,
             "ls-files",
             "--others",
             "--exclude-standard",
@@ -65,13 +63,11 @@ def untracked_paths() -> list[str]:
     )
 
 
-def tracked_diff_stats() -> tuple[int, int]:
-    """Return insertion/deletion counts for tracked changes relative to HEAD."""
-
+def tracked_diff_stats(root: Path) -> tuple[int, int]:
     insertions = 0
     deletions = 0
 
-    for line in git("diff", "--numstat", "HEAD").splitlines():
+    for line in git(root, "diff", "--numstat", "HEAD").splitlines():
         parts = line.split("\t", 2)
         if len(parts) < 2:
             continue
@@ -89,13 +85,12 @@ def tracked_diff_stats() -> tuple[int, int]:
 
 
 def main() -> None:
-    # Validate that we're operating inside a Git repository.
-    repository_root()
+    root = repository_root()
 
     try:
-        tracked = tracked_changed_paths()
-        untracked = untracked_paths()
-        tracked_insertions, tracked_deletions = tracked_diff_stats()
+        tracked = tracked_changed_paths(root)
+        untracked = untracked_paths(root)
+        tracked_insertions, tracked_deletions = tracked_diff_stats(root)
     except subprocess.CalledProcessError as exc:
         print(
             f"unable to collect git metadata: {exc.stderr.strip()}",
