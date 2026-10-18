@@ -129,6 +129,12 @@ destination lifecycle or lineage is created. A destination that does launch
 and exits nonzero retains its truthful start and end events and returns the
 tool's exit outcome.
 
+The continuation context is passed as one command-line argument and is kept
+within 30,720 bytes. Dirty paths are trimmed first and marked truncated; a
+checkpoint too large to fit on its own stops the handoff before launch. A
+`--stdin` handoff also stops before launch if the source already holds a
+checkpoint dated after the one just appended.
+
 The destination receives a deliberately constructed prompt containing only
 the six checkpoint fields and bounded repository metadata already permitted by
 the AI-session model. Workgraph does not persist or transport transcripts,

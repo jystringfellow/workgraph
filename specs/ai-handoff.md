@@ -79,6 +79,24 @@ A successful handoff should:
 The implementation should reuse the existing AI-session and checkpoint
 architecture rather than create a second continuity model.
 
+## Continuation context size
+
+The destination receives the continuation context as one command-line
+argument, so its encoded JSON is limited to 30,720 bytes, counting each `"` and
+`\` twice to bound Windows command-line quoting. This stays below the Linux
+per-argument limit and the Windows command-line limit.
+
+When the context exceeds the limit, handoff keeps the leading dirty paths that
+fit, drops the rest, and sets `dirty_paths_truncated` while leaving
+`dirty_path_count` unchanged. When the context still exceeds the limit without
+any dirty paths, handoff fails before launch with an error naming the size and
+asking for a shorter checkpoint. A checkpoint that `--stdin` appended before
+that failure remains on the source.
+
+With `--stdin`, the handed-off checkpoint is the one just appended. If the
+source already holds a checkpoint dated after it, handoff fails before launch
+rather than handing off a different checkpoint.
+
 ## Privacy boundary
 
 Handoff may persist the same categories of data already permitted by the
@@ -155,6 +173,9 @@ special-case only the tools used during development.
   hidden by an older compatible projection.
 - A checkpoint explicitly appended before a later launch failure remains on
   the source, while no destination lifecycle or lineage is recorded.
+- The continuation context stays within the command-line limit by trimming
+  dirty paths, or handoff fails before launch.
+- A `--stdin` handoff launches only with the checkpoint it appended.
 - The handoff nesting exception does not change nested-session rejection for
   ordinary run or native resume.
 - Existing AI-session behavior remains compatible.

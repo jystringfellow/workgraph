@@ -8,8 +8,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 )
+
+const aiHandoffContextLimit = 30 * 1024
 
 type AIHandoffConfig struct {
 	HomeDir          string
@@ -108,6 +111,9 @@ func HandoffAISession(config AIHandoffConfig) (AIHandoffResult, error) {
 		if err != nil {
 			return AIHandoffResult{}, err
 		}
+		if source.newestCheckpointID != result.CheckpointEventID {
+			return AIHandoffResult{}, errors.New("source session has a checkpoint dated after the one --stdin just recorded, so the recorded checkpoint cannot be handed off; check the system clock and inspect the source with `workgraph ai show`")
+		}
 	} else {
 		result.ReusedCheckpoint = true
 	}
@@ -186,6 +192,29 @@ func buildAIHandoffContext(sessionID string, checkpoint *aiCheckpointPayload, ob
 			DirtyPathsTruncated: observed.DirtyPathsTruncated,
 		},
 	}
+	encoded, err := encodeAIHandoffContext(context)
+	if err != nil {
+		return "", err
+	}
+	if aiHandoffContextCost(encoded) > aiHandoffContextLimit && len(observed.DirtyPaths) > 0 {
+		context.Repository.DirtyPathsTruncated = true
+		kept := sort.Search(len(observed.DirtyPaths), func(count int) bool {
+			context.Repository.DirtyPaths = observed.DirtyPaths[:count+1]
+			candidate, err := encodeAIHandoffContext(context)
+			return err != nil || aiHandoffContextCost(candidate) > aiHandoffContextLimit
+		})
+		context.Repository.DirtyPaths = append([]string{}, observed.DirtyPaths[:kept]...)
+		if encoded, err = encodeAIHandoffContext(context); err != nil {
+			return "", err
+		}
+	}
+	if cost := aiHandoffContextCost(encoded); cost > aiHandoffContextLimit {
+		return "", fmt.Errorf("handoff context needs %d bytes, over the %d-byte command-line limit even without dirty paths; record a shorter checkpoint while the source is active, for example with --stdin", cost, aiHandoffContextLimit)
+	}
+	return encoded, nil
+}
+
+func encodeAIHandoffContext(context aiHandoffContext) (string, error) {
 	var encoded bytes.Buffer
 	encoder := json.NewEncoder(&encoded)
 	encoder.SetEscapeHTML(false)
@@ -193,6 +222,10 @@ func buildAIHandoffContext(sessionID string, checkpoint *aiCheckpointPayload, ob
 		return "", fmt.Errorf("encode handoff context: %w", err)
 	}
 	return strings.TrimSuffix(encoded.String(), "\n"), nil
+}
+
+func aiHandoffContextCost(encoded string) int {
+	return len(encoded) + strings.Count(encoded, `"`) + strings.Count(encoded, `\`)
 }
 
 func aiHandoffArguments(destination, continuation string) []string {

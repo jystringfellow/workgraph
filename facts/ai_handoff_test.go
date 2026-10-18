@@ -3,10 +3,12 @@ package facts
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -40,11 +42,13 @@ func TestAIHandoffLaunchesVerifiedDestinationsWithLineageAndPrivateContext(t *te
 			argsPath := filepath.Join(workingDir, "args.txt")
 			contextPath := filepath.Join(workingDir, "environment.txt")
 			writeAIFactExecutable(t, workingDir, test.destination, `printf '%s\n' "$@" > "$WORKGRAPH_AI_TEST_ARGS"
-printf '%s\n%s\n%s' "$WORKGRAPH_AI_SESSION_ID" "$WORKGRAPH_AI_HOME" "$WORKGRAPH_AI_DATABASE" > "$WORKGRAPH_AI_TEST_CONTEXT"`)
+printf '%s\n%s\n%s' "$WORKGRAPH_AI_SESSION_ID" "$WORKGRAPH_AI_HOME" "$WORKGRAPH_AI_DATABASE" > "$WORKGRAPH_AI_TEST_CONTEXT"
+`+aiHandoffDestinationRecorder)
 			sourceID := fmt.Sprintf("00000000-0000-4000-8000-%012d", 300+index)
 			insertAINativeFactSession(t, initialized.DatabasePath, sourceID, test.sourceTool, "/usr/local/bin/"+test.sourceTool, test.sourceTool+"-native", "", workingDir, "2026-08-03T12:00:00Z", true)
 			insertAIHandoffCheckpoint(t, initialized.DatabasePath, sourceID, workingDir)
 			injectForbiddenSourceFields(t, initialized.DatabasePath, sourceID)
+			sourceHistory := readAISessionHistory(t, initialized.DatabasePath, sourceID)
 
 			environment := []string{
 				"PATH=" + workingDir + string(os.PathListSeparator) + os.Getenv("PATH"),
@@ -77,6 +81,43 @@ printf '%s\n%s\n%s' "$WORKGRAPH_AI_SESSION_ID" "$WORKGRAPH_AI_HOME" "$WORKGRAPH_
 					t.Fatalf("handoff transported forbidden %q:\n%s", forbidden, arguments)
 				}
 			}
+			argumentLines := strings.Split(strings.TrimSuffix(arguments, "\n"), "\n")
+			for _, argument := range argumentLines {
+				if strings.Contains(argument, test.sourceTool+"-native") || argument == "resume" || strings.HasPrefix(argument, "--resume") {
+					t.Fatalf("handoff selected the source native session %q:\n%s", argument, arguments)
+				}
+			}
+			if test.promptFlag != "" && (len(argumentLines) < 2 || argumentLines[len(argumentLines)-2] != test.promptFlag) {
+				t.Fatalf("continuation context did not follow %s:\n%s", test.promptFlag, arguments)
+			}
+			resolvedWorkingDir, err := filepath.EvalSymlinks(workingDir)
+			if err != nil {
+				t.Fatalf("resolve working directory: %v", err)
+			}
+			if launchDir := readAIFactFile(t, workingDir, "launch-dir.txt"); launchDir != resolvedWorkingDir {
+				t.Fatalf("destination launched in %q, want the source's observed cwd %q", launchDir, resolvedWorkingDir)
+			}
+			var delivered map[string]any
+			if err := json.Unmarshal([]byte(readAIFactFile(t, workingDir, "context.json")), &delivered); err != nil {
+				t.Fatalf("decode delivered context: %v", err)
+			}
+			expected := map[string]any{
+				"instruction":       "Continue from the structured Workgraph handoff context. Verify repository state before changing files.",
+				"source_session_id": sourceID,
+				"checkpoint": map[string]any{
+					"goal": "Ship the handoff feature", "current_state": "Implementation ready",
+					"completed": []any{"Added facts"}, "next_actions": []any{"Run focused facts"},
+					"blockers": []any{}, "decisions": []any{"Reuse session events"},
+				},
+				"repository": map[string]any{
+					"observed_at": "2026-08-03T12:00:30Z", "cwd": resolvedWorkingDir, "worktree_root": resolvedWorkingDir,
+					"branch": "main", "head": "0123456789abcdef", "dirty_paths": []any{"changed.go"},
+					"dirty_path_count": float64(1), "dirty_paths_truncated": false,
+				},
+			}
+			if !reflect.DeepEqual(delivered, expected) {
+				t.Fatalf("delivered context is not exactly the structured continuation:\n got %#v\nwant %#v", delivered, expected)
+			}
 
 			db, err := sql.Open("sqlite3", initialized.DatabasePath)
 			if err != nil {
@@ -103,6 +144,9 @@ printf '%s\n%s\n%s' "$WORKGRAPH_AI_SESSION_ID" "$WORKGRAPH_AI_HOME" "$WORKGRAPH_
 			parts := strings.Split(string(childContext), "\n")
 			if len(parts) != 3 || parts[0] != destinationID || parts[1] != homeDir || parts[2] != initialized.DatabasePath {
 				t.Fatalf("destination did not receive its own storage identity: %q", childContext)
+			}
+			if after := readAISessionHistory(t, initialized.DatabasePath, sourceID); after != sourceHistory {
+				t.Fatalf("successful handoff changed source history:\nbefore %s\nafter  %s", sourceHistory, after)
 			}
 		})
 	}
@@ -581,7 +625,7 @@ func TestAIHandoffRejectsAnOlderCheckpointWhenTheLatestIsUnsupported(t *testing.
 		{name: "array version", version: `[]`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			assertAIHandoffRejectsUnsafeEvidence(t, "ai.session_checkpointed", test.version, "latest checkpoint is unsupported or invalid")
+			assertAIHandoffRejectsUnsafeEvidence(t, "ai.session_checkpointed", test.version, aiUnsafeEvidenceFields, "latest checkpoint is unsupported or invalid")
 		})
 	}
 }
@@ -603,14 +647,38 @@ func TestAIHandoffRejectsOlderObservationWhenNewerEvidenceIsUnsupportedOrInvalid
 				{name: "array version", version: `[]`},
 			} {
 				t.Run(test.name, func(t *testing.T) {
-					assertAIHandoffRejectsUnsafeEvidence(t, eventType, test.version, "latest repository observation is unsupported or invalid")
+					assertAIHandoffRejectsUnsafeEvidence(t, eventType, test.version, aiUnsafeEvidenceFields, "latest repository observation is unsupported or invalid")
 				})
 			}
 		})
 	}
 }
 
-func assertAIHandoffRejectsUnsafeEvidence(t *testing.T, eventType, schemaVersion, want string) {
+func TestAIHandoffRejectsOlderEvidenceWhenNewerSupportedPayloadIsMistyped(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	for _, test := range []struct {
+		name      string
+		eventType string
+		fields    string
+		want      string
+	}{
+		{name: "start pid", eventType: "ai.session_started", fields: `"tool":"codex","pid":"not-a-number","observed":{"cwd":"must-not-be-used"}`, want: "latest repository observation is unsupported or invalid"},
+		{name: "start observation", eventType: "ai.session_started", fields: `"tool":"codex","pid":42,"observed":{"cwd":["must-not-be-used"]}`, want: "latest repository observation is unsupported or invalid"},
+		{name: "checkpoint agent stated", eventType: "ai.session_checkpointed", fields: `"agent_stated":["must not be handed off"],"observed":{"cwd":"must-not-be-used"}`, want: "latest checkpoint is unsupported or invalid"},
+		{name: "checkpoint observation", eventType: "ai.session_checkpointed", fields: `"agent_stated":{"goal":"must not be handed off"},"observed":{"dirty_path_count":"many"}`, want: "latest checkpoint is unsupported or invalid"},
+		{name: "end outcome", eventType: "ai.session_ended", fields: `"outcome":"exited","observation_status":"captured","observed":{"cwd":"must-not-be-used"}`, want: "latest repository observation is unsupported or invalid"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assertAIHandoffRejectsUnsafeEvidence(t, test.eventType, "1", test.fields, test.want)
+		})
+	}
+}
+
+const aiUnsafeEvidenceFields = `"agent_stated":{"goal":"must not be handed off"},"observation_status":"captured","observed":{"cwd":"must-not-be-used"}`
+
+func assertAIHandoffRejectsUnsafeEvidence(t *testing.T, eventType, schemaVersion, fields, want string) {
 	t.Helper()
 	homeDir := filepath.Join(t.TempDir(), ".workgraph")
 	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
@@ -628,7 +696,7 @@ func assertAIHandoffRejectsUnsafeEvidence(t *testing.T, eventType, schemaVersion
 		t.Fatalf("open database: %v", err)
 	}
 	defer db.Close()
-	unsupported := `{"schema_version":` + schemaVersion + `,"session_id":"` + sourceID + `","agent_stated":{"goal":"must not be handed off"},"observation_status":"captured","observed":{"cwd":"must-not-be-used"}}`
+	unsupported := `{"schema_version":` + schemaVersion + `,"session_id":"` + sourceID + `",` + fields + `}`
 	if _, err := db.Exec(`INSERT INTO events (id, source, type, timestamp, payload_json, project, actor, summary, created_at)
 		VALUES ('opaque-newer-evidence', 'ai', ?, '2026-08-03T12:02:00Z', ?, '', '', 'Newer AI evidence', '2026-08-03T12:02:00Z')`,
 		eventType, unsupported); err != nil {
@@ -771,7 +839,46 @@ func TestAIHandoffFreshCheckpointPreservesInvokingDirectoryBinding(t *testing.T)
 	}
 }
 
+const aiHandoffDestinationRecorder = `for last do :; done
+printf '%s' "$last" > context.json
+pwd -P > launch-dir.txt`
+
+func readAIFactFile(t *testing.T, directory, name string) string {
+	t.Helper()
+	contents, err := os.ReadFile(filepath.Join(directory, name))
+	if err != nil {
+		t.Fatalf("read %s: %v", name, err)
+	}
+	return strings.TrimSuffix(string(contents), "\n")
+}
+
+func readAISessionHistory(t *testing.T, databasePath, sessionID string) string {
+	t.Helper()
+	db, err := sql.Open("sqlite3", databasePath)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	var history string
+	if err := db.QueryRow(`SELECT json_group_array(json_object(
+		'id', id, 'source', source, 'type', type, 'timestamp', timestamp, 'payload_json', payload_json,
+		'project', project, 'actor', actor, 'summary', summary, 'created_at', created_at))
+		FROM (SELECT * FROM events WHERE json_extract(payload_json, '$.session_id') = ? ORDER BY id)`, sessionID).Scan(&history); err != nil {
+		t.Fatalf("read session history: %v", err)
+	}
+	return history
+}
+
 func insertAIHandoffCheckpoint(t *testing.T, databasePath, sessionID, workingDir string) {
+	t.Helper()
+	insertAIHandoffCheckpointWith(t, databasePath, sessionID, workingDir, []string{"changed.go"}, map[string]any{
+		"goal": "Ship the handoff feature", "current_state": "Implementation ready",
+		"completed": []string{"Added facts"}, "next_actions": []string{"Run focused facts"},
+		"blockers": []string{}, "decisions": []string{"Reuse session events"},
+	})
+}
+
+func insertAIHandoffCheckpointWith(t *testing.T, databasePath, sessionID, workingDir string, dirtyPaths []string, agentStated map[string]any) {
 	t.Helper()
 	resolvedWorkingDir, err := filepath.EvalSymlinks(workingDir)
 	if err != nil {
@@ -789,14 +896,10 @@ func insertAIHandoffCheckpoint(t *testing.T, databasePath, sessionID, workingDir
 		"observed": map[string]any{
 			"observed_at": "2026-08-03T12:00:30Z", "cwd": workingDir,
 			"worktree_root": workingDir, "git_common_dir": filepath.Join(workingDir, ".git"),
-			"branch": "main", "head": "0123456789abcdef", "dirty_paths": []string{"changed.go"},
-			"dirty_path_count": 1, "dirty_paths_truncated": false,
+			"branch": "main", "head": "0123456789abcdef", "dirty_paths": dirtyPaths,
+			"dirty_path_count": len(dirtyPaths), "dirty_paths_truncated": false,
 		},
-		"agent_stated": map[string]any{
-			"goal": "Ship the handoff feature", "current_state": "Implementation ready",
-			"completed": []string{"Added facts"}, "next_actions": []string{"Run focused facts"},
-			"blockers": []string{}, "decisions": []string{"Reuse session events"},
-		},
+		"agent_stated": agentStated,
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
@@ -1079,4 +1182,226 @@ func countAIStartedSessions(t *testing.T, databasePath string) int {
 		t.Fatalf("count started sessions: %v", err)
 	}
 	return starts
+}
+
+func TestAIHandoffReturnsDestinationExitCode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init workgraph: %v", err)
+	}
+	workingDir := t.TempDir()
+	writeAIFactExecutable(t, workingDir, "codex", "exit 7")
+	sourceID := "00000000-0000-4000-8000-000000000360"
+	insertAINativeFactSession(t, initialized.DatabasePath, sourceID, "claude", "/usr/local/bin/claude", "claude-native", "", workingDir, "2026-08-03T12:00:00Z", true)
+	insertAIHandoffCheckpoint(t, initialized.DatabasePath, sourceID, workingDir)
+
+	output, err := runWorkgraphCommandAllowError([]string{
+		"PATH=" + workingDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	}, "ai", "handoff", "codex", "--from", sourceID, "--home", homeDir, "--database", initialized.DatabasePath)
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 7 {
+		t.Fatalf("handoff did not return the destination exit code 7: %v\n%s", err, output)
+	}
+
+	db, err := sql.Open("sqlite3", initialized.DatabasePath)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	var outcomeKind string
+	var exitCode int
+	if err := db.QueryRow(`SELECT json_extract(payload_json, '$.outcome.kind'), json_extract(payload_json, '$.outcome.exit_code') FROM events
+		WHERE type = 'ai.session_ended' AND json_extract(payload_json, '$.session_id') <> ?`, sourceID).Scan(&outcomeKind, &exitCode); err != nil {
+		t.Fatalf("read destination end: %v", err)
+	}
+	if outcomeKind != "exited" || exitCode != 7 {
+		t.Fatalf("destination end recorded %s/%d, want exited/7", outcomeKind, exitCode)
+	}
+}
+
+func TestAIHandoffTrimsDirtyPathsToFitTheCommandLine(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init workgraph: %v", err)
+	}
+	workingDir := t.TempDir()
+	writeAIFactExecutable(t, workingDir, "codex", aiHandoffDestinationRecorder)
+	sourceID := "00000000-0000-4000-8000-000000000361"
+	insertAINativeFactSession(t, initialized.DatabasePath, sourceID, "claude", "/usr/local/bin/claude", "claude-native", "", workingDir, "2026-08-03T12:00:00Z", true)
+	dirtyPaths := make([]string, 500)
+	for index := range dirtyPaths {
+		dirtyPaths[index] = fmt.Sprintf("src/%03d/\"quoted\"\\%s.go", index, strings.Repeat("p", 80))
+	}
+	insertAIHandoffCheckpointWith(t, initialized.DatabasePath, sourceID, workingDir, dirtyPaths, map[string]any{"goal": "Fit the command line"})
+	sourceHistory := readAISessionHistory(t, initialized.DatabasePath, sourceID)
+
+	output, err := runWorkgraphCommandAllowError([]string{
+		"PATH=" + workingDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	}, "ai", "handoff", "codex", "--from", sourceID, "--home", homeDir, "--database", initialized.DatabasePath)
+	if err != nil {
+		t.Fatalf("handoff with many dirty paths: %v\n%s", err, output)
+	}
+	encoded := readAIFactFile(t, workingDir, "context.json")
+	if cost := len(encoded) + strings.Count(encoded, `"`) + strings.Count(encoded, `\`); cost > 30*1024 {
+		t.Fatalf("continuation context costs %d bytes on the command line, over 30720", cost)
+	}
+	var delivered struct {
+		Checkpoint map[string]any `json:"checkpoint"`
+		Repository struct {
+			DirtyPaths          []string `json:"dirty_paths"`
+			DirtyPathCount      int      `json:"dirty_path_count"`
+			DirtyPathsTruncated bool     `json:"dirty_paths_truncated"`
+		} `json:"repository"`
+	}
+	if err := json.Unmarshal([]byte(encoded), &delivered); err != nil {
+		t.Fatalf("decode delivered context: %v", err)
+	}
+	repository := delivered.Repository
+	if !repository.DirtyPathsTruncated || repository.DirtyPathCount != 500 || len(repository.DirtyPaths) == 0 || len(repository.DirtyPaths) >= 500 ||
+		!reflect.DeepEqual(repository.DirtyPaths, dirtyPaths[:len(repository.DirtyPaths)]) || delivered.Checkpoint["goal"] != "Fit the command line" {
+		t.Fatalf("dirty paths were not trimmed to a marked leading subset: truncated=%v count=%d kept=%d checkpoint=%v",
+			repository.DirtyPathsTruncated, repository.DirtyPathCount, len(repository.DirtyPaths), delivered.Checkpoint)
+	}
+	if after := readAISessionHistory(t, initialized.DatabasePath, sourceID); after != sourceHistory {
+		t.Fatal("trimming the continuation context changed source history")
+	}
+}
+
+func TestAIHandoffRejectsCheckpointTooLargeForTheCommandLine(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	largeCheckpoint := map[string]any{
+		"goal":          strings.Repeat("Keep the goal readable. ", 650),
+		"current_state": strings.Repeat("The state is long. ", 800),
+		"completed":     []string{strings.Repeat("Done step. ", 300)},
+	}
+	encodedCheckpoint, err := json.Marshal(largeCheckpoint)
+	if err != nil {
+		t.Fatalf("encode large checkpoint: %v", err)
+	}
+	for _, test := range []struct {
+		name  string
+		stdin bool
+	}{
+		{name: "stored checkpoint"},
+		{name: "stdin checkpoint", stdin: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			homeDir := filepath.Join(t.TempDir(), ".workgraph")
+			initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+			if err != nil {
+				t.Fatalf("init workgraph: %v", err)
+			}
+			workingDir, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatalf("resolve working directory: %v", err)
+			}
+			launchedPath := filepath.Join(workingDir, "launched.txt")
+			writeAIFactExecutable(t, workingDir, "codex", `touch "$WORKGRAPH_AI_TEST_LAUNCHED"`)
+			sourceID := "00000000-0000-4000-8000-000000000362"
+			insertAINativeFactSession(t, initialized.DatabasePath, sourceID, "claude", "/usr/local/bin/claude", "claude-native", "", workingDir, "2026-08-03T12:00:00Z", !test.stdin)
+			if !test.stdin {
+				insertAIHandoffCheckpointWith(t, initialized.DatabasePath, sourceID, workingDir, []string{"changed.go"}, largeCheckpoint)
+			}
+			sourceHistory := readAISessionHistory(t, initialized.DatabasePath, sourceID)
+
+			args := []string{"ai", "handoff", "codex", "--from", sourceID, "--home", homeDir, "--database", initialized.DatabasePath}
+			if test.stdin {
+				args = append(args, "--stdin")
+			}
+			command := exec.Command(workgraphFactsBinary, args...)
+			command.Dir = workingDir
+			command.Env = daemonCommandEnv([]string{
+				"PATH=" + workingDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+				"WORKGRAPH_AI_TEST_LAUNCHED=" + launchedPath,
+			})
+			detachFromControllingTerminal(command)
+			command.Stdin = strings.NewReader(string(encodedCheckpoint))
+			output, err := command.CombinedOutput()
+			if err == nil || !strings.Contains(string(output), "over the 30720-byte command-line limit") || !strings.Contains(string(output), "shorter checkpoint") {
+				t.Fatalf("expected actionable context size rejection, got %v\n%s", err, output)
+			}
+			if _, err := os.Stat(launchedPath); !os.IsNotExist(err) {
+				t.Fatalf("oversized context launched the destination: %v", err)
+			}
+
+			db, err := sql.Open("sqlite3", initialized.DatabasePath)
+			if err != nil {
+				t.Fatalf("open database: %v", err)
+			}
+			defer db.Close()
+			var starts, checkpoints int
+			if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type = 'ai.session_started'`).Scan(&starts); err != nil || starts != 1 {
+				t.Fatalf("oversized context created destination lifecycle, starts=%d err=%v", starts, err)
+			}
+			if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type = 'ai.session_checkpointed' AND json_extract(payload_json, '$.session_id') = ?`, sourceID).Scan(&checkpoints); err != nil || checkpoints != 1 {
+				t.Fatalf("source checkpoint count = %d, want the one checkpoint kept, err=%v", checkpoints, err)
+			}
+			if after := readAISessionHistory(t, initialized.DatabasePath, sourceID); !test.stdin && after != sourceHistory {
+				t.Fatal("rejected stored-checkpoint handoff changed source history")
+			}
+		})
+	}
+}
+
+func TestAIHandoffStdinRefusesWhenALaterDatedCheckpointExists(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init workgraph: %v", err)
+	}
+	workingDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve working directory: %v", err)
+	}
+	launchedPath := filepath.Join(workingDir, "launched.txt")
+	writeAIFactExecutable(t, workingDir, "codex", `printf '%s\n' "$@" > "$WORKGRAPH_AI_TEST_LAUNCHED"`)
+	sourceID := "00000000-0000-4000-8000-000000000363"
+	insertAINativeFactSession(t, initialized.DatabasePath, sourceID, "claude", "/usr/local/bin/claude", "claude-native", "", workingDir, "2026-08-03T12:00:00Z", false)
+	insertAIHandoffCheckpoint(t, initialized.DatabasePath, sourceID, workingDir)
+	db, err := sql.Open("sqlite3", initialized.DatabasePath)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`UPDATE events SET timestamp = '2099-01-01T00:00:00Z' WHERE id = ?`, "ai.session_checkpointed:"+sourceID+":handoff"); err != nil {
+		t.Fatalf("future-date existing checkpoint: %v", err)
+	}
+
+	command := exec.Command(workgraphFactsBinary,
+		"ai", "handoff", "codex", "--from", sourceID, "--stdin", "--home", homeDir, "--database", initialized.DatabasePath,
+	)
+	command.Dir = workingDir
+	command.Env = daemonCommandEnv([]string{
+		"PATH=" + workingDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"WORKGRAPH_AI_TEST_LAUNCHED=" + launchedPath,
+	})
+	detachFromControllingTerminal(command)
+	command.Stdin = strings.NewReader(`{"goal":"Freshly recorded goal"}`)
+	output, err := command.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "checkpoint dated after the one --stdin just recorded") {
+		t.Fatalf("expected later-dated checkpoint refusal, got %v\n%s", err, output)
+	}
+	if _, err := os.Stat(launchedPath); !os.IsNotExist(err) {
+		t.Fatalf("destination launched with a checkpoint other than the one recorded: %v", err)
+	}
+	var checkpoints, starts int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type = 'ai.session_checkpointed' AND json_extract(payload_json, '$.session_id') = ?`, sourceID).Scan(&checkpoints); err != nil || checkpoints != 2 {
+		t.Fatalf("fresh checkpoint was not kept beside the existing one, count=%d err=%v", checkpoints, err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type = 'ai.session_started'`).Scan(&starts); err != nil || starts != 1 {
+		t.Fatalf("refused handoff created destination lifecycle, starts=%d err=%v", starts, err)
+	}
 }

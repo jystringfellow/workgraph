@@ -300,7 +300,9 @@ wrapped but cannot be natively bound unless an exact `--session` ID was already
 provided.
 
 Before launch, workgraph rejects the command if `WORKGRAPH_AI_SESSION_ID` is
-already present. Nested wrapped sessions are not supported in V1. This also
+already present. Nested wrapped sessions are not supported in V1, except that
+`ai handoff` invoked inside its selected wrapped source may launch the
+destination as a new wrapped session; see [AI Handoff](ai-handoff.md). This also
 applies to `ai resume`, because resume uses the same wrapper lifecycle and
 workgraph cannot safely distinguish an active ancestor session from a manually
 exported stale value. The error must explain that resume should run outside the
@@ -932,7 +934,8 @@ the explicitly selected local session and verified adapter command.
 - `gh copilot` wrapper adaptation; the verified Copilot adapter targets the
   direct `copilot` executable
 - vendor-native selection by ambiguous prefix, name, picker, or "last session"
-- nested sessions
+- nested sessions, other than the `ai handoff` exception in
+  [AI Handoff](ai-handoff.md)
 - multi-repository sessions
 - worktree creation or management
 - non-Git project inference without an explicit mapping
