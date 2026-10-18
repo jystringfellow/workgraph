@@ -38,12 +38,22 @@ local CAO instance for the runner and every seat's CAO MCP client.
 
 Set `CAO_PYTHON` to that installation's Python interpreter. The runner calls CAO
 as a module of the Python that runs it, and `sync.sh` calls the `cao` entry point
-found first on `PATH`; the commands below put both on the same installation.
+found first on `PATH` and reads profile front matter with `CAO_PYTHON` (PyYAML);
+the commands below put both on the same installation.
 
-The native Codex profiles `cao_workspace` and `cao_readonly` must exist.
-[`codex-profiles.toml`](codex-profiles.toml) is the reference sandbox setting
-for each (`workspace-write` and `read-only`). The runner does not inspect native
-Codex configuration; confirm `cao_readonly` is read-only before a run.
+The native Codex profiles `cao_workspace` and `cao_readonly` must exist. Codex
+reads each profile from `$CODEX_HOME/<name>.config.toml` (default `CODEX_HOME`
+is `~/.codex`); legacy `[profiles.<name>]` tables in `config.toml` are rejected
+when `--profile` is used. The reference files in [`codex/`](codex/) set
+`workspace-write` and `read-only` sandboxes. Install any that are missing,
+without replacing existing files:
+
+```sh
+cp -n .cao/codex/*.config.toml "${CODEX_HOME:-$HOME/.codex}/"
+```
+
+The runner does not inspect native Codex configuration; confirm
+`cao_readonly.config.toml` sets `sandbox_mode = "read-only"` before a run.
 Profiles retain scoped MCP approval overrides: CAO's `--auto-approve` skips its
 launch confirmation, but does not grant Codex tool approval or broaden a sandbox.
 The explicit native Codex tool names can produce CAO vocabulary warnings; keep

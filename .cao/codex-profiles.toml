@@ -1,5 +1,0 @@
-[profiles.cao_workspace]
-sandbox_mode = "workspace-write"
-
-[profiles.cao_readonly]
-sandbox_mode = "read-only"

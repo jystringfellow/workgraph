@@ -236,7 +236,37 @@ class PodTest(unittest.TestCase):
         receipt, kill, elapsed = self.timed_check(('', None), None, time_limit=40)
         self.assertTrue(receipt['timed_out'])
         self.assertEqual(len(kill.call_args_list), 1)
-        self.assertLess(elapsed, 900)
+        self.assertEqual(elapsed, 55)
+
+    def test_successful_check_finishing_after_its_time_limit_is_timed_out(self):
+        root = self.prepare()
+        child = Mock(returncode=0)
+        clock = [0.0]
+        def finish_late(timeout):
+            clock[0] += 0.116
+            return 'go_vet: pass\ngo_test: pass\n', None
+        child.communicate.side_effect = finish_late
+        with self.check_process(child), patch.object(pod.time, 'monotonic', side_effect=lambda: clock[0]):
+            receipt = pod.verify(root, 1, verifier=(root / 'verify.sh').read_bytes(), time_limit=0.02)
+        self.assertTrue(receipt['timed_out'])
+        self.assertFalse(receipt['passed'])
+
+    def test_each_check_wait_is_capped_by_the_remaining_time(self):
+        root = self.prepare()
+        child = Mock(returncode=0)
+        clock = [0.0]
+        waits = []
+        def communicate(timeout):
+            waits.append(timeout)
+            clock[0] += timeout
+            if len(waits) < 3:
+                raise subprocess.TimeoutExpired('go', timeout)
+            return 'go_vet: pass\ngo_test: pass\n', None
+        child.communicate.side_effect = communicate
+        with self.check_process(child), patch.object(pod.time, 'monotonic', side_effect=lambda: clock[0]):
+            receipt = pod.verify(root, 1, verifier=(root / 'verify.sh').read_bytes(), time_limit=60)
+        self.assertEqual(waits, [25, 25, 10])
+        self.assertTrue(receipt['passed'])
 
     def test_edit_reverted_during_check_is_indistinguishable_from_no_edit(self):
         root = self.prepare()

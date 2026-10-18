@@ -201,15 +201,16 @@ def verify(root, number, mode='full', fact=None, *, verifier, time_limit=900):
     print(f'Host verification {number}: {mode}' + ((' ' + fact) if fact else ''), flush=True)
     child = subprocess.Popen(command, cwd=REPO, env=env, stdout=subprocess.PIPE,
                              stderr=subprocess.STDOUT, text=True, start_new_session=True, umask=0o022)
-    started = time.monotonic()
+    expires = time.monotonic() + time_limit
     timed_out = False
     while True:
         try:
-            output, _ = child.communicate(timeout=25)
+            output, _ = child.communicate(timeout=max(0, min(25, expires - time.monotonic())))
+            timed_out = time.monotonic() > expires
             break
         except subprocess.TimeoutExpired:
             print(f'Host verification {number}: still running', flush=True)
-            if time.monotonic() - started > time_limit:
+            if time.monotonic() >= expires:
                 import signal
                 timed_out = True
                 os.killpg(child.pid, signal.SIGTERM)
