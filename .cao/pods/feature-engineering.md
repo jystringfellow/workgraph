@@ -96,7 +96,7 @@ Never edit check receipts, host configuration, plan bindings or seat profiles.
 Read failing test locations for triage; stop for insufficient evidence.
 
 The host additionally bounds the run to 14 worker assignments, 12 check requests
-and 40 minutes of supervision. Individual checks are time-limited. Engineering
+and 40 minutes of supervision. Individual checks also end at that deadline. Engineering
 correction budgets are enforced by the lead's protocol; the host is not a
 transactional workflow engine. Requested provider/model identity is recorded;
 actual model identity may remain unverified and is not a reason to invent work.

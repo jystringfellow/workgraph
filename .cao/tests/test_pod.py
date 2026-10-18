@@ -120,8 +120,9 @@ class PodTest(unittest.TestCase):
             first, second = self.prepare(), self.prepare()
         self.assertNotEqual(first, second)
         self.assertEqual(first.stat().st_mode & 0o777, 0o700)
-        self.assertEqual(json.loads((first / 'manifest.json').read_text())['review_corrections'], 3)
-        self.assertEqual(json.loads((first / 'manifest.json').read_text())['gate_corrections'], 2)
+        manifest = json.loads((first / 'manifest.json').read_text())
+        self.assertEqual((manifest['max_worker_assignments'], manifest['max_check_requests']), (14, 12))
+        self.assertFalse({'review_corrections', 'gate_corrections'} & set(manifest))
         seats = json.loads((first / 'seats.json').read_text())
         self.assertEqual(set(seats), {'lead', 'developer', 'reviewer', 'gate'})
         self.assertNotIn('astra', json.dumps(seats))
@@ -198,20 +199,67 @@ class PodTest(unittest.TestCase):
         self.assertEqual(receipt['go_vet'], 'fail')
         self.assertEqual(receipt['go_test'], 'pass')
 
+    def timed_check(self, after_term, after_kill, time_limit=900, mode='full', fact=None):
+        root = self.prepare()
+        child = Mock(returncode=-9, pid=123456)
+        clock = [0.0]
+        kill = Mock()
+        def communicate(timeout):
+            clock[0] += timeout
+            outcome = [None, after_term, after_kill][len(kill.call_args_list)]
+            if outcome is None:
+                raise subprocess.TimeoutExpired('go', timeout)
+            return outcome
+        child.communicate.side_effect = communicate
+        with self.check_process(child), patch.object(pod.os, 'killpg', kill), \
+                patch.object(pod.time, 'monotonic', side_effect=lambda: clock[0]):
+            receipt = pod.verify(root, 1, mode, fact, verifier=(root / 'verify.sh').read_bytes(),
+                                 time_limit=time_limit)
+        return receipt, kill, clock[0]
+
     def test_check_timeout_terminates_only_its_process_group_and_is_not_red_evidence(self):
         import signal
-        root = self.prepare()
-        child = Mock(returncode=-signal.SIGKILL, pid=123456)
-        child.communicate.side_effect = [subprocess.TimeoutExpired('go', 25),
-                                         subprocess.TimeoutExpired('go', 15),
-                                         ('--- FAIL: TestRegression (0s)\n', None)]
-        with self.check_process(child), patch.object(pod.os, 'killpg') as kill, \
-                patch.object(pod.time, 'monotonic', side_effect=[0, 901]):
-            receipt = pod.verify(root, 1, 'red', 'TestRegression', verifier=(root / 'verify.sh').read_bytes())
+        receipt, kill, _ = self.timed_check(None, ('--- FAIL: TestRegression (0s)\n', None),
+                                            mode='red', fact='TestRegression')
         self.assertTrue(receipt['timed_out'])
         self.assertFalse(receipt['expected_fact_failed'])
         self.assertEqual([call.args for call in kill.call_args_list],
                          [(123456, signal.SIGTERM), (123456, signal.SIGKILL)])
+
+    def test_unkillable_check_is_recorded_as_timed_out(self):
+        receipt, kill, _ = self.timed_check(None, None)
+        self.assertTrue(receipt['timed_out'])
+        self.assertFalse(receipt['passed'])
+        self.assertEqual(len(kill.call_args_list), 2)
+
+    def test_check_time_limit_follows_remaining_supervision_time(self):
+        receipt, kill, elapsed = self.timed_check(('', None), None, time_limit=40)
+        self.assertTrue(receipt['timed_out'])
+        self.assertEqual(len(kill.call_args_list), 1)
+        self.assertLess(elapsed, 900)
+
+    def test_edit_reverted_during_check_is_indistinguishable_from_no_edit(self):
+        root = self.prepare()
+        child = Mock(returncode=0)
+        def edit_and_revert(**kwargs):
+            original = (self.repo / 'candidate.txt').read_text()
+            (self.repo / 'candidate.txt').write_text('transient edit')
+            (self.repo / 'candidate.txt').write_text(original)
+            return 'go_vet: pass\ngo_test: pass\n', None
+        child.communicate.side_effect = edit_and_revert
+        with self.check_process(child):
+            receipt = pod.verify(root, 1, verifier=(root / 'verify.sh').read_bytes())
+        self.assertTrue(receipt['passed'])
+        self.assertFalse(receipt['changed_during_checks'])
+
+    def test_prepared_profiles_bind_every_cao_mcp_client_to_the_runner_instance(self):
+        import yaml
+        root = self.prepare()
+        for cfg in json.loads((root / 'seats.json').read_text()).values():
+            header = (root / (cfg['name'] + '.md')).read_text().split('---', 2)[1]
+            server = yaml.safe_load(header)['mcpServers']['cao-mcp-server']
+            self.assertEqual(server.get('env'), {'CAO_HOME_DIR': str(self.home),
+                                                 'CAO_API_HOST': pod.API_HOST, 'CAO_API_PORT': pod.API_PORT})
 
     def test_repository_changes_during_checks_invalidate_success(self):
         root = self.prepare()
@@ -301,8 +349,12 @@ class PodTest(unittest.TestCase):
                           first_request='1 red TestRegression', red_succeeded=True, repeat_full_change=False,
                           unchanged_candidate=False, failed_full=False, confirming_red=False,
                           error_terminal=None, expire_while_waiting=False, ready_worker_busy=False,
-                          delete_failure=None, verifier_script=None, tamper_step=None):
+                          delete_failure=None, verifier_script=None, tamper_step=None,
+                          lead_provider=None, late_request=False, interrupt=False, register_lead=True,
+                          commit_after_launch=False, duplicate_request=False, second_request=None):
         root = self.prepare()
+        self.cli_commands = []
+        self.check_options = {}
         manifest = json.loads((root / 'manifest.json').read_text())
         manifest['max_worker_assignments'] = assignment_limit
         pod.save(root / 'manifest.json', manifest)
@@ -311,6 +363,9 @@ class PodTest(unittest.TestCase):
             manifest['verifier_sha256'] = hashlib.sha256(verifier_script).hexdigest()
             pod.save(root / 'manifest.json', manifest)
         seats = json.loads((root / 'seats.json').read_text())
+        if lead_provider:
+            seats['lead']['provider'] = lead_provider
+            pod.save(root / 'seats.json', seats)
         if preexisting_native:
             (self.native / (seats['reviewer']['name'] + '.agent.md')).write_text('existing agent')
         (self.home / 'db').mkdir()
@@ -320,6 +375,8 @@ class PodTest(unittest.TestCase):
             db.execute('CREATE TABLE inbox (sender_id, receiver_id, status, message)')
             for identifier, seat in [('lead', 'lead'), ('review1', 'reviewer'), ('gate1', 'gate'),
                                      ('developer', 'developer'), ('review2', 'reviewer'), ('gate2', 'gate')]:
+                if seat == 'lead' and not register_lead:
+                    continue
                 cfg = seats[seat]
                 db.execute('INSERT INTO terminals VALUES (?, ?, ?, ?, 1, ?)',
                            (identifier, cfg['name'], cfg['provider'], cfg['model'], 'cao-fake'))
@@ -341,6 +398,7 @@ class PodTest(unittest.TestCase):
             if number and busy:
                 raise AssertionError('Checks started while terminals were busy')
             checks.append((number, mode, fact))
+            self.check_options[number] = options
             if verifier_script is not None and mode == 'full':
                 return real_verify(directory, number, mode, fact, **options)
             passed = (mode == 'full' and not (failed_full and number == 2)) or (confirming_red and number == 2)
@@ -358,6 +416,9 @@ class PodTest(unittest.TestCase):
         def cli(command, **options):
             if command[0] == 'git':
                 return real_run(command, **options)
+            self.cli_commands.append(command)
+            if 'launch' in command and commit_after_launch:
+                self.git('commit', '-q', '--allow-empty', '-m', 'unexpected commit')
             if tamper_step in command:
                 forged = b'printf "go_vet: pass\\ngo_test: pass\\n"\n'
                 (root / 'verify.sh').write_bytes(forged)
@@ -385,7 +446,11 @@ class PodTest(unittest.TestCase):
                 if 'request 1 ' in options['params']['message']:
                     if not unchanged_candidate:
                         (self.repo / 'candidate.txt').write_text('Corrected implementation\n')
-                    (root / 'verify.request').write_text('2 red TestRegression' if confirming_red else '2 full')
+                    following = second_request or ('2 red TestRegression' if confirming_red else '2 full')
+                    if duplicate_request:
+                        pending_request[0] = following
+                    else:
+                        (root / 'verify.request').write_text(following)
                 elif (repeat_full_change or confirming_red) and 'request 2 ' in options['params']['message']:
                     if repeat_full_change:
                         (self.repo / 'candidate.txt').write_text('Another correction\n')
@@ -403,6 +468,9 @@ class PodTest(unittest.TestCase):
                                        ('gate1', 'lead', 'delivered', latest_gate_reply))
                 return {'success': True}
             identifier = path.rsplit('/', 1)[-1]
+            if late_request and not late_clock_set[0] and path.startswith('/terminals/'):
+                late_clock_set[0] = True
+                clock[0] = 2440.0
             if identifier == error_terminal:
                 return {'status': 'error'}
             if ready[0] and ready_worker_busy and identifier == 'developer':
@@ -416,8 +484,18 @@ class PodTest(unittest.TestCase):
                 del busy[identifier]
             return {'status': 'ok' if path == '/health' else 'completed'}
 
+        pending_request = [None]
+        late_clock_set = [False]
+        sleeps = [0]
+
         def sleep(seconds):
+            if interrupt:
+                raise KeyboardInterrupt
             clock[0] += 10
+            sleeps[0] += 1
+            if pending_request[0] and sleeps[0] >= 3:
+                (root / 'verify.request').write_text(pending_request[0])
+                pending_request[0] = None
 
         with patch.object(pod, 'api', side_effect=api), \
                 patch.object(pod.subprocess, 'run', side_effect=cli), \
@@ -435,6 +513,63 @@ class PodTest(unittest.TestCase):
         self.assertEqual(result['verdict_terminals'], {'reviewer': 'review2', 'gate': 'gate2'})
         self.assertTrue(result['verdicts_require_human_inspection'])
         self.assertEqual(result['candidate'], pod.state())
+
+    def test_lead_launch_uses_the_lead_profile_provider(self):
+        self.run_gate_scenario(lead_provider='claude_code')
+        launch = next(command for command in self.cli_commands if 'launch' in command)
+        self.assertEqual(launch[launch.index('--provider') + 1], 'claude_code')
+
+    def test_host_checks_are_bounded_by_remaining_supervision_time(self):
+        _, status, checks = self.run_gate_scenario(late_request=True)
+        self.assertEqual(status, 0)
+        self.assertEqual(self.check_options[0]['time_limit'], 900)
+        self.assertEqual(self.check_options[1]['time_limit'], 60.0)
+
+    def test_interrupt_records_interrupted_result(self):
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_gate_scenario(interrupt=True)
+        root, = (self.repo / '.cao/pod-runs').iterdir()
+        result = json.loads((root / 'result.json').read_text())
+        self.assertEqual(result['status'], 'interrupted')
+        self.assertEqual(result['failure'], 'KeyboardInterrupt')
+
+    def test_unregistered_lead_terminal_stops_before_checks(self):
+        root, status, checks = self.run_gate_scenario(register_lead=False)
+        self.assertEqual(status, 1)
+        self.assertEqual(checks, [(0, 'full', None)])
+        self.assertIn('Lead terminal is not registered', (root / 'result.json').read_text())
+
+    def test_head_change_stops_the_run(self):
+        root, status, checks = self.run_gate_scenario(commit_after_launch=True)
+        self.assertEqual(status, 1)
+        self.assertEqual(checks, [(0, 'full', None)])
+        self.assertIn('Git HEAD changed', (root / 'result.json').read_text())
+
+    def test_repeated_request_is_not_rerun(self):
+        _, status, checks = self.run_gate_scenario(duplicate_request=True)
+        self.assertEqual(status, 0)
+        self.assertEqual(checks, [(0, 'full', None), (1, 'red', 'TestRegression'), (2, 'full', None)])
+
+    def test_invalid_request_mid_run_stops_without_running_it(self):
+        root, status, checks = self.run_gate_scenario(second_request='2 full --run everything')
+        self.assertEqual(status, 1)
+        self.assertEqual(checks, [(0, 'full', None), (1, 'red', 'TestRegression')])
+        self.assertIn('Invalid host check request', (root / 'result.json').read_text())
+
+    def test_lead_that_never_yields_stops_before_verification(self):
+        root, status, checks = self.run_gate_scenario(busy_terminals=('lead',), never_idle=True)
+        self.assertEqual(status, 1)
+        self.assertEqual(checks, [(0, 'full', None)])
+        self.assertIn('did not yield', (root / 'result.json').read_text())
+
+    def test_overall_timeout_deletes_session_and_run_registrations(self):
+        root, status, _ = self.run_gate_scenario(final_stage='Stage: awaiting gate')
+        self.assertEqual(status, 1)
+        result = json.loads((root / 'result.json').read_text())
+        self.assertEqual(result['failure'], 'Overall pod time bound exhausted')
+        self.assertEqual(result['bound_cleanup'], {'success': True})
+        self.assertEqual(list((self.home / 'agent-store').glob('*.md')), [])
+        self.assertEqual(list(self.native.iterdir()), [])
 
     def test_unchanged_candidate_can_repeat_full_without_red(self):
         _, status, checks = self.run_gate_scenario(first_request='1 full', unchanged_candidate=True)

@@ -11,16 +11,22 @@ The [Feature Engineering pod](pods/feature-engineering.md) has four stable
 gate. It uses CAO assign/send_message callbacks and ordinary prose. A supplied
 valid plan avoids an architect call. Agents never run tests in this lane.
 
-`pod.py` retains the host-side runner used for the successful AI handoff trial.
-It prepares private run profiles and task input, starts the lead, executes
+`pod.py` is the consolidated host-side runner. Evidence from its AI handoff trial
+run is not committed to this repository. It prepares private run profiles and task input, starts the lead, executes
 allowlisted verification requests, and checks candidate identity and callback
 provenance. It is not a general orchestration engine. The lead owns engineering
 judgments, correction dispositions, and the per-stage correction budgets; the
 host additionally bounds assignments, check requests, and elapsed time.
 
-The older Python workflows, duplicated smoke profiles, workflow observer, and
-local CAO compatibility patch are retired. Git history preserves them. CAO
-provider compatibility fixes belong upstream.
+CAO provider compatibility fixes belong upstream.
+
+The independent reviewer runs a different model family (Copilot,
+`claude-haiku-5.5`) and reads source files directly with read-only file tools.
+The gate shares the developer's and lead's model family (Codex, `gpt-6.1-sol`);
+its independence comes from a fresh context and a read-only sandbox, not model
+diversity. The assurance this pod provides is fresh-context review by a second
+model plus human inspection, not proof of correctness. Session deletion belongs
+to the host; the lead has no auto-approved terminal deletion.
 
 ## Running a task
 
@@ -28,9 +34,16 @@ Use the Python environment containing your installed CAO. Its PyYAML dependency
 is needed to prepare run-specific profiles. The runner otherwise uses the Python
 standard library. CAO server and native CLIs must already be configured and
 running locally. `CAO_HOME_DIR`, `CAO_API_HOST`, and `CAO_API_PORT` select the same
-local CAO instance for the runner and its Codex MCP clients.
+local CAO instance for the runner and every seat's CAO MCP client.
 
-The native Codex configurations `cao_workspace` and `cao_readonly` must exist.
+Set `CAO_PYTHON` to that installation's Python interpreter. The runner calls CAO
+as a module of the Python that runs it, and `sync.sh` calls the `cao` entry point
+found first on `PATH`; the commands below put both on the same installation.
+
+The native Codex profiles `cao_workspace` and `cao_readonly` must exist.
+[`codex-profiles.toml`](codex-profiles.toml) is the reference sandbox setting
+for each (`workspace-write` and `read-only`). The runner does not inspect native
+Codex configuration; confirm `cao_readonly` is read-only before a run.
 Profiles retain scoped MCP approval overrides: CAO's `--auto-approve` skips its
 launch confirmation, but does not grant Codex tool approval or broaden a sandbox.
 The explicit native Codex tool names can produce CAO vocabulary warnings; keep
@@ -39,7 +52,7 @@ the provider grants intact. Prompt-only tool restrictions are not OS enforcement
 Optional stable-profile installation, without agent calls:
 
 ```sh
-bash .cao/sync.sh
+PATH="$(dirname "$CAO_PYTHON"):$PATH" bash .cao/sync.sh
 ```
 
 Write a short task brief containing objective, implementation status, scope,
@@ -47,8 +60,8 @@ acceptance criteria, and relevant repository paths. Prepare a run with explicit
 plan sources (AGENTS.md is always included):
 
 ```sh
-/path/to/cao/python .cao/pod.py prepare \
-  --brief /private/tmp/task-brief.md \
+"$CAO_PYTHON" .cao/pod.py prepare \
+  --brief /tmp/task-brief.md \
   --plan specs/ai-handoff.md --plan features/ai_handoff.feature
 ```
 
@@ -58,7 +71,7 @@ its path. It snapshots the verifier as `verify.sh` and records its SHA-256 in
 explicitly start the run; **this command uses model quota**:
 
 ```sh
-/path/to/cao/python .cao/pod.py run .cao/pod-runs/pod-REPLACE_WITH_ID
+"$CAO_PYTHON" .cao/pod.py run .cao/pod-runs/pod-REPLACE_WITH_ID
 ```
 
 The runner registers unique aliases, validates them, installs the Copilot custom
@@ -81,6 +94,8 @@ manifest. Every full check executes those retained bytes; later edits to the sou
 snapshot, or manifest cannot replace the command. Preparation artifacts must be
 trusted when the run starts.
 It removes active Workgraph AI session bindings from the child environment.
+Each check stops after 15 minutes or at the supervision deadline, whichever is
+sooner, and a timed-out check is never passing or red evidence.
 The test process uses umask 022 so permission-sensitive fixtures are predictable;
 run directories remain private. Native compiler/toolchain settings remain
 operator-controlled. Passing output becomes a compact receipt. Failures retain
@@ -154,7 +169,9 @@ no installer path override was discoverable in the available local code or docs.
 Existing registrations are preserved; collisions stop the run. Registration
 cleanup errors are retained in `result.json` and prevent a successful result.
 The private run directory remains available for inspection. Other failures
-preserve the session for inspection. A host crash or interrupt can leave agents alive; inspect CAO before another launch.
+preserve the session for inspection. An interrupt records `interrupted` in
+`result.json`; a host crash or interrupt can leave agents alive, so inspect CAO
+before another launch.
 
 `result.json` records success metadata or the stop reason and evidence location.
 Unresolved engineering findings remain in the lead's `handoff.md`. Missing callbacks
@@ -167,8 +184,7 @@ Run artifacts have no automatic expiry. They may contain the human-authored task
 brief and curated reviewer text, which can still be sensitive. Do not put secrets,
 raw terminal transcripts, captured provider prompts, environment dumps, source
 contents or full diffs into diagnostic evidence. Operators own retention and
-removal. Historical `smoke-work/` fixtures remain ignored and are not swept by
-cleanup. No run evidence, installed sessions, or native settings are deleted by
+removal. No run evidence, installed sessions, or native settings are deleted by
 source cleanup or sync.
 
 ## Optional Jev experiment and fallback policy
@@ -193,9 +209,10 @@ side-effecting retry is safe, so this runner supplies no automatic switching sea
 
 ```sh
 python3 -m unittest discover -s .cao/tests
-bash -n .cao/sync.sh .cao/verification/verify.sh
+bash -n .cao/sync.sh
+bash -n .cao/verification/verify.sh
 git diff --check
 ```
 
 Tests mock CAO and Jev calls and use temporary Git repositories. They cover the
-retained runner and sync, not retired workflow behavior. No paid agents are launched.
+runner, sync, seat profiles and the Jev experiment. No paid agents are launched.

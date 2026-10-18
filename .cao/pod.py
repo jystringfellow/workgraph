@@ -89,7 +89,7 @@ def prepare(brief_path, plan_paths):
         _, header, body = text.split('---', 2)
         cfg = yaml.safe_load(header)
         cfg['name'] += '-' + run_id
-        if cfg['provider'] == 'codex':
+        if 'cao-mcp-server' in cfg.get('mcpServers', {}):
             cfg['mcpServers']['cao-mcp-server']['env'] = {
                 'CAO_HOME_DIR': str(HOME), 'CAO_API_HOST': API_HOST, 'CAO_API_PORT': API_PORT}
         (root / (cfg['name'] + '.md')).write_text('---\n' + yaml.safe_dump(cfg, sort_keys=False) + '---' + body)
@@ -98,7 +98,6 @@ def prepare(brief_path, plan_paths):
     save(root / 'seats.json', seats)
     save(root / 'manifest.json', {'run_id': run_id, 'repo': str(REPO),
                                 'verifier_sha256': hashlib.sha256(verifier).hexdigest(),
-                                'review_corrections': 3, 'gate_corrections': 2,
                                 'max_worker_assignments': 14, 'max_check_requests': 12})
     (root / 'packet.md').write_text(f'''# Execution packet
 
@@ -191,7 +190,7 @@ def review_evidence(receipt, current, callbacks, actors, seats):
     return required
 
 
-def verify(root, number, mode='full', fact=None, *, verifier):
+def verify(root, number, mode='full', fact=None, *, verifier, time_limit=900):
     before = state()
     paths = subprocess.check_output(['git', '-C', str(REPO), 'diff', '--name-only', '-z', 'HEAD'])
     paths += subprocess.check_output(['git', '-C', str(REPO), 'ls-files', '--others', '--exclude-standard', '-z'])
@@ -210,7 +209,7 @@ def verify(root, number, mode='full', fact=None, *, verifier):
             break
         except subprocess.TimeoutExpired:
             print(f'Host verification {number}: still running', flush=True)
-            if time.monotonic() - started > 900:
+            if time.monotonic() - started > time_limit:
                 import signal
                 timed_out = True
                 os.killpg(child.pid, signal.SIGTERM)
@@ -218,7 +217,10 @@ def verify(root, number, mode='full', fact=None, *, verifier):
                     output, _ = child.communicate(timeout=15)
                 except subprocess.TimeoutExpired:
                     os.killpg(child.pid, signal.SIGKILL)
-                    output, _ = child.communicate(timeout=15)
+                    try:
+                        output, _ = child.communicate(timeout=15)
+                    except subprocess.TimeoutExpired:
+                        output = ''
                 break
     after = state()
     failed_tests = sorted(set(re.findall(r'--- FAIL: ([A-Za-z0-9_/]+)', output)))
@@ -262,8 +264,8 @@ def run(root):
     session_deleted = False
     command = [sys.executable, '-m', 'cli_agent_orchestrator.cli.main']
 
-    def host_verify(number, mode='full', fact=None):
-        receipt = verify(root, number, mode, fact, verifier=verifier)
+    def host_verify(number, mode='full', fact=None, time_limit=900):
+        receipt = verify(root, number, mode, fact, verifier=verifier, time_limit=time_limit)
         if mode == 'full' and receipt['passed']:
             with closing(sqlite3.connect('file:' + str(HOME / 'db/cli-agent-orchestrator.db') + '?mode=ro', uri=True)) as db:
                 receipt['inbox_rowid'] = db.execute('select coalesce(max(rowid), 0) from inbox').fetchone()[0]
@@ -306,7 +308,7 @@ def run(root):
         if not baseline['passed']:
             raise RuntimeError('Full baseline verification failed; no paid seats launched')
         launched = subprocess.run(command + ['launch', '--headless', '--async', '--auto-approve',
-                                 '--agents', seats['lead']['name'], '--provider', 'codex',
+                                 '--agents', seats['lead']['name'], '--provider', seats['lead']['provider'],
                                  '--working-directory', str(REPO),
                                  f'Read {root / "packet.md"} and supervise this bounded engineering task.'],
                                   env=env, capture_output=True, text=True, timeout=180)
@@ -356,6 +358,8 @@ def run(root):
             if text and text not in seen_requests:
                 number, mode, fact = parse_request(text, len(seen_requests), manifest['max_check_requests'])
                 seen_requests.add(text)
+                if not lead_id:
+                    raise RuntimeError('Lead terminal is not registered in CAO; inspect the retained session')
                 ready_deadline = time.monotonic() + 90
                 while True:
                     now = time.monotonic()
@@ -368,7 +372,7 @@ def run(root):
                     time.sleep(2)
                 if time.monotonic() >= deadline:
                     raise TimeoutError('Overall pod time bound exhausted')
-                receipt = host_verify(number, mode, fact)
+                receipt = host_verify(number, mode, fact, time_limit=min(900, deadline - time.monotonic()))
                 cue = (f'Host verification request {number} completed. Read {root / "checks.json"}. '
                        f'Mode={mode}; passed={receipt["passed"]}; expected_fact_failed={receipt["expected_fact_failed"]}. '
                        f'Candidate fingerprint={receipt["candidate"]["fingerprint"]}. Continue packet within remaining budgets.')
@@ -403,6 +407,9 @@ def run(root):
                 session_deleted = result['bound_cleanup'].get('success') is True
             except Exception as cleanup_error:
                 result['bound_cleanup_error'] = type(cleanup_error).__name__
+    except BaseException as exc:
+        result.update(status='interrupted', failure=type(exc).__name__)
+        raise
     finally:
         if not session or session_deleted:
             for path in reversed(registrations):

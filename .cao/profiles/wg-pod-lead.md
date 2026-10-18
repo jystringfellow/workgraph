@@ -9,7 +9,6 @@ codexConfig:
   mcp_servers.cao-mcp-server.tools.load_skill.approval_mode: approve
   mcp_servers.cao-mcp-server.tools.assign.approval_mode: approve
   mcp_servers.cao-mcp-server.tools.send_message.approval_mode: approve
-  mcp_servers.cao-mcp-server.tools.delete_terminal.approval_mode: approve
 allowedTools: [exec, wait, exec_command, write_stdin, "@cao-mcp-server"]
 mcpServers:
   cao-mcp-server:
