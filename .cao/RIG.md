@@ -53,7 +53,8 @@ plan sources (AGENTS.md is always included):
 ```
 
 Preparation only writes a fresh `.cao/pod-runs/pod-<id>/` directory and prints
-its path. Review `packet.md`, `seats.json`, and `plan-state.json` there. Then
+its path. It snapshots the verifier as `verify.sh` and records its SHA-256 in
+`manifest.json`. Review `packet.md`, `seats.json`, and `plan-state.json` there. Then
 explicitly start the run; **this command uses model quota**:
 
 ```sh
@@ -73,7 +74,9 @@ profiles. Never overwrite a Copilot agent whose ownership CAO cannot verify.
 
 ## Verification and evidence
 
-The host runs `verification/verify.sh`: `go vet ./...` and `go test ./...`.
+The host runs the prepared snapshot of `verification/verify.sh`: `go vet ./...`
+and `go test ./...`. It checks the snapshot hash before execution and executes
+those checked bytes, so edits to the source verifier do not alter a run's checks.
 It removes active Workgraph AI session bindings from the child environment.
 The test process uses umask 022 so permission-sensitive fixtures are predictable;
 run directories remain private. Native compiler/toolchain settings remain
@@ -88,27 +91,43 @@ A lead writes `verify.request` with an increasing request number:
 2 full
 ```
 
-It ends its turn. The host checks the exact Go fact or the full suite, writes
-numbered receipts and `checks.json`, then wakes the lead. Repeated requests are
-not rerun; malformed, out-of-order, or over-budget requests stop execution.
+It ends its turn. The host waits up to 90 seconds, within the supervision
+deadline, for every session terminal to be idle or completed before checking the
+exact Go fact or the full suite. It writes numbered receipts and `checks.json`,
+then wakes the lead. Repeated requests are not rerun; malformed, out-of-order, or over-budget requests stop execution.
 An expected red fact must fail its intended assertion. A compiler/setup failure
-or missing fact is not evidence of a reproduced defect.
+or missing fact is not evidence of a reproduced defect. After a candidate change,
+the host requires a successful red receipt before another full request: the named
+fact must have failed without a timeout or concurrent candidate changes, on a
+candidate different from the last full check. Each full request consumes that
+red evidence; another correction needs fresh red evidence. The initial baseline
+and repeat full checks of an unchanged candidate are exempt. The lead still
+inspects the fact and failure to establish that the intended assertion failed.
+Receipts record `changed_paths` relative to HEAD, including pre-existing changes
+and non-ignored untracked paths. Nested repositories appear as directory paths.
 
 Candidate identity includes HEAD, index entries, tracked changes, and untracked
-paths/content/symlink targets. Effective no-op and changed-then-reverted states
-match; staged changes and commits affect identity. This lane prohibits commits
+paths/content/symlink targets, including Git-visible contents of untracked nested
+repositories. Ignored files, including run artifacts and ignored build inputs,
+are outside the fingerprint; keep ignored inputs stable during a run. Nested
+repositories use their own Git ignore rules. Effective no-op and
+changed-then-reverted states match; staged changes and commits affect identity. This lane prohibits commits
 during a run. Changes invalidate earlier checks and approvals. This is Git
 state evidence, not OS enforcement against arbitrary writes outside the repository.
 
 The lead retains concise findings, developer dispositions, budgets, and current
 state in `handoff.md`. The host retains receipts, requested provider/model/profile,
 terminal IDs and candidate-bound callback provenance. A final ready claim requires
-current full checks and delivered callbacks from both independent seats naming
-that HEAD and fingerprint. The runner prints the verdicts for operator inspection.
+current full checks and each independent seat's latest callback, delivered after
+the inbox rowid captured at the full receipt, naming that HEAD and fingerprint.
+An older callback cannot override a newer response, including a pending one.
+The runner prints the verdicts for operator inspection.
 **Callback provenance does not establish that a verdict approves, or that its
 judgment is correct.** Inspect the actual verdicts and handoff before accepting the
 result; `verdicts_require_human_inspection` remains true. There is no automatic PR,
-commit, publication, merge, or release.
+commit, publication, merge, or release. Stage matching begins at the stage value,
+so `Stage: fixing failed full checks` and `Stage: not ready for human review`
+neither stop nor approve the run. Indentation and `**Stage:**` are accepted.
 
 ## Recovery and retention
 
@@ -117,8 +136,12 @@ claim: a run directory can be executed once, including when its first attempt
 fails. Do not remove that claim to retry a possibly side-effecting step. Reconcile
 the retained CAO session and worktree, then prepare a fresh run. Host assignment
 or elapsed-time exhaustion requests cleanup of that run's session; cleanup errors
-are recorded. Other failures preserve the session for inspection. A host crash
-or interrupt can leave agents alive; inspect CAO before another launch.
+are recorded. The runner's exit cleanup removes the run-specific profiles it
+registered in the CAO agent store and its Copilot custom agent from
+`~/.copilot/agents/`. Existing registrations are preserved; collisions stop the
+run. Cleanup errors are retained in `result.json` and prevent a successful result.
+The private run directory remains available for inspection. Other failures
+preserve the session for inspection. A host crash or interrupt can leave agents alive; inspect CAO before another launch.
 
 `result.json` records success metadata or the stop reason and evidence location.
 Unresolved engineering findings remain in the lead's `handoff.md`. Missing callbacks

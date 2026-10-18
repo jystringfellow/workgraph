@@ -72,11 +72,19 @@ turn for callbacks; no built-in subagents, polling or model substitutions.
 The [runner](../pod.py) prepares a private execution packet under
 `.cao/pod-runs/pod-<id>/`. `plan-state.json` binds AGENTS.md and explicit plan
 sources. `seats.json` provides exact run-specific profile names. `checks.json`
-is the latest host receipt; numbered receipts retain prior results.
+is the latest host receipt; numbered receipts retain prior results. The prepared
+`verify.sh` snapshot and its manifest hash bind the full verification command.
 
 The lead requests checks by writing `verify.request` in that run directory:
 `1 red TestExactFactName`, then `2 full`, increasing the number each time. End
-its turn immediately; the host runs the command and sends a compact callback.
+its turn immediately; the host waits for every session terminal to be idle or
+completed, runs the command, and sends a compact callback. A changed candidate
+requires a successful red receipt before full verification. The initial baseline
+and unchanged full-check retries are exempt. A full request consumes red evidence;
+subsequent corrections need a new red receipt. Receipts record changed paths
+relative to HEAD. The lead must still confirm the intended assertion failed.
+Final readiness requires each independent seat's latest delivered callback to
+name the candidate and follow the latest full receipt's inbox boundary.
 Never edit check receipts, host configuration, plan bindings or seat profiles.
 Read failing test locations for triage; stop for insufficient evidence.
 
