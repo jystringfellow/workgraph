@@ -123,23 +123,24 @@ func TestAIHandoffCapturesCheckpointInsideWrappedSession(t *testing.T) {
 		t.Fatalf("resolve working directory: %v", err)
 	}
 	argsPath := filepath.Join(workingDir, "args.txt")
-	writeAIFactExecutable(t, workingDir, "codex", `printf '%s\n' "$@" > "$WORKGRAPH_AI_TEST_ARGS"`)
+	stdinKindPath := filepath.Join(workingDir, "stdin-kind.txt")
+	writeAIFactExecutable(t, workingDir, "codex", `printf '%s\n' "$@" > "$WORKGRAPH_AI_TEST_ARGS"
+if [ -t 0 ]; then echo terminal > "$WORKGRAPH_AI_TEST_STDIN_KIND"; else echo not-terminal > "$WORKGRAPH_AI_TEST_STDIN_KIND"; fi`)
 	sourceID := "00000000-0000-4000-8000-000000000320"
 	insertAINativeFactSession(t, initialized.DatabasePath, sourceID, "claude", "/usr/local/bin/claude", "claude-native", "", workingDir, "2026-08-03T12:00:00Z", false)
+	checkpointPath := filepath.Join(t.TempDir(), "checkpoint.json")
+	if err := os.WriteFile(checkpointPath, []byte(`{"goal":"Fresh handoff goal","current_state":"Ready to switch","next_actions":["Continue in Codex"]}`), 0o600); err != nil {
+		t.Fatalf("write checkpoint: %v", err)
+	}
 
-	command := exec.Command(workgraphFactsBinary,
-		"ai", "handoff", "codex", "--stdin", "--home", homeDir, "--database", initialized.DatabasePath,
-	)
-	command.Dir = workingDir
-	command.Env = daemonCommandEnv([]string{
+	output, err := runWorkgraphInAIFactTerminal(t, workingDir, checkpointPath, []string{
 		"PATH=" + workingDir + string(os.PathListSeparator) + os.Getenv("PATH"),
 		"WORKGRAPH_AI_SESSION_ID=" + sourceID,
 		"WORKGRAPH_AI_HOME=" + homeDir,
 		"WORKGRAPH_AI_DATABASE=" + initialized.DatabasePath,
 		"WORKGRAPH_AI_TEST_ARGS=" + argsPath,
-	})
-	command.Stdin = strings.NewReader(`{"goal":"Fresh handoff goal","current_state":"Ready to switch","next_actions":["Continue in Codex"]}`)
-	output, err := command.CombinedOutput()
+		"WORKGRAPH_AI_TEST_STDIN_KIND=" + stdinKindPath,
+	}, "ai", "handoff", "codex", "--stdin", "--home", homeDir, "--database", initialized.DatabasePath)
 	if err != nil {
 		t.Fatalf("nested handoff: %v\n%s", err, output)
 	}
@@ -164,6 +165,92 @@ func TestAIHandoffCapturesCheckpointInsideWrappedSession(t *testing.T) {
 	if err != nil || !strings.Contains(string(argsBytes), "Fresh handoff goal") {
 		t.Fatalf("fresh checkpoint not delivered: %v\n%s", err, argsBytes)
 	}
+	stdinKind, err := os.ReadFile(stdinKindPath)
+	if err != nil || strings.TrimSpace(string(stdinKind)) != "terminal" {
+		t.Fatalf("destination stdin was not the controlling terminal: %v %q", err, stdinKind)
+	}
+}
+
+func TestAIHandoffStdinWithoutTerminalKeepsCheckpointAndDoesNotLaunch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init workgraph: %v", err)
+	}
+	workingDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve working directory: %v", err)
+	}
+	launchedPath := filepath.Join(workingDir, "launched.txt")
+	writeAIFactExecutable(t, workingDir, "codex", `cat > "$WORKGRAPH_AI_TEST_LAUNCHED"`)
+	sourceID := "00000000-0000-4000-8000-000000000321"
+	insertAINativeFactSession(t, initialized.DatabasePath, sourceID, "claude", "/usr/local/bin/claude", "claude-native", "", workingDir, "2026-08-03T12:00:00Z", false)
+
+	command := exec.Command(workgraphFactsBinary,
+		"ai", "handoff", "codex", "--from", sourceID, "--stdin", "--home", homeDir, "--database", initialized.DatabasePath,
+	)
+	command.Dir = workingDir
+	command.Env = daemonCommandEnv([]string{
+		"PATH=" + workingDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"WORKGRAPH_AI_TEST_LAUNCHED=" + launchedPath,
+	})
+	detachFromControllingTerminal(command)
+	command.Stdin = strings.NewReader(`{"goal":"Recorded before terminal check"}`)
+	output, err := command.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "no controlling terminal") || !strings.Contains(string(output), "ai handoff codex --from "+sourceID) {
+		t.Fatalf("expected actionable missing-terminal failure, got %v\n%s", err, output)
+	}
+	if _, err := os.Stat(launchedPath); !os.IsNotExist(err) {
+		t.Fatalf("destination launched without a terminal: %v", err)
+	}
+
+	db, err := sql.Open("sqlite3", initialized.DatabasePath)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	var checkpoints, starts int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type = 'ai.session_checkpointed' AND json_extract(payload_json, '$.session_id') = ?`, sourceID).Scan(&checkpoints); err != nil || checkpoints != 1 {
+		t.Fatalf("validated checkpoint was not kept on the source, count=%d err=%v", checkpoints, err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type = 'ai.session_started'`).Scan(&starts); err != nil || starts != 1 {
+		t.Fatalf("missing terminal created destination lifecycle, starts=%d err=%v", starts, err)
+	}
+}
+
+func runWorkgraphInAIFactTerminal(t *testing.T, dir, stdinPath string, env []string, args ...string) (string, error) {
+	t.Helper()
+	scriptPath, err := exec.LookPath("script")
+	if err != nil {
+		t.Skip("script is unavailable to allocate a terminal")
+	}
+	quote := func(value string) string {
+		return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+	}
+	quoted := []string{quote(workgraphFactsBinary)}
+	for _, argument := range args {
+		quoted = append(quoted, quote(argument))
+	}
+	wrapper := filepath.Join(t.TempDir(), "in-terminal.sh")
+	contents := "#!/bin/sh\ncd " + quote(dir) + " || exit 97\nexec " + strings.Join(quoted, " ") + " < " + quote(stdinPath) + "\n"
+	if err := os.WriteFile(wrapper, []byte(contents), 0o755); err != nil {
+		t.Fatalf("write terminal wrapper: %v", err)
+	}
+	var command *exec.Cmd
+	if runtime.GOOS == "linux" {
+		command = exec.Command(scriptPath, "-qec", wrapper, "/dev/null")
+	} else {
+		command = exec.Command(scriptPath, "-q", "/dev/null", wrapper)
+	}
+	command.Env = daemonCommandEnv(env)
+	output, err := command.CombinedOutput()
+	if strings.Contains(string(output), "openpty") {
+		t.Skipf("terminal allocation is unavailable: %s", output)
+	}
+	return string(output), err
 }
 
 func TestAIHandoffReusesValidCheckpointWithJSONEscapedCharacters(t *testing.T) {
@@ -361,9 +448,6 @@ func TestAIHandoffFailuresDoNotCreateDestinationLineage(t *testing.T) {
 	insertAIHandoffCheckpoint(t, initialized.DatabasePath, sourceID, workingDir)
 	noCheckpointID := "00000000-0000-4000-8000-000000000331"
 	insertAINativeFactSession(t, initialized.DatabasePath, noCheckpointID, "claude", "/usr/local/bin/claude", "claude-native-empty", "", workingDir, "2026-08-03T12:02:00Z", true)
-	unsupportedSourceID := "00000000-0000-4000-8000-000000000332"
-	insertAINativeFactSession(t, initialized.DatabasePath, unsupportedSourceID, "aider", "/usr/local/bin/aider", "aider-native", "", workingDir, "2026-08-03T12:04:00Z", true)
-	insertAIHandoffCheckpoint(t, initialized.DatabasePath, unsupportedSourceID, workingDir)
 	otherHome := filepath.Join(t.TempDir(), ".workgraph")
 	other, err := workgraph.Init(workgraph.InitConfig{HomeDir: otherHome})
 	if err != nil {
@@ -379,7 +463,6 @@ func TestAIHandoffFailuresDoNotCreateDestinationLineage(t *testing.T) {
 		{name: "unsupported destination", args: []string{"aider", "--from", sourceID}, want: `destination "aider" is unsupported`},
 		{name: "missing source", args: []string{"codex", "--from", "missing"}, want: `AI session "missing" was not found`},
 		{name: "missing checkpoint", args: []string{"codex", "--from", noCheckpointID}, want: "source session has no structured checkpoint"},
-		{name: "unsupported source", args: []string{"codex", "--from", unsupportedSourceID}, want: `source AI tool "aider" is unsupported`},
 		{name: "conflicting injected source", env: []string{"WORKGRAPH_AI_SESSION_ID=another"}, args: []string{"codex", "--from", sourceID}, want: "explicit source session disagrees"},
 		{name: "conflicting injected database", env: []string{"WORKGRAPH_AI_DATABASE=" + other.DatabasePath}, args: []string{"codex", "--from", sourceID}, want: "explicit database disagrees"},
 	}
@@ -410,7 +493,7 @@ func TestAIHandoffFailuresDoNotCreateDestinationLineage(t *testing.T) {
 	}
 	defer db.Close()
 	var starts int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type = 'ai.session_started'`).Scan(&starts); err != nil || starts != 3 {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type = 'ai.session_started'`).Scan(&starts); err != nil || starts != 2 {
 		t.Fatalf("failed handoffs created a destination, starts=%d err=%v", starts, err)
 	}
 }
@@ -435,14 +518,15 @@ func TestAIHandoffFreshCheckpointSurvivesDestinationLaunchFailure(t *testing.T) 
 	sourceID := "00000000-0000-4000-8000-000000000333"
 	insertAINativeFactSession(t, initialized.DatabasePath, sourceID, "claude", "/usr/local/bin/claude", "claude-native", "", workingDir, "2026-08-03T12:00:00Z", false)
 
-	command := exec.Command(workgraphFactsBinary,
+	checkpointPath := filepath.Join(t.TempDir(), "checkpoint.json")
+	if err := os.WriteFile(checkpointPath, []byte(`{"goal":"Checkpoint survives launch failure"}`), 0o600); err != nil {
+		t.Fatalf("write checkpoint: %v", err)
+	}
+	output, err := runWorkgraphInAIFactTerminal(t, workingDir, checkpointPath,
+		[]string{"PATH=" + workingDir + string(os.PathListSeparator) + os.Getenv("PATH")},
 		"ai", "handoff", "codex", "--from", sourceID, "--stdin", "--home", homeDir, "--database", initialized.DatabasePath,
 	)
-	command.Dir = workingDir
-	command.Env = daemonCommandEnv([]string{"PATH=" + workingDir + string(os.PathListSeparator) + os.Getenv("PATH")})
-	command.Stdin = strings.NewReader(`{"goal":"Checkpoint survives launch failure"}`)
-	output, err := command.CombinedOutput()
-	if err == nil || !strings.Contains(string(output), "start AI tool") {
+	if err == nil || !strings.Contains(output, "start AI tool") {
 		t.Fatalf("expected destination launch failure, got %v\n%s", err, output)
 	}
 
@@ -729,5 +813,177 @@ func injectForbiddenSourceFields(t *testing.T, databasePath, sessionID string) {
 	}
 	if _, err := db.Exec(`UPDATE events SET payload_json = ? WHERE id = ?`, string(encoded), "ai.session_started:"+sessionID); err != nil {
 		t.Fatalf("update source payload: %v", err)
+	}
+}
+
+func writeVersionedClaudeFixture(t *testing.T, body string) (string, string) {
+	t.Helper()
+	binDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve bin directory: %v", err)
+	}
+	versionsDir := filepath.Join(binDir, "versions")
+	if err := os.Mkdir(versionsDir, 0o755); err != nil {
+		t.Fatalf("create versions directory: %v", err)
+	}
+	versioned := writeAIFactExecutable(t, versionsDir, "2.1.302", body)
+	launcher := filepath.Join(binDir, "claude")
+	if err := os.Symlink(versioned, launcher); err != nil {
+		t.Fatalf("link claude launcher: %v", err)
+	}
+	return binDir, launcher
+}
+
+func readAIStartedTool(t *testing.T, databasePath, sessionID string) (string, string) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", databasePath)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	var tool, toolPath string
+	if err := db.QueryRow(`SELECT json_extract(payload_json, '$.tool'), COALESCE(json_extract(payload_json, '$.tool_path'), '') FROM events
+		WHERE type = 'ai.session_started' AND json_extract(payload_json, '$.session_id') = ?`, sessionID).Scan(&tool, &toolPath); err != nil {
+		t.Fatalf("read started tool for %s: %v", sessionID, err)
+	}
+	return tool, toolPath
+}
+
+func latestAIStartedSessionID(t *testing.T, databasePath string) string {
+	t.Helper()
+	db, err := sql.Open("sqlite3", databasePath)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	var sessionID string
+	if err := db.QueryRow(`SELECT json_extract(payload_json, '$.session_id') FROM events
+		WHERE type = 'ai.session_started' ORDER BY timestamp DESC, rowid DESC LIMIT 1`).Scan(&sessionID); err != nil {
+		t.Fatalf("read latest started session: %v", err)
+	}
+	return sessionID
+}
+
+func TestAIHandoffIdentifiesClaudeLaunchedThroughVersionedSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init workgraph: %v", err)
+	}
+	workingDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve working directory: %v", err)
+	}
+	argsPath := filepath.Join(workingDir, "args.txt")
+	binDir, launcher := writeVersionedClaudeFixture(t, `printf '%s\n' "$@" > "$WORKGRAPH_AI_TEST_ARGS"`)
+	writeAIFactExecutable(t, binDir, "codex", `printf '%s\n' "$@" > "$WORKGRAPH_AI_TEST_ARGS"`)
+	environment := daemonCommandEnv([]string{
+		"PATH=" + binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"WORKGRAPH_AI_TEST_ARGS=" + argsPath,
+	})
+
+	run := exec.Command(workgraphFactsBinary, "ai", "run", "--home", homeDir, "--database", initialized.DatabasePath, "--", "claude")
+	run.Dir = workingDir
+	run.Env = environment
+	if output, err := run.CombinedOutput(); err != nil {
+		t.Fatalf("run versioned claude: %v\n%s", err, output)
+	}
+	sourceID := latestAIStartedSessionID(t, initialized.DatabasePath)
+	if tool, toolPath := readAIStartedTool(t, initialized.DatabasePath, sourceID); tool != "claude" || toolPath != launcher {
+		t.Fatalf("versioned claude recorded as tool=%q tool_path=%q, want claude at %q", tool, toolPath, launcher)
+	}
+	insertAIHandoffCheckpoint(t, initialized.DatabasePath, sourceID, workingDir)
+
+	for _, destination := range []string{"codex", "claude"} {
+		if err := os.Remove(argsPath); err != nil && !os.IsNotExist(err) {
+			t.Fatalf("reset destination args: %v", err)
+		}
+		handoff := exec.Command(workgraphFactsBinary, "ai", "handoff", destination, "--from", sourceID, "--home", homeDir, "--database", initialized.DatabasePath)
+		handoff.Dir = workingDir
+		handoff.Env = environment
+		if output, err := handoff.CombinedOutput(); err != nil {
+			t.Fatalf("handoff from versioned claude to %s: %v\n%s", destination, err, output)
+		}
+		destinationID := latestAIStartedSessionID(t, initialized.DatabasePath)
+		if tool, _ := readAIStartedTool(t, initialized.DatabasePath, destinationID); destinationID == sourceID || tool != destination {
+			t.Fatalf("handoff to %s recorded destination %s as tool %q", destination, destinationID, tool)
+		}
+		argsBytes, err := os.ReadFile(argsPath)
+		if err != nil {
+			t.Fatalf("read %s destination args: %v", destination, err)
+		}
+		if !strings.Contains(string(argsBytes), "Ship the handoff feature") {
+			t.Fatalf("%s destination did not receive continuation context:\n%s", destination, argsBytes)
+		}
+		if destination == "claude" && !strings.Contains(string(argsBytes), "--settings\n") {
+			t.Fatalf("versioned claude destination skipped native lifecycle settings:\n%s", argsBytes)
+		}
+	}
+}
+
+func TestAIResumeLaunchesClaudeRecordedThroughVersionedSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init workgraph: %v", err)
+	}
+	workingDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve working directory: %v", err)
+	}
+	argsPath := filepath.Join(workingDir, "args.txt")
+	_, launcher := writeVersionedClaudeFixture(t, `printf '%s\n' "$@" > "$WORKGRAPH_AI_TEST_ARGS"`)
+	nativeID := "41111111-1111-4111-8111-111111111111"
+	sessionID := "00000000-0000-4000-8000-000000000360"
+	insertAINativeFactSession(t, initialized.DatabasePath, sessionID, "claude", launcher, nativeID, "", workingDir, "2026-08-03T12:00:00Z", true)
+
+	output, err := runWorkgraphCommandAllowError([]string{"WORKGRAPH_AI_TEST_ARGS=" + argsPath},
+		"ai", "resume", "--home", homeDir, "--database", initialized.DatabasePath, sessionID,
+	)
+	if err != nil {
+		t.Fatalf("resume versioned claude: %v\n%s", err, output)
+	}
+	argsBytes, err := os.ReadFile(argsPath)
+	if err != nil || !strings.Contains(string(argsBytes), "--resume\n"+nativeID+"\n") {
+		t.Fatalf("versioned claude did not receive native resume argv: %v\n%s", err, argsBytes)
+	}
+	resumedID := latestAIStartedSessionID(t, initialized.DatabasePath)
+	if tool, toolPath := readAIStartedTool(t, initialized.DatabasePath, resumedID); resumedID == sessionID || tool != "claude" || toolPath != launcher {
+		t.Fatalf("resumed versioned claude recorded tool=%q tool_path=%q", tool, toolPath)
+	}
+}
+
+func TestAIHandoffAcceptsCheckpointedSourceFromAnyWrappedTool(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init workgraph: %v", err)
+	}
+	workingDir := t.TempDir()
+	argsPath := filepath.Join(workingDir, "args.txt")
+	writeAIFactExecutable(t, workingDir, "codex", `printf '%s\n' "$@" > "$WORKGRAPH_AI_TEST_ARGS"`)
+	sourceID := "00000000-0000-4000-8000-000000000332"
+	insertAINativeFactSession(t, initialized.DatabasePath, sourceID, "aider", "/usr/local/bin/aider", "", "", workingDir, "2026-08-03T12:04:00Z", true)
+	insertAIHandoffCheckpoint(t, initialized.DatabasePath, sourceID, workingDir)
+
+	output, err := runWorkgraphCommandAllowError([]string{
+		"PATH=" + workingDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"WORKGRAPH_AI_TEST_ARGS=" + argsPath,
+	}, "ai", "handoff", "codex", "--from", sourceID, "--home", homeDir, "--database", initialized.DatabasePath)
+	if err != nil {
+		t.Fatalf("handoff from aider source: %v\n%s", err, output)
+	}
+	argsBytes, err := os.ReadFile(argsPath)
+	if err != nil || !strings.Contains(string(argsBytes), "Ship the handoff feature") {
+		t.Fatalf("aider source checkpoint not delivered: %v\n%s", err, argsBytes)
 	}
 }

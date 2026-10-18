@@ -43,6 +43,15 @@ structured checkpoint. With `--stdin`, it first appends a checkpoint through
 the existing checkpoint contract while the source remains active. An ended
 source can reuse a stored checkpoint but cannot accept a new one.
 
+`--stdin` reads the checkpoint to end of input, so the destination never
+inherits that consumed standard input. Instead the destination's standard
+input is the controlling terminal (`/dev/tty`, or `CONIN$` on Windows). When
+no controlling terminal is available, the validated checkpoint stays on the
+source and handoff fails before launch with an error naming the
+`ai handoff <destination> --from <session-id>` command to rerun from a
+terminal. Without `--stdin`, the destination inherits standard input
+unchanged.
+
 Handoff invoked inside its selected wrapped source is an intentional, private
 exception to the nested-session guard. The launched destination receives a new
 Workgraph session identity. Ordinary `ai run` and `ai resume` retain the
@@ -118,7 +127,9 @@ unsupported or invalid. It rejects that source before launch with an
 actionable compatibility error. A valid end event that contains no final
 observation does not invalidate the last captured repository observation.
 
-Unsupported source/destination combinations should fail safely.
+Unsupported destinations fail safely before launch. The source may be any
+wrapped Workgraph AI session with a valid structured checkpoint and repository
+observation; handoff never invokes the source tool or its native adapter.
 
 ## Compatibility
 

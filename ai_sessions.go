@@ -258,15 +258,19 @@ func runAISession(config AIRunConfig, permittedParentSessionID string) (AIRunRes
 		return AIRunResult{}, fmt.Errorf("resolve AI session working directory: %w", err)
 	}
 
-	resolvedExecutable, err := exec.LookPath(config.Command[0])
+	invokedExecutable, err := exec.LookPath(config.Command[0])
 	if err != nil {
 		return AIRunResult{}, fmt.Errorf("resolve AI tool %q: %w", filepath.Base(config.Command[0]), err)
 	}
-	resolvedExecutable, err = canonicalAIPath(resolvedExecutable)
+	invokedExecutable, err = filepath.Abs(invokedExecutable)
 	if err != nil {
 		return AIRunResult{}, fmt.Errorf("resolve AI tool path %q: %w", filepath.Base(config.Command[0]), err)
 	}
-	tool := filepath.Base(resolvedExecutable)
+	resolvedExecutable, err := canonicalAIPath(invokedExecutable)
+	if err != nil {
+		return AIRunResult{}, fmt.Errorf("resolve AI tool path %q: %w", filepath.Base(config.Command[0]), err)
+	}
+	tool := aiToolIdentity(invokedExecutable, resolvedExecutable)
 	now := time.Now().UTC()
 	observed, project, err := observeAIWorkingState(workingDir, now)
 	if err != nil {
@@ -298,7 +302,7 @@ func runAISession(config AIRunConfig, permittedParentSessionID string) (AIRunRes
 		}
 	}
 
-	command := exec.Command(resolvedExecutable, nativeLaunch.Args...)
+	command := exec.Command(invokedExecutable, nativeLaunch.Args...)
 	command.Dir = workingDir
 	command.Stdin = config.Stdin
 	command.Stdout = config.Stdout
@@ -313,7 +317,7 @@ func runAISession(config AIRunConfig, permittedParentSessionID string) (AIRunRes
 		SchemaVersion:        aiSchemaVersion,
 		SessionID:            sessionID,
 		Tool:                 tool,
-		ToolPath:             resolvedExecutable,
+		ToolPath:             invokedExecutable,
 		NativeSessionID:      nativeSessionID,
 		PredecessorSessionID: predecessorSessionID,
 		PID:                  command.Process.Pid,
@@ -1518,6 +1522,16 @@ func parseAIDirtyPaths(output []byte) ([]string, error) {
 	}
 	sort.Strings(result)
 	return result, nil
+}
+
+func aiToolIdentity(invokedPath, resolvedPath string) string {
+	for _, candidate := range []string{invokedPath, resolvedPath} {
+		name := filepath.Base(candidate)
+		if _, known := aiNativeAdapters[name]; known {
+			return name
+		}
+	}
+	return filepath.Base(resolvedPath)
 }
 
 func canonicalAIPath(path string) (string, error) {

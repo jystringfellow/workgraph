@@ -60,3 +60,7 @@ func aiSignalName(signal syscall.Signal) string {
 		return "SIG" + strconv.Itoa(int(signal))
 	}
 }
+
+func openAIControllingTerminal() (*os.File, error) {
+	return os.OpenFile("/dev/tty", os.O_RDWR, 0)
+}

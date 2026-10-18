@@ -195,11 +195,17 @@ errors are written to stderr, not persisted in the payload.
 does not introduce an implicit shell. Stdin, stdout, and stderr pass through
 unchanged.
 
-`filepath.Base` of the resolved executable is stored as `tool`. The normalized
-resolved executable path is stored separately as `tool_path` so a later native
-resume launches the same local executable rather than trusting a changed
-`PATH`. If the user explicitly launches `sh -c ...` or `npx ...`, the tool is
-`sh` or `npx`. Workgraph never persists the remaining arguments.
+The `tool` is the basename of the invoked executable when that basename names
+a verified adapter, otherwise the basename of the symlink-resolved executable
+when that names a verified adapter, otherwise the symlink-resolved basename.
+A `claude` launcher that links to a versioned file such as
+`versions/2.1.302` is therefore recorded as `claude`. The absolute, cleaned
+invoked executable path is launched and stored separately as `tool_path`; it
+keeps symlinks so a later native resume follows the tool's own launcher rather
+than a versioned file that an update may remove, and it never trusts a
+changed `PATH`. The invoked path must still resolve before launch. If the user
+explicitly launches `sh -c ...` or `npx ...`, the tool is `sh` or `npx`.
+Workgraph never persists the remaining arguments.
 
 Native behavior comes from a small verified adapter registry. An adapter
 defines the executable basename, how to capture a native session ID, how to
@@ -794,8 +800,8 @@ Resume requires:
 - a latest native session ID
 - a verified adapter for the stored tool
 - a stored latest observed cwd that still resolves locally
-- a resolvable stored `tool_path`, with the stored basename still matching the
-  adapter
+- an absolute, resolvable stored `tool_path` whose tool identity, derived as
+  for `ai run`, still matches the stored tool
 
 Running and `unknown` sessions are rejected conservatively. Missing native
 identity or adapter support produces an actionable nonzero error and does not

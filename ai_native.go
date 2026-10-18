@@ -184,11 +184,12 @@ func ResumeAISession(config AIResumeConfig) (AIResumeResult, error) {
 	if selected.Started == nil || selected.Started.ToolPath == "" {
 		return AIResumeResult{}, errors.New("native resume is unavailable: no resolved tool path was recorded")
 	}
-	toolPath, err := canonicalAIPath(selected.Started.ToolPath)
+	toolPath := selected.Started.ToolPath
+	resolvedToolPath, err := canonicalAIPath(toolPath)
 	if err != nil {
 		return AIResumeResult{}, fmt.Errorf("resolve stored AI tool path: %w", err)
 	}
-	if filepath.Base(toolPath) != selected.Summary.Tool {
+	if !filepath.IsAbs(toolPath) || aiToolIdentity(toolPath, resolvedToolPath) != selected.Summary.Tool {
 		return AIResumeResult{}, errors.New("stored AI tool path does not match the verified adapter")
 	}
 	if selected.LatestObserved == nil || selected.LatestObserved.CWD == "" {

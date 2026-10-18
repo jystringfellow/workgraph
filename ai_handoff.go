@@ -86,9 +86,6 @@ func HandoffAISession(config AIHandoffConfig) (AIHandoffResult, error) {
 	if err != nil {
 		return AIHandoffResult{}, err
 	}
-	if _, supported := aiNativeAdapters[source.Summary.Tool]; !supported {
-		return AIHandoffResult{}, fmt.Errorf("source AI tool %q is unsupported for handoff", source.Summary.Tool)
-	}
 	if source.LatestObserved == nil || source.LatestObserved.CWD == "" {
 		return AIHandoffResult{}, errors.New("source session has no usable observed working directory")
 	}
@@ -128,13 +125,22 @@ func HandoffAISession(config AIHandoffConfig) (AIHandoffResult, error) {
 	if err != nil {
 		return AIHandoffResult{}, err
 	}
+	destinationStdin := config.Stdin
+	if config.CheckpointInput != nil {
+		terminal, err := openAIControllingTerminal()
+		if err != nil {
+			return AIHandoffResult{}, fmt.Errorf("--stdin consumed standard input and no controlling terminal is available for the destination (%v); the checkpoint is recorded on the source, so rerun `workgraph ai handoff %s --from %s` from a terminal", err, destination, sourceSessionID)
+		}
+		defer terminal.Close()
+		destinationStdin = terminal
+	}
 	arguments := aiHandoffArguments(destination, continuation)
 	launch, err := runAISession(AIRunConfig{
 		HomeDir: config.HomeDir, DatabasePath: config.DatabasePath,
 		WorkingDir:           source.LatestObserved.CWD,
 		Command:              append([]string{destinationPath}, arguments...),
 		PredecessorSessionID: sourceSessionID,
-		Stdin:                config.Stdin, Stdout: config.Stdout, Stderr: config.Stderr,
+		Stdin:                destinationStdin, Stdout: config.Stdout, Stderr: config.Stderr,
 	}, environmentSessionID)
 	if err != nil {
 		return AIHandoffResult{}, fmt.Errorf("launch destination: %w", err)

@@ -119,7 +119,11 @@ observation is unsupported or invalid, handoff stops before launch instead of
 silently using an older projection.
 
 With `--stdin`, checkpoint validation and append happen before destination
-launch. If that append succeeds but launch later fails, the successfully
+launch. Because the checkpoint consumes standard input, the destination reads
+from the controlling terminal instead, so run `--stdin` handoffs from an
+interactive terminal. Without one, the checkpoint is kept on the source and
+handoff stops before launch with the `--from` command to rerun from a
+terminal. If that append succeeds but launch later fails, the successfully
 appended checkpoint remains on the source session for inspection or retry; no
 destination lifecycle or lineage is created. A destination that does launch
 and exits nonzero retains its truthful start and end events and returns the
