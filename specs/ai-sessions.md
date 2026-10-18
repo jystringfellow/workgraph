@@ -511,7 +511,13 @@ persistence only. Lifecycle timestamps are not duplicated as `started_at`,
 `checkpointed_at`, or `ended_at` inside payloads. Readers parse timestamps into
 time values before ordering; they do not rely on lexicographic SQLite ordering
 of variable-width RFC3339Nano strings. Equal event timestamps are ordered by
-event ID.
+event ID. An AI event with a readable session ID but an unparseable event
+timestamp is unorderable evidence for that session, regardless of event type
+or schema version. Readers retain an integrity warning and exclude it from
+time-ordered projections. Handoff rejects the session before appending a
+checkpoint or launching a destination: it cannot prove that the selected
+checkpoint and observation are current. Unassociated invalid envelopes do not
+create or block an unrelated session.
 
 Every payload begins with the stable envelope fields `schema_version` and
 `session_id`. V1 writes schema version 1.
@@ -558,7 +564,11 @@ wrapped lifetime. Repeated callbacks for the same workgraph session, tool, and
 native ID are idempotent. A binding can add predecessor lineage when the
 native ID was selected inside the child and therefore was unavailable in the
 launch arguments. `source` is the adapter's bounded lifecycle value and never
-contains prompt or transcript data.
+contains prompt or transcript data. A predecessor recorded in the start event
+always takes precedence over one suggested by a native binding. The binding
+supplies predecessor lineage only when the start event has none, preserving
+explicit handoff lineage even if the destination binds to a native session
+associated with another workgraph lifetime.
 
 ### Checkpoint payload
 

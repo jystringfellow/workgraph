@@ -37,6 +37,9 @@ A handoff starts from the current/selected Workgraph AI session and launches
 the destination AI tool with compact continuation context.
 
 The supported destinations are `codex`, `claude`, `copilot`, and `opencode`.
+An unknown destination is a CLI usage error (exit 2). Value-taking options
+`from`, `home`, and `database` accept one or two leading dashes, with a separate
+value or `=value`, before or after the destination.
 `--from` selects the source explicitly; otherwise the command uses
 `WORKGRAPH_AI_SESSION_ID`. Without `--stdin`, handoff reuses the latest valid
 structured checkpoint. With `--stdin`, it first appends a checkpoint through
@@ -77,7 +80,8 @@ A successful handoff should:
    the work later.
 
 The implementation should reuse the existing AI-session and checkpoint
-architecture rather than create a second continuity model.
+architecture rather than create a second continuity model. The handoff result
+identifies the checkpoint event used, whether newly appended or reused.
 
 ## Continuation context size
 
@@ -121,7 +125,12 @@ Handoff must not automatically persist or transport:
 - source diffs
 
 The destination receives only deliberately constructed continuation context,
-not the source tool's conversation history.
+not the source tool's conversation history. Before constructing that context,
+handoff checks branch, cwd, worktree root, and every dirty path against the
+same credential patterns used by checkpoint validation. Any match rejects the
+handoff before launch; values are not redacted or echoed in diagnostics. This
+check also covers dirty paths that would otherwise be removed to fit the
+command-line budget.
 
 This boundary limits what Workgraph captures, persists, and places in the
 continuation context. It does not sandbox the launched destination or remove
@@ -139,7 +148,9 @@ that appears to have been successfully handed off when it was not.
 Failures before child launch create no destination lifecycle or lineage. When
 `--stdin` has already appended a valid source checkpoint and destination launch
 then fails, the append remains as truthful, inspectable source history. The
-source can reuse it on a later handoff. Once a child has launched and its start
+source can reuse it on a later handoff. The error explicitly says the checkpoint
+was saved and gives a shell-quoted retry command without `--stdin`, preserving
+any selected home and database. Once a child has launched and its start
 event has been persisted, a nonzero child exit records the real end outcome and
 is returned to the caller.
 
@@ -148,6 +159,9 @@ checkpoint or newer observation-bearing start, checkpoint, or end event is
 unsupported or invalid. It rejects that source before launch with an
 actionable compatibility error. A valid end event that contains no final
 observation does not invalidate the last captured repository observation.
+
+Unorderable event timestamps block handoff as specified in
+[AI Sessions](ai-sessions.md), even when compatible older context exists.
 
 Unsupported destinations fail safely before launch. The source may be any
 wrapped Workgraph AI session with a valid structured checkpoint and repository

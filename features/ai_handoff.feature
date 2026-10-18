@@ -25,6 +25,7 @@ Feature: Privacy-bounded AI session handoff
     Given the source AI session has ended with a durable structured checkpoint
     When I select it with "--from <session-id>"
     Then workgraph reuses its latest checkpoint without appending to the ended session
+    And the result identifies the reused checkpoint event
     And launches a linked destination from its last observed working directory
 
   Scenario: Fail without misleading lineage
@@ -45,6 +46,7 @@ Feature: Privacy-bounded AI session handoff
     And the destination cannot be launched
     When I request a handoff with "--stdin"
     Then the source checkpoint remains durable
+    And the error says it was saved and provides a retry command without "--stdin"
     And no destination session or predecessor lineage is recorded
 
   Scenario: Hand work to the same supported agent
@@ -52,3 +54,21 @@ Feature: Privacy-bounded AI session handoff
     When I hand it to the same AI tool
     Then workgraph starts a new linked workgraph lifetime with the compact continuation context
     And does not resume or copy the source provider conversation
+
+  Scenario: Reject credentials in repository metadata
+    Given a source observation contains a credential pattern in its branch, cwd, worktree root, or dirty paths
+    When I request a handoff
+    Then workgraph rejects the handoff without echoing the credential or launching a destination
+
+  Scenario: Reject unorderable source evidence
+    Given a source has valid handoff context and an event with an unparseable timestamp
+    When I request a handoff
+    Then workgraph reports unorderable evidence without appending a checkpoint or launching a destination
+
+  Scenario: Accept standard flag spellings
+    When I select a source and storage with single-dash or double-dash value options
+    Then handoff accepts separate values and equals values before or after the destination
+
+  Scenario: Reject an unknown destination as usage
+    When I request a handoff to an unsupported destination
+    Then the command exits with usage status 2

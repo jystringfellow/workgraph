@@ -86,7 +86,9 @@ Priority labels used below:
   `specs/suggestion-explainability.md`, `specs/event-associations.md`, and
   `specs/effectiveness-review.md`]
 - AI session continuity, native continuation, privacy-bounded handoff,
-  lifecycle controls, and agent plugin installation. [specs:
+  lifecycle controls, and agent plugin installation. Handoff rejects credential
+  patterns in repository context and unorderable session evidence, identifies
+  reused checkpoints, and gives saved-checkpoint retry guidance. [specs:
   `specs/ai-sessions.md`, `specs/ai-handoff.md`, and `specs/agent-plugin.md`]
 - Managed settings, enterprise security reporting, local LLM filtering, CI,
   and cross-platform release packaging. [specs:

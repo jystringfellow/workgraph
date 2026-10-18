@@ -22,6 +22,10 @@ type helpTopic struct {
 	description string
 }
 
+var helpDetails = map[string]string{
+	"ai handoff": "Handoff rejects unsupported newer source evidence. Source transcripts, environment, terminal output, arguments, file contents, and diffs are not persisted or transported. The tool retains normal child-process capabilities.",
+}
+
 var helpTopics = map[string]helpTopic{
 	"memory doctor":           {"workgraph memory doctor [--interactive] [project] [options]", "Inspect project mappings and review possible captured project matches."},
 	"memory link":             {"workgraph memory link --source <captured-project> <memory-project> [options]", "Associate captured project evidence with an existing memory project."},
@@ -33,7 +37,7 @@ var helpTopics = map[string]helpTopic{
 	"ai":                      {"workgraph ai <subcommand>", "Capture, hand off, and resume durable local CLI AI session context."},
 	"ai archive":              {"workgraph ai archive <session-id> [<session-id>...] [options]", "Hide AI sessions from the default list without deleting their events."},
 	"ai checkpoint":           {"workgraph ai checkpoint [session-id] --stdin [options]", "Append a validated structured checkpoint to an AI session."},
-	"ai handoff":              {"workgraph ai handoff <codex|claude|copilot|opencode> [--from <session-id>] [--stdin] [options]", "Launch a linked AI session with structured checkpoint and repository context; unsupported newer source evidence is rejected; transcripts, environment, terminal output, arguments, file contents, and diffs are excluded from captured context; the tool retains normal child-process capabilities."},
+	"ai handoff":              {"workgraph ai handoff <codex|claude|copilot|opencode> [--from <session-id>] [--stdin] [options]", "Launch a linked AI session with structured checkpoint and repository context."},
 	"ai resume":               {"workgraph ai resume <session-id> [options]", "Launch a verified native codex, claude, copilot, or opencode session as a linked lifetime."},
 	"ai run":                  {"workgraph ai run [options] -- <agent-command>", "Launch and record one CLI AI child-process lifetime; native adapters: codex, claude, copilot, opencode."},
 	"ai sessions":             {"workgraph ai sessions [--status <status>] [--limit <count>] [--all | --archived] [options]", "List known local AI sessions and their derived status."},
@@ -253,6 +257,10 @@ func writeTopicHelp(output io.Writer, key string, topic helpTopic) {
 	fmt.Fprintf(output, "  %s\n", topic.usage)
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, topic.description)
+	if detail := helpDetails[key]; detail != "" {
+		fmt.Fprintln(output)
+		fmt.Fprintln(output, detail)
+	}
 
 	if children := immediateSubcommands(key); len(children) > 0 {
 		fmt.Fprintln(output)

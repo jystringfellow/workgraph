@@ -207,6 +207,7 @@ type aiSessionProjection struct {
 	Ended               *aiEndedPayload
 	LatestNative        *aiNativeBoundPayload
 	NativeBoundAt       time.Time
+	unorderableEvidence bool
 	EndedExists         bool
 	Warnings            []string
 	latestEventID       string
@@ -786,11 +787,6 @@ func loadAISessionProjections(homeDir string, databasePath string, inspector AIP
 		if err := rows.Scan(&id, &eventType, &timestampText, &project, &payloadText); err != nil {
 			return nil, nil, fmt.Errorf("scan AI event: %w", err)
 		}
-		timestamp, err := time.Parse(time.RFC3339Nano, timestampText)
-		if err != nil {
-			warnings = append(warnings, "ignored AI event with invalid timestamp: "+id)
-			continue
-		}
 		var identity struct {
 			SessionID string `json:"session_id"`
 		}
@@ -802,6 +798,12 @@ func loadAISessionProjections(homeDir string, databasePath string, inspector AIP
 		if projection == nil {
 			projection = &aiSessionProjection{Summary: AISessionSummary{SessionID: identity.SessionID, Project: project, Tool: "unknown"}}
 			byID[identity.SessionID] = projection
+		}
+		timestamp, err := time.Parse(time.RFC3339Nano, timestampText)
+		if err != nil {
+			projection.unorderableEvidence = true
+			projection.Warnings = append(projection.Warnings, "ignored AI event with invalid timestamp: "+id)
+			continue
 		}
 		if projection.Summary.LatestEventAt.IsZero() || timestamp.After(projection.Summary.LatestEventAt) || (timestamp.Equal(projection.Summary.LatestEventAt) && id > projection.latestEventID) {
 			projection.Summary.LatestEventAt = timestamp
@@ -1289,16 +1291,25 @@ func validateAIString(field string, raw json.RawMessage, maximum int) (string, e
 			return "", fmt.Errorf("checkpoint field %q contains a control character", field)
 		}
 	}
-	patterns, _, err := llmOutboundRedactionPatterns()
-	if err != nil {
-		return "", fmt.Errorf("load checkpoint sensitive patterns: %w", err)
-	}
-	for _, pattern := range patterns {
-		if pattern.Pattern.MatchString(value) {
-			return "", fmt.Errorf("checkpoint field %q contains a %s credential pattern", field, pattern.Name)
-		}
+	if err := validateAICredentialPatterns(fmt.Sprintf("checkpoint field %q", field), value); err != nil {
+		return "", err
 	}
 	return value, nil
+}
+
+func validateAICredentialPatterns(field string, values ...string) error {
+	patterns, _, err := llmOutboundRedactionPatterns()
+	if err != nil {
+		return fmt.Errorf("load AI sensitive patterns: %w", err)
+	}
+	for _, value := range values {
+		for _, pattern := range patterns {
+			if pattern.Pattern.MatchString(value) {
+				return fmt.Errorf("%s contains a %s credential pattern", field, pattern.Name)
+			}
+		}
+	}
+	return nil
 }
 
 func aiPathWithin(root string, candidate string) bool {

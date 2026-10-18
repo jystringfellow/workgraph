@@ -208,11 +208,17 @@ func TestAIHelpNamesVerifiedNativeAdapters(t *testing.T) {
 }
 
 func TestAIHandoffHelpExplainsContextAndPrivacy(t *testing.T) {
+	parent := runWorkgraphCommand(t, nil, "help", "ai")
+	for _, line := range strings.Split(parent, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "handoff ") && len(strings.TrimSpace(line)) > 120 {
+			t.Fatalf("handoff summary is too long: %s", line)
+		}
+	}
 	output := runWorkgraphCommand(t, nil, "help", "ai", "handoff")
 	for _, expected := range []string{
 		"workgraph ai handoff <codex|claude|copilot|opencode>",
 		"--from", "--stdin", "structured checkpoint", "transcripts", "environment", "diffs",
-		"unsupported newer source evidence", "normal child-process capabilities",
+		"unsupported newer source evidence", "normal child-process capabilities", "persisted or transported",
 	} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("AI handoff help omitted %q:\n%s", expected, output)

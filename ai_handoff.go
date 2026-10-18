@@ -120,6 +120,7 @@ func HandoffAISession(config AIHandoffConfig) (AIHandoffResult, error) {
 		}
 	} else {
 		result.ReusedCheckpoint = true
+		result.CheckpointEventID = source.latestCheckpointID
 	}
 	if source.newestCheckpointID != "" && source.newestCheckpointID != source.latestCheckpointID {
 		return AIHandoffResult{}, errors.New("source session's latest checkpoint is unsupported or invalid and cannot be handed off safely")
@@ -143,14 +144,8 @@ func HandoffAISession(config AIHandoffConfig) (AIHandoffResult, error) {
 	if config.CheckpointInput != nil {
 		terminal, err := openAIControllingTerminal()
 		if err != nil {
-			retry := []string{"workgraph", "ai", "handoff", destination, "--from", sourceSessionID}
-			if config.HomeDir != "" {
-				retry = append(retry, "--home", config.HomeDir)
-			}
-			if config.DatabasePath != "" {
-				retry = append(retry, "--database", config.DatabasePath)
-			}
-			return AIHandoffResult{}, fmt.Errorf("--stdin consumed standard input and no controlling terminal is available for the destination (%v); the checkpoint is recorded on the source, so rerun `%s` from a terminal", err, aiShellCommand(retry))
+			return AIHandoffResult{}, aiHandoffCheckpointRetryError(config, destination, sourceSessionID,
+				fmt.Errorf("--stdin consumed standard input and no controlling terminal is available for the destination: %w", err))
 		}
 		defer terminal.Close()
 		destinationStdin = terminal
@@ -164,11 +159,26 @@ func HandoffAISession(config AIHandoffConfig) (AIHandoffResult, error) {
 		Stdin:                destinationStdin, Stdout: config.Stdout, Stderr: config.Stderr,
 	}, environmentSessionID)
 	if err != nil {
-		return AIHandoffResult{}, fmt.Errorf("launch destination: %w", err)
+		launchErr := fmt.Errorf("launch destination: %w", err)
+		if config.CheckpointInput != nil {
+			launchErr = aiHandoffCheckpointRetryError(config, destination, sourceSessionID, launchErr)
+		}
+		return AIHandoffResult{}, launchErr
 	}
 	result.DestinationSessionID = launch.SessionID
 	result.ExitCode = launch.ExitCode
 	return result, nil
+}
+
+func aiHandoffCheckpointRetryError(config AIHandoffConfig, destination, sourceSessionID string, err error) error {
+	retry := []string{"workgraph", "ai", "handoff", destination, "--from", sourceSessionID}
+	if config.HomeDir != "" {
+		retry = append(retry, "--home", config.HomeDir)
+	}
+	if config.DatabasePath != "" {
+		retry = append(retry, "--database", config.DatabasePath)
+	}
+	return fmt.Errorf("%w; the checkpoint was saved on the source; retry without --stdin from a terminal: `%s`", err, aiShellCommand(retry))
 }
 
 func findAIHandoffSource(homeDir, databasePath, sessionID string) (*aiSessionProjection, error) {
@@ -178,6 +188,9 @@ func findAIHandoffSource(homeDir, databasePath, sessionID string) (*aiSessionPro
 	}
 	for index := range projections {
 		if projections[index].Summary.SessionID == sessionID {
+			if projections[index].unorderableEvidence {
+				return nil, errors.New("source session has unorderable evidence with an invalid timestamp; inspect and repair the source events before handoff")
+			}
 			return &projections[index], nil
 		}
 	}
@@ -205,6 +218,16 @@ func buildAIHandoffContext(sessionID string, checkpoint *aiCheckpointPayload, ob
 	normalizedCheckpoint, err := validateAIStoredCheckpoint(checkpoint.AgentStated)
 	if err != nil {
 		return "", fmt.Errorf("stored checkpoint cannot be handed off safely: %w", err)
+	}
+	for _, field := range []struct{ name, value string }{
+		{"branch", observed.Branch}, {"cwd", observed.CWD}, {"worktree_root", observed.WorktreeRoot},
+	} {
+		if err := validateAICredentialPatterns("repository field "+field.name, field.value); err != nil {
+			return "", err
+		}
+	}
+	if err := validateAICredentialPatterns("repository field dirty_paths", observed.DirtyPaths...); err != nil {
+		return "", err
 	}
 	context := aiHandoffContext{
 		Instruction:     "Continue from the structured Workgraph handoff context. Verify repository state before changing files.",

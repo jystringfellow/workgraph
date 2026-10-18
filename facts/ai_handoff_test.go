@@ -12,7 +12,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	workgraph "github.com/jystringfellow/workgraph"
 )
@@ -246,7 +245,7 @@ func TestAIHandoffStdinWithoutTerminalKeepsCheckpointAndDoesNotLaunch(t *testing
 	detachFromControllingTerminal(command)
 	command.Stdin = strings.NewReader(`{"goal":"Recorded before terminal check"}`)
 	output, err := command.CombinedOutput()
-	if err == nil || !strings.Contains(string(output), "no controlling terminal") {
+	if err == nil || !strings.Contains(string(output), "no controlling terminal") || !strings.Contains(string(output), "checkpoint was saved") || !strings.Contains(string(output), "without --stdin") {
 		t.Fatalf("expected actionable missing-terminal failure, got %v\n%s", err, output)
 	}
 	if _, err := os.Stat(launchedPath); !os.IsNotExist(err) {
@@ -346,12 +345,16 @@ func TestAIHandoffReusesValidCheckpointWithJSONEscapedCharacters(t *testing.T) {
 		t.Fatalf("record valid escaped checkpoint: %v", err)
 	}
 
-	output, err := runWorkgraphCommandAllowError([]string{
-		"PATH=" + workingDir + string(os.PathListSeparator) + os.Getenv("PATH"),
-		"WORKGRAPH_AI_TEST_ARGS=" + argsPath,
-	}, "ai", "handoff", "codex", "--from", sourceID, "--home", homeDir, "--database", initialized.DatabasePath)
+	t.Setenv("PATH", workingDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("WORKGRAPH_AI_TEST_ARGS", argsPath)
+	result, err := workgraph.HandoffAISession(workgraph.AIHandoffConfig{
+		HomeDir: homeDir, DatabasePath: initialized.DatabasePath, SourceSessionID: sourceID, Destination: "codex",
+	})
 	if err != nil {
-		t.Fatalf("handoff escaped checkpoint: %v\n%s", err, output)
+		t.Fatalf("handoff escaped checkpoint: %v", err)
+	}
+	if !result.ReusedCheckpoint || result.CheckpointEventID != checkpoint.EventID {
+		t.Fatalf("handoff did not identify reused checkpoint %s: %#v", checkpoint.EventID, result)
 	}
 	argsBytes, err := os.ReadFile(argsPath)
 	if err != nil {
@@ -370,72 +373,94 @@ func TestAIHandoffReusesValidCheckpointWithJSONEscapedCharacters(t *testing.T) {
 	if context.Checkpoint["goal"] != goal {
 		t.Fatal("destination did not receive the complete escaped checkpoint")
 	}
-	if checkpoint.EventID == "" {
-		t.Fatal("checkpoint append did not return an event id")
-	}
 }
 
 func TestAIHandoffRejectsSensitiveStoredCheckpointWithoutLeakingIt(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fixture")
 	}
-	homeDir := filepath.Join(t.TempDir(), ".workgraph")
-	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
-	if err != nil {
-		t.Fatalf("init workgraph: %v", err)
-	}
-	workingDir := t.TempDir()
-	writeAIFactExecutable(t, workingDir, "codex", "exit 0")
-	sourceID := "00000000-0000-4000-8000-000000000323"
-	insertAINativeFactSession(t, initialized.DatabasePath, sourceID, "claude", "/usr/local/bin/claude", "claude-native", "", workingDir, "2026-08-03T12:00:00Z", true)
-	insertAIHandoffCheckpoint(t, initialized.DatabasePath, sourceID, workingDir)
-	credential := "sk-abcdefghijklmnopqrstuvwxyz123456"
+	for _, field := range []string{"goal", "branch", "cwd", "worktree_root", "dirty_paths"} {
+		t.Run(field, func(t *testing.T) {
+			homeDir := filepath.Join(t.TempDir(), ".workgraph")
+			initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+			if err != nil {
+				t.Fatalf("init workgraph: %v", err)
+			}
+			workingDir := t.TempDir()
+			writeAIFactExecutable(t, workingDir, "codex", "exit 0")
+			sourceID := "00000000-0000-4000-8000-000000000323"
+			insertAINativeFactSession(t, initialized.DatabasePath, sourceID, "claude", "/usr/local/bin/claude", "claude-native", "", workingDir, "2026-08-03T12:00:00Z", true)
+			insertAIHandoffCheckpoint(t, initialized.DatabasePath, sourceID, workingDir)
+			credential := "sk-abcdefghijklmnopqrstuvwxyz123456"
 
-	db, err := sql.Open("sqlite3", initialized.DatabasePath)
-	if err != nil {
-		t.Fatalf("open database: %v", err)
-	}
-	var payloadText string
-	checkpointID := "ai.session_checkpointed:" + sourceID + ":handoff"
-	if err := db.QueryRow(`SELECT payload_json FROM events WHERE id = ?`, checkpointID).Scan(&payloadText); err != nil {
-		db.Close()
-		t.Fatalf("read checkpoint: %v", err)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(payloadText), &payload); err != nil {
-		db.Close()
-		t.Fatalf("decode checkpoint: %v", err)
-	}
-	payload["agent_stated"].(map[string]any)["goal"] = credential
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		db.Close()
-		t.Fatalf("encode sensitive checkpoint: %v", err)
-	}
-	if _, err := db.Exec(`UPDATE events SET payload_json = ? WHERE id = ?`, string(encoded), checkpointID); err != nil {
-		db.Close()
-		t.Fatalf("update sensitive checkpoint: %v", err)
-	}
-	db.Close()
+			db, err := sql.Open("sqlite3", initialized.DatabasePath)
+			if err != nil {
+				t.Fatalf("open database: %v", err)
+			}
+			var payloadText string
+			checkpointID := "ai.session_checkpointed:" + sourceID + ":handoff"
+			if err := db.QueryRow(`SELECT payload_json FROM events WHERE id = ?`, checkpointID).Scan(&payloadText); err != nil {
+				db.Close()
+				t.Fatalf("read checkpoint: %v", err)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(payloadText), &payload); err != nil {
+				db.Close()
+				t.Fatalf("decode checkpoint: %v", err)
+			}
+			if field == "goal" {
+				payload["agent_stated"].(map[string]any)[field] = credential
+			} else {
+				value := filepath.Join(workingDir, credential)
+				if err := os.MkdirAll(value, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				observed := payload["observed"].(map[string]any)
+				if field == "dirty_paths" {
+					paths := make([]string, 500)
+					for i := range paths {
+						paths[i] = strings.Repeat("safe-path-", 20)
+					}
+					observed[field] = append(paths, value)
+				} else {
+					observed[field] = value
+				}
+			}
+			encoded, err := json.Marshal(payload)
+			if err != nil {
+				db.Close()
+				t.Fatalf("encode sensitive checkpoint: %v", err)
+			}
+			if _, err := db.Exec(`UPDATE events SET payload_json = ? WHERE id = ?`, string(encoded), checkpointID); err != nil {
+				db.Close()
+				t.Fatalf("update sensitive checkpoint: %v", err)
+			}
+			db.Close()
+			history := readAISessionHistory(t, initialized.DatabasePath, sourceID)
 
-	output, err := runWorkgraphCommandAllowError([]string{
-		"PATH=" + workingDir + string(os.PathListSeparator) + os.Getenv("PATH"),
-	}, "ai", "handoff", "codex", "--from", sourceID, "--home", homeDir, "--database", initialized.DatabasePath)
-	if err == nil || !strings.Contains(output, "openai-token credential pattern") {
-		t.Fatalf("expected sensitive stored checkpoint rejection, got %v\n%s", err, output)
-	}
-	if strings.Contains(output, credential) {
-		t.Fatal("sensitive checkpoint rejection leaked submitted content")
-	}
+			output, err := runWorkgraphCommandAllowError([]string{
+				"PATH=" + workingDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+			}, "ai", "handoff", "codex", "--from", sourceID, "--home", homeDir, "--database", initialized.DatabasePath)
+			if err == nil || !strings.Contains(output, "openai-token credential pattern") {
+				t.Fatalf("expected sensitive stored checkpoint rejection, got %v\n%s", err, output)
+			}
+			if strings.Contains(output, credential) {
+				t.Fatal("sensitive checkpoint rejection leaked submitted content")
+			}
 
-	db, err = sql.Open("sqlite3", initialized.DatabasePath)
-	if err != nil {
-		t.Fatalf("reopen database: %v", err)
-	}
-	defer db.Close()
-	var starts int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type = 'ai.session_started'`).Scan(&starts); err != nil || starts != 1 {
-		t.Fatalf("sensitive checkpoint launched a destination, starts=%d err=%v", starts, err)
+			db, err = sql.Open("sqlite3", initialized.DatabasePath)
+			if err != nil {
+				t.Fatalf("reopen database: %v", err)
+			}
+			defer db.Close()
+			var starts int
+			if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type = 'ai.session_started'`).Scan(&starts); err != nil || starts != 1 {
+				t.Fatalf("sensitive checkpoint launched a destination, starts=%d err=%v", starts, err)
+			}
+			if after := readAISessionHistory(t, initialized.DatabasePath, sourceID); after != history {
+				t.Fatal("rejection changed source history")
+			}
+		})
 	}
 }
 
@@ -530,6 +555,7 @@ func TestAIHandoffFailuresDoNotCreateDestinationLineage(t *testing.T) {
 		{name: "missing source", args: []string{"codex", "--from", "missing"}, want: `AI session "missing" was not found`},
 		{name: "missing checkpoint", args: []string{"codex", "--from", noCheckpointID}, want: "source session has no structured checkpoint"},
 		{name: "conflicting injected source", env: []string{"WORKGRAPH_AI_SESSION_ID=another"}, args: []string{"codex", "--from", sourceID}, want: "explicit source session disagrees"},
+		{name: "conflicting injected home", env: []string{"WORKGRAPH_AI_HOME=" + otherHome}, args: []string{"codex", "--from", sourceID}, want: "explicit home disagrees"},
 		{name: "conflicting injected database", env: []string{"WORKGRAPH_AI_DATABASE=" + other.DatabasePath}, args: []string{"codex", "--from", sourceID}, want: "explicit database disagrees"},
 	}
 	invalidToolPath := filepath.Join(workingDir, "codex")
@@ -547,6 +573,12 @@ func TestAIHandoffFailuresDoNotCreateDestinationLineage(t *testing.T) {
 			args = append(args, "--home", homeDir, "--database", initialized.DatabasePath)
 			environment := append([]string{"PATH=" + workingDir + string(os.PathListSeparator) + os.Getenv("PATH")}, test.env...)
 			output, err := runWorkgraphCommandAllowError(environment, args...)
+			if test.name == "unsupported destination" {
+				var exitErr *exec.ExitError
+				if !errors.As(err, &exitErr) || exitErr.ExitCode() != 2 {
+					t.Fatalf("unsupported destination must exit 2: %v\n%s", err, output)
+				}
+			}
 			if err == nil || !strings.Contains(output, test.want) {
 				t.Fatalf("expected %q, got %v\n%s", test.want, err, output)
 			}
@@ -592,7 +624,7 @@ func TestAIHandoffFreshCheckpointSurvivesDestinationLaunchFailure(t *testing.T) 
 		[]string{"PATH=" + workingDir + string(os.PathListSeparator) + os.Getenv("PATH")},
 		"ai", "handoff", "codex", "--from", sourceID, "--stdin", "--home", homeDir, "--database", initialized.DatabasePath,
 	)
-	if err == nil || !strings.Contains(output, "start AI tool") {
+	if err == nil || !strings.Contains(output, "start AI tool") || !strings.Contains(output, "checkpoint was saved") || !strings.Contains(output, "without --stdin") || !strings.Contains(output, "ai handoff codex --from "+sourceID) {
 		t.Fatalf("expected destination launch failure, got %v\n%s", err, output)
 	}
 
@@ -654,22 +686,24 @@ func TestAIHandoffRejectsOlderObservationWhenNewerEvidenceIsUnsupportedOrInvalid
 	}
 }
 
+var aiMistypedEvidenceCases = []struct {
+	name      string
+	eventType string
+	fields    string
+	want      string
+}{
+	{name: "start pid", eventType: "ai.session_started", fields: `"tool":"codex","pid":"not-a-number","observed":{"cwd":"must-not-be-used"}`, want: "latest repository observation is unsupported or invalid"},
+	{name: "start observation", eventType: "ai.session_started", fields: `"tool":"codex","pid":42,"observed":{"cwd":["must-not-be-used"]}`, want: "latest repository observation is unsupported or invalid"},
+	{name: "checkpoint agent stated", eventType: "ai.session_checkpointed", fields: `"agent_stated":["must not be handed off"],"observed":{"cwd":"must-not-be-used"}`, want: "latest checkpoint is unsupported or invalid"},
+	{name: "checkpoint observation", eventType: "ai.session_checkpointed", fields: `"agent_stated":{"goal":"must not be handed off"},"observed":{"dirty_path_count":"many"}`, want: "latest checkpoint is unsupported or invalid"},
+	{name: "end outcome", eventType: "ai.session_ended", fields: `"outcome":"exited","observation_status":"captured","observed":{"cwd":"must-not-be-used"}`, want: "latest repository observation is unsupported or invalid"},
+}
+
 func TestAIHandoffRejectsOlderEvidenceWhenNewerSupportedPayloadIsMistyped(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fixture")
 	}
-	for _, test := range []struct {
-		name      string
-		eventType string
-		fields    string
-		want      string
-	}{
-		{name: "start pid", eventType: "ai.session_started", fields: `"tool":"codex","pid":"not-a-number","observed":{"cwd":"must-not-be-used"}`, want: "latest repository observation is unsupported or invalid"},
-		{name: "start observation", eventType: "ai.session_started", fields: `"tool":"codex","pid":42,"observed":{"cwd":["must-not-be-used"]}`, want: "latest repository observation is unsupported or invalid"},
-		{name: "checkpoint agent stated", eventType: "ai.session_checkpointed", fields: `"agent_stated":["must not be handed off"],"observed":{"cwd":"must-not-be-used"}`, want: "latest checkpoint is unsupported or invalid"},
-		{name: "checkpoint observation", eventType: "ai.session_checkpointed", fields: `"agent_stated":{"goal":"must not be handed off"},"observed":{"dirty_path_count":"many"}`, want: "latest checkpoint is unsupported or invalid"},
-		{name: "end outcome", eventType: "ai.session_ended", fields: `"outcome":"exited","observation_status":"captured","observed":{"cwd":"must-not-be-used"}`, want: "latest repository observation is unsupported or invalid"},
-	} {
+	for _, test := range aiMistypedEvidenceCases {
 		t.Run(test.name, func(t *testing.T) {
 			assertAIHandoffRejectsUnsafeEvidence(t, test.eventType, "1", test.fields, test.want)
 		})
@@ -701,31 +735,6 @@ func assertAIHandoffRejectsUnsafeEvidence(t *testing.T, eventType, schemaVersion
 		VALUES ('opaque-newer-evidence', 'ai', ?, '2026-08-03T12:02:00Z', ?, '', '', 'Newer AI evidence', '2026-08-03T12:02:00Z')`,
 		eventType, unsupported); err != nil {
 		t.Fatalf("insert unsupported or invalid evidence: %v", err)
-	}
-	listed, err := workgraph.ListAISessions(workgraph.AISessionsConfig{
-		HomeDir: homeDir, DatabasePath: initialized.DatabasePath,
-	})
-	if err != nil {
-		t.Fatalf("list sessions with invalid newer evidence: %v", err)
-	}
-	if len(listed.Sessions) != 1 || listed.Known != 1 {
-		t.Fatalf("session listing reconstructed identity or lost the source: %#v", listed.Sessions)
-	}
-	source := listed.Sessions[0]
-	if source.SessionID != sourceID || source.Tool != "claude" || source.NativeSessionID != "claude-native" || source.Status != "ended" ||
-		source.LatestCheckpointAt == nil || source.LatestCheckpointAt.UTC().Format(time.RFC3339) != "2026-08-03T12:00:30Z" || len(listed.Warnings) == 0 {
-		t.Fatalf("session listing lost valid source context or integrity warnings: %#v", listed)
-	}
-	if _, err := db.Exec(`INSERT INTO events (id, source, type, timestamp, payload_json, project, actor, summary, created_at)
-		VALUES ('ai.session_checkpointed:00000000-0000-4000-8000-000000000999:invalid', 'ai', 'ai.session_checkpointed',
-		'2026-08-03T12:03:00Z', '{"schema_version":"invalid"}', '', '', 'Unassociated AI evidence', '2026-08-03T12:03:00Z')`); err != nil {
-		t.Fatalf("insert unassociated invalid envelope: %v", err)
-	}
-	listed, err = workgraph.ListAISessions(workgraph.AISessionsConfig{
-		HomeDir: homeDir, DatabasePath: initialized.DatabasePath,
-	})
-	if err != nil || len(listed.Sessions) != 1 || listed.Known != 1 || listed.Sessions[0].SessionID != sourceID {
-		t.Fatalf("unassociated invalid envelope changed session identities: sessions=%#v err=%v", listed.Sessions, err)
 	}
 	const eventSnapshotQuery = `SELECT json_group_array(json_object(
 		'id', id, 'source', source, 'type', type, 'timestamp', timestamp, 'payload_json', payload_json,
@@ -1541,4 +1550,129 @@ func aiWindowsCommandLineCost(arguments []string) int {
 		cost += aiWindowsArgumentCost(argument)
 	}
 	return cost
+}
+
+func TestAIHandoffAndCheckpointAcceptStandardFlagSpellings(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	for _, subcommand := range []string{"handoff", "checkpoint"} {
+		for _, prefix := range []string{"-", "--"} {
+			for _, equals := range []bool{false, true} {
+				for _, flagsFirst := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%s/%s/equals=%v/flagsFirst=%v", subcommand, prefix, equals, flagsFirst), func(t *testing.T) {
+						homeDir := filepath.Join(t.TempDir(), ".workgraph")
+						initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+						if err != nil {
+							t.Fatal(err)
+						}
+						workingDir, err := filepath.EvalSymlinks(t.TempDir())
+						if err != nil {
+							t.Fatal(err)
+						}
+						writeAIFactExecutable(t, workingDir, "codex", "exit 0")
+						sourceID := "00000000-0000-4000-8000-000000000370"
+						insertAINativeFactSession(t, initialized.DatabasePath, sourceID, "claude", "/usr/local/bin/claude", "claude-native", "", workingDir, "2026-08-03T12:00:00Z", false)
+						insertAIHandoffCheckpoint(t, initialized.DatabasePath, sourceID, workingDir)
+						var options []string
+						addOption := func(name, value string) {
+							if equals {
+								options = append(options, prefix+name+"="+value)
+							} else {
+								options = append(options, prefix+name, value)
+							}
+						}
+						addOption("home", homeDir)
+						addOption("database", initialized.DatabasePath)
+						positional := sourceID
+						if subcommand == "handoff" {
+							positional = "codex"
+							addOption("from", sourceID)
+						} else {
+							options = append(options, prefix+"stdin")
+						}
+						args := []string{"ai", subcommand}
+						if flagsFirst {
+							args = append(append(args, options...), positional)
+						} else {
+							args = append(append(args, positional), options...)
+						}
+						command := exec.Command(workgraphFactsBinary, args...)
+						command.Dir = workingDir
+						command.Env = daemonCommandEnv([]string{"PATH=" + workingDir + string(os.PathListSeparator) + os.Getenv("PATH")})
+						command.Stdin = strings.NewReader(`{"goal":"Continue the selected session"}`)
+						if output, err := command.CombinedOutput(); err != nil {
+							t.Fatalf("standard flags failed: %v\n%s", err, output)
+						}
+						if subcommand == "handoff" && countAIStartedSessions(t, initialized.DatabasePath) != 2 {
+							t.Fatal("handoff did not launch destination")
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestAIHandoffRejectsUnorderableSessionEvidence(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	for _, eventType := range []string{"ai.session_started", "ai.session_checkpointed", "ai.session_ended", "ai.session_native_bound", "ai.session_archived", "ai.future_event"} {
+		for _, stdin := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stdin=%v", eventType, stdin), func(t *testing.T) {
+				homeDir := filepath.Join(t.TempDir(), ".workgraph")
+				initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+				if err != nil {
+					t.Fatal(err)
+				}
+				workingDir, err := filepath.EvalSymlinks(t.TempDir())
+				if err != nil {
+					t.Fatal(err)
+				}
+				writeAIFactExecutable(t, workingDir, "codex", `touch "$0.launched"`)
+				sourceID := "00000000-0000-4000-8000-000000000371"
+				insertAINativeFactSession(t, initialized.DatabasePath, sourceID, "claude", "/usr/local/bin/claude", "claude-native", "", workingDir, "2026-08-03T12:00:00Z", false)
+				insertAIHandoffCheckpoint(t, initialized.DatabasePath, sourceID, workingDir)
+				db, err := sql.Open("sqlite3", initialized.DatabasePath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer db.Close()
+				payload := `{"schema_version":1,"session_id":"` + sourceID + `","agent_stated":{"goal":"Unorderable checkpoint"}}`
+				if _, err := db.Exec(`INSERT INTO events (id, source, type, timestamp, payload_json, project, actor, summary, created_at)
+				VALUES ('unorderable', 'ai', ?, 'not-a-timestamp', ?, '', '', 'Unorderable evidence', '2026-08-03T12:02:00Z')`, eventType, payload); err != nil {
+					t.Fatal(err)
+				}
+				history := readAISessionHistory(t, initialized.DatabasePath, sourceID)
+				startsBefore := countAIStartedSessions(t, initialized.DatabasePath)
+				args := []string{"ai", "handoff", "codex", "--from", sourceID, "--home", homeDir, "--database", initialized.DatabasePath}
+				if stdin {
+					args = append(args, "--stdin")
+				}
+				command := exec.Command(workgraphFactsBinary, args...)
+				command.Dir = workingDir
+				command.Env = daemonCommandEnv([]string{"PATH=" + workingDir + string(os.PathListSeparator) + os.Getenv("PATH")})
+				command.Stdin = strings.NewReader(`{"goal":"Must not append"}`)
+				detachFromControllingTerminal(command)
+				output, err := command.CombinedOutput()
+				if err == nil || !strings.Contains(string(output), "unorderable") || !strings.Contains(string(output), "timestamp") {
+					t.Errorf("expected unorderable evidence rejection: %v\n%s", err, output)
+				}
+				if after := readAISessionHistory(t, initialized.DatabasePath, sourceID); after != history {
+					t.Error("unorderable evidence allowed source changes")
+				}
+				if countAIStartedSessions(t, initialized.DatabasePath) != startsBefore {
+					t.Error("unorderable evidence created destination lifecycle")
+				}
+				if _, err := os.Stat(filepath.Join(workingDir, "codex.launched")); !os.IsNotExist(err) {
+					t.Errorf("destination launched: %v", err)
+				}
+				listed, err := workgraph.ListAISessions(workgraph.AISessionsConfig{HomeDir: homeDir, DatabasePath: initialized.DatabasePath})
+				if err != nil || len(listed.Warnings) == 0 {
+					t.Errorf("unorderable evidence lost integrity warning: %#v %v", listed, err)
+				}
+			})
+		}
+	}
 }
