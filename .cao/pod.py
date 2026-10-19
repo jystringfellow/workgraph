@@ -70,6 +70,12 @@ def clean_env():
     return env
 
 
+def handoff_stage(handoff):
+    return next((line.strip().replace('**', '') for line in reversed(handoff.splitlines())
+                 if re.match(r'(?i)^stage:', line.strip().replace('**', ''))),
+                'Awaiting lead handoff')
+
+
 def prepare(brief_path, plan_paths):
     import yaml
 
@@ -329,8 +335,7 @@ def run(root):
         while time.monotonic() < deadline:
             handoff_path = root / 'handoff.md'
             handoff = handoff_path.read_text() if handoff_path.exists() else ''
-            stage = next((s.strip().replace('**', '') for s in handoff.splitlines()
-                          if re.match(r'(?i)^stage:', s.strip().replace('**', ''))), 'Awaiting lead handoff')
+            stage = handoff_stage(handoff)
             if stage != previous or time.monotonic() - notice > 30:
                 print(stage, flush=True)
                 notice, previous = time.monotonic(), stage
