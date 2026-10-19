@@ -1,5 +1,35 @@
 Feature: Resume work
 
+Scenario: Show where personal work last stopped
+  Given workgraph captured personal work across several projects within the last week
+  And unrelated GitHub issue snapshots were updated more recently
+  And a newly cloned repository produced file creation events
+  When I run "workgraph resume"
+  Then I see the latest personal work session with its project and evidence
+  And the GitHub snapshots do not move the handoff forward
+  And the new clone does not move the handoff forward
+  And I see how to inspect that project
+
+Scenario: Preserve context after a longer absence
+  Given the latest personal work was more than a week ago
+  When I run "workgraph resume"
+  Then I see that last known session labeled older than a week
+
+Scenario: Show personal work since the previous check-in
+  Given I successfully ran plain "workgraph resume" before
+  And workgraph has since captured personal work
+  And workgraph has captured an explicitly relevant update and an unclassified repository issue
+  When I run "workgraph resume"
+  Then I see the previous check-in time and the new personal work
+  And I see the explicitly relevant update separately
+  And I do not see the unclassified repository issue in the handoff
+  And the new check-in is recorded for the next run
+
+Scenario: Keep diagnostic and project inspections from moving the check-in
+  Given I successfully ran plain "workgraph resume" before
+  When I run "workgraph resume <project>" or a diagnostic overview
+  Then the default overview's check-in remains at its previous time
+
 Scenario: List resumable projects
   Given workgraph has captured events for multiple projects
   When I run "workgraph resume"

@@ -563,6 +563,7 @@ type storedEvent struct {
 	Involvement any
 	Payload     string
 	Summary     string
+	CreatedAt   time.Time
 }
 
 func insertEvent(t *testing.T, dbPath string, event storedEvent) {
@@ -579,13 +580,17 @@ func insertEvent(t *testing.T, dbPath string, event storedEvent) {
 		source = "file"
 	}
 
+	createdAt := event.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = event.Timestamp
+	}
 	_, err = db.Exec(`INSERT INTO events
 		(id, source, type, timestamp, payload_json, project, actor, involvement_json, summary, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.ID,
 		source,
 		event.Type,
-		event.Timestamp.UTC().Format(time.RFC3339Nano),
+		createdAt.UTC().Format(time.RFC3339Nano),
 		event.Payload,
 		event.Project,
 		event.Actor,
