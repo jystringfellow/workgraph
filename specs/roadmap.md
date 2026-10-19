@@ -57,6 +57,10 @@ Priority labels used below:
 
 ## Recently Delivered
 
+- [x] A seven-day `resume` handoff with last-known-work fallback and a durable
+  overview check-in for personal work captured since the previous run. [spec:
+  `specs/resume.md`]
+
 - [x] Explainable project-name and acronym candidates in memory doctor, today,
   resume and empty suggestions, with explicit interactive acceptance. [spec:
   `specs/memory.md`; #138]

@@ -62,7 +62,7 @@ func TestTodayCoalescesCanonicalPairWhenBothEventsAreToday(t *testing.T) {
 	now := time.Date(2026, 7, 20, 16, 0, 0, 0, time.UTC)
 	url := "https://github.com/acme/widget/issues/42"
 	insertAssociationEvent(t, dbPath, associationStoredEvent{
-		ID: "github:coalesce", Source: "github", Type: "github.issue",
+		ID: "git:coalesce", Source: "git", Type: "git.commit",
 		Timestamp: now.Add(-3 * time.Hour), Payload: fmt.Sprintf(`{"url":%q}`, url),
 	})
 	insertAssociationEvent(t, dbPath, associationStoredEvent{
@@ -74,7 +74,7 @@ func TestTodayCoalescesCanonicalPairWhenBothEventsAreToday(t *testing.T) {
 	if err != nil {
 		t.Fatalf("today failed: %v", err)
 	}
-	if count := strings.Count(result.Message, "github:coalesce, mail:coalesce"); count != 1 {
+	if count := strings.Count(result.Message, "git:coalesce, mail:coalesce"); count != 1 {
 		t.Fatalf("expected canonical pair to render exactly once, got %d occurrences in:\n%s", count, result.Message)
 	}
 	if len(result.Associations) != 1 {
@@ -231,26 +231,106 @@ func TestTodayAssociationIncludesRelatedEventOutsideToday(t *testing.T) {
 	homeDir, dbPath := initAssociationStore(t)
 	now := time.Date(2026, 7, 20, 16, 0, 0, 0, time.UTC)
 	url := "https://github.com/acme/widget/pull/33"
-	insertAssociationEvent(t, dbPath, associationStoredEvent{ID: "github:today-only", Source: "github", Type: "github.pull_request", Timestamp: now.Add(-1 * time.Hour), Payload: fmt.Sprintf(`{"url":%q}`, url)})
-	insertAssociationEvent(t, dbPath, associationStoredEvent{ID: "slack:three-days-ago", Source: "slack", Type: "slack.message", Timestamp: now.AddDate(0, 0, -3), Payload: fmt.Sprintf(`{"text":%q}`, url)})
+	insertAssociationEvent(t, dbPath, associationStoredEvent{ID: "github:three-days-ago", Source: "github", Type: "github.pull_request", Timestamp: now.AddDate(0, 0, -3), Payload: fmt.Sprintf(`{"url":%q}`, url)})
+	insertAssociationEvent(t, dbPath, associationStoredEvent{ID: "slack:today-only", Source: "slack", Type: "slack.message", Timestamp: now.Add(-1 * time.Hour), Payload: fmt.Sprintf(`{"text":%q}`, url)})
 
 	result, err := workgraph.Today(workgraph.TodayConfig{HomeDir: homeDir, DatabasePath: dbPath, Now: now})
 	if err != nil {
 		t.Fatalf("today failed: %v", err)
 	}
-	if !strings.Contains(result.Message, "github:today-only, slack:three-days-ago") {
+	if !strings.Contains(result.Message, "github:three-days-ago, slack:today-only") {
 		t.Fatalf("expected association citing an event outside today but inside the window, got:\n%s", result.Message)
 	}
-	if strings.Contains(result.Message, "slack:three-days-ago") && strings.Contains(result.Message, "Sessions") {
+	if len(result.Events) != 1 || result.Events[0].ID != "slack:today-only" {
+		t.Fatalf("expected only today's qualifying target in activity, got %#v", result.Events)
+	}
+	if strings.Contains(result.Message, "github:three-days-ago") && strings.Contains(result.Message, "Sessions") {
 		sessionsIndex := strings.Index(result.Message, "Sessions")
 		associationsIndex := strings.Index(result.Message, "Associations")
 		if associationsIndex == -1 {
 			t.Fatalf("expected Associations section, got:\n%s", result.Message)
 		}
 		sessionsSection := result.Message[sessionsIndex:associationsIndex]
-		if strings.Contains(sessionsSection, "slack:three-days-ago") {
+		if strings.Contains(sessionsSection, "github:three-days-ago") {
 			t.Fatalf("expected out-of-day event to stay out of raw Sessions section, got:\n%s", result.Message)
 		}
+	}
+}
+
+func TestTodayGitHubSnapshotsDoNotSeedAssociationContext(t *testing.T) {
+	for _, eventType := range []string{"github.issue", "github.pull_request"} {
+		for _, withGit := range []bool{false, true} {
+			name := eventType
+			if withGit {
+				name += "_with_unrelated_personal_git"
+			}
+			t.Run(name, func(t *testing.T) {
+				homeDir, dbPath := initAssociationStore(t)
+				now := time.Date(2026, 7, 20, 16, 0, 0, 0, time.UTC)
+				url := "https://github.com/acme/widget/issues/99"
+				insertAssociationEvent(t, dbPath, associationStoredEvent{
+					ID: "github:snapshot-target", Source: "github", Type: eventType, Timestamp: now.Add(-time.Hour),
+					Payload: fmt.Sprintf(`{"url":%q,"matched_scopes":["involves"]}`, url),
+				})
+				insertAssociationEvent(t, dbPath, associationStoredEvent{
+					ID: "slack:historical-match", Source: "slack", Type: "slack.message", Timestamp: now.AddDate(0, 0, -3),
+					Payload: fmt.Sprintf(`{"text":%q}`, url),
+				})
+				if withGit {
+					insertAssociationEvent(t, dbPath, associationStoredEvent{
+						ID: "git:unrelated-personal", Source: "git", Type: "git.commit", Timestamp: now,
+						Payload: `{"subject":"Update independent local work","commit":"1234567890abcdef"}`,
+					})
+				}
+				explain, err := workgraph.ExplainEventAssociations(workgraph.AssociationExplainConfig{HomeDir: homeDir, DatabasePath: dbPath, EventID: "github:snapshot-target"})
+				if err != nil || len(explain.Candidates) != 1 || explain.Candidates[0].Score != 100 {
+					t.Fatalf("expected a qualifying historical URL match for explicit inspection: result=%#v err=%v", explain, err)
+				}
+				before := snapshotEventRows(t, dbPath)
+				result, err := workgraph.Today(workgraph.TodayConfig{HomeDir: homeDir, DatabasePath: dbPath, Now: now})
+				if err != nil {
+					t.Fatalf("today failed: %v", err)
+				}
+				if len(result.Associations) != 0 || strings.Contains(result.Message, "Associations") {
+					t.Errorf("snapshot must not seed association context even with a high-confidence historical match:\n%s", result.Message)
+				}
+				if after := snapshotEventRows(t, dbPath); after != before {
+					t.Error("excluding a snapshot target must preserve all raw events")
+				}
+			})
+		}
+	}
+}
+
+func TestTodayGitHubSnapshotsDoNotConsumeAssociationTargetLimit(t *testing.T) {
+	homeDir, dbPath := initAssociationStore(t)
+	now := time.Date(2026, 7, 20, 16, 0, 0, 0, time.UTC)
+	url := "https://github.com/acme/widget/pull/100"
+	insertAssociationEvent(t, dbPath, associationStoredEvent{
+		ID: "git:qualifying-target", Source: "git", Type: "git.commit", Timestamp: now.Add(-2 * time.Hour),
+		Payload: fmt.Sprintf(`{"subject":"Implement linked work","url":%q}`, url),
+	})
+	insertAssociationEvent(t, dbPath, associationStoredEvent{
+		ID: "slack:historical-context", Source: "slack", Type: "slack.message", Timestamp: now.AddDate(0, 0, -3),
+		Payload: fmt.Sprintf(`{"text":%q}`, url),
+	})
+	for i := 0; i < 50; i++ {
+		eventType := "github.issue"
+		if i%2 == 0 {
+			eventType = "github.pull_request"
+		}
+		insertAssociationEvent(t, dbPath, associationStoredEvent{
+			ID: fmt.Sprintf("github:recent-snapshot-%02d", i), Source: "github", Type: eventType,
+			Timestamp: now.Add(-time.Duration(i) * time.Minute),
+			Payload:   fmt.Sprintf(`{"url":"https://github.com/acme/unrelated/issues/%d"}`, i+1),
+		})
+	}
+	result, err := workgraph.Today(workgraph.TodayConfig{HomeDir: homeDir, DatabasePath: dbPath, Now: now})
+	if err != nil {
+		t.Fatalf("today failed: %v", err)
+	}
+	if len(result.Associations) != 1 || !strings.Contains(result.Message, "git:qualifying-target, slack:historical-context") {
+		t.Fatalf("excluded snapshots must not crowd a personal target out of the 50-target window:\n%s", result.Message)
 	}
 }
 
@@ -289,7 +369,7 @@ func TestTodayAssociationsPreserveProjectsSessionsAndRawEventLines(t *testing.T)
 	homeDir, dbPath := initAssociationStore(t)
 	now := time.Date(2026, 7, 20, 16, 0, 0, 0, time.UTC)
 	url := "https://github.com/acme/widget/pull/64"
-	insertAssociationEvent(t, dbPath, associationStoredEvent{ID: "github:preserve", Source: "github", Type: "github.pull_request", Timestamp: now.Add(-2 * time.Hour), Project: "widget", Payload: fmt.Sprintf(`{"url":%q,"title":"Ship widget release","number":64,"state":"open"}`, url)})
+	insertAssociationEvent(t, dbPath, associationStoredEvent{ID: "git:preserve", Source: "git", Type: "git.commit", Timestamp: now.Add(-2 * time.Hour), Project: "widget", Summary: "Ship widget release", Payload: fmt.Sprintf(`{"url":%q,"subject":"Ship widget release"}`, url)})
 	insertAssociationEvent(t, dbPath, associationStoredEvent{ID: "slack:preserve", Source: "slack", Type: "slack.message", Timestamp: now.Add(-1 * time.Hour), Project: "widget", Payload: fmt.Sprintf(`{"text":%q}`, url)})
 
 	result, err := workgraph.Today(workgraph.TodayConfig{HomeDir: homeDir, DatabasePath: dbPath, Now: now})
@@ -414,7 +494,7 @@ func snapshotEventRows(t *testing.T, dbPath string) string {
 		t.Fatalf("open database: %v", err)
 	}
 	defer db.Close()
-	rows, err := db.Query(`SELECT id, source, type, timestamp, project, actor, summary, payload_json, created_at FROM events ORDER BY id ASC`)
+	rows, err := db.Query(`SELECT id, source, type, timestamp, project, actor, involvement_json, summary, payload_json, created_at FROM events ORDER BY id ASC`)
 	if err != nil {
 		t.Fatalf("query events snapshot: %v", err)
 	}
@@ -422,11 +502,11 @@ func snapshotEventRows(t *testing.T, dbPath string) string {
 	var builder strings.Builder
 	for rows.Next() {
 		var id, source, eventType, timestamp, payload, createdAt string
-		var project, actor, summary sql.NullString
-		if err := rows.Scan(&id, &source, &eventType, &timestamp, &project, &actor, &summary, &payload, &createdAt); err != nil {
+		var project, actor, involvement, summary sql.NullString
+		if err := rows.Scan(&id, &source, &eventType, &timestamp, &project, &actor, &involvement, &summary, &payload, &createdAt); err != nil {
 			t.Fatalf("scan event snapshot: %v", err)
 		}
-		fmt.Fprintf(&builder, "%s|%s|%s|%s|%s|%s|%s|%s|%s\n", id, source, eventType, timestamp, project.String, actor.String, summary.String, payload, createdAt)
+		fmt.Fprintf(&builder, "%s|%s|%s|%s|%s|%s|%#v|%s|%s|%s\n", id, source, eventType, timestamp, project.String, actor.String, involvement, summary.String, payload, createdAt)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate event snapshot: %v", err)

@@ -335,6 +335,7 @@ func createSchema(db *sql.DB) error {
 			completed_through TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		);`,
+		resumeCheckInSchema,
 		`CREATE TABLE IF NOT EXISTS bridge_workers (
 			worker TEXT PRIMARY KEY,
 			last_heartbeat_at TEXT NOT NULL,

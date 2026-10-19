@@ -17,12 +17,30 @@ they are excluded from `today`. Derived `notion.page_updated` and
 them only for activity attributed to the connected user. The raw inventory
 records remain stored and inspectable through `workgraph events today`.
 
+GitHub `github.issue` and `github.pull_request` records are work snapshots, not
+evidence that the connected user acted at the stored timestamp. The timestamp
+comes from the item's latest update, which may have been made by someone else.
+Their author and matched search scopes do not establish who made that update.
+`today` excludes these snapshots from its default event count, project counts,
+sessions, and association targets, including historical rows without matched
+scope metadata. They remain stored and inspectable through `workgraph events
+today`. A GitHub action can appear in `today` only when a separately captured
+event identifies the user's action and its own timestamp.
+An excluded snapshot may still be a related association candidate when another
+qualifying personal event is the association target. The existing association
+window is symmetric around the target timestamp and includes candidate events
+from before or after the target; this change does not narrow that window.
+
 Both `workgraph today --actor <actor>` and `workgraph events today --actor
 <actor>` apply an exact actor filter to stored event metadata. This is a
 source-neutral inspection control: it does not infer whether the actor is the
 current user. Exact `--involvement <kind>` filtering selects the explicit reason
 an event is relevant. See `specs/event-involvement.md`; actor equality is never
 used as an implicit `--mine-only` rule.
+An explicit `workgraph today --involvement <kind>` query can show a matching
+GitHub snapshot because it asks for relationship evidence, not actions taken
+at the snapshot timestamp. `workgraph today --actor <actor>` retains the default
+personal-activity exclusions before applying the actor filter.
 
 ## Output
 
@@ -43,7 +61,8 @@ When no events exist for the local day, output includes `Today` and says no acti
 
 - file events use their captured path when no summary exists
 - git commits use the commit subject plus branch and short SHA when available
-- GitHub pull requests and issues use the title plus number and state when available
+- GitHub pull requests and issues use the title plus number and state when
+  available in detailed event output
 - whitespace, including embedded newlines and tabs, is collapsed so each event occupies one physical line
 - the rendered label is capped at 160 Unicode characters including a trailing ellipsis when truncated
 
@@ -90,9 +109,9 @@ Visibility and bounds:
 
 - only score 80-100 (`high` confidence), lane `baseline`, type `association`
   pairs qualify
-- at least one cited event must belong to the current local day; the other
-  cited event may fall outside today as long as it remains inside the
-  producer's existing seven-day candidate window
+- at least one qualifying target event must belong to the current local day;
+  the related candidate may be a GitHub snapshot inside the producer's existing
+  seven-day window on either side of the target timestamp
 - dismissed, snoozed, and explicitly suppressed associations are hidden;
   proposed, reviewed, approved, and acted associations remain visible
 - the same canonical pair renders at most once even when both cited events

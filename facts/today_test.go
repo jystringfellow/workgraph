@@ -279,7 +279,7 @@ func TestTodayDisplaysGitCommitEventsWithBranchAndShortSHA(t *testing.T) {
 	}
 }
 
-func TestTodayDisplaysGitHubPullRequestEventsWithNumberAndState(t *testing.T) {
+func TestEventsTodayDisplaysGitHubPullRequestEventsWithNumberAndState(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
 	result, err := workgraph.Init(workgraph.InitConfig{
@@ -289,24 +289,23 @@ func TestTodayDisplaysGitHubPullRequestEventsWithNumberAndState(t *testing.T) {
 		t.Fatalf("init failed: %v", err)
 	}
 
-	now := time.Date(2026, 5, 20, 15, 0, 0, 0, time.Local)
+	now := time.Now()
 	insertEvent(t, result.DatabasePath, storedEvent{
 		ID:        "github-pr-42",
 		Source:    "github",
 		Type:      "github.pull_request",
-		Timestamp: now.Add(-30 * time.Minute),
+		Timestamp: now,
 		Project:   "Cupcake",
 		Payload:   `{"repository":"jystringfellow/Cupcake","number":42,"url":"https://github.com/jystringfellow/Cupcake/pull/42","state":"open","actor":"octocat","title":"Add cupcake API","branch":"feature/cupcake-api","commit":"abcdef1234567890"}`,
 		Summary:   "Add cupcake API",
 	})
 
-	today, err := workgraph.Today(workgraph.TodayConfig{
+	today, err := workgraph.EventsToday(workgraph.EventsTodayConfig{
 		HomeDir:      homeDir,
 		DatabasePath: result.DatabasePath,
-		Now:          now,
 	})
 	if err != nil {
-		t.Fatalf("today failed: %v", err)
+		t.Fatalf("events today failed: %v", err)
 	}
 
 	if !strings.Contains(today.Message, "github.pull_request Add cupcake API (#42 open)") {
@@ -314,7 +313,7 @@ func TestTodayDisplaysGitHubPullRequestEventsWithNumberAndState(t *testing.T) {
 	}
 }
 
-func TestTodayDisplaysGitHubIssueEventsWithNumberAndState(t *testing.T) {
+func TestEventsTodayDisplaysGitHubIssueEventsWithNumberAndState(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
 	result, err := workgraph.Init(workgraph.InitConfig{
@@ -324,24 +323,23 @@ func TestTodayDisplaysGitHubIssueEventsWithNumberAndState(t *testing.T) {
 		t.Fatalf("init failed: %v", err)
 	}
 
-	now := time.Date(2026, 5, 20, 15, 0, 0, 0, time.Local)
+	now := time.Now()
 	insertEvent(t, result.DatabasePath, storedEvent{
 		ID:        "github-issue-12",
 		Source:    "github",
 		Type:      "github.issue",
-		Timestamp: now.Add(-20 * time.Minute),
+		Timestamp: now,
 		Project:   "Cupcake",
 		Payload:   `{"repository":"jystringfellow/Cupcake","number":12,"url":"https://github.com/jystringfellow/Cupcake/issues/12","state":"open","actor":"octocat","title":"Bug in cupcake frosting"}`,
 		Summary:   "Bug in cupcake frosting",
 	})
 
-	today, err := workgraph.Today(workgraph.TodayConfig{
+	today, err := workgraph.EventsToday(workgraph.EventsTodayConfig{
 		HomeDir:      homeDir,
 		DatabasePath: result.DatabasePath,
-		Now:          now,
 	})
 	if err != nil {
-		t.Fatalf("today failed: %v", err)
+		t.Fatalf("events today failed: %v", err)
 	}
 
 	if !strings.Contains(today.Message, "github.issue Bug in cupcake frosting (#12 open)") {
@@ -556,14 +554,16 @@ func TestTodayOutputIsPlainTextWithoutLLM(t *testing.T) {
 }
 
 type storedEvent struct {
-	ID        string
-	Source    string
-	Type      string
-	Timestamp time.Time
-	Project   string
-	Actor     string
-	Payload   string
-	Summary   string
+	ID          string
+	Source      string
+	Type        string
+	Timestamp   time.Time
+	Project     string
+	Actor       string
+	Involvement any
+	Payload     string
+	Summary     string
+	CreatedAt   time.Time
 }
 
 func insertEvent(t *testing.T, dbPath string, event storedEvent) {
@@ -580,16 +580,21 @@ func insertEvent(t *testing.T, dbPath string, event storedEvent) {
 		source = "file"
 	}
 
+	createdAt := event.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = event.Timestamp
+	}
 	_, err = db.Exec(`INSERT INTO events
-		(id, source, type, timestamp, payload_json, project, actor, summary, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(id, source, type, timestamp, payload_json, project, actor, involvement_json, summary, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.ID,
 		source,
 		event.Type,
-		event.Timestamp.UTC().Format(time.RFC3339Nano),
+		createdAt.UTC().Format(time.RFC3339Nano),
 		event.Payload,
 		event.Project,
 		event.Actor,
+		event.Involvement,
 		event.Summary,
 		event.Timestamp.UTC().Format(time.RFC3339Nano),
 	)

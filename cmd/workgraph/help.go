@@ -121,7 +121,7 @@ var helpTopics = map[string]helpTopic{
 	"plugin":                  {"workgraph plugin <subcommand>", "Install and diagnose the workgraph agent plugin for supported AI clients."},
 	"plugin doctor":           {"workgraph plugin doctor --client <codex|claude-code> [options]", "Verify the workgraph plugin, bundled skills, local MCP, worker, and heartbeat."},
 	"plugin install":          {"workgraph plugin install --client <codex|claude-code> [--model <model> | --clear-model] [options]", "Install or update the workgraph plugin, bundled skills, local MCP, and macOS bridge worker."},
-	"resume":                  {"workgraph resume [project] [--all] [--debug-relevance] [options]", "Restore context for recent work or a specific project."},
+	"resume":                  {"workgraph resume [project] [--all] [--debug-relevance] [options]", "Show last personal work and updates; the plain overview records a local check-in."},
 	"review":                  {"workgraph review [--since week|7d|30d] [--format text|json] [options]", "Review local suggestion effectiveness over a time window."},
 	"security":                {"workgraph security <subcommand>", "Inspect local security posture."},
 	"security report":         {"workgraph security report [--format text|json] [options]", "Produce a secret-free local endpoint security report."},

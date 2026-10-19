@@ -18,6 +18,12 @@ spec.loader.exec_module(pod)
 
 
 class PodTest(unittest.TestCase):
+    def test_handoff_stage_uses_latest_stage(self):
+        self.assertEqual(pod.handoff_stage('Stage: fact development\nStage: stopped\n'),
+                         'Stage: stopped')
+        self.assertEqual(pod.handoff_stage('Stage: fact development\n  **Stage:** ready for human review.\n'),
+                         'Stage: ready for human review.')
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

@@ -17,7 +17,17 @@ import (
 const (
 	defaultResumeActivityLimit = 10
 	defaultResumeFreshness     = 180 * 24 * time.Hour
+	resumeHandoffLookback      = 7 * 24 * time.Hour
+	resumeHandoffSessionGap    = 30 * time.Minute
+	resumeHandoffEventLimit    = 3
+	resumeSinceEventLimit      = 5
+	resumeCheckInFormat        = "2006-01-02T15:04:05.000000000Z"
 )
+
+const resumeCheckInSchema = `CREATE TABLE IF NOT EXISTS resume_checkins (
+	scope TEXT PRIMARY KEY,
+	checked_at TEXT NOT NULL
+)`
 
 type ResumeConfig struct {
 	HomeDir        string
@@ -33,15 +43,23 @@ type ResumeConfig struct {
 }
 
 type ResumeResult struct {
-	Project    string
-	Projects   []ResumeProject
-	Events     []ResumeEvent
-	Files      []string
-	GitHub     []ResumeEvent
-	Memory     *MemoryDoc
-	MemoryPath string
-	Omitted    int
-	Message    string
+	Project     string
+	Projects    []ResumeProject
+	LastWork    []ResumeEvent
+	WorkOlder   bool
+	AsOf        time.Time
+	CheckIn     time.Time
+	SinceLast   []ResumeEvent
+	SinceCount  int
+	Updates     []ResumeEvent
+	UpdateCount int
+	Events      []ResumeEvent
+	Files       []string
+	GitHub      []ResumeEvent
+	Memory      *MemoryDoc
+	MemoryPath  string
+	Omitted     int
+	Message     string
 }
 
 type ResumeProject struct {
@@ -51,13 +69,16 @@ type ResumeProject struct {
 }
 
 type ResumeEvent struct {
-	ID        string
-	Type      string
-	Timestamp time.Time
-	Project   string
-	Path      string
-	Summary   string
-	Payload   string
+	ID          string
+	Source      string
+	Type        string
+	Timestamp   time.Time
+	Project     string
+	Path        string
+	Summary     string
+	Payload     string
+	CapturedAt  time.Time
+	Involvement []string
 }
 
 func Resume(config ResumeConfig) (ResumeResult, error) {
@@ -88,18 +109,36 @@ func Resume(config ResumeConfig) (ResumeResult, error) {
 	}
 
 	project := strings.TrimSpace(config.Project)
-	result := ResumeResult{Project: project}
+	result := ResumeResult{Project: project, AsOf: now}
 	if project == "" {
 		if config.AllProjects {
 			result.Projects = resumableProjects(events)
 		} else {
 			result.Projects = resumableRelevantProjects(events, config.GitEmails, config.GitHubLogins, now)
+			result.LastWork, result.WorkOlder = resumeLastWork(events, config.GitEmails, now)
 		}
 		if config.DebugRelevance {
 			result.Message = resumeRelevanceMessage(resumeRelevanceDecisions(events, config.GitEmails, config.GitHubLogins, now), location)
 			return result, nil
 		}
+		if !config.AllProjects {
+			result.CheckIn, err = loadResumeCheckIn(db)
+			if err != nil {
+				return ResumeResult{}, err
+			}
+			if !result.CheckIn.IsZero() {
+				result.SinceLast, result.SinceCount = resumePersonalWorkSince(events, config.GitEmails, result.CheckIn, now)
+				result.Updates, result.UpdateCount = resumeRelevantUpdatesSince(events, config.GitEmails, result.CheckIn, now)
+			}
+		}
 		result.Message = resumeProjectsMessage(result.Projects, location)
+		if !config.AllProjects {
+			prefix := resumeLastWorkMessage(result.LastWork, result.WorkOlder, location)
+			if !result.CheckIn.IsZero() {
+				prefix += "\n\n" + resumeSinceMessage(result, location)
+			}
+			result.Message = prefix + "\n\n" + result.Message
+		}
 		result.Message += memoryDiscoveryHints(db, events, MemoryDoctorConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir})
 		return result, nil
 	}
@@ -125,6 +164,176 @@ func Resume(config ResumeConfig) (ResumeResult, error) {
 	result.Message = resumeProjectMessage(result, location)
 	result.Message += memoryDiscoveryHints(db, events, MemoryDoctorConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir, Project: config.Project})
 	return result, nil
+}
+
+func loadResumeCheckIn(db *sql.DB) (time.Time, error) {
+	var exists int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'resume_checkins'`).Scan(&exists); err != nil {
+		return time.Time{}, fmt.Errorf("check resume check-in storage: %w", err)
+	}
+	if exists == 0 {
+		return time.Time{}, nil
+	}
+	var raw string
+	err := db.QueryRow(`SELECT checked_at FROM resume_checkins WHERE scope = 'overview'`).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, nil
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("read resume check-in: %w", err)
+	}
+	checkedAt, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse resume check-in: %w", err)
+	}
+	return checkedAt, nil
+}
+
+func RecordResumeCheckIn(config ResumeConfig, at time.Time) error {
+	if at.IsZero() {
+		return errors.New("resume check-in time is required")
+	}
+	dbPath, err := resumeDatabasePath(config)
+	if err != nil {
+		return err
+	}
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(resumeCheckInSchema); err != nil {
+		return fmt.Errorf("create resume check-in storage: %w", err)
+	}
+	if _, err := db.Exec(`INSERT INTO resume_checkins (scope, checked_at) VALUES ('overview', ?)
+		ON CONFLICT(scope) DO UPDATE SET checked_at = excluded.checked_at
+		WHERE excluded.checked_at > resume_checkins.checked_at`, at.UTC().Format(resumeCheckInFormat)); err != nil {
+		return fmt.Errorf("record resume check-in: %w", err)
+	}
+	return nil
+}
+
+func resumePersonalWorkSince(events []ResumeEvent, gitEmails []string, previous time.Time, now time.Time) ([]ResumeEvent, int) {
+	var recent []ResumeEvent
+	count := 0
+	for _, event := range events {
+		if event.Timestamp.After(now) || event.CapturedAt.After(now) || !resumePersonalWork(event, gitEmails) {
+			continue
+		}
+		if !event.Timestamp.After(previous) && !event.CapturedAt.After(previous) {
+			continue
+		}
+		count++
+		if len(recent) < resumeSinceEventLimit {
+			recent = append(recent, event)
+		}
+	}
+	return recent, count
+}
+
+func resumeRelevantUpdatesSince(events []ResumeEvent, gitEmails []string, previous time.Time, now time.Time) ([]ResumeEvent, int) {
+	var recent []ResumeEvent
+	count := 0
+	for _, event := range events {
+		if event.Timestamp.After(now) || event.CapturedAt.After(now) || isTransientResumePath(event.Path) || len(event.Involvement) == 0 || resumePersonalWork(event, gitEmails) {
+			continue
+		}
+		if !event.Timestamp.After(previous) && !event.CapturedAt.After(previous) {
+			continue
+		}
+		count++
+		if len(recent) < resumeSinceEventLimit {
+			recent = append(recent, event)
+		}
+	}
+	return recent, count
+}
+
+func resumeSinceMessage(result ResumeResult, location *time.Location) string {
+	lines := []string{
+		"Previous check-in: " + result.CheckIn.In(location).Format("2006-01-02 15:04"),
+		"Personal work since last check-in",
+	}
+	lines = appendResumeSinceEvents(lines, result.SinceLast, result.SinceCount, result.CheckIn, location, "No new personal work captured.")
+	lines = append(lines, "", "Relevant updates since last check-in")
+	lines = appendResumeSinceEvents(lines, result.Updates, result.UpdateCount, result.CheckIn, location, "No new relevant updates captured.")
+	return strings.Join(lines, "\n")
+}
+
+func appendResumeSinceEvents(lines []string, events []ResumeEvent, count int, previous time.Time, location *time.Location, emptyMessage string) []string {
+	if count == 0 {
+		return append(lines, emptyMessage)
+	}
+	lines = append(lines, pluralize(count, "event"))
+	for _, event := range events {
+		line := fmt.Sprintf("- %s %s %s %s", event.Timestamp.In(location).Format("2006-01-02 15:04"), event.Project, event.Type, resumeEventLabel(event))
+		if !event.Timestamp.After(previous) && event.CapturedAt.After(previous) {
+			line += " (captured since check-in)"
+		}
+		if len(event.Involvement) > 0 {
+			line += " [" + strings.Join(event.Involvement, ", ") + "]"
+		}
+		lines = append(lines, line)
+	}
+	if count > len(events) {
+		lines = append(lines, fmt.Sprintf("... and %s", pluralizeOlderEvents(count-len(events))))
+	}
+	return lines
+}
+
+func resumeLastWork(events []ResumeEvent, gitEmails []string, now time.Time) ([]ResumeEvent, bool) {
+	var session []ResumeEvent
+	for _, event := range events {
+		if event.Timestamp.After(now) || !resumePersonalWork(event, gitEmails) {
+			continue
+		}
+		if len(session) > 0 {
+			previous := session[len(session)-1]
+			if event.Project != session[0].Project || previous.Timestamp.Sub(event.Timestamp) > resumeHandoffSessionGap {
+				break
+			}
+		}
+		session = append(session, event)
+		if len(session) == resumeHandoffEventLimit {
+			break
+		}
+	}
+	if len(session) == 0 {
+		return nil, false
+	}
+	return session, session[0].Timestamp.Before(now.Add(-resumeHandoffLookback))
+}
+
+func resumePersonalWork(event ResumeEvent, gitEmails []string) bool {
+	if event.Project == "" || isTransientResumePath(event.Path) {
+		return false
+	}
+	switch {
+	case event.Type == "git.commit":
+		return normalizedEmailSet(gitEmails)[strings.ToLower(gitCommitAuthorEmail(event.Payload))]
+	case event.Type == "file.modified" || event.Type == "file.deleted":
+		return event.Path != "" && !broadResumeProjectName(event.Project) && !personalResumeProjectName(event.Project)
+	default:
+		return false
+	}
+}
+
+func resumeLastWorkMessage(events []ResumeEvent, older bool, location *time.Location) string {
+	lines := []string{"Where you left off"}
+	if len(events) == 0 {
+		return strings.Join(append(lines, "No personal work session found in captured events."), "\n")
+	}
+	latest := events[0]
+	heading := fmt.Sprintf("- %s: last active %s", latest.Project, latest.Timestamp.In(location).Format("2006-01-02 15:04"))
+	if older {
+		heading += " (older than a week)"
+	}
+	lines = append(lines, heading)
+	for _, event := range events {
+		lines = append(lines, fmt.Sprintf("  - %s %s %s", event.Timestamp.In(location).Format("15:04"), event.Type, resumeEventLabel(event)))
+	}
+	lines = append(lines, "Run: workgraph resume "+latest.Project)
+	return strings.Join(lines, "\n")
 }
 
 func canonicalResumeProjectName(project string, events []ResumeEvent) string {
@@ -173,7 +382,15 @@ func resumeDatabasePath(config ResumeConfig) (string, error) {
 }
 
 func loadResumeEvents(db *sql.DB, location *time.Location) ([]ResumeEvent, error) {
-	rows, err := db.Query(`SELECT id, type, timestamp, project, summary, payload_json FROM events`)
+	var involvementColumnCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('events') WHERE name = 'involvement_json'`).Scan(&involvementColumnCount); err != nil {
+		return nil, fmt.Errorf("inspect event schema: %w", err)
+	}
+	query := `SELECT id, source, type, timestamp, project, summary, payload_json, created_at, involvement_json FROM events`
+	if involvementColumnCount == 0 {
+		query = `SELECT id, source, type, timestamp, project, summary, payload_json, created_at, NULL FROM events`
+	}
+	rows, err := db.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("query events: %w", err)
 	}
@@ -182,7 +399,8 @@ func loadResumeEvents(db *sql.DB, location *time.Location) ([]ResumeEvent, error
 	var events []ResumeEvent
 	for rows.Next() {
 		var stored storedTodayEvent
-		if err := rows.Scan(&stored.ID, &stored.Type, &stored.Timestamp, &stored.Project, &stored.Summary, &stored.PayloadJSON); err != nil {
+		var capturedAtRaw string
+		if err := rows.Scan(&stored.ID, &stored.Source, &stored.Type, &stored.Timestamp, &stored.Project, &stored.Summary, &stored.PayloadJSON, &capturedAtRaw, &stored.Involvement); err != nil {
 			return nil, fmt.Errorf("scan event: %w", err)
 		}
 
@@ -190,13 +408,24 @@ func loadResumeEvents(db *sql.DB, location *time.Location) ([]ResumeEvent, error
 		if err != nil {
 			return nil, fmt.Errorf("parse event timestamp %q: %w", stored.ID, err)
 		}
+		capturedAt, err := time.Parse(time.RFC3339Nano, capturedAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse event capture time %q: %w", stored.ID, err)
+		}
 
 		event := ResumeEvent{
-			ID:        stored.ID,
-			Type:      stored.Type,
-			Timestamp: timestamp.In(location),
-			Path:      eventPath(stored.PayloadJSON),
-			Payload:   stored.PayloadJSON,
+			ID:         stored.ID,
+			Source:     stored.Source,
+			Type:       stored.Type,
+			Timestamp:  timestamp.In(location),
+			Path:       eventPath(stored.PayloadJSON),
+			Payload:    stored.PayloadJSON,
+			CapturedAt: capturedAt.In(location),
+		}
+		if stored.Involvement.Valid {
+			if err := json.Unmarshal([]byte(stored.Involvement.String), &event.Involvement); err != nil {
+				return nil, fmt.Errorf("parse event involvement %q: %w", stored.ID, err)
+			}
 		}
 		if stored.Project.Valid {
 			event.Project = stored.Project.String
