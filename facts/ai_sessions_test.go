@@ -1767,3 +1767,116 @@ func writeAIFactExecutable(t *testing.T, directory, name, body string) string {
 	}
 	return path
 }
+
+func TestAISessionsPreservesValidContextBesideInvalidEvidence(t *testing.T) {
+	tests := []struct{ name, eventType, version, fields string }{}
+	for _, eventType := range []string{"ai.session_started", "ai.session_checkpointed", "ai.session_ended"} {
+		for _, version := range []string{`2`, `"1"`, `true`, `{}`, `[]`} {
+			tests = append(tests, struct{ name, eventType, version, fields string }{eventType + version, eventType, version, aiUnsafeEvidenceFields})
+		}
+	}
+	for _, test := range aiMistypedEvidenceCases {
+		tests = append(tests, struct{ name, eventType, version, fields string }{test.name, test.eventType, "1", test.fields})
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			homeDir := filepath.Join(t.TempDir(), ".workgraph")
+			initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			workingDir := t.TempDir()
+			sourceID := "00000000-0000-4000-8000-000000000335"
+			insertAINativeFactSession(t, initialized.DatabasePath, sourceID, "claude", "/usr/local/bin/claude", "claude-native", "", workingDir, "2026-08-03T12:00:00Z", true)
+			insertAIHandoffCheckpoint(t, initialized.DatabasePath, sourceID, workingDir)
+			db, err := sql.Open("sqlite3", initialized.DatabasePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			payload := `{"schema_version":` + test.version + `,"session_id":"` + sourceID + `",` + test.fields + `}`
+			if _, err := db.Exec(`INSERT INTO events (id, source, type, timestamp, payload_json, project, actor, summary, created_at)
+				VALUES ('opaque-newer-evidence', 'ai', ?, '2026-08-03T12:02:00Z', ?, '', '', 'Newer AI evidence', '2026-08-03T12:02:00Z')`, test.eventType, payload); err != nil {
+				t.Fatal(err)
+			}
+			listed, err := workgraph.ListAISessions(workgraph.AISessionsConfig{
+				HomeDir: homeDir, DatabasePath: initialized.DatabasePath,
+			})
+			if err != nil {
+				t.Fatalf("list sessions with invalid newer evidence: %v", err)
+			}
+			if len(listed.Sessions) != 1 || listed.Known != 1 {
+				t.Fatalf("session listing reconstructed identity or lost the source: %#v", listed.Sessions)
+			}
+			source := listed.Sessions[0]
+			if source.SessionID != sourceID || source.Tool != "claude" || source.NativeSessionID != "claude-native" || source.Status != "ended" ||
+				source.LatestCheckpointAt == nil || source.LatestCheckpointAt.UTC().Format(time.RFC3339) != "2026-08-03T12:00:30Z" || len(listed.Warnings) == 0 {
+				t.Fatalf("session listing lost valid source context or integrity warnings: %#v", listed)
+			}
+			if _, err := db.Exec(`INSERT INTO events (id, source, type, timestamp, payload_json, project, actor, summary, created_at)
+		VALUES ('ai.session_checkpointed:00000000-0000-4000-8000-000000000999:invalid', 'ai', 'ai.session_checkpointed',
+		'2026-08-03T12:03:00Z', '{"schema_version":"invalid"}', '', '', 'Unassociated AI evidence', '2026-08-03T12:03:00Z')`); err != nil {
+				t.Fatalf("insert unassociated invalid envelope: %v", err)
+			}
+			listed, err = workgraph.ListAISessions(workgraph.AISessionsConfig{
+				HomeDir: homeDir, DatabasePath: initialized.DatabasePath,
+			})
+			if err != nil || len(listed.Sessions) != 1 || listed.Known != 1 || listed.Sessions[0].SessionID != sourceID {
+				t.Fatalf("unassociated invalid envelope changed session identities: sessions=%#v err=%v", listed.Sessions, err)
+			}
+		})
+	}
+}
+
+func TestAICommandEnvironmentIsolatesWrappedSession(t *testing.T) {
+	t.Setenv("WORKGRAPH_AI_SESSION_ID", "parent-session")
+	t.Setenv("WORKGRAPH_AI_HOME", "/parent/home")
+	t.Setenv("WORKGRAPH_AI_DATABASE", "/parent/events.db")
+	t.Setenv("WORKGRAPH_AI_FUTURE_OPTION", "parent-option")
+	for _, entry := range daemonCommandEnv([]string{"WORKGRAPH_AI_SESSION_ID=fixture-session"}) {
+		if strings.HasPrefix(entry, "WORKGRAPH_AI_") && entry != "WORKGRAPH_AI_SESSION_ID=fixture-session" {
+			t.Fatalf("fixture inherited wrapped-session environment: %s", entry)
+		}
+	}
+}
+
+func TestAISessionsOmitsSessionsWithOnlyUnorderableEvidence(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workingDir := t.TempDir()
+	writeAIFactExecutable(t, workingDir, "codex", `touch "$0.launched"`)
+	sourceID := "00000000-0000-4000-8000-000000000373"
+	insertAINativeFactSession(t, initialized.DatabasePath, sourceID, "claude", "/usr/local/bin/claude", "claude-native", "", workingDir, "not-a-timestamp", false)
+	listed, err := workgraph.ListAISessions(workgraph.AISessionsConfig{HomeDir: homeDir, DatabasePath: initialized.DatabasePath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Sessions) != 0 || listed.Known != 0 {
+		t.Errorf("unorderable-only evidence created phantom session: %#v", listed)
+	}
+	if len(listed.Warnings) != 1 || !strings.Contains(listed.Warnings[0], "invalid timestamp") {
+		t.Errorf("lost integrity warning: %#v", listed.Warnings)
+	}
+	history := readAISessionHistory(t, initialized.DatabasePath, sourceID)
+	command := exec.Command(workgraphFactsBinary, "ai", "handoff", "codex", "--from", sourceID, "--stdin", "--home", homeDir, "--database", initialized.DatabasePath)
+	command.Env = daemonCommandEnv([]string{"PATH=" + workingDir + string(os.PathListSeparator) + os.Getenv("PATH")})
+	command.Stdin = strings.NewReader(`{"goal":"Must not append"}`)
+	if output, err := command.CombinedOutput(); err == nil {
+		t.Fatalf("unorderable-only session accepted: %s", output)
+	}
+	if after := readAISessionHistory(t, initialized.DatabasePath, sourceID); after != history {
+		t.Fatal("handoff modified unorderable session")
+	}
+	if countAIStartedSessions(t, initialized.DatabasePath) != 1 {
+		t.Fatal("handoff created destination lifecycle")
+	}
+	if _, err := os.Stat(filepath.Join(workingDir, "codex.launched")); !os.IsNotExist(err) {
+		t.Fatalf("destination launched: %v", err)
+	}
+}

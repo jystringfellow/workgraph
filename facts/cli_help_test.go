@@ -18,6 +18,7 @@ var publicCommandPaths = []string{
 	"ai",
 	"ai archive",
 	"ai checkpoint",
+	"ai handoff",
 	"ai resume",
 	"ai run",
 	"ai sessions",
@@ -192,7 +193,7 @@ func TestEveryPublicCommandHasHelp(t *testing.T) {
 }
 
 func TestAIHelpNamesVerifiedNativeAdapters(t *testing.T) {
-	for _, path := range []string{"ai run", "ai resume"} {
+	for _, path := range []string{"ai handoff", "ai run", "ai resume"} {
 		output := runWorkgraphCommand(t, nil, append([]string{"help"}, strings.Fields(path)...)...)
 		for _, tool := range []string{"codex", "claude", "copilot", "opencode"} {
 			if !strings.Contains(output, tool) {
@@ -203,6 +204,25 @@ func TestAIHelpNamesVerifiedNativeAdapters(t *testing.T) {
 	resumeOutput := runWorkgraphCommand(t, nil, "help", "ai", "resume")
 	if !strings.Contains(resumeOutput, "Launch a verified native") {
 		t.Fatalf("AI resume help did not make process launch explicit:\n%s", resumeOutput)
+	}
+}
+
+func TestAIHandoffHelpExplainsContextAndPrivacy(t *testing.T) {
+	parent := runWorkgraphCommand(t, nil, "help", "ai")
+	for _, line := range strings.Split(parent, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "handoff ") && len(strings.TrimSpace(line)) > 120 {
+			t.Fatalf("handoff summary is too long: %s", line)
+		}
+	}
+	output := runWorkgraphCommand(t, nil, "help", "ai", "handoff")
+	for _, expected := range []string{
+		"workgraph ai handoff <codex|claude|copilot|opencode>",
+		"--from", "--stdin", "structured checkpoint", "transcripts", "environment", "diffs",
+		"unsupported newer source evidence", "normal child-process capabilities", "persisted or transported",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("AI handoff help omitted %q:\n%s", expected, output)
+		}
 	}
 }
 
@@ -237,6 +257,7 @@ func TestLeafHelpListsAvailableOptions(t *testing.T) {
 		options     []string
 	}{
 		{"today", []string{"Options:", "--home", "--database"}},
+		{"ai handoff", []string{"Options:", "--from", "--stdin", "--home", "--database"}},
 		{"ai sessions", []string{"Options:", "--all", "--archived", "--status", "--limit"}},
 		{"llm add", []string{"Options:", "--provider", "--model", "--api-key-env", "--config-dir"}},
 		{"llm connect", []string{"Options:", "--name", "--for", "--model", "--config-dir"}},
@@ -264,6 +285,12 @@ func TestBridgeAndAIClientCommandsAreDocumented(t *testing.T) {
 		expected []string
 	}{
 		{filepath.Join(root, "docs", "commands.md"), []string{
+			"workgraph ai handoff codex",
+			"does not persist or transport transcripts",
+			"handoff-only exception to the nested-session guard",
+			"appended checkpoint remains",
+			"silently using an older projection",
+			"filesystem or network access",
 			"workgraph plugin install --client codex",
 			"workgraph plugin install --client claude-code",
 			"workgraph capture requests --claim",

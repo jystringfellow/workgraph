@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -13,7 +14,7 @@ import (
 
 func runAI(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: workgraph ai <run|checkpoint|sessions|archive|unarchive|show|resume>")
+		fmt.Fprintln(stderr, "usage: workgraph ai <run|checkpoint|handoff|sessions|archive|unarchive|show|resume>")
 		return 2
 	}
 	switch args[0] {
@@ -21,6 +22,8 @@ func runAI(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) i
 		return runAIRun(args[1:], stdin, stdout, stderr)
 	case "checkpoint":
 		return runAICheckpoint(args[1:], stdin, stdout, stderr)
+	case "handoff":
+		return runAIHandoff(args[1:], stdin, stdout, stderr)
 	case "sessions":
 		return runAISessions(args[1:], stdout, stderr)
 	case "archive":
@@ -35,6 +38,46 @@ func runAI(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) i
 		fmt.Fprintf(stderr, "unknown ai command: %s\n", args[0])
 		return 2
 	}
+}
+
+func runAIHandoff(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
+	parseArgs, positional := reorderAIValueArgs(args, "home", "database", "from")
+	flags := flag.NewFlagSet("ai handoff", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", os.Getenv("WORKGRAPH_AI_HOME"), "workgraph home directory")
+	databasePath := flags.String("database", os.Getenv("WORKGRAPH_AI_DATABASE"), "workgraph SQLite database path")
+	sourceSessionID := flags.String("from", "", "source workgraph AI session id; defaults to WORKGRAPH_AI_SESSION_ID")
+	fromStdin := flags.Bool("stdin", false, "append structured checkpoint JSON from standard input before handoff")
+	if err := flags.Parse(parseArgs); err != nil {
+		return 2
+	}
+	explicit := make(map[string]bool)
+	flags.Visit(func(option *stdflag.Flag) {
+		explicit[option.Name] = true
+	})
+	if flags.NArg() != 0 || len(positional) != 1 {
+		fmt.Fprintln(stderr, "usage: workgraph ai handoff <codex|claude|copilot|opencode> [--from <session-id>] [--stdin]")
+		return 2
+	}
+	if !workgraph.IsAIHandoffDestination(positional[0]) {
+		fmt.Fprintf(stderr, "workgraph ai handoff: destination %q is unsupported; choose codex, claude, copilot, or opencode\n", positional[0])
+		return 2
+	}
+	var checkpointInput io.Reader
+	if *fromStdin {
+		checkpointInput = stdin
+	}
+	result, err := workgraph.HandoffAISession(workgraph.AIHandoffConfig{
+		HomeDir: *homeDir, DatabasePath: *databasePath,
+		HomeExplicit: explicit["home"], DatabaseExplicit: explicit["database"],
+		SourceSessionID: *sourceSessionID, Destination: positional[0], CheckpointInput: checkpointInput,
+		Stdin: stdin, Stdout: stdout, Stderr: stderr,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph ai handoff: %v\n", err)
+		return 1
+	}
+	return result.ExitCode
 }
 
 func runAIRun(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
@@ -66,7 +109,7 @@ func runAIRun(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer
 }
 
 func runAICheckpoint(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
-	parseArgs, positional := reorderAICheckpointArgs(args)
+	parseArgs, positional := reorderAIValueArgs(args, "home", "database")
 	flags := flag.NewFlagSet("ai checkpoint", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	homeDir := flags.String("home", os.Getenv("WORKGRAPH_AI_HOME"), "workgraph home directory")
@@ -106,23 +149,19 @@ func runAICheckpoint(args []string, stdin io.Reader, stdout io.Writer, stderr io
 	return 0
 }
 
-func reorderAICheckpointArgs(args []string) ([]string, []string) {
+func reorderAIValueArgs(args []string, valueOptions ...string) ([]string, []string) {
 	flagArgs := make([]string, 0, len(args))
 	var positional []string
 	for index := 0; index < len(args); index++ {
 		argument := args[index]
-		switch {
-		case argument == "--home" || argument == "--database":
+		if strings.HasPrefix(argument, "-") {
 			flagArgs = append(flagArgs, argument)
-			if index+1 < len(args) {
+			name := strings.TrimPrefix(strings.TrimPrefix(argument, "-"), "-")
+			if slices.Contains(valueOptions, name) && index+1 < len(args) {
 				index++
 				flagArgs = append(flagArgs, args[index])
 			}
-		case argument == "--stdin" || argument == "-h" || argument == "--help" || strings.HasPrefix(argument, "--home=") || strings.HasPrefix(argument, "--database="):
-			flagArgs = append(flagArgs, argument)
-		case strings.HasPrefix(argument, "-"):
-			flagArgs = append(flagArgs, argument)
-		default:
+		} else {
 			positional = append(positional, argument)
 		}
 	}
