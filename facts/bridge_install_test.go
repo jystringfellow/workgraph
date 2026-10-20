@@ -62,6 +62,7 @@ func TestClaudePluginInstallMergesLeastPrivilegeDrainPermissions(t *testing.T) {
 		"mcp__plugin_workgraph_workgraph__capture_ingest",
 		"mcp__plugin_workgraph_workgraph__capture_request_fail",
 		"mcp__plugin_workgraph_workgraph__capture_watermark",
+		"mcp__plugin_workgraph_workgraph__next_items",
 		"mcp__plugin_workgraph_workgraph__connector_status",
 		"mcp__plugin_workgraph_workgraph__connector_required_tools",
 		"mcp__plugin_workgraph_workgraph__bridge_worker_heartbeat",

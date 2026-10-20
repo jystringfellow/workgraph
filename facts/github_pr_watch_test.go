@@ -1,6 +1,11 @@
 package facts
 
-import "testing"
+import (
+	workgraph "github.com/jystringfellow/workgraph"
+	"reflect"
+	"testing"
+	"time"
+)
 
 func TestGitHubPRWatchConnectValidatesGHAndStaysOptIn(t *testing.T) {
 	t.Skip("TBD: github prs connect validates gh auth status and a viewer probe, marks github.pr_watch ready, and github connect alone leaves it disabled")
@@ -95,7 +100,32 @@ func TestGitHubPRWatchOnlyTheUsersOwnActionsArePersonalActivity(t *testing.T) {
 }
 
 func TestGitHubPRWatchResumeRelevantUpdatesIncludeOnlyNeedsUserTransitions(t *testing.T) {
-	t.Skip("TBD: after a resume check-in, a review_comment awaiting the user and a checks_failed appear under Relevant updates since last check-in; a needs_user observed, checks_passed, and author_replied do not")
+	f := newNextFixture(t)
+	f.exec(t, `DELETE FROM events`)
+	if err := workgraph.RecordResumeCheckIn(workgraph.ResumeConfig{HomeDir: f.home}, f.now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		typ       string
+		needsUser bool
+	}{
+		{"review_comment", true}, {"checks_failed", true}, {"observed", true}, {"checks_passed", true}, {"author_replied", true}, {"review_comment", false}, {"changes_requested", false}, {"merge_conflict", false}, {"ready_to_merge", false}, {"review_requested", false},
+	}
+	for i, entry := range cases {
+		at := f.now.Add(time.Duration(i-20) * time.Minute).Format(time.RFC3339Nano)
+		f.event(t, entry.typ+at, entry.typ, at, map[string]any{"node_id": "PR0", "role": "author", "triage": map[string]any{"needs_user": entry.needsUser}})
+	}
+	resume, err := workgraph.Resume(workgraph.ResumeConfig{HomeDir: f.home, Now: f.now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := []string{}
+	for _, event := range resume.Updates {
+		got = append(got, event.Type)
+	}
+	if !reflect.DeepEqual(got, []string{"github.pull_request.checks_failed", "github.pull_request.review_comment"}) || resume.UpdateCount != 2 {
+		t.Fatalf("relevant updates: %v (%d)", got, resume.UpdateCount)
+	}
 }
 
 func TestGitHubPRWatchPollsAreFenced(t *testing.T) {
@@ -111,7 +141,44 @@ func TestGitHubPRWatchLongThreadsAreUnknown(t *testing.T) {
 }
 
 func TestGitHubPRWatchBacklogItemsCiteTheObservedEvent(t *testing.T) {
-	t.Skip("TBD: on first sight a PR with failed checks, changes requested, a conflict, and an awaiting thread opens four items whose opened_by is the observed event and since is baseline_at; after an observation reset the item ids and opened_by are unchanged")
+	f := newNextFixture(t)
+	f.exec(t, `DELETE FROM events`)
+	f.exec(t, `DELETE FROM github_pr_observations`)
+	o := f.observations[0]
+	o["opinionated_reviews"] = f.observations[2]["opinionated_reviews"]
+	o["checks_state"] = "failed"
+	o["check_runs"] = f.observations[3]["check_runs"]
+	o["mergeable"] = "CONFLICTING"
+	baselineAt := f.now.Add(-time.Hour).Format(time.RFC3339Nano)
+	o["baseline_at"] = baselineAt
+	baseline := map[string]any{
+		"review_ids": []string{"R1"},
+		"threads":    []any{map[string]any{"thread_id": "T1", "last_comment_id": "C1"}},
+		"head_sha":   "abc123", "run_fingerprint": "fixturehash1",
+	}
+	id := "github.pull_request.observed:PR0:author"
+	f.event(t, id, "observed", baselineAt, map[string]any{"node_id": "PR0", "role": "author", "baseline_at": baselineAt, "baseline": baseline, "state": map[string]any{"checks_state": "failed", "mergeable": "CONFLICTING"}, "triage": map[string]any{"needs_user": true}, "untrusted": map[string]any{"threads": []any{map[string]any{"thread_id": "T1", "last_comment_id": "C1", "body": "BASELINE PRIVATE", "comment_url": "https://github.com/acme/demo/pull/1#discussion_r1"}}}})
+	f.save(t, o)
+	items := f.items(t, "--include-untrusted")
+	if len(items) != 4 {
+		t.Fatalf("backlog: %+v", items)
+	}
+	for _, item := range items {
+		if item.OpenedBy != id || item.Since.Format(time.RFC3339Nano) != baselineAt || !reflect.DeepEqual(item.Evidence, []string{id}) {
+			t.Fatalf("opening evidence: %+v", item)
+		}
+	}
+	if items[0].Untrusted["body"] != "BASELINE PRIVATE" {
+		t.Fatalf("baseline body: %v", items[0].Untrusted)
+	}
+	f.exec(t, `DELETE FROM github_pr_observations`)
+	o["observed_at"] = f.now.Add(time.Minute).Format(time.RFC3339Nano)
+	o["baseline_at"] = o["observed_at"]
+	f.save(t, o)
+	reset := f.items(t, "--include-untrusted")
+	if !reflect.DeepEqual(items, reset) {
+		t.Fatalf("reset changed items:\nbefore %+v\nafter %+v", items, reset)
+	}
 }
 
 func TestGitHubPRWatchDirectAndTeamReviewRequestsEnterReviewerSet(t *testing.T) {

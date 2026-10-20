@@ -147,6 +147,14 @@ func Today(config TodayConfig) (TodayResult, error) {
 	}
 	result.Message += memoryDiscoveryHints(db, evidence, MemoryDoctorConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir})
 
+	next, err := Next(NextConfig{HomeDir: config.HomeDir, DatabasePath: dbPath, Now: now})
+	if err != nil {
+		return TodayResult{}, err
+	}
+	if len(next.Items) > 0 {
+		result.Message += fmt.Sprintf("\n\nWaiting on you: %d items (workgraph next)", len(next.Items))
+	}
+
 	return result, nil
 }
 

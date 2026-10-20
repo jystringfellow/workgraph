@@ -1,7 +1,7 @@
 # Next
 
-Status: proposed. No behavior described here is implemented until its facts in
-`facts/next_test.go` are active.
+Status: implemented for local GitHub PR observations and events, with active
+executable facts in `facts/next_test.go`.
 
 ## Intent
 

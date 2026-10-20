@@ -41,10 +41,6 @@ Priority labels used below:
 - `P1` Expand connector coverage to meetings, work tracking, and knowledge
   bases as user-verifiable integrations. [specs: `specs/calendar.md`,
   `specs/azure-boards.md`, and `specs/notion.md`]
-- `P1` Add `workgraph next`, one local list of what is waiting on the user,
-  with stable item ids, `done` and `snooze`, and a `--watch --json` feed that
-  later dispatch can consume. Show its items in `resume` and a count in
-  `today`. [spec: `specs/next.md`]
 - `P1` Watch open GitHub pull requests the user authored or is asked to
   review (directly or through a team) through the existing `gh` CLI auth, as
   the first `next` source: read-only, deterministic transition events,
@@ -73,6 +69,11 @@ Priority labels used below:
 - `P2` Desktop UI after the local CLI and data contracts are stable.
 
 ## Recently Delivered
+
+- [x] `workgraph next` projects local GitHub PR observations and events into
+  attention items with stable ids, evidence, freshness, done/snooze bookkeeping,
+  and a JSON Lines watch feed. The same items appear through MCP and `resume`,
+  with a count in `today`. [spec: `specs/next.md`]
 
 - [x] A seven-day `resume` handoff with last-known-work fallback and a durable
   overview check-in for personal work captured since the previous run. [spec:
