@@ -236,3 +236,11 @@ Scenario: Hints respect GitHub rate limits
   Given GitHub asked workgraph to wait before polling again
   When I run "workgraph github prs hint" or "workgraph github prs capture"
   Then workgraph does not query GitHub until the wait is over
+
+Scenario: Failed team membership refresh preserves cached attribution
+  Given github.pr_watch has cached team membership from an hour ago
+  When refreshing membership fails
+  Then the cached teams and successful refresh time are preserved
+  And connector status reports a warning
+  And the next poll retries membership refresh
+  But a rate limit defers that retry until the retry-after deadline

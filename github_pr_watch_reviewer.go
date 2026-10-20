@@ -2,6 +2,7 @@ package workgraph
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -37,12 +38,18 @@ func refreshGitHubPRTeams(ctx context.Context, homeDir, gh string, params github
 			return cache, nil
 		}
 	}
-	cache = &githubPRTeamCache{Login: params.IdentityLogin, RefreshedAt: now.Format(time.RFC3339Nano), Teams: []string{}}
+	if cache == nil || cache.Login != params.IdentityLogin {
+		cache = &githubPRTeamCache{Login: params.IdentityLogin, Teams: []string{}}
+	}
 	teams, err := fetchGitHubPRTeams(ctx, gh, params.IdentityLogin)
+	var retryAfter *ConnectorPollRetryAfter
 	if err != nil {
 		cache.Warning = "team membership unavailable; requests may be via team (unresolved): " + err.Error()
+		errors.As(err, &retryAfter)
 	} else {
 		cache.Teams = teams
+		cache.RefreshedAt = now.Format(time.RFC3339Nano)
+		cache.Warning = ""
 	}
 	connectorPollStateMu.Lock()
 	defer connectorPollStateMu.Unlock()
@@ -56,11 +63,20 @@ func refreshGitHubPRTeams(ctx context.Context, homeDir, gh string, params github
 		return nil, err
 	}
 	if len(entry.BridgeParams) == 0 || current.IdentityLogin != params.IdentityLogin {
+		if retryAfter != nil {
+			return cache, retryAfter
+		}
 		return cache, nil
 	}
 	entry.GitHubPRTeams = cache
 	state.Connectors[githubPRWatchConnectorID] = entry
-	return cache, writeConnectorRuntimeFile(homeDir, state)
+	if err := writeConnectorRuntimeFile(homeDir, state); err != nil {
+		return cache, err
+	}
+	if retryAfter != nil {
+		return cache, retryAfter
+	}
+	return cache, nil
 }
 
 func fetchGitHubPRTeams(ctx context.Context, gh, login string) ([]string, error) {

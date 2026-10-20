@@ -2,6 +2,7 @@ package facts
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -113,6 +114,8 @@ func TestResumeHandoffStopsAtProjectAndTimeGaps(t *testing.T) {
 }
 
 func TestResumeCommandRecordsCheckInAndShowsNewlyCapturedPersonalWork(t *testing.T) {
+	gh := writeFakeGHGraphQL(t, t.TempDir())
+	t.Setenv("PATH", filepath.Dir(gh.Path)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	homeDir := filepath.Join(t.TempDir(), ".workgraph")
 	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
 	if err != nil {
@@ -174,6 +177,8 @@ func TestResumeCommandRecordsCheckInAndShowsNewlyCapturedPersonalWork(t *testing
 }
 
 func TestResumeInspectionsDoNotAdvanceOverviewCheckIn(t *testing.T) {
+	gh := writeFakeGHGraphQL(t, t.TempDir())
+	t.Setenv("PATH", filepath.Dir(gh.Path)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	homeDir := filepath.Join(t.TempDir(), ".workgraph")
 	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
 	if err != nil {

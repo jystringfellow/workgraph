@@ -23,6 +23,7 @@ type nextFixture struct {
 	db           string
 	now          time.Time
 	observations []map[string]any
+	gh           *fakeGHGraphQL
 }
 
 func newNextFixture(t *testing.T) *nextFixture {
@@ -32,7 +33,7 @@ func newNextFixture(t *testing.T) *nextFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &nextFixture{home: home, db: initialized.DatabasePath, now: time.Now().UTC().Truncate(time.Second)}
+	f := &nextFixture{home: home, db: initialized.DatabasePath, now: time.Now().UTC().Truncate(time.Second), gh: writeFakeGHGraphQL(t, t.TempDir())}
 	f.exec(t, `INSERT INTO github_pr_watch_state(connector_id, enabled) VALUES ('github.pr_watch', 1)`)
 	f.runtime(t, "ready")
 	types := []string{"review_comment", "review_requested", "changes_requested", "checks_failed", "merge_conflict", "ready_to_merge"}
@@ -129,9 +130,17 @@ func (f *nextFixture) cli(t *testing.T, args ...string) string {
 		args = append(args, "--home", f.home)
 	}
 	command := exec.Command(workgraphFactsBinary, args...)
+	command.Env = append(os.Environ(), "PATH="+filepath.Dir(f.gh.Path)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	before := strings.Join(f.gh.Invocations(t), "\n")
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%v: %v\n%s", args, err, output)
+	}
+	if args[0] == "resume" {
+		after := strings.Join(f.gh.Invocations(t), "\n")
+		if len(after) <= len(before) || !strings.HasSuffix(after, "auth status --hostname github.com") {
+			t.Fatal("resume did not discover the GitHub identity through the fake gh")
+		}
 	}
 	return string(output)
 }

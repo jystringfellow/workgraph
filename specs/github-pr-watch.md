@@ -319,8 +319,10 @@ query($login: String!, $after: String) {
 }
 ```
 
-The result is cached in connector state and refreshed at connect and at most
-hourly. It is used only to label a request: a request whose `requestedReviewer`
+The result is cached in connector state and refreshed at connect and hourly
+after a successful refresh. A failed refresh records a warning, preserves the
+previous teams and successful refresh timestamp, and retries on the next poll.
+Rate limits use the normal retry-after deadline before another refresh. It is used only to label a request: a request whose `requestedReviewer`
 is a team in the cache is `via <org>/<slug>`. A PR returned by the search whose
 requests match no cached team is labeled `via team (unresolved)` rather than
 dropped, because GitHub's search already decided it matches.
@@ -850,7 +852,7 @@ watch needs a small extension:
 | `gh` missing | exec error | setup `error` |
 | Malformed JSON or schema drift | decode failure | the role fails; nothing changes for it |
 | Completeness violated | see Completeness | the role fails; nothing changes for it |
-| Team membership unreadable | missing `read:org` or `FORBIDDEN` on the teams query | warning in status; team requests labeled `via team (unresolved)` |
+| Team membership unreadable | missing `read:org` or `FORBIDDEN` on the teams query | warning in status; retain cached teams and refresh time, retry next poll; unmatched requests labeled `via team (unresolved)` |
 | Whole-poll deadline (30s) | context deadline | transient |
 | Repository renamed or transferred | `nameWithOwner` changes under the same `node_id` | observation and event ids follow `node_id`; payloads use the new name |
 

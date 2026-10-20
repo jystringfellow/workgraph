@@ -451,13 +451,18 @@ func (harness *prWatchHarness) eventsOfType(eventType string) []prWatchEvent {
 
 func (harness *prWatchHarness) observation(nodeID string) map[string]any {
 	harness.t.Helper()
+	return harness.observationForRole(nodeID, "author")
+}
+
+func (harness *prWatchHarness) observationForRole(nodeID, role string) map[string]any {
+	harness.t.Helper()
 	db, err := sql.Open("sqlite3", harness.dbPath)
 	if err != nil {
 		harness.t.Fatalf("open database: %v", err)
 	}
 	defer db.Close()
 	var raw string
-	err = db.QueryRow(`SELECT observation_json FROM github_pr_observations WHERE connector_id = 'github.pr_watch' AND node_id = ? AND role = 'author'`, nodeID).Scan(&raw)
+	err = db.QueryRow(`SELECT observation_json FROM github_pr_observations WHERE connector_id = 'github.pr_watch' AND node_id = ? AND role = ?`, nodeID, role).Scan(&raw)
 	if err == sql.ErrNoRows {
 		return nil
 	}

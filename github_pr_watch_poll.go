@@ -182,11 +182,12 @@ func CaptureGitHubPRWatch(config GitHubPRWatchCaptureConfig) (GitHubPRWatchCaptu
 			now: pollStart, remoteProjects: remoteProjects,
 		}
 		poll.observedAt = poll.now.Format(time.RFC3339Nano)
-		poll.teams, err = refreshGitHubPRTeams(ctx, status.HomeDir, poll.gh, params, pollStart, false)
-		if err != nil {
-			return result, err
+		var changes *githubPRWatchChanges
+		var roleErr error
+		poll.teams, roleErr = refreshGitHubPRTeams(ctx, status.HomeDir, poll.gh, params, pollStart, false)
+		if roleErr == nil {
+			changes, roleErr = poll.run()
 		}
-		changes, roleErr := poll.run()
 		if err := recordGitHubPRWatchBudget(status.HomeDir, poll.rateLimit); err != nil {
 			return result, err
 		}

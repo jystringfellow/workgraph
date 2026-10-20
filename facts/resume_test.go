@@ -970,6 +970,8 @@ func TestResumeLabelsUncertainNextSteps(t *testing.T) {
 }
 
 func TestCLIResumeListsRecentProjects(t *testing.T) {
+	gh := writeFakeGHGraphQL(t, t.TempDir())
+	t.Setenv("PATH", filepath.Dir(gh.Path)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
 	result, err := workgraph.Init(workgraph.InitConfig{

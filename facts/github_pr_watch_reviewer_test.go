@@ -2,8 +2,10 @@ package facts
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -228,47 +230,119 @@ func TestGitHubPRWatchReviewerCaptureFeedsNext(t *testing.T) {
 }
 
 func TestGitHubPRWatchTeamCacheRefreshAndWarnings(t *testing.T) {
-	h := reviewerHarness(t, reviewerParams)
-	runtimePath := filepath.Join(h.homeDir, "connectors.json")
-	raw, err := os.ReadFile(runtimePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var runtime map[string]any
-	if err := json.Unmarshal(raw, &runtime); err != nil {
-		t.Fatal(err)
-	}
-	cache := runtime["connectors"].(map[string]any)["github.pr_watch"].(map[string]any)["github_pr_teams"].(map[string]any)
-	if !strings.Contains(watchJSON(t, cache), "acme/platform") {
-		t.Fatalf("team cache missing from connector state: %s", raw)
-	}
-	cache["refreshed_at"] = watchTime(-time.Hour)
-	if err := os.WriteFile(runtimePath, []byte(watchJSON(t, runtime)), 0600); err != nil {
-		t.Fatal(err)
-	}
-	failure := `{"data":{"viewer":null},"errors":[{"type":"FORBIDDEN","message":"read:org unavailable"}]}`
-	h.mustPoll(watchBase, failure, reviewerStatus(t, requestedPR(watchPRNodeID, "acme/platform")))
-	if event := h.events()[0]; payloadValue(event.Payload, "triage", "request", "unresolved_team") != true {
-		t.Fatalf("failed membership did not degrade to unresolved: %s", event.Raw)
-	}
-	status, err := workgraph.ListConnectors(workgraph.ConnectorListConfig{HomeDir: h.homeDir})
-	if err != nil || !strings.Contains(status.Message, "team membership unavailable") {
-		t.Fatalf("missing team warning: %+v %v", status, err)
-	}
-	h.mustPoll(watchBase.Add(59*time.Minute), reviewerStatus(t, requestedPR(watchPRNodeID, "acme/platform")))
-	if len(h.gh.GraphQLInputs(t)) != 5 {
-		t.Fatal("failed membership refreshed more than hourly")
-	}
-	h.mustPoll(watchBase.Add(time.Hour), teamResponse(t), reviewerStatus(t, requestedPR(watchPRNodeID, "acme/platform")))
-	if len(h.gh.GraphQLInputs(t)) != 7 {
-		t.Fatal("membership did not refresh after one hour")
-	}
-	status, err = workgraph.ListConnectors(workgraph.ConnectorListConfig{HomeDir: h.homeDir})
-	if err != nil || strings.Contains(status.Message, "team membership unavailable") {
-		t.Fatalf("warning did not clear: %+v %v", status, err)
-	}
-	if len(h.events()) != 1 {
-		t.Fatal("label refresh emitted a request transition")
+	for _, failure := range []struct {
+		name        string
+		response    string
+		stderr      string
+		code        int
+		rateLimited bool
+		storedReset bool
+	}{
+		{name: "unavailable", response: `{"data":{"viewer":null},"errors":[{"type":"FORBIDDEN","message":"read:org unavailable"}]}`},
+		{name: "graphql rate limit", response: `{"data":null,"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded"}]}`, rateLimited: true},
+		{name: "stored reset", response: `{"data":null,"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded"}]}`, code: 1, rateLimited: true, storedReset: true},
+		{name: "http rate limit", stderr: "HTTP 429: secondary rate limit", code: 1, rateLimited: true},
+	} {
+		t.Run(failure.name, func(t *testing.T) {
+			h := reviewerHarness(t, reviewerParams)
+			node := requestedPR(watchPRNodeID, "acme/platform")
+			h.mustPoll(watchBase, reviewerStatus(t, node))
+			before := h.observationForRole(watchPRNodeID, "reviewer")
+			runtimePath := filepath.Join(h.homeDir, "connectors.json")
+			readState := func() (map[string]any, map[string]any) {
+				t.Helper()
+				raw, err := os.ReadFile(runtimePath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var state map[string]any
+				if err := json.Unmarshal(raw, &state); err != nil {
+					t.Fatal(err)
+				}
+				return state, state["connectors"].(map[string]any)["github.pr_watch"].(map[string]any)
+			}
+			state, entry := readState()
+			cache := entry["github_pr_teams"].(map[string]any)
+			cache["refreshed_at"] = watchTime(-time.Hour)
+			if failure.storedReset {
+				entry["rate_limit_reset_at"] = watchTime(20 * time.Minute)
+			} else {
+				delete(entry, "rate_limit_reset_at")
+			}
+			if err := os.WriteFile(runtimePath, []byte(watchJSON(t, state)), 0600); err != nil {
+				t.Fatal(err)
+			}
+
+			h.gh.QueueResult(t, failure.response, failure.stderr, failure.code)
+			if !failure.rateLimited {
+				h.gh.Queue(t, reviewerStatus(t, node))
+			}
+			now := watchBase.Add(5 * time.Minute)
+			_, err := h.poll(now)
+			retryAt := now.Add(time.Minute)
+			if failure.rateLimited {
+				var retry *workgraph.ConnectorPollRetryAfter
+				if !errors.As(err, &retry) {
+					t.Fatalf("expected retry-after from team query, got %v", err)
+				}
+				retryAt = now.Add(retry.RetryAfter)
+				if failure.storedReset && !retryAt.Equal(watchBase.Add(20*time.Minute)) {
+					t.Fatalf("retry ignored stored reset: %s", retryAt)
+				}
+				if !failure.storedReset && retry.RetryAfter != time.Minute {
+					t.Fatalf("expected a one-minute retry without a reset, got %s", retry.RetryAfter)
+				}
+				deadline, err := workgraph.ConnectorPollNotBefore(h.homeDir, "github.pr_watch")
+				if err != nil || !deadline.Equal(retryAt) {
+					t.Fatalf("missing retry deadline: %s %v", deadline, err)
+				}
+				calls := len(h.gh.GraphQLInputs(t))
+				_, err = h.poll(now.Add(time.Second))
+				var deferred *workgraph.ConnectorPollDeferred
+				if !errors.As(err, &deferred) || !deferred.NotBefore.Equal(retryAt) || len(h.gh.GraphQLInputs(t)) != calls {
+					t.Fatalf("poll before deadline was not deferred without queries: %v", err)
+				}
+				if !reflect.DeepEqual(before, h.observationForRole(watchPRNodeID, "reviewer")) {
+					t.Fatal("rate limit changed observation")
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			_, entry = readState()
+			retained := entry["github_pr_teams"].(map[string]any)
+			if !reflect.DeepEqual(retained["teams"], cache["teams"]) || retained["refreshed_at"] != cache["refreshed_at"] {
+				t.Fatalf("failed refresh replaced good cache: %#v", retained)
+			}
+			request := h.observationForRole(watchPRNodeID, "reviewer")["review_request"]
+			if payloadValue(request, "unresolved_team") == true || !reflect.DeepEqual(payloadValue(request, "teams"), []any{"acme/platform"}) {
+				t.Fatalf("cached attribution lost: %#v", request)
+			}
+			status, err := workgraph.ListConnectors(workgraph.ConnectorListConfig{HomeDir: h.homeDir})
+			if err != nil || !strings.Contains(status.Message, "team membership unavailable") {
+				t.Fatalf("missing team warning: %+v %v", status, err)
+			}
+
+			calls := len(h.gh.GraphQLInputs(t))
+			h.mustPoll(retryAt, teamResponse(t), reviewerStatus(t, node))
+			if len(h.gh.GraphQLInputs(t)) != calls+2 {
+				t.Fatal("next eligible poll did not retry membership")
+			}
+			_, entry = readState()
+			if entry["github_pr_teams"].(map[string]any)["refreshed_at"] != retryAt.Format(time.RFC3339Nano) {
+				t.Fatal("successful refresh time did not advance")
+			}
+			status, err = workgraph.ListConnectors(workgraph.ConnectorListConfig{HomeDir: h.homeDir})
+			if err != nil || strings.Contains(status.Message, "team membership unavailable") {
+				t.Fatalf("warning did not clear: %+v %v", status, err)
+			}
+			h.mustPoll(retryAt.Add(time.Minute), reviewerStatus(t, node))
+			if len(h.gh.GraphQLInputs(t)) != calls+3 {
+				t.Fatal("successful membership refreshed before one hour")
+			}
+			if len(h.events()) != 1 {
+				t.Fatal("label refresh emitted a request transition")
+			}
+		})
 	}
 }
 
@@ -360,7 +434,7 @@ func TestGitHubPRWatchTeamMembershipFailureAtConnectIsWarning(t *testing.T) {
 	if _, err := workgraph.ConnectGitHubPRWatch(workgraph.ConnectorConnectConfig{HomeDir: h.homeDir, GitHubCommand: h.gh.Path, ParamsJSON: json.RawMessage(reviewerParams)}); err != nil {
 		t.Fatalf("membership failure blocked connection: %v", err)
 	}
-	h.mustPoll(watchBase, reviewerStatus(t, requestedPR(watchPRNodeID, "acme/platform")))
+	h.mustPoll(watchBase, `{"data":{"viewer":null},"errors":[{"type":"FORBIDDEN","message":"missing read:org"}]}`, reviewerStatus(t, requestedPR(watchPRNodeID, "acme/platform")))
 	if len(h.events()) != 1 || payloadValue(h.events()[0].Payload, "triage", "request", "unresolved_team") != true {
 		t.Fatalf("missing unresolved request: %v", h.events())
 	}
