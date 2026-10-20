@@ -463,6 +463,7 @@ func (poll *githubPRWatchPoll) search(role string) ([]githubPRStatusNode, error)
 			continue
 		}
 		if errors.Is(err, errGitHubGraphQLTimeout) {
+			poll.searchTimedOut = true
 			notBefore := poll.now.Add(githubPRWatchDefaultRetryAfter)
 			return nil, &ConnectorPollDeferred{Reason: err.Error() + "; retrying after " + notBefore.Format(time.RFC3339), NotBefore: notBefore}
 		}

@@ -281,7 +281,6 @@ The reviewer search adds what only the reviewer role uses:
 ```graphql
 query($q: String!, $login: String!, $first: Int!, $after: String) {
   ...same search and fields as the author search, plus:
-        reviewDecision
         reviewRequests(first: 50) {
           totalCount
           nodes { requestedReviewer {

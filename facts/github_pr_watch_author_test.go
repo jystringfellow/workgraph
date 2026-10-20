@@ -1741,3 +1741,37 @@ func watchSearchPageSize(t *testing.T, homeDir string) int {
 	}
 	return state.Connectors["github.pr_watch"].SearchPageSize
 }
+
+func TestGitHubPRWatchMinimumSearchPageStaysAfterAnotherRoleTimesOut(t *testing.T) {
+	harness := newPRWatchHarness(t, `{"scope":"open_prs","identity":"@me","roles":["author","reviewer"],"review_requests":"direct"}`)
+	path := filepath.Join(harness.homeDir, "connectors.json")
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read connectors.json: %v", err)
+	}
+	var state map[string]map[string]map[string]any
+	if err := json.Unmarshal(contents, &state); err != nil {
+		t.Fatalf("parse connectors.json: %v", err)
+	}
+	state["connectors"]["github.pr_watch"]["search_page_size"] = 5
+	if err := os.WriteFile(path, []byte(watchJSON(t, state)), 0o600); err != nil {
+		t.Fatalf("write connectors.json: %v", err)
+	}
+
+	harness.gh.Queue(t, statusResponse(t, watchPR()))
+	harness.gh.Queue(t, detailResponse(t, detailFixture{ID: watchPRNodeID}))
+	harness.gh.QueueResult(t, "", "gh: HTTP 502: 502 Bad Gateway (https://api.github.com/graphql)\n", 1)
+	_, err = harness.poll(watchBase)
+	var deferred *workgraph.ConnectorPollDeferred
+	if !errors.As(err, &deferred) || harness.observation(watchPRNodeID) == nil {
+		t.Fatalf("expected the author role to commit and the reviewer timeout to defer, got %v", err)
+	}
+	if size := watchSearchPageSize(t, harness.homeDir); size != 5 {
+		t.Fatalf("expected a search timeout at the minimum page size to keep it at 5, got %d", size)
+	}
+	for _, input := range harness.gh.GraphQLInputs(t) {
+		if strings.Contains(input, `"q":"is:pr is:open user-review-requested:`) && strings.Contains(input, "reviewDecision") {
+			t.Fatalf("expected the reviewer search not to select reviewDecision: %s", input)
+		}
+	}
+}

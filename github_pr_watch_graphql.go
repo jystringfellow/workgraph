@@ -49,7 +49,6 @@ const githubPRWatchReviewerStatusQuery = `query($q: String!, $login: String!, $f
         headRepository { nameWithOwner }
         isCrossRepository
         headRefName headRefOid baseRefName
-        reviewDecision
         reviewRequests(first: 50) {
           totalCount
           nodes { requestedReviewer {
