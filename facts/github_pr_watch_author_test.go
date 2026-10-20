@@ -1355,14 +1355,32 @@ func TestGitHubPRWatchCaptureFeedsNext(t *testing.T) {
 		t.Fatalf("expected the still-open conflict to keep citing the observed event, got %q", items["conflicts"].OpenedBy)
 	}
 
-	for _, enabled := range []bool{false, true} {
-		if _, err := workgraph.SetConnectorEnabled(workgraph.ConnectorUpdateConfig{HomeDir: harness.homeDir, ID: "github.pr_watch", Enabled: enabled}); err != nil {
-			t.Fatalf("set github.pr_watch enabled %v: %v", enabled, err)
+	if err := workgraph.DoneNext(workgraph.NextConfig{HomeDir: harness.homeDir, DatabasePath: harness.dbPath, Now: watchBase.Add(6 * time.Minute)}, items["conflicts"].ID); err != nil {
+		t.Fatalf("mark the conflict done: %v", err)
+	}
+	resetObservations := func() {
+		for _, enabled := range []bool{false, true} {
+			if _, err := workgraph.SetConnectorEnabled(workgraph.ConnectorUpdateConfig{HomeDir: harness.homeDir, ID: "github.pr_watch", Enabled: enabled}); err != nil {
+				t.Fatalf("set github.pr_watch enabled %v: %v", enabled, err)
+			}
+		}
+		if harness.observationCount() != 0 {
+			t.Fatalf("expected disabling the watch to reset observations")
 		}
 	}
-	if harness.observationCount() != 0 {
-		t.Fatalf("expected disabling the watch to reset observations")
+
+	resetObservations()
+	harness.mustPoll(watchBase.Add(8*time.Minute), statusResponse(t, failingOn(newHead, "run-2", watchTime(4*time.Minute), watchTime(3*time.Minute))),
+		detailResponse(t, detailFixture{ID: watchPRNodeID, Threads: []threadFixture{{ID: "PRRT_one", Path: "settings.go", Line: 18, Comments: []commentFixture{question, followUp}}}}))
+	if got := len(harness.eventsOfType("github.pull_request.merge_conflict")); got != 0 {
+		t.Fatalf("expected an unchanged conflict not to re-emit after a reset, got %d merge_conflict events", got)
 	}
+	items = nextItemsByReason(t, harness, watchBase.Add(9*time.Minute))
+	if conflict, open := items["conflicts"]; open {
+		t.Fatalf("expected the conflict marked done to stay hidden after a reset, got %q", conflict.ID)
+	}
+
+	resetObservations()
 	resetHead := "4444444444444444444444444444444444444444"
 	harness.mustPoll(watchBase.Add(10*time.Minute), statusResponse(t, failingOn(resetHead, "run-3", watchTime(8*time.Minute), watchTime(8*time.Minute))),
 		detailResponse(t, detailFixture{ID: watchPRNodeID, Threads: []threadFixture{{ID: "PRRT_one", Path: "settings.go", Line: 18, Comments: []commentFixture{question, followUp}}}}))
@@ -1377,9 +1395,6 @@ func TestGitHubPRWatchCaptureFeedsNext(t *testing.T) {
 	checks = items["checks_failed"]
 	if !strings.HasPrefix(checks.OpenedBy, "github.pull_request.checks_failed:"+watchPRNodeID+":"+resetHead+":") || !stored[checks.OpenedBy] {
 		t.Fatalf("expected a failing head pushed while observations were missing to emit checks_failed, got %q", checks.OpenedBy)
-	}
-	if conflicts := items["conflicts"].OpenedBy; !strings.HasPrefix(conflicts, "github.pull_request.merge_conflict:"+watchPRNodeID+":"+resetHead+":") || !stored[conflicts] {
-		t.Fatalf("expected the conflict on the new head to emit merge_conflict after the reset, got %q", conflicts)
 	}
 }
 

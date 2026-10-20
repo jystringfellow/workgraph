@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -544,6 +545,9 @@ func (poll *githubPRWatchPoll) observeAuthor(changes *githubPRWatchChanges, prev
 		current.BaselineAt = poll.observedAt
 		if found {
 			current.BaselineAt = baselineAt
+			if current.LastKnown, err = poll.storedLastKnown(node.ID, githubPRRoleAuthor); err != nil {
+				return err
+			}
 		}
 	}
 	views := poll.applyDetail(&current, detail)
@@ -1288,6 +1292,43 @@ func (poll *githubPRWatchPoll) storedObservedBaseline(nodeID string, role string
 		return "", false, fmt.Errorf("read stored observed event: %w", err)
 	}
 	return baselineAt.String, baselineAt.String != "", nil
+}
+
+func (poll *githubPRWatchPoll) storedLastKnown(nodeID string, role string) (githubPRLastKnown, error) {
+	rows, err := poll.db.Query(`SELECT type, json_extract(payload_json, '$.state.mergeable'), json_extract(payload_json, '$.state.ready')
+		FROM events
+		WHERE type IN (?, ?, ?, ?) AND json_extract(payload_json, '$.node_id') = ? AND json_extract(payload_json, '$.role') = ?
+		ORDER BY timestamp, id`,
+		githubPREventObserved, githubPREventMergeConflict, githubPREventReadyToMerge, githubPREventReadinessLost, nodeID, role)
+	if err != nil {
+		return githubPRLastKnown{}, fmt.Errorf("read stored readiness evidence: %w", err)
+	}
+	defer rows.Close()
+	lastKnown := githubPRLastKnown{}
+	for rows.Next() {
+		var eventType string
+		var mergeable sql.NullString
+		var ready sql.NullBool
+		if err := rows.Scan(&eventType, &mergeable, &ready); err != nil {
+			return githubPRLastKnown{}, fmt.Errorf("scan stored readiness evidence: %w", err)
+		}
+		switch eventType {
+		case githubPREventObserved:
+			if mergeable.String != "" && mergeable.String != "UNKNOWN" {
+				lastKnown.Mergeable = mergeable.String
+			}
+			if ready.Valid {
+				lastKnown.Ready = strconv.FormatBool(ready.Bool)
+			}
+		case githubPREventMergeConflict:
+			lastKnown.Mergeable = "CONFLICTING"
+		case githubPREventReadyToMerge:
+			lastKnown.Ready = "true"
+		case githubPREventReadinessLost:
+			lastKnown.Ready = "false"
+		}
+	}
+	return lastKnown, rows.Err()
 }
 
 func (poll *githubPRWatchPoll) priorClosedAt(nodeID string) (string, error) {
