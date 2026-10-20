@@ -70,7 +70,7 @@ func TestClaudePluginInstallMergesLeastPrivilegeDrainPermissions(t *testing.T) {
 			t.Fatalf("Claude permissions omitted %q:\n%s", expected, contents)
 		}
 	}
-	for _, forbidden := range []string{"mcp__plugin_workgraph_workgraph__*", "connector_bridge_configure", "connector_bridge_disconnect", "Bash"} {
+	for _, forbidden := range []string{"mcp__plugin_workgraph_workgraph__*", "mcp__plugin_workgraph_workgraph__next_items", "connector_bridge_configure", "connector_bridge_disconnect", "Bash"} {
 		if strings.Contains(allowed, forbidden) {
 			t.Fatalf("Claude permissions were too broad (%q):\n%s", forbidden, contents)
 		}

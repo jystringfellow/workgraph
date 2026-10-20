@@ -8,6 +8,7 @@ import (
 )
 
 var publicCommandPaths = []string{
+	"next", "next explain", "next done", "next snooze",
 	"memory doctor",
 	"memory link",
 	"memory unlink",

@@ -1,7 +1,6 @@
 # Next
 
-Status: proposed. No behavior described here is implemented until its facts in
-`facts/next_test.go` are active.
+Status: projection implemented over `github.pr_watch` state; it shows no items until the GitHub PR watch capture lands.
 
 ## Intent
 
