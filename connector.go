@@ -168,6 +168,7 @@ type connectorRuntimeEntry struct {
 	RateLimitRemaining  *int               `json:"rate_limit_remaining,omitempty"`
 	RateLimitResetAt    string             `json:"rate_limit_reset_at,omitempty"`
 	QueryBatchSize      int                `json:"query_batch_size,omitempty"`
+	SearchPageSize      int                `json:"search_page_size,omitempty"`
 	ConsecutiveFailures int                `json:"consecutive_failures,omitempty"`
 }
 

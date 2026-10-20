@@ -247,11 +247,16 @@ checks. The split keeps a typical poll at a few GraphQL points.
 
 ### Status query (every poll, per role)
 
+The author search selects only what the author role needs from every PR on
+every poll. Even `reviewDecision` alone costs enough per PR to bring a
+50-PR author search near GitHub's timeout, so it moves to the merge and checks
+query:
+
 ```graphql
-query($q: String!, $login: String!, $after: String) {
+query($q: String!, $first: Int!, $after: String) {
   viewer { login }
   rateLimit { cost remaining resetAt }
-  search(type: ISSUE, query: $q, first: 50, after: $after) {
+  search(type: ISSUE, query: $q, first: $first, after: $after) {
     issueCount
     pageInfo { hasNextPage endCursor }
     nodes {
@@ -262,6 +267,20 @@ query($q: String!, $login: String!, $after: String) {
         headRepository { nameWithOwner }
         isCrossRepository
         headRefName headRefOid baseRefName
+        commits(last: 1) {
+          nodes { commit { oid statusCheckRollup { state contexts { totalCount } } } }
+        }
+      }
+    }
+  }
+}
+```
+
+The reviewer search adds what only the reviewer role uses:
+
+```graphql
+query($q: String!, $login: String!, $first: Int!, $after: String) {
+  ...same search and fields as the author search, plus:
         reviewDecision
         reviewRequests(first: 50) {
           totalCount
@@ -275,14 +294,13 @@ query($q: String!, $login: String!, $after: String) {
             states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) {
           nodes { id state submittedAt commit { oid } }
         }
-        commits(last: 1) {
-          nodes { commit { oid statusCheckRollup { state contexts { totalCount } } } }
-        }
-      }
-    }
-  }
 }
 ```
+
+- `$first` is the search page size: 20 by default, reduced after timeouts
+  (see GitHub query timeouts). Completeness still requires paging to
+  `hasNextPage = false` and `issueCount` equal to the nodes received across
+  all pages.
 
 `$q` by role:
 
@@ -306,7 +324,7 @@ query($id0: ID!, ...) {
   rateLimit { cost remaining resetAt }
   pr0: node(id: $id0) {
     ... on PullRequest {
-      id mergeable mergeStateStatus
+      id headRefOid reviewDecision mergeable mergeStateStatus
       commits(last: 1) {
         nodes { commit {
           oid
@@ -333,8 +351,10 @@ query($id0: ID!, ...) {
   rollup `state`, or context `totalCount` changed; its stored `mergeable` or
   `mergeStateStatus` is `UNKNOWN` (GitHub computes them lazily); its last
   fetch of this data is older than 30 minutes; or a hint forces it.
-- Other PRs carry their previous `mergeable`, `merge_state_status`,
-  `checks_state`, and check runs forward. A carried value never emits a
+- Other PRs carry their previous `review_decision`, `mergeable`,
+  `merge_state_status`, `checks_state`, and check runs forward. A submitted
+  review bumps `updatedAt`, so `reviewDecision` changes are refetched on the
+  next poll. A carried value never emits a
   transition. Changes that move none of the triggers, such as a base branch
   advance (`BEHIND`) or a re-run that ends in the same state, are seen within
   the 30-minute reconciliation or on a hint.
@@ -354,9 +374,12 @@ query($id0: ID!, ...) {
   so the next poll starts there even when the whole-poll deadline cut the
   previous one short. Each poll that commits without a timeout grows it by
   one, up to 10.
-- When the status search times out, the poll is **deferred** for 60 seconds
-  with the reason `GitHub timed out on the query (HTTP 502)` in connector
-  status. A deferral does not count as a failure. Roles that completed in the
+- When a status search page times out, the watch halves the search page size
+  (minimum 5), stores it in connector state, and retries the same page within
+  the poll. Each poll without a search timeout grows it by 5, up to 20.
+- When the status search still times out at 5, the poll is **deferred** for
+  60 seconds with the reason `GitHub timed out on the query (HTTP 502)` in
+  connector status. A deferral does not count as a failure. Roles that completed in the
   same poll still commit, and another role's real error is reported instead
   of the deferral.
 

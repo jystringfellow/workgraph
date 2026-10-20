@@ -186,6 +186,23 @@ func statusPage(t *testing.T, issueCount int, prs ...prFixture) string {
 	}})
 }
 
+func statusPages(t *testing.T, pageSize int, prs ...prFixture) []string {
+	t.Helper()
+	pages := []string{}
+	for start := 0; start < len(prs); start += pageSize {
+		page := map[string]any{}
+		if err := json.Unmarshal([]byte(statusPage(t, len(prs), prs[start:min(start+pageSize, len(prs))]...)), &page); err != nil {
+			t.Fatalf("decode status page: %v", err)
+		}
+		search := page["data"].(map[string]any)["search"].(map[string]any)
+		if start+pageSize < len(prs) {
+			search["pageInfo"] = map[string]any{"hasNextPage": true, "endCursor": fmt.Sprintf("page-%d", start/pageSize+1)}
+		}
+		pages = append(pages, watchJSON(t, page))
+	}
+	return pages
+}
+
 func statusResponse(t *testing.T, prs ...prFixture) string {
 	t.Helper()
 	return statusPage(t, len(prs), prs...)
