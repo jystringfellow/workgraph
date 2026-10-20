@@ -280,6 +280,7 @@ func bridgeMCPTools() []bridgeMCPTool {
 		map[string]any{"required": []string{"request_id", "claim_token", "list_id", "snapshot_csv"}},
 	}
 	return []bridgeMCPTool{
+		{"next_items", "Read local attention items and their evidence. This tool does not change items or contact providers.", object(map[string]any{"project": str, "reason": str, "include_untrusted": map[string]any{"type": "boolean"}})},
 		{"capture_requests_list", "List non-secret bridged capture outbox metadata.", object(map[string]any{"connector": str})},
 		{"capture_requests_claim", "Atomically claim daemon-scheduled capture work.", object(map[string]any{"connector": str, "worker": str, "max": integer}, "worker")},
 		{"capture_request_renew", "Renew an unexpired capture claim.", object(map[string]any{"request_id": str, "claim_token": str}, "request_id", "claim_token")},
@@ -312,6 +313,11 @@ func callBridgeMCPTool(config BridgeMCPConfig, name string, raw json.RawMessage)
 	}
 	base := CaptureRequestListConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath}
 	switch name {
+	case "next_items":
+		var includeUntrusted bool
+		_ = json.Unmarshal(args["include_untrusted"], &includeUntrusted)
+		result, err := Next(NextConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, Project: stringArg("project"), Reason: stringArg("reason"), IncludeUntrusted: includeUntrusted})
+		return map[string]any{"items": result.Items}, err
 	case "capture_requests_list":
 		base.ConnectorID = stringArg("connector")
 		requests, err := ListCaptureRequests(base)

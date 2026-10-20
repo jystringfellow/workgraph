@@ -336,6 +336,9 @@ func createSchema(db *sql.DB) error {
 			updated_at TEXT NOT NULL
 		);`,
 		resumeCheckInSchema,
+		githubPRObservationsSchema,
+		githubPRWatchStateSchema,
+		connectorPollHintsSchema,
 		`CREATE TABLE IF NOT EXISTS bridge_workers (
 			worker TEXT PRIMARY KEY,
 			last_heartbeat_at TEXT NOT NULL,
@@ -386,6 +389,9 @@ func createSchema(db *sql.DB) error {
 		return err
 	}
 
+	if err := ensureColumn(db, "github_pr_watch_state", "reviewer_polled", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
 	if err := ensureColumn(db, "notion_index", "content_preview", "TEXT"); err != nil {
 		return err
 	}

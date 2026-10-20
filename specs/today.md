@@ -31,6 +31,13 @@ qualifying personal event is the association target. The existing association
 window is symmetric around the target timestamp and includes candidate events
 from before or after the target; this change does not narrow that window.
 
+With the GitHub pull request watch (`specs/github-pr-watch.md`) and
+`workgraph next` (`specs/next.md`): of the `github.pull_request.*` transition events, only
+`author_replied` with `responder: author` and `review_submitted` count as
+personal activity; the rest are excluded like snapshots. When `workgraph next`
+has a source enabled and open items, `today` ends with one `Waiting on you:
+<n> items (workgraph next)` line.
+
 Both `workgraph today --actor <actor>` and `workgraph events today --actor
 <actor>` apply an exact actor filter to stored event metadata. This is a
 source-neutral inspection control: it does not infer whether the actor is the

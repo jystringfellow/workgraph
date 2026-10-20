@@ -371,6 +371,10 @@ func githubSearchWindow(ctx context.Context, gh string, kind string, baseArgs []
 	)
 	output, err := exec.CommandContext(ctx, gh, args...).Output()
 	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && len(bytesTrimSpace(exitErr.Stderr)) > 0 {
+			return nil, fmt.Errorf("gh %s: %w: %s", strings.Join(args, " "), err, bytesTrimSpace(exitErr.Stderr))
+		}
 		return nil, fmt.Errorf("gh %s: %w", strings.Join(args, " "), err)
 	}
 	var items []githubSearchItem
@@ -467,6 +471,10 @@ func storeGitHubEvent(db githubExecQueryRower, event githubExportEvent, project 
 	if eventType == "" {
 		return false, nil
 	}
+	id := fmt.Sprintf("%s:%s:%d", eventType, event.Repository, event.Number)
+	if eventType == "github.pull_request" && event.Branch == "" && event.Commit == "" {
+		event.Branch, event.Commit = knownGitHubPullRequestHead(db, id, event.Repository, event.Number)
+	}
 
 	payload, err := json.Marshal(githubEventPayload{
 		Repository:    event.Repository,
@@ -502,7 +510,7 @@ func storeGitHubEvent(db githubExecQueryRower, event githubExportEvent, project 
 			actor = excluded.actor,
 			summary = excluded.summary
 		WHERE excluded.timestamp > events.timestamp`,
-		fmt.Sprintf("%s:%s:%d", eventType, event.Repository, event.Number),
+		id,
 		"github",
 		eventType,
 		timestamp.UTC().Format(time.RFC3339Nano),
@@ -520,6 +528,21 @@ func storeGitHubEvent(db githubExecQueryRower, event githubExportEvent, project 
 		return false, fmt.Errorf("store github event: %w", err)
 	}
 	return rows > 0, nil
+}
+
+func knownGitHubPullRequestHead(db githubExecQueryRower, id string, repository string, number int) (string, string) {
+	var branch, commit sql.NullString
+	err := db.QueryRow(`SELECT json_extract(payload_json, '$.branch'), json_extract(payload_json, '$.commit') FROM events WHERE id = ?`, id).Scan(&branch, &commit)
+	if err == nil && (branch.String != "" || commit.String != "") {
+		return branch.String, commit.String
+	}
+	err = db.QueryRow(`SELECT json_extract(observation_json, '$.head_ref'), json_extract(observation_json, '$.head_sha')
+		FROM github_pr_observations WHERE lower(repository) = lower(?) AND number = ?
+		ORDER BY observed_at DESC LIMIT 1`, repository, number).Scan(&branch, &commit)
+	if err != nil {
+		return "", ""
+	}
+	return branch.String, commit.String
 }
 
 func githubEventType(kind string) string {

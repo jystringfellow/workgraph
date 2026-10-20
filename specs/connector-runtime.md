@@ -220,3 +220,8 @@ continue.
 
 Errors from the filesystem watcher or local event store may still terminate the
 capture process because they affect the core local capture path.
+
+If connector settings become unreadable during polling, each poller continues
+using its in-memory schedule without a persisted not-before deadline. It logs
+the settings error once until a successful read, after which a new outage can
+be logged again.

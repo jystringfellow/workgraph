@@ -147,6 +147,13 @@ func Today(config TodayConfig) (TodayResult, error) {
 	}
 	result.Message += memoryDiscoveryHints(db, evidence, MemoryDoctorConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir})
 
+	next, err := Next(NextConfig{HomeDir: config.HomeDir, DatabasePath: dbPath, Now: now})
+	if err != nil {
+		result.Message += "\n\n" + nextUnavailableMessage(err)
+	} else if len(next.Items) > 0 {
+		result.Message += fmt.Sprintf("\n\nWaiting on you: %d items (workgraph next)", len(next.Items))
+	}
+
 	return result, nil
 }
 
@@ -175,6 +182,9 @@ func loadTodayEvents(db *sql.DB, now time.Time, actor string, involvement string
 		query += ` AND (involvement_json IS NULL OR json_array_length(involvement_json) > 0)`
 		query += ` AND NOT (source = 'notion' AND type IN ('notion.page', 'notion.database'))`
 		query += ` AND type NOT IN ('github.issue', 'github.pull_request')`
+		query += ` AND NOT (type GLOB 'github.pull_request.*'
+			AND NOT (type = 'github.pull_request.review_submitted'
+				OR (type = 'github.pull_request.author_replied' AND json_extract(payload_json, '$.triage.responder') = 'author')))`
 	}
 	query += ` ORDER BY timestamp ASC, id ASC`
 	rows, err := db.Query(query, args...)
@@ -490,6 +500,9 @@ func eventLabel(event TodayEvent) string {
 	if event.Type == "github.pull_request" || event.Type == "github.issue" {
 		return githubEventLabel(event)
 	}
+	if strings.HasPrefix(event.Type, "github.pull_request.") {
+		return githubPRWatchEventLabel(event)
+	}
 	if event.Summary != "" {
 		return event.Summary
 	}
@@ -573,6 +586,18 @@ func githubEventLabel(event TodayEvent) string {
 		return fmt.Sprintf("%s (#%d)", title, payload.Number)
 	}
 	return fmt.Sprintf("%s (#%d %s)", title, payload.Number, payload.State)
+}
+
+func githubPRWatchEventLabel(event TodayEvent) string {
+	var payload struct {
+		Number int    `json:"number"`
+		Title  string `json:"title"`
+	}
+	if err := json.Unmarshal([]byte(event.Payload), &payload); err != nil || payload.Title == "" || payload.Number == 0 {
+		return eventLabelWithoutGitDecoration(event)
+	}
+	detail := strings.TrimPrefix(event.Summary, fmt.Sprintf("PR #%d ", payload.Number))
+	return fmt.Sprintf("%s (#%d): %s", payload.Title, payload.Number, detail)
 }
 
 func eventLabelWithoutGitDecoration(event TodayEvent) string {

@@ -43,7 +43,10 @@ type ConnectorStatus struct {
 	LastSuccess         string
 	LastIngest          string
 	LastError           string
+	Warning             string
 	NextPoll            string
+	NotBefore           string
+	DeferredReason      string
 	ConsecutiveFailures int
 	CaptureRequestID    string
 	CaptureStatus       string
@@ -147,22 +150,75 @@ type connectorRuntimeFile struct {
 }
 
 type connectorRuntimeEntry struct {
-	Enabled             *bool           `json:"enabled,omitempty"`
-	CaptureMode         string          `json:"capture_mode,omitempty"`
-	BridgeParams        json.RawMessage `json:"bridge_params,omitempty"`
-	Interval            string          `json:"interval,omitempty"`
-	SetupState          string          `json:"setup_state,omitempty"`
-	LastValidated       string          `json:"last_validated_at,omitempty"`
-	LastValidationError string          `json:"last_validation_error,omitempty"`
-	LastPoll            string          `json:"last_poll_at,omitempty"`
-	LastSuccess         string          `json:"last_success_at,omitempty"`
-	LastIngest          string          `json:"last_ingest_at,omitempty"`
-	LastError           string          `json:"last_error,omitempty"`
-	NextPoll            string          `json:"next_poll_at,omitempty"`
-	ConsecutiveFailures int             `json:"consecutive_failures,omitempty"`
+	GitHubPRTeams       *githubPRTeamCache `json:"github_pr_teams,omitempty"`
+	Enabled             *bool              `json:"enabled,omitempty"`
+	CaptureMode         string             `json:"capture_mode,omitempty"`
+	BridgeParams        json.RawMessage    `json:"bridge_params,omitempty"`
+	Interval            string             `json:"interval,omitempty"`
+	SetupState          string             `json:"setup_state,omitempty"`
+	LastValidated       string             `json:"last_validated_at,omitempty"`
+	LastValidationError string             `json:"last_validation_error,omitempty"`
+	LastPoll            string             `json:"last_poll_at,omitempty"`
+	LastSuccess         string             `json:"last_success_at,omitempty"`
+	LastIngest          string             `json:"last_ingest_at,omitempty"`
+	LastError           string             `json:"last_error,omitempty"`
+	NextPoll            string             `json:"next_poll_at,omitempty"`
+	NotBefore           string             `json:"not_before,omitempty"`
+	DeferredReason      string             `json:"deferred_reason,omitempty"`
+	RateLimitRemaining  *int               `json:"rate_limit_remaining,omitempty"`
+	RateLimitResetAt    string             `json:"rate_limit_reset_at,omitempty"`
+	ConsecutiveFailures int                `json:"consecutive_failures,omitempty"`
 }
 
 var connectorPollStateMu sync.Mutex
+
+type ConnectorPollDeferred struct {
+	Reason    string
+	NotBefore time.Time
+}
+
+func (result *ConnectorPollDeferred) Error() string {
+	return result.Reason
+}
+
+type ConnectorPollRetryAfter struct {
+	Err        error
+	RetryAfter time.Duration
+}
+
+func (result *ConnectorPollRetryAfter) Error() string {
+	return result.Err.Error()
+}
+
+func (result *ConnectorPollRetryAfter) Unwrap() error {
+	return result.Err
+}
+
+func ConnectorPollNotBefore(homeDir string, id string) (time.Time, error) {
+	entry, err := readConnectorPollState(homeDir, id)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return connectorNotBefore(entry)
+}
+
+func readConnectorPollState(homeDir string, id string) (connectorRuntimeEntry, error) {
+	connectorPollStateMu.Lock()
+	defer connectorPollStateMu.Unlock()
+	state, err := readConnectorRuntimeFile(homeDir)
+	return state.entry(id), err
+}
+
+func connectorNotBefore(entry connectorRuntimeEntry) (time.Time, error) {
+	if entry.NotBefore == "" {
+		return time.Time{}, nil
+	}
+	deadline, err := time.Parse(time.RFC3339Nano, entry.NotBefore)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse connector not-before deadline: %w", err)
+	}
+	return deadline, nil
+}
 
 func ConnectBridgedConnector(config ConnectorModeConfig) (ConnectorConnectResult, error) {
 	config.Mode = "bridged"
@@ -835,6 +891,11 @@ func SetConnectorEnabled(config ConnectorUpdateConfig) (ConnectorUpdateResult, e
 	if err != nil {
 		return ConnectorUpdateResult{}, err
 	}
+	if id == githubPRWatchConnectorID {
+		if err := setGitHubPRWatchEnabled(homeDir, state, config.Enabled); err != nil {
+			return ConnectorUpdateResult{}, err
+		}
+	}
 	entry := state.entry(id)
 	enabled := config.Enabled
 	entry.Enabled = &enabled
@@ -864,6 +925,9 @@ func SetConnectorInterval(config ConnectorUpdateConfig) (ConnectorUpdateResult, 
 	}
 	if config.Interval <= 0 {
 		return ConnectorUpdateResult{}, fmt.Errorf("connector interval must be positive")
+	}
+	if id == githubPRWatchConnectorID && config.Interval < githubPRWatchMinInterval {
+		return ConnectorUpdateResult{}, fmt.Errorf("connector %s interval must be at least %s", id, githubPRWatchMinInterval)
 	}
 	state, err := readConnectorRuntimeFile(homeDir)
 	if err != nil {
@@ -920,6 +984,8 @@ func ValidateConnector(config ConnectorValidateConfig) (ConnectorValidateResult,
 	switch id {
 	case "github":
 		return validateGitHubConnector(homeDir, config)
+	case githubPRWatchConnectorID:
+		return validateGitHubPRWatchConnector(homeDir, config)
 	case "notion":
 		return validateNotionConnector(homeDir)
 	default:
@@ -1134,6 +1200,15 @@ func pollConnectorIDs(homeDir string, state connectorRuntimeFile, requested stri
 }
 
 func pollConnectorOnce(homeDir string, databasePath string, id string) error {
+	notBefore, err := ConnectorPollNotBefore(homeDir, id)
+	if err != nil {
+		return err
+	}
+	if time.Now().Before(notBefore) {
+		return &ConnectorPollDeferred{
+			Reason: "rate limited until " + notBefore.UTC().Format(time.RFC3339Nano), NotBefore: notBefore,
+		}
+	}
 	state, err := readConnectorRuntimeFile(homeDir)
 	if err != nil {
 		return err
@@ -1156,6 +1231,8 @@ func pollConnectorOnce(homeDir string, databasePath string, id string) error {
 	case "github":
 		capture.githubEnabled = true
 		pollErr = capture.captureGitHubEvents(ctx)
+	case githubPRWatchConnectorID:
+		pollErr = capture.captureGitHubPRWatch(ctx)
 	case "slack":
 		config, err := readSlackConnectorConfig(homeDir)
 		if err != nil {
@@ -1246,7 +1323,10 @@ func connectorStatuses(homeDir string, state connectorRuntimeFile) []ConnectorSt
 			LastSuccess:         entry.LastSuccess,
 			LastIngest:          entry.LastIngest,
 			LastError:           entry.LastError,
+			Warning:             githubPRTeamsWarning(entry),
 			NextPoll:            connectorNextPoll(entry, defaultConnectorInterval(id)),
+			NotBefore:           entry.NotBefore,
+			DeferredReason:      entry.DeferredReason,
 			ConsecutiveFailures: entry.ConsecutiveFailures,
 			CaptureRequestID:    request.ID,
 			CaptureStatus:       request.Status,
@@ -1276,11 +1356,7 @@ func recordConnectorPollSuccess(homeDir string, id string, when time.Time) error
 }
 
 func recordConnectorPollError(homeDir string, id string, when time.Time, pollErr error) error {
-	message := ""
-	if pollErr != nil {
-		message = pollErr.Error()
-	}
-	return recordConnectorPollResult(homeDir, id, when, message)
+	return recordConnectorPollAttempt(homeDir, id, when, time.Time{}, -1, pollErr)
 }
 
 func recordConnectorPollResult(homeDir string, id string, when time.Time, lastError string) error {
@@ -1301,7 +1377,15 @@ func recordConnectorPollAttempt(homeDir string, id string, when time.Time, nextP
 	}
 	entry := state.entry(id)
 	entry.LastPoll = when.UTC().Format(time.RFC3339)
-	if pollErr == nil {
+	var deferred *ConnectorPollDeferred
+	var retryAfter *ConnectorPollRetryAfter
+	isDeferred := errors.As(pollErr, &deferred)
+	entry.DeferredReason = ""
+	if isDeferred {
+		entry.DeferredReason = strings.TrimSpace(deferred.Reason)
+		entry.NotBefore = deferred.NotBefore.UTC().Format(time.RFC3339Nano)
+		nextPoll = deferred.NotBefore
+	} else if pollErr == nil {
 		entry.LastSuccess = entry.LastPoll
 		entry.LastError = ""
 		entry.ConsecutiveFailures = 0
@@ -1313,12 +1397,22 @@ func recordConnectorPollAttempt(homeDir string, id string, when time.Time, nextP
 			entry.ConsecutiveFailures++
 		}
 	}
+	if !isDeferred && errors.As(pollErr, &retryAfter) && retryAfter.RetryAfter > 0 {
+		entry.NotBefore = when.Add(retryAfter.RetryAfter).UTC().Format(time.RFC3339Nano)
+	}
+	if notBefore, err := connectorNotBefore(entry); err == nil && notBefore.After(when) {
+		if nextPoll.Before(notBefore) {
+			nextPoll = notBefore
+		}
+	} else if !isDeferred {
+		entry.NotBefore = ""
+	}
 	if nextPoll.IsZero() {
 		entry.NextPoll = ""
 	} else {
-		entry.NextPoll = nextPoll.UTC().Format(time.RFC3339)
+		entry.NextPoll = nextPoll.UTC().Format(time.RFC3339Nano)
 	}
-	if pollErr != nil && connectorAuthFailure(pollErr.Error()) {
+	if pollErr != nil && !isDeferred && connectorAuthFailure(pollErr.Error()) {
 		entry.SetupState = "error"
 		entry.LastValidated = entry.LastPoll
 		entry.LastValidationError = "last poll failed with invalid credentials; reconnect " + id
@@ -1337,6 +1431,8 @@ func connectorConnected(homeDir string, state connectorRuntimeFile, id string) b
 		return true
 	case "github":
 		return true
+	case githubPRWatchConnectorID:
+		return len(state.entry(id).BridgeParams) > 0
 	case "slack":
 		config, err := readSlackConnectorConfig(homeDir)
 		return err == nil && strings.TrimSpace(config.AccessToken) != ""
@@ -1486,7 +1582,7 @@ func (state connectorRuntimeFile) entry(id string) connectorRuntimeEntry {
 func connectorEnabled(state connectorRuntimeFile, id string) bool {
 	entry := state.Connectors[id]
 	if entry.Enabled == nil {
-		return true
+		return id != githubPRWatchConnectorID
 	}
 	return *entry.Enabled
 }
@@ -1515,7 +1611,7 @@ func connectorReadyForPolling(state connectorRuntimeFile, id string) bool {
 	if strings.TrimSpace(entry.SetupState) == "error" || strings.TrimSpace(entry.SetupState) == "draft" {
 		return false
 	}
-	if id == "github" {
+	if id == "github" || id == githubPRWatchConnectorID {
 		return strings.TrimSpace(entry.SetupState) == "ready"
 	}
 	return true
@@ -1649,7 +1745,8 @@ func connectorAuthFailure(lastError string) bool {
 	normalized := strings.ToLower(lastError)
 	return strings.Contains(normalized, "status 401") ||
 		strings.Contains(normalized, "unauthenticated") ||
-		strings.Contains(normalized, "invalid credentials")
+		strings.Contains(normalized, "invalid credentials") ||
+		githubGHAuthFailure(normalized)
 }
 
 func connectorListMessage(result ConnectorListResult) string {
@@ -1681,6 +1778,15 @@ func connectorListMessage(result ConnectorListResult) string {
 		}
 		if status.LastError != "" {
 			line += ", last error " + status.LastError
+		}
+		if status.Warning != "" {
+			line += ", warning " + status.Warning
+		}
+		if status.DeferredReason != "" {
+			line += ", deferred " + status.DeferredReason
+		}
+		if status.NotBefore != "" {
+			line += ", not before " + status.NotBefore
 		}
 		if status.NextPoll != "" {
 			line += ", next poll " + status.NextPoll
@@ -1763,6 +1869,15 @@ func connectorStatusMessage(result ConnectorListResult) string {
 		if status.LastError != "" {
 			line += ", last error " + status.LastError
 		}
+		if status.Warning != "" {
+			line += ", warning " + status.Warning
+		}
+		if status.DeferredReason != "" {
+			line += ", deferred " + status.DeferredReason
+		}
+		if status.NotBefore != "" {
+			line += ", not before " + status.NotBefore
+		}
 		if status.NextPoll != "" {
 			line += ", next poll " + status.NextPoll
 		}
@@ -1808,6 +1923,9 @@ func connectorConnectMessage(homeDir string, id string) string {
 	}
 	if id == "github" {
 		name = "GitHub"
+	}
+	if id == githubPRWatchConnectorID {
+		name = "GitHub PR watch"
 	}
 	return strings.Join([]string{
 		fmt.Sprintf("%s connected", name),

@@ -8,6 +8,7 @@ import (
 )
 
 var publicCommandPaths = []string{
+	"next", "next explain", "next done", "next snooze",
 	"memory doctor",
 	"memory link",
 	"memory unlink",
@@ -65,6 +66,11 @@ var publicCommandPaths = []string{
 	"github",
 	"github capture",
 	"github connect",
+	"github prs",
+	"github prs capture",
+	"github prs connect",
+	"github prs disconnect",
+	"github prs hint",
 	"help",
 	"init",
 	"llm",

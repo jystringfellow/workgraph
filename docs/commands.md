@@ -465,6 +465,32 @@ workgraph connectors poll --once --connector notion
 
 See the [connectors guide](connectors.md) for provider-specific setup.
 
+Watch your open authored pull requests through the authenticated `gh` CLI.
+The watch is opt-in, read-only, and stores no token:
+
+```sh
+workgraph github prs connect --params-json '{"scope":"open_prs","identity":"@me","roles":["author"]}'
+workgraph github prs capture
+workgraph events today --type 'github.pull_request.*'
+workgraph github prs disconnect
+```
+
+Background capture polls the watch only after it starts or restarts, so
+after `github prs connect` run `workgraph start`, or `workgraph stop` then
+`workgraph start` if capture is already running. To verify immediately, run
+`workgraph github prs capture` and then `workgraph next`.
+
+`github prs disconnect` deletes the watch's observations and keeps captured
+events.
+
+Ask the running daemon to poll the watch within seconds, for example from a
+webhook relay. `--pr` refreshes that pull request's review threads:
+
+```sh
+workgraph github prs hint
+workgraph github prs hint --pr https://github.com/acme/widget/pull/42
+```
+
 Inspect the canonical read-only provider operations needed by every bridged
 recipe, or one connector:
 

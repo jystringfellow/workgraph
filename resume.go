@@ -43,6 +43,7 @@ type ResumeConfig struct {
 }
 
 type ResumeResult struct {
+	NextItems   []NextItem
 	Project     string
 	Projects    []ResumeProject
 	LastWork    []ResumeEvent
@@ -110,6 +111,15 @@ func Resume(config ResumeConfig) (ResumeResult, error) {
 
 	project := strings.TrimSpace(config.Project)
 	result := ResumeResult{Project: project, AsOf: now}
+	nextWarning := ""
+	if !config.AllProjects && !config.DebugRelevance {
+		next, nextErr := Next(NextConfig{HomeDir: config.HomeDir, DatabasePath: dbPath, Project: project, Now: now})
+		if nextErr != nil {
+			nextWarning = "\n\n" + nextUnavailableMessage(nextErr)
+		} else {
+			result.NextItems = next.Items
+		}
+	}
 	if project == "" {
 		if config.AllProjects {
 			result.Projects = resumableProjects(events)
@@ -134,12 +144,16 @@ func Resume(config ResumeConfig) (ResumeResult, error) {
 		result.Message = resumeProjectsMessage(result.Projects, location)
 		if !config.AllProjects {
 			prefix := resumeLastWorkMessage(result.LastWork, result.WorkOlder, location)
+			if waiting := nextWaitingMessage(result.NextItems, 5); waiting != "" {
+				prefix += "\n\n" + waiting
+			}
 			if !result.CheckIn.IsZero() {
 				prefix += "\n\n" + resumeSinceMessage(result, location)
 			}
 			result.Message = prefix + "\n\n" + result.Message
 		}
 		result.Message += memoryDiscoveryHints(db, events, MemoryDoctorConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir})
+		result.Message += nextWarning
 		return result, nil
 	}
 	project = canonicalResumeProjectName(project, events)
@@ -163,6 +177,7 @@ func Resume(config ResumeConfig) (ResumeResult, error) {
 	}
 	result.Message = resumeProjectMessage(result, location)
 	result.Message += memoryDiscoveryHints(db, events, MemoryDoctorConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir, Project: config.Project})
+	result.Message += nextWarning
 	return result, nil
 }
 
@@ -235,6 +250,9 @@ func resumeRelevantUpdatesSince(events []ResumeEvent, gitEmails []string, previo
 	var recent []ResumeEvent
 	count := 0
 	for _, event := range events {
+		if strings.HasPrefix(event.Type, "github.pull_request.") && !nextNeedsUserTransition(event.Type, event.Payload) {
+			continue
+		}
 		if event.Timestamp.After(now) || event.CapturedAt.After(now) || isTransientResumePath(event.Path) || len(event.Involvement) == 0 || resumePersonalWork(event, gitEmails) {
 			continue
 		}
@@ -825,6 +843,9 @@ func resumeProjectMessage(result ResumeResult, location *time.Location) string {
 		if result.Memory != nil {
 			lines = append(lines, "", "Project memory", result.Memory.Content)
 		}
+		if waiting := nextWaitingMessage(result.NextItems, 0); waiting != "" {
+			lines = append(lines, "", waiting)
+		}
 		return strings.Join(lines, "\n")
 	}
 
@@ -836,6 +857,9 @@ func resumeProjectMessage(result ResumeResult, location *time.Location) string {
 		lines = append(lines, fmt.Sprintf("... and %s", pluralizeOlderEvents(result.Omitted)))
 	}
 
+	if waiting := nextWaitingMessage(result.NextItems, 0); waiting != "" {
+		lines = append(lines, "", waiting)
+	}
 	if len(result.Files) > 0 {
 		lines = append(lines, "", "Relevant files")
 		for _, file := range result.Files {
