@@ -41,12 +41,16 @@ Priority labels used below:
 - `P1` Expand connector coverage to meetings, work tracking, and knowledge
   bases as user-verifiable integrations. [specs: `specs/calendar.md`,
   `specs/azure-boards.md`, and `specs/notion.md`]
-- `P1` Watch open authored GitHub pull requests through the existing `gh` CLI
-  auth and show what is waiting on the user (replies, changes requested,
-  failed checks, conflicts, ready to merge) in `today` and `resume`, with
-  read-only, deterministic transition events and untrusted comment handling.
+- `P1` Add `workgraph next`, one local list of what is waiting on the user,
+  with stable item ids, `done` and `snooze`, and a `--watch --json` feed that
+  later dispatch can consume. Show its items in `resume` and a count in
+  `today`. [spec: `specs/next.md`]
+- `P1` Watch open GitHub pull requests the user authored or is asked to
+  review (directly or through a team) through the existing `gh` CLI auth, as
+  the first `next` source: read-only, deterministic transition events,
+  untrusted comment handling, and local push hints for near-real-time polls.
   Fix the existing GitHub connector's rate-limit, auth, and bridged identity
-  bugs first. [spec: `specs/github-connector.md`]
+  bugs first. [spec: `specs/github-pr-watch.md`]
 - `P1` Add preference modeling and locally resettable ranking weights while
   preserving the explicit suggestion lifecycle. [spec:
   `specs/personalization-feedback.md`]
@@ -55,8 +59,11 @@ Priority labels used below:
 
 - `P2` Approval-based actions: draft responses, draft PR comments, suggested
   commits, and explicit execution approval.
-- `P2` Route PR feedback to local agents from the authored PR watch, with
-  deterministic classification and bounded, approved dispatch.
+- `P2` Dispatch `next` items to local or cloud agents for triage, consuming
+  the `next --watch --json` feed, with deterministic classification, leases,
+  enforced write scope, per-run attribution, and explicit approval.
+- `P2` Receive GitHub webhooks (or a relay) and turn them into local poll
+  hints.
 - `P2` Stronger local security: SQLite encryption, OS credential-store-backed
   keys, Windows credential ACLs, and Windows CI coverage.
 - `P2` Broader distribution: Scoop, plugin expansion, and an open-source

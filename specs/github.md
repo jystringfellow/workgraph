@@ -113,9 +113,9 @@ identity. Recapturing the same PR or issue with a newer GitHub `updated_at`
 refreshes the stored timestamp, state, title, actor, and payload without
 creating a duplicate row. Older snapshots must not replace newer GitHub state.
 
-Proposed in `specs/github-connector.md`, not yet implemented:
+Proposed in `specs/github-pr-watch.md`, not yet implemented:
 
-- The opt-in `github.authored_prs` watch sets `branch` and `commit` on
+- The opt-in `github.pr_watch` connector sets `branch` and `commit` on
   existing PR snapshot rows. A newer snapshot refresh keeps those values when
   the incoming payload has none.
 - The rate-limit pre-check reads the `search` bucket with a threshold sized

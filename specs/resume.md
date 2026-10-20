@@ -57,6 +57,14 @@ default overview's check-in. Calling the Go `Resume` query API also does not
 advance it; the CLI records the check-in after successful output. A failed
 render, query, or output does not advance the check-in.
 
+Proposed in `specs/next.md` and `specs/github-pr-watch.md`, not yet
+implemented: the default overview shows a `Waiting on you` section after
+`Where you left off` with at most five `workgraph next` items, and
+`resume <project>` shows that project's items after `Recent activity`.
+`github.pull_request.*` transition events qualify for `Relevant updates since
+last check-in` only when `triage.needs_user` is true. Personal work evidence
+for the handoff is unchanged.
+
 ## Project List
 
 When no project is provided, `workgraph resume` lists projects with user-work

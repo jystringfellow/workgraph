@@ -1,0 +1,271 @@
+# Next
+
+Status: proposed. No behavior described here is implemented until its facts in
+`facts/next_test.go` are active.
+
+## Intent
+
+`today` answers what the user did, and `resume` answers where they left off.
+Neither answers **what should I do next?** The answer is scattered across
+review requests, feedback on the user's own PRs, failing checks, and, later,
+other sources.
+
+`workgraph next` is the single local list of things waiting on the user. It:
+
+- reads only local state; it makes no provider request and needs no LLM
+- lists each item with the rule that opened it, a link, and how fresh the
+  underlying capture is
+- gives every item a stable id and a versioned JSON shape, so a later dispatch
+  design can hand items to local or cloud agents without re-deriving them
+- never acts on an item (`specs/principles.md`, principle 6)
+
+The first source is the GitHub pull request watch (`specs/github-pr-watch.md`).
+Other sources add items by implementing the same contract.
+
+```text
+connector polls (interval or push hint)
+  -> events + observations committed
+  -> next projection (read time)
+  -> workgraph next | resume | today hint | next --watch --json | MCP
+                                              └─> later: dispatch
+```
+
+## Attention Items
+
+An attention item is a read-time projection over stored events and a source's
+checkpoint state. Items are not stored, and are not suggestions: a suggestion
+is a proposal awaiting approval, while an item is a pointer to something that
+closes itself when its condition stops holding.
+
+Each source defines, for every reason it produces:
+
+- the condition under which the item is open
+- a deterministic item id that changes when the underlying subject changes,
+  so marking an item done never hides later activity
+- the event that opened it (`since`)
+- the evidence event ids
+
+### Ordering
+
+Items are ordered by reason group, then oldest `since` first:
+
+1. someone is waiting on the user: `reply`, `review_requested`, `rereview`
+2. the user's own work is blocked: `changes_requested`, `checks_failed`,
+   `conflicts`
+3. the user's own work can finish: `ready_to_merge`
+
+Sources map their reasons into these groups. The order is deterministic and
+documented, not a priority score.
+
+### JSON shape
+
+```json
+{
+  "schema": "workgraph.next_item.v1",
+  "id": "github:reply:PR_kwDO...:PRRT_kwDO...:PRRC_kwDO...",
+  "source": "github",
+  "reason": "reply",
+  "group": "waiting_on_you",
+  "role": "author",
+  "project": "workgraph-demo",
+  "since": "2026-10-16T17:02:11Z",
+  "opened_by": "github.pull_request.review_comment:PR_kwDO...:PRRC_kwDO...",
+  "evidence": ["github.pull_request.review_comment:PR_kwDO...:PRRC_kwDO..."],
+  "subject": {
+    "kind": "thread",
+    "id": "PRRT_kwDO...",
+    "url": "https://github.com/example-org/workgraph-demo/pull/42#discussion_r1",
+    "path": "settings.go",
+    "line": 18
+  },
+  "pull_request": {
+    "repository": "example-org/workgraph-demo",
+    "number": 42,
+    "node_id": "PR_kwDO...",
+    "url": "https://github.com/example-org/workgraph-demo/pull/42",
+    "title": "Add settings helper",
+    "branch": "feature/settings-helper",
+    "base_ref": "main",
+    "head_sha": "1111111111111111111111111111111111111111",
+    "is_draft": false,
+    "is_cross_repository": false
+  },
+  "actor": {"login": "alice", "kind": "user", "association": "MEMBER"},
+  "triage": {
+    "last_responder": "other",
+    "previous_responder": null,
+    "agent_replies_in_thread": 0,
+    "has_suggestion": true,
+    "thread_depth": 1,
+    "unknown": []
+  },
+  "freshness": {"as_of": "2026-10-16T17:02:11Z", "stale": false},
+  "untrusted": {
+    "trust": "untrusted",
+    "body": "Could you rename this?",
+    "body_truncated": false
+  }
+}
+```
+
+- `schema` is versioned. Adding a field is compatible; removing or renaming a
+  field requires a new version.
+- `triage` carries the deterministic inputs a later classifier needs. `next`
+  does not classify; it never says whether an agent could take the item.
+- `untrusted` is present only with `--include-untrusted` and only in JSON.
+  It is never rendered in text output.
+- `freshness.stale` is true when the source's last successful poll is older
+  than three intervals or the source is in setup `error`.
+- Local paths, tokens, and connector configuration never appear in an item,
+  so items can be sent to a cloud agent without leaking the local machine's
+  layout.
+
+## Commands
+
+```text
+workgraph next [--project <p>] [--reason <r>] [--json [--include-untrusted]]
+workgraph next --watch --json [--include-untrusted]
+workgraph next explain <item-id>
+workgraph next done <item-id>
+workgraph next snooze <item-id> --for <duration>
+```
+
+### `workgraph next`
+
+```text
+Next (as of 17:02)
+Waiting on you
+  #77 Cache eviction (acme/api): review requested via acme/platform
+  #42 Add settings helper: alice replied on settings.go:18
+Blocked
+  #57 Cache warmup: changes requested by bob
+  #42 Add settings helper: checks failed on 1111111 (lint, unit)
+Ready
+  #61 Retry policy: ready to merge
+```
+
+- Each line is built only from structured fields. Comment text never appears.
+- A source in setup `error`, or stale, adds a warning line naming the problem
+  and the command to fix it, before the items.
+- With no enabled sources, `next` says which connectors provide items and how
+  to connect them. With sources but no items, it says nothing is waiting and
+  shows the freshness line.
+- `--project` and `--reason` are exact filters.
+
+### `workgraph next explain <item-id>`
+
+Prints the rule that opened the item, the condition currently holding, the
+evidence events with their ids, and the observation time. It is the
+deterministic answer to "why is this here?".
+
+### `done` and `snooze`
+
+- `workgraph next done <item-id>` appends a `next.item_done` event (source
+  `workgraph`, id `next.item_done:<item-id>`) and hides that item id.
+- `workgraph next snooze <item-id> --for <duration>` appends a
+  `next.item_snoozed` event (id `next.item_snoozed:<item-id>:<until>`) and
+  hides the item until then.
+- Because a new comment, head, or run set produces a new item id, done and
+  snooze never hide later activity.
+- Both are local bookkeeping. Neither writes to a provider.
+
+### `workgraph next --watch --json`
+
+The subscription point for anything that reacts to items, including a later
+dispatcher. It writes JSON Lines to stdout:
+
+```json
+{"op":"opened","item":{...},"initial":true}
+{"op":"synced","as_of":"2026-10-16T17:02:11Z"}
+{"op":"opened","item":{...}}
+{"op":"closed","id":"github:reply:...","reason":"resolved"}
+{"op":"changed","item":{...}}
+```
+
+- On start it emits every open item as `opened` with `initial: true`, then
+  `synced`. A consumer that restarts gets the full set again and must treat
+  item ids idempotently.
+- After start it re-projects when any source commits a poll (its `poll_seq`
+  changes) or a `next.*` event is written, checking every second. It emits
+  `opened` and `closed` for the difference, and `changed` when an open item's
+  non-id fields change, such as `freshness.stale` or `triage.unknown`.
+- `closed.reason` is `resolved` (the condition stopped holding), `done`,
+  `snoozed`, or `pr_closed`.
+- `--watch` without `--json` is a usage error.
+
+Together with push hints, the path from a provider change to a consumer is:
+provider change → hint → poll within about 10 seconds → commit → `--watch`
+line within about 1 second.
+
+### MCP
+
+The workgraph MCP server exposes a read-only `next_items` tool that returns
+the same JSON items, with optional `project` and `reason` filters. Untrusted
+fields stay in their delimited `untrusted` object and are never interpolated
+into tool descriptions or instructions (`specs/llm-integration.md`).
+
+## Other Surfaces
+
+- **`resume`**: the default overview shows `Waiting on you` after `Where you
+  left off`, listing at most five items in `next` order, then `<n> more:
+  workgraph next` when more exist. `resume <project>` shows that project's
+  items after `Recent activity`. Showing items does not advance the resume
+  check-in beyond the existing rules.
+- **`today`**: stays a personal activity view. When at least one source is
+  enabled and items are open, it ends with `Waiting on you: <n> items
+  (workgraph next)`.
+- **`connectors status`** shows each source's freshness.
+
+## Dispatch Boundary
+
+`next` is the input to a later dispatch design; it does not dispatch. That
+design (roadmap P2, draft parked on `agent/4f0e34fb/pr-routing-draft`) must
+consume `next --watch --json` or the MCP tool rather than reading source
+tables, and must resolve its own review findings: write enforcement, leases
+and crash recovery, push safety, per-run attribution, and standing approval.
+Keeping that boundary means routing can be added, replaced, or run in the
+cloud without changing capture.
+
+## Out Of Scope
+
+- Ranking by priority, effort, or LLM judgment.
+- Any provider write, including from `done` or `snooze`.
+- Sources other than the GitHub pull request watch. Azure Boards assigned
+  items and Slack mentions are natural next sources.
+
+## Facts
+
+Facts live in `facts/next_test.go` and use stored events and observations
+only. No fact invokes `gh`.
+
+- **N1. Lists each reason in documented order.** Fixtures for a thread
+  awaiting the user, a review request, a re-review, changes requested, failed
+  checks, a conflict, a ready PR, a bot conversation comment, and a thread an
+  agent answered list exactly seven items, grouped and ordered as documented,
+  without the bot comment or the agent-answered thread, and without invoking
+  `gh`.
+- **N2. JSON items follow `workgraph.next_item.v1`.** Each item has a stable
+  id, `opened_by`, evidence ids, and no local path or token. Without
+  `--include-untrusted` it has no `untrusted` field; with it, comment text
+  appears only there. Text output never contains comment text.
+- **N3. Done and snooze hide only that item id.** After `done` on a thread
+  item, the thread is not listed; a new reviewer comment in the thread lists
+  it again under a new id. A snoozed item returns when the snooze ends. Both
+  append `next.*` events and write nothing to providers.
+- **N4. Staleness is reported.** With the source in setup `error`, or its
+  last successful poll older than three intervals, `next` prints a warning
+  and items have `freshness.stale: true`. `unknown` dimensions are shown as
+  unknown.
+- **N5. Watch emits the initial set, then differences.** `next --watch
+  --json` emits each open item with `initial: true` and then `synced`. After a
+  poll commit that opens one item and resolves another, it emits exactly one
+  `opened` and one `closed` with `reason: "resolved"`, within two seconds of
+  the commit.
+- **N6. Resume and today show the same items.** The default `resume` overview
+  lists the first five items in `next` order and a `more` line. `resume
+  <project>` lists that project's items. `today` prints only the count line
+  and still counts only personal activity.
+- **N7. Explain cites the rule and evidence.** `next explain <id>` prints the
+  reason, the holding condition, and every evidence event id.
+- **N8. MCP returns the same items read-only.** The `next_items` tool returns
+  the same ids as `next --json` and has no write behavior.
