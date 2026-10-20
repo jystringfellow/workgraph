@@ -153,11 +153,25 @@ type githubPRConversation struct {
 	LastHumanCommentID string `json:"last_human_comment_id,omitempty"`
 	LastHumanCommentAt string `json:"last_human_comment_at,omitempty"`
 	LastUserCommentAt  string `json:"last_user_comment_at,omitempty"`
+	Unknown            bool   `json:"unknown,omitempty"`
 }
 
 type githubPRLastKnown struct {
 	Ready     string `json:"ready,omitempty"`
 	Mergeable string `json:"mergeable,omitempty"`
+}
+
+type githubPRBaseline struct {
+	ChangesRequestedReviewIDs []string                 `json:"changes_requested_review_ids"`
+	AwaitingThreads           []githubPRBaselineThread `json:"awaiting_threads"`
+	ConversationCommentID     string                   `json:"conversation_comment_id,omitempty"`
+	HeadSHA                   string                   `json:"head_sha"`
+	RunFingerprint            string                   `json:"run_fingerprint,omitempty"`
+}
+
+type githubPRBaselineThread struct {
+	ThreadID      string `json:"thread_id"`
+	LastCommentID string `json:"last_comment_id"`
 }
 
 type githubPRReviewRequest struct {

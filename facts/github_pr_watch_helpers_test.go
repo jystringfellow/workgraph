@@ -55,6 +55,7 @@ if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
     printf 'fake gh: no queued graphql response %s\n' "$n" >&2
     exit 1
   fi
+  if [ -f "$response.hook" ]; then sh "$response.hook"; fi
   cat "$response.out"
   if [ -f "$response.err" ]; then cat "$response.err" >&2; fi
   code=$(cat "$response.code" 2>/dev/null || echo 0)
@@ -89,6 +90,14 @@ func (fake *fakeGHGraphQL) QueueResult(t *testing.T, stdout, stderr string, exit
 		if err := os.WriteFile(base+suffix, []byte(content), 0o644); err != nil {
 			t.Fatalf("queue fake gh response: %v", err)
 		}
+	}
+}
+
+func (fake *fakeGHGraphQL) HookLastQueued(t *testing.T, script string) {
+	t.Helper()
+	base := filepath.Join(fake.queueDir, fmt.Sprint(fake.queued))
+	if err := os.WriteFile(base+".hook", []byte(script), 0o644); err != nil {
+		t.Fatalf("write fake gh hook: %v", err)
 	}
 }
 

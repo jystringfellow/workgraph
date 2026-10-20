@@ -117,6 +117,8 @@ type RunCapture struct {
 	githubEnabled           bool
 	githubPollInterval      time.Duration
 	githubCommand           string
+	githubPRWatchEnabled    bool
+	githubPRWatchInterval   time.Duration
 	slackEnabled            bool
 	slackListsEnabled       bool
 	slackPollInterval       time.Duration
@@ -252,6 +254,9 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := reconcileGitHubPRWatchFence(db, connectorState); err != nil {
+		log.Printf("workgraph connector state reconcile failed: connector=%s error=%v", githubPRWatchConnectorID, err)
+	}
 	managedSettings, _, managedSettingsPresent, err := readManagedSettings()
 	if err != nil {
 		watcher.Close()
@@ -289,6 +294,8 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 		githubEnabled:         connectorCaptureMode(connectorState, "github") == "direct" && connectorReadyForRuntime(connectorState, "github", managedSettings, managedSettingsPresent),
 		githubPollInterval:    connectorInterval(connectorState, "github", githubPollInterval(config.GitHubPollInterval)),
 		githubCommand:         config.GitHubCommand,
+		githubPRWatchEnabled:  connectorConnected(status.HomeDir, connectorState, githubPRWatchConnectorID) && connectorReadyForRuntime(connectorState, githubPRWatchConnectorID, managedSettings, managedSettingsPresent),
+		githubPRWatchInterval: connectorInterval(connectorState, githubPRWatchConnectorID, githubPRWatchPollInterval),
 		slackEnabled:          connectorCaptureMode(connectorState, "slack") == "direct" && connectorReadyForRuntime(connectorState, "slack", managedSettings, managedSettingsPresent),
 		slackListsEnabled:     connectorCaptureMode(connectorState, "slack.lists") == "direct" && connectorReadyForRuntime(connectorState, "slack.lists", managedSettings, managedSettingsPresent),
 		slackPollInterval:     connectorInterval(connectorState, "slack", slackPollInterval(config.SlackPollInterval)),
@@ -471,6 +478,9 @@ func (capture *RunCapture) connectorPollers() []connectorPoller {
 	}
 	if capture.githubEnabled {
 		pollers = append(pollers, connectorPoller{id: "github", interval: capture.githubPollInterval, poll: capture.captureGitHubEvents})
+	}
+	if capture.githubPRWatchEnabled {
+		pollers = append(pollers, connectorPoller{id: githubPRWatchConnectorID, interval: capture.githubPRWatchInterval, poll: capture.captureGitHubPRWatch})
 	}
 	if capture.slackEnabled && capture.slackToken != "" {
 		pollers = append(pollers, connectorPoller{id: "slack", interval: capture.slackPollInterval, poll: capture.captureSlackEvents})
@@ -712,6 +722,17 @@ func (capture *RunCapture) captureGitCommits(ctx context.Context) error {
 
 func (capture *RunCapture) captureGitHubEvents(ctx context.Context) error {
 	_, err := CaptureGitHubFromGH(GitHubCaptureConfig{
+		HomeDir:       capture.homeDir,
+		DatabasePath:  capture.databasePath,
+		WatchDirs:     capture.watchDirs,
+		GitHubCommand: capture.githubCommand,
+		Context:       ctx,
+	})
+	return err
+}
+
+func (capture *RunCapture) captureGitHubPRWatch(ctx context.Context) error {
+	_, err := CaptureGitHubPRWatch(GitHubPRWatchCaptureConfig{
 		HomeDir:       capture.homeDir,
 		DatabasePath:  capture.databasePath,
 		WatchDirs:     capture.watchDirs,

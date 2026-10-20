@@ -835,6 +835,11 @@ func SetConnectorEnabled(config ConnectorUpdateConfig) (ConnectorUpdateResult, e
 	if err != nil {
 		return ConnectorUpdateResult{}, err
 	}
+	if id == githubPRWatchConnectorID {
+		if err := setGitHubPRWatchEnabled(homeDir, state, config.Enabled); err != nil {
+			return ConnectorUpdateResult{}, err
+		}
+	}
 	entry := state.entry(id)
 	enabled := config.Enabled
 	entry.Enabled = &enabled
@@ -864,6 +869,9 @@ func SetConnectorInterval(config ConnectorUpdateConfig) (ConnectorUpdateResult, 
 	}
 	if config.Interval <= 0 {
 		return ConnectorUpdateResult{}, fmt.Errorf("connector interval must be positive")
+	}
+	if id == githubPRWatchConnectorID && config.Interval < githubPRWatchMinInterval {
+		return ConnectorUpdateResult{}, fmt.Errorf("connector %s interval must be at least %s", id, githubPRWatchMinInterval)
 	}
 	state, err := readConnectorRuntimeFile(homeDir)
 	if err != nil {
@@ -920,6 +928,8 @@ func ValidateConnector(config ConnectorValidateConfig) (ConnectorValidateResult,
 	switch id {
 	case "github":
 		return validateGitHubConnector(homeDir, config)
+	case githubPRWatchConnectorID:
+		return validateGitHubPRWatchConnector(homeDir, config)
 	case "notion":
 		return validateNotionConnector(homeDir)
 	default:
@@ -1156,6 +1166,8 @@ func pollConnectorOnce(homeDir string, databasePath string, id string) error {
 	case "github":
 		capture.githubEnabled = true
 		pollErr = capture.captureGitHubEvents(ctx)
+	case githubPRWatchConnectorID:
+		pollErr = capture.captureGitHubPRWatch(ctx)
 	case "slack":
 		config, err := readSlackConnectorConfig(homeDir)
 		if err != nil {
@@ -1337,6 +1349,8 @@ func connectorConnected(homeDir string, state connectorRuntimeFile, id string) b
 		return true
 	case "github":
 		return true
+	case githubPRWatchConnectorID:
+		return len(state.entry(id).BridgeParams) > 0
 	case "slack":
 		config, err := readSlackConnectorConfig(homeDir)
 		return err == nil && strings.TrimSpace(config.AccessToken) != ""
@@ -1486,7 +1500,7 @@ func (state connectorRuntimeFile) entry(id string) connectorRuntimeEntry {
 func connectorEnabled(state connectorRuntimeFile, id string) bool {
 	entry := state.Connectors[id]
 	if entry.Enabled == nil {
-		return true
+		return id != githubPRWatchConnectorID
 	}
 	return *entry.Enabled
 }
@@ -1515,7 +1529,7 @@ func connectorReadyForPolling(state connectorRuntimeFile, id string) bool {
 	if strings.TrimSpace(entry.SetupState) == "error" || strings.TrimSpace(entry.SetupState) == "draft" {
 		return false
 	}
-	if id == "github" {
+	if id == "github" || id == githubPRWatchConnectorID {
 		return strings.TrimSpace(entry.SetupState) == "ready"
 	}
 	return true
@@ -1649,7 +1663,8 @@ func connectorAuthFailure(lastError string) bool {
 	normalized := strings.ToLower(lastError)
 	return strings.Contains(normalized, "status 401") ||
 		strings.Contains(normalized, "unauthenticated") ||
-		strings.Contains(normalized, "invalid credentials")
+		strings.Contains(normalized, "invalid credentials") ||
+		githubGHAuthFailure(normalized)
 }
 
 func connectorListMessage(result ConnectorListResult) string {
@@ -1808,6 +1823,9 @@ func connectorConnectMessage(homeDir string, id string) string {
 	}
 	if id == "github" {
 		name = "GitHub"
+	}
+	if id == githubPRWatchConnectorID {
+		name = "GitHub PR watch"
 	}
 	return strings.Join([]string{
 		fmt.Sprintf("%s connected", name),

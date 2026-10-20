@@ -19,6 +19,7 @@ var connectorRegistry = []connectorDefinition{
 		fetchIdentityProviderTool("github.search_pull_requests", "return repository, number, and updated revision for every matching pull request"),
 		fetchIdentityProviderTool("github.search_issues", "return repository, number, and updated revision for every matching issue"),
 	}, DefaultInterval: func() time.Duration { return githubPollInterval(0) }, ValidateBridge: validateGitHubBridgeParams},
+	{ID: githubPRWatchConnectorID, EventSource: "github", Direct: true, DefaultInterval: func() time.Duration { return githubPRWatchPollInterval }},
 	{ID: "slack", EventSource: "slack", Direct: true, Bridged: true, CaptureSemantics: "bounded_events", RequiredTools: []ProviderToolRequirement{
 		fetchProviderToolWhen("slack.read_channel", "channels", "read every configured channel across the request window"),
 		fetchProviderToolWhen("slack.search_messages", "participant_or_dms", "search only the approved participant or direct-message scope"),

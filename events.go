@@ -1,6 +1,7 @@
 package workgraph
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -38,7 +39,7 @@ func EventsToday(config EventsTodayConfig) (EventsTodayResult, error) {
 	eventType := strings.TrimSpace(config.Type)
 	events := make([]TodayEvent, 0, len(today.Events))
 	for _, event := range today.Events {
-		if eventType != "" && event.Type != eventType {
+		if !eventTypeMatches(event.Type, eventType) {
 			continue
 		}
 		events = append(events, event)
@@ -55,6 +56,35 @@ func EventsToday(config EventsTodayConfig) (EventsTodayResult, error) {
 	}
 	result.Message = eventsTodayMessage(result, time.Now().Location())
 	return result, nil
+}
+
+func eventTypeMatches(eventType string, filter string) bool {
+	if filter == "" {
+		return true
+	}
+	if prefix, wildcard := strings.CutSuffix(filter, ".*"); wildcard {
+		return strings.HasPrefix(eventType, prefix+".")
+	}
+	return eventType == filter
+}
+
+func untrustedCommentLine(event TodayEvent) string {
+	var payload struct {
+		ActorKind string `json:"actor_kind"`
+		Untrusted struct {
+			Author string `json:"author"`
+			Body   string `json:"body"`
+		} `json:"untrusted"`
+	}
+	if event.Type != githubPREventReviewComment || json.Unmarshal([]byte(event.Payload), &payload) != nil || payload.Untrusted.Body == "" {
+		return ""
+	}
+	firstLine, _, _ := strings.Cut(strings.TrimSpace(payload.Untrusted.Body), "\n")
+	runes := []rune(strings.TrimSpace(firstLine))
+	if len(runes) > todayEventLabelMaxRunes {
+		runes = append(runes[:todayEventLabelMaxRunes-1], '…')
+	}
+	return fmt.Sprintf("  untrusted comment (%s, %s): %q", payload.Untrusted.Author, payload.ActorKind, string(runes))
 }
 
 func eventsTodayMessage(result EventsTodayResult, location *time.Location) string {
@@ -94,6 +124,9 @@ func eventsTodayMessage(result EventsTodayResult, location *time.Location) strin
 		}
 		if event.Path != "" {
 			lines = append(lines, "  path: "+event.Path)
+		}
+		if line := untrustedCommentLine(event); line != "" {
+			lines = append(lines, line)
 		}
 	}
 	return strings.Join(lines, "\n")

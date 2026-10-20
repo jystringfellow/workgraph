@@ -2645,6 +2645,8 @@ func runGitHub(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runGitHubConnect(args[1:], stdout, stderr)
 	case "capture":
 		return runGitHubCapture(args[1:], stdout, stderr)
+	case "prs":
+		return runGitHubPRs(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown github command: %s\n", args[0])
 		return 2
@@ -2700,6 +2702,110 @@ func runGitHubCapture(args []string, stdout io.Writer, stderr io.Writer) int {
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph github capture: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runGitHubPRs(args []string, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: workgraph github prs <command>")
+		return 2
+	}
+
+	switch args[0] {
+	case "connect":
+		return runGitHubPRsConnect(args[1:], stdout, stderr)
+	case "capture":
+		return runGitHubPRsCapture(args[1:], stdout, stderr)
+	case "disconnect":
+		return runGitHubPRsDisconnect(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "unknown github prs command: %s\n", args[0])
+		return 2
+	}
+}
+
+func runGitHubPRsConnect(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("github prs connect", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	gh := flags.String("gh", "", "gh-compatible executable for GitHub access")
+	paramsJSON := flags.String("params-json", "", "non-secret pull request watch scope as a JSON object; defaults to open_prs for @me")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph github prs connect [--params-json '<scope-json>']")
+		return 2
+	}
+
+	result, err := workgraph.ConnectGitHubPRWatch(workgraph.ConnectorConnectConfig{
+		HomeDir:       *homeDir,
+		GitHubCommand: *gh,
+		ParamsJSON:    json.RawMessage(*paramsJSON),
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph github prs connect: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runGitHubPRsCapture(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("github prs capture", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
+	gh := flags.String("gh", "", "gh-compatible executable for GitHub access")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph github prs capture")
+		return 2
+	}
+
+	result, err := workgraph.CaptureGitHubPRWatch(workgraph.GitHubPRWatchCaptureConfig{
+		HomeDir:       *homeDir,
+		DatabasePath:  *databasePath,
+		GitHubCommand: *gh,
+	})
+	if result.Message != "" {
+		fmt.Fprintln(stdout, result.Message)
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph github prs capture: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func runGitHubPRsDisconnect(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("github prs disconnect", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph github prs disconnect")
+		return 2
+	}
+
+	result, err := workgraph.DisconnectGitHubPRWatch(workgraph.ConnectorConnectConfig{HomeDir: *homeDir})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph github prs disconnect: %v\n", err)
 		return 1
 	}
 

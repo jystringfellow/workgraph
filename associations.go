@@ -191,6 +191,7 @@ func loadAssociationCandidates(db *sql.DB, target AssociationEvent) ([]Associati
 	rows, err := db.Query(`SELECT id, source, type, timestamp, project, summary, payload_json
 		FROM events
 		WHERE id != ? AND source != ? AND timestamp >= ? AND timestamp <= ?
+			AND (type NOT GLOB 'github.pull_request.*' OR type = 'github.pull_request.observed')
 		ORDER BY ABS(julianday(timestamp) - julianday(?)) ASC, timestamp ASC, id ASC
 		LIMIT ?`, target.ID, target.Source, start, end, target.Timestamp.UTC().Format(time.RFC3339Nano), associationCandidateLimit)
 	if err != nil {
@@ -465,6 +466,9 @@ func collectAssociationPayloadSignals(value any, key string, signals *associatio
 			signals.IssueRefs[repository+"#"+strconv.FormatInt(issueNumber, 10)] = true
 		}
 		for _, childKey := range keys {
+			if childKey == "untrusted" {
+				continue
+			}
 			collectAssociationPayloadSignals(typed[childKey], childKey, signals)
 		}
 	case []any:
