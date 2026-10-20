@@ -111,6 +111,36 @@ const githubPRWatchFollowUpQuery = `query($ids: [ID!]!) {
   }
 }`
 
+const githubPRWatchTeamsQuery = `query($login: String!, $after: String) {
+  viewer { organizations(first: 100, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    nodes { login teams(first: 100, userLogins: [$login]) {
+      totalCount nodes { slug }
+    } }
+  } }
+}`
+
+const githubPRWatchReviewerFollowUpQuery = `query($ids: [ID!]!, $login: String!) {
+  rateLimit { cost remaining resetAt }
+  nodes(ids: $ids) {
+    ... on PullRequest {
+      id state merged mergedAt closedAt mergedBy { login } repository { isArchived }
+      reviewRequests(first: 50) {
+        totalCount
+        nodes { requestedReviewer {
+          __typename
+          ... on User { login }
+          ... on Team { slug organization { login } }
+        } }
+      }
+      viewerLatestReview: reviews(author: $login, last: 1,
+          states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) {
+        nodes { id state submittedAt commit { oid } }
+      }
+    }
+  }
+}`
+
 const githubPRWatchDetailBatchSize = 10
 
 func githubPRWatchDetailQuery(count int) string {
@@ -266,6 +296,7 @@ type githubPRStatusData struct {
 }
 
 type githubPRStatusNode struct {
+	githubPRReviewerStatus
 	ID         string           `json:"id"`
 	Number     int              `json:"number"`
 	URL        string           `json:"url"`
@@ -302,6 +333,46 @@ type githubPRStatusNode struct {
 			} `json:"commit"`
 		} `json:"nodes"`
 	} `json:"commits"`
+}
+
+type githubPRReviewerStatus struct {
+	ReviewRequests struct {
+		TotalCount int `json:"totalCount"`
+		Nodes      []struct {
+			RequestedReviewer *struct {
+				Typename     string `json:"__typename"`
+				Login        string `json:"login"`
+				Slug         string `json:"slug"`
+				Organization struct {
+					Login string `json:"login"`
+				} `json:"organization"`
+			} `json:"requestedReviewer"`
+		} `json:"nodes"`
+	} `json:"reviewRequests"`
+	ViewerLatestReview struct {
+		Nodes []struct {
+			ID          string `json:"id"`
+			State       string `json:"state"`
+			SubmittedAt string `json:"submittedAt"`
+			Commit      *struct {
+				OID string `json:"oid"`
+			} `json:"commit"`
+		} `json:"nodes"`
+	} `json:"viewerLatestReview"`
+}
+
+func (status githubPRReviewerStatus) viewerReview() *githubPRViewerReview {
+	for _, review := range status.ViewerLatestReview.Nodes {
+		if review.State == "PENDING" || review.SubmittedAt == "" {
+			continue
+		}
+		result := &githubPRViewerReview{ID: review.ID, State: review.State, SubmittedAt: review.SubmittedAt}
+		if review.Commit != nil {
+			result.Commit = review.Commit.OID
+		}
+		return result
+	}
+	return nil
 }
 
 type githubPRCheckContext struct {
@@ -379,6 +450,7 @@ type githubPRThreadComment struct {
 }
 
 type githubPRFollowUpNode struct {
+	githubPRReviewerStatus
 	ID       string           `json:"id"`
 	State    string           `json:"state"`
 	Merged   bool             `json:"merged"`
