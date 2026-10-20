@@ -478,6 +478,14 @@ workgraph github prs disconnect
 `github prs disconnect` deletes the watch's observations and keeps captured
 events.
 
+Ask the running daemon to poll the watch within seconds, for example from a
+webhook relay. `--pr` refreshes that pull request's review threads:
+
+```sh
+workgraph github prs hint
+workgraph github prs hint --pr https://github.com/acme/widget/pull/42
+```
+
 Inspect the canonical read-only provider operations needed by every bridged
 recipe, or one connector:
 
