@@ -358,6 +358,9 @@ func applyGitHubPRWatchFence(db *sql.DB, enabled bool, scopeHash string) error {
 		if _, err := tx.Exec(`DELETE FROM github_pr_observations WHERE connector_id = ?`, githubPRWatchConnectorID); err != nil {
 			return fmt.Errorf("delete github.pr_watch observations: %w", err)
 		}
+		if _, err := tx.Exec(`UPDATE github_pr_watch_state SET reviewer_polled = 0 WHERE connector_id = ?`, githubPRWatchConnectorID); err != nil {
+			return fmt.Errorf("reset github.pr_watch reviewer poll state: %w", err)
+		}
 	}
 	if _, err := tx.Exec(`INSERT INTO github_pr_watch_state (connector_id, enabled, scope_hash, poll_seq) VALUES (?, ?, ?, 1)
 		ON CONFLICT(connector_id) DO UPDATE SET enabled = excluded.enabled, scope_hash = excluded.scope_hash, poll_seq = github_pr_watch_state.poll_seq + 1`,

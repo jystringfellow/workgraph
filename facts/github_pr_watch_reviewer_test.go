@@ -109,6 +109,29 @@ func TestGitHubPRWatchDirectAndTeamReviewRequestsEnterReviewerSet(t *testing.T) 
 }
 
 func TestGitHubPRWatchFirstReviewerPollIsBacklogAndLaterRequestsAreTransitions(t *testing.T) {
+	t.Run("scope change preserves open item", func(t *testing.T) {
+		h := reviewerHarness(t, reviewerParams)
+		status := reviewerStatus(t, requestedPR(watchPRNodeID, watchIdentity))
+		h.mustPoll(watchBase, status)
+		item, ok := nextItemsByReason(t, h, watchBase.Add(time.Minute))["review_requested"]
+		if !ok {
+			t.Fatal("captured request missing from next")
+		}
+		h.gh.Queue(t, probeResponse(t))
+		if _, err := workgraph.ConnectGitHubPRWatch(workgraph.ConnectorConnectConfig{
+			HomeDir: h.homeDir, GitHubCommand: h.gh.Path,
+			ParamsJSON: json.RawMessage(`{"roles":["reviewer"],"review_requests":"direct"}`),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		h.mustPoll(watchBase.Add(5*time.Minute), status)
+		if len(h.eventsOfType("github.pull_request.review_requested")) != 0 {
+			t.Error("scope change replayed an existing review request")
+		}
+		if got := nextItemsByReason(t, h, watchBase.Add(6*time.Minute))["review_requested"]; got.ID != item.ID {
+			t.Errorf("scope change replaced open item %q with %q", item.ID, got.ID)
+		}
+	})
 	for _, empty := range []bool{false, true} {
 		t.Run(map[bool]string{true: "empty first poll", false: "backlog"}[empty], func(t *testing.T) {
 			h := reviewerHarness(t, reviewerParams)
