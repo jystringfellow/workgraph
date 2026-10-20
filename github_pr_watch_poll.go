@@ -39,6 +39,10 @@ type githubPRWatchPoll struct {
 	rateLimit      *githubGraphQLRateLimit
 	leaving        map[string]bool
 	hints          githubPRWatchHints
+	homeDir        string
+	batchSize      int
+	timedOut       bool
+	deferred       *ConnectorPollDeferred
 }
 
 type githubPRWatchChanges struct {
@@ -114,6 +118,7 @@ type githubPRChecks struct {
 	fingerprint string
 	completedAt string
 	failed      []map[string]any
+	carried     bool
 }
 
 func CaptureGitHubPRWatch(config GitHubPRWatchCaptureConfig) (GitHubPRWatchCaptureResult, error) {
@@ -187,6 +192,7 @@ func CaptureGitHubPRWatch(config GitHubPRWatchCaptureConfig) (GitHubPRWatchCaptu
 		poll := &githubPRWatchPoll{
 			ctx: ctx, gh: githubCommandOrDefault(config.GitHubCommand), db: db, params: params,
 			now: pollStart, remoteProjects: remoteProjects, hints: hints,
+			homeDir: status.HomeDir, batchSize: githubPRWatchStoredBatchSize(state.entry(githubPRWatchConnectorID)),
 		}
 		poll.observedAt = poll.now.Format(time.RFC3339Nano)
 		var changes *githubPRWatchChanges
@@ -197,6 +203,14 @@ func CaptureGitHubPRWatch(config GitHubPRWatchCaptureConfig) (GitHubPRWatchCaptu
 		}
 		if err := recordGitHubPRWatchBudget(status.HomeDir, poll.rateLimit); err != nil {
 			return result, err
+		}
+		if poll.deferred != nil {
+			if err := extendConnectorNotBefore(status.HomeDir, githubPRWatchConnectorID, poll.deferred.NotBefore); err != nil {
+				return result, err
+			}
+			if roleErr == nil && changes == nil {
+				return result, poll.deferred
+			}
 		}
 		var retryAfter *ConnectorPollRetryAfter
 		if errors.As(roleErr, &retryAfter) {
@@ -221,6 +235,11 @@ func CaptureGitHubPRWatch(config GitHubPRWatchCaptureConfig) (GitHubPRWatchCaptu
 		if err != nil {
 			return result, err
 		}
+		if !poll.timedOut && poll.batchSize < githubPRWatchBatchSize {
+			if err := recordGitHubPRWatchBatchSize(status.HomeDir, poll.batchSize+1); err != nil {
+				return result, err
+			}
+		}
 		result.EventsStored = stored
 		result.Message = strings.Join([]string{
 			"GitHub PR watch capture complete",
@@ -228,6 +247,9 @@ func CaptureGitHubPRWatch(config GitHubPRWatchCaptureConfig) (GitHubPRWatchCaptu
 			"Database: " + result.DatabasePath,
 			fmt.Sprintf("Events stored: %d", stored),
 		}, "\n")
+		if roleErr == nil && poll.deferred != nil {
+			return result, poll.deferred
+		}
 		return result, roleErr
 	}
 }
@@ -303,6 +325,11 @@ func (poll *githubPRWatchPoll) run() (*githubPRWatchChanges, error) {
 		} else {
 			changes, err = poll.runAuthor()
 		}
+		var deferred *ConnectorPollDeferred
+		if errors.As(err, &deferred) {
+			poll.deferred = deferred
+			continue
+		}
 		if err != nil {
 			failures = append(failures, fmt.Errorf("%s role: %w", role, err))
 			continue
@@ -329,10 +356,14 @@ func (poll *githubPRWatchPoll) runAuthor() (githubPRWatchChanges, error) {
 	}
 	current := map[string]bool{}
 	detailIDs := []string{}
+	mergeIDs := []string{}
 	for _, node := range nodes {
 		current[node.ID] = true
 		if poll.needsDetail(previous[node.ID], node) {
 			detailIDs = append(detailIDs, node.ID)
+		}
+		if poll.needsMergeState(previous[node.ID], node) {
+			mergeIDs = append(mergeIDs, node.ID)
 		}
 	}
 	leaving := []*githubPRObservation{}
@@ -350,6 +381,10 @@ func (poll *githubPRWatchPoll) runAuthor() (githubPRWatchChanges, error) {
 	}
 	sort.Slice(leaving, func(i, j int) bool { return leaving[i].NodeID < leaving[j].NodeID })
 
+	mergeStates, err := poll.fetchMergeStates(mergeIDs)
+	if err != nil {
+		return githubPRWatchChanges{}, err
+	}
 	details, err := poll.fetchDetails(append(detailIDs, leavingIDs...), previous)
 	if err != nil {
 		return githubPRWatchChanges{}, err
@@ -361,7 +396,7 @@ func (poll *githubPRWatchPoll) runAuthor() (githubPRWatchChanges, error) {
 
 	changes := githubPRWatchChanges{}
 	for _, node := range nodes {
-		if err := poll.observeAuthor(&changes, previous[node.ID], node, details[node.ID]); err != nil {
+		if err := poll.observeAuthor(&changes, previous[node.ID], node, details[node.ID], mergeStates[node.ID]); err != nil {
 			return githubPRWatchChanges{}, err
 		}
 	}
@@ -404,6 +439,10 @@ func (poll *githubPRWatchPoll) search(role string) ([]githubPRStatusNode, error)
 	for {
 		var data githubPRStatusData
 		graphQLErrors, err := poll.graphQL(githubPRWatchStatusQuery, map[string]any{"q": query, "login": poll.params.IdentityLogin, "after": after}, &data)
+		if errors.Is(err, errGitHubGraphQLTimeout) {
+			notBefore := poll.now.Add(githubPRWatchDefaultRetryAfter)
+			return nil, &ConnectorPollDeferred{Reason: err.Error() + "; retrying after " + notBefore.Format(time.RFC3339), NotBefore: notBefore}
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -444,6 +483,85 @@ func (poll *githubPRWatchPoll) needsDetail(previous *githubPRObservation, node g
 	return age > githubPRWatchDetailRefresh || poll.hints.forcesDetail(previous.URL, age)
 }
 
+func (poll *githubPRWatchPoll) needsMergeState(previous *githubPRObservation, node githubPRStatusNode) bool {
+	if previous == nil || previous.HeadSHA != node.HeadRefOid || previous.UpdatedAt != node.UpdatedAt ||
+		previous.ChecksRollup != node.Commits.rollupKey() || previous.Mergeable == "UNKNOWN" || previous.MergeStateStatus == "UNKNOWN" {
+		return true
+	}
+	fetchedAt, err := time.Parse(time.RFC3339Nano, previous.MergeFetchedAt)
+	if err != nil {
+		return true
+	}
+	age := poll.now.Sub(fetchedAt)
+	return age > githubPRWatchDetailRefresh || poll.hints.forcesDetail(previous.URL, age)
+}
+
+func (poll *githubPRWatchPoll) shrinkBatches(failedSize int) error {
+	poll.timedOut = true
+	poll.batchSize = max(1, failedSize/2)
+	return recordGitHubPRWatchBatchSize(poll.homeDir, poll.batchSize)
+}
+
+func githubPRWatchStoredBatchSize(entry connectorRuntimeEntry) int {
+	if entry.QueryBatchSize > 0 && entry.QueryBatchSize < githubPRWatchBatchSize {
+		return entry.QueryBatchSize
+	}
+	return githubPRWatchBatchSize
+}
+
+func recordGitHubPRWatchBatchSize(homeDir string, size int) error {
+	connectorPollStateMu.Lock()
+	defer connectorPollStateMu.Unlock()
+	state, err := readConnectorRuntimeFile(homeDir)
+	if err != nil {
+		return err
+	}
+	entry := state.entry(githubPRWatchConnectorID)
+	entry.QueryBatchSize = size
+	state.Connectors[githubPRWatchConnectorID] = entry
+	return writeConnectorRuntimeFile(homeDir, state)
+}
+
+func (poll *githubPRWatchPoll) fetchMergeStates(ids []string) (map[string]*githubPRMergeNode, error) {
+	results := map[string]*githubPRMergeNode{}
+	queue := append([]string(nil), ids...)
+	for len(queue) > 0 {
+		size := min(len(queue), poll.batchSize)
+		batch := queue[:size]
+		variables := map[string]any{}
+		for index, id := range batch {
+			variables[fmt.Sprintf("id%d", index)] = id
+		}
+		var data map[string]json.RawMessage
+		graphQLErrors, err := poll.graphQL(githubPRWatchMergeQuery(len(batch)), variables, &data)
+		if errors.Is(err, errGitHubGraphQLTimeout) && size > 1 {
+			if err := poll.shrinkBatches(size); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if len(graphQLErrors) > 0 {
+			return nil, fmt.Errorf("merge state incomplete: %w", graphQLErrors)
+		}
+		queue = queue[size:]
+		for index, id := range batch {
+			raw := data[fmt.Sprintf("pr%d", index)]
+			if len(raw) == 0 || string(raw) == "null" {
+				continue
+			}
+			var node githubPRMergeNode
+			if err := json.Unmarshal(raw, &node); err != nil {
+				return nil, fmt.Errorf("parse pull request merge state: %w", err)
+			}
+			results[id] = &node
+		}
+	}
+	return results, nil
+}
+
 func (poll *githubPRWatchPoll) fetchDetails(ids []string, previous map[string]*githubPRObservation) (map[string]*githubPRDetail, error) {
 	type pendingPage struct {
 		id    string
@@ -462,9 +580,8 @@ func (poll *githubPRWatchPoll) fetchDetails(ids []string, previous map[string]*g
 	}
 	results := map[string]*githubPRDetail{}
 	for len(queue) > 0 {
-		size := min(len(queue), githubPRWatchDetailBatchSize)
+		size := min(len(queue), poll.batchSize)
 		batch := queue[:size]
-		queue = queue[size:]
 		variables := map[string]any{}
 		for index, page := range batch {
 			variables[fmt.Sprintf("id%d", index)] = page.id
@@ -473,9 +590,16 @@ func (poll *githubPRWatchPoll) fetchDetails(ids []string, previous map[string]*g
 		}
 		var data map[string]json.RawMessage
 		graphQLErrors, err := poll.graphQL(githubPRWatchDetailQuery(len(batch)), variables, &data)
+		if errors.Is(err, errGitHubGraphQLTimeout) && size > 1 {
+			if err := poll.shrinkBatches(size); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
+		queue = queue[size:]
 		leavingAlias := func(field any) bool {
 			alias, _ := field.(string)
 			var index int
@@ -539,16 +663,36 @@ func (poll *githubPRWatchPoll) fetchFollowUps(ids []string) (map[string]*githubP
 	return results, nil
 }
 
-func (poll *githubPRWatchPoll) observeAuthor(changes *githubPRWatchChanges, previous *githubPRObservation, node githubPRStatusNode, detail *githubPRDetail) error {
+func (poll *githubPRWatchPoll) observeAuthor(changes *githubPRWatchChanges, previous *githubPRObservation, node githubPRStatusNode, detail *githubPRDetail, mergeState *githubPRMergeNode) error {
+	rollupKey := node.Commits.rollupKey()
+	var checks githubPRChecks
+	mergeFetchedAt := ""
+	if mergeState != nil && mergeState.HeadRefOid != node.HeadRefOid {
+		mergeState = nil
+	}
+	switch {
+	case mergeState != nil:
+		node.Mergeable, node.MergeStateStatus, node.Commits = mergeState.Mergeable, mergeState.MergeStateStatus, mergeState.Commits
+		checks = githubPRChecksFromStatus(node)
+		mergeFetchedAt = poll.observedAt
+	case previous != nil:
+		node.Mergeable, node.MergeStateStatus = previous.Mergeable, previous.MergeStateStatus
+		checks = githubPRChecks{state: previous.ChecksState, runs: previous.CheckRuns, carried: true}
+		mergeFetchedAt = previous.MergeFetchedAt
+	default:
+		node.Mergeable, node.MergeStateStatus = "UNKNOWN", "UNKNOWN"
+		checks = githubPRChecks{state: "unknown", carried: true}
+	}
 	current := githubPRObservationFromStatus(node)
 	current.ObservedAt = poll.observedAt
 	current.VerifiedAt = poll.observedAt
 	current.Access = "ok"
-	checks := githubPRChecksFromStatus(node)
+	current.ChecksRollup = rollupKey
+	current.MergeFetchedAt = mergeFetchedAt
 	current.ChecksState = checks.state
 	current.CheckRuns = checks.runs
 	runSet := current.HeadSHA + ":" + checks.fingerprint
-	terminal := checks.state == "passed" || checks.state == "failed"
+	terminal := !checks.carried && (checks.state == "passed" || checks.state == "failed")
 
 	hasStoredObserved := false
 	if previous != nil {

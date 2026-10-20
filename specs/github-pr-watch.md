@@ -237,10 +237,13 @@ github_pr_watch_state(connector_id PRIMARY KEY, enabled, scope_hash, poll_seq)
 
 ## Query Shape
 
-Each poll uses one **status query** per enabled role for the whole open set,
-and a **detail query** only for author-role PRs that changed. The split keeps
-a typical poll at a few GraphQL points; each response's measured
-`rateLimit.cost` is recorded in connector state.
+Each poll uses one cheap **status query** per enabled role for the whole open
+set, then, for author-role PRs only, a batched **merge and checks query** and
+a **detail query** for the PRs that changed. The status query never asks for
+`mergeable`, `mergeStateStatus`, or check contexts: those force GitHub to
+compute a test merge per PR and push a 50-PR search past GitHub's roughly
+10-second GraphQL timeout (`HTTP 502`) on accounts with many open PRs and
+checks. The split keeps a typical poll at a few GraphQL points.
 
 ### Status query (every poll, per role)
 
@@ -259,7 +262,7 @@ query($q: String!, $login: String!, $after: String) {
         headRepository { nameWithOwner }
         isCrossRepository
         headRefName headRefOid baseRefName
-        reviewDecision mergeable mergeStateStatus
+        reviewDecision
         reviewRequests(first: 50) {
           totalCount
           nodes { requestedReviewer {
@@ -273,20 +276,7 @@ query($q: String!, $login: String!, $after: String) {
           nodes { id state submittedAt commit { oid } }
         }
         commits(last: 1) {
-          nodes { commit {
-            oid
-            statusCheckRollup {
-              state
-              contexts(first: 100) {
-                totalCount
-                nodes {
-                  __typename
-                  ... on CheckRun { id name status conclusion completedAt detailsUrl }
-                  ... on StatusContext { context state createdAt targetUrl }
-                }
-              }
-            }
-          } }
+          nodes { commit { oid statusCheckRollup { state contexts { totalCount } } } }
         }
       }
     }
@@ -305,8 +295,70 @@ query($q: String!, $login: String!, $after: String) {
   unsubmitted drafts. A returned review with a null `submittedAt` is treated
   as absent. The reviewer role uses it only to tell `reviewed` from
   `withdrawn` and to emit `review_submitted`.
-- Check status changes do not bump `updatedAt`, so the rollup is read here on
-  every poll. The reviewer role ignores checks.
+- Check status changes do not bump `updatedAt`, so the rollup `state` and
+  context `totalCount` are read here on every poll. A change in either is what
+  triggers the merge and checks query. The reviewer role ignores checks.
+
+### Merge and checks query (author role, changed PRs only)
+
+```graphql
+query($id0: ID!, ...) {
+  rateLimit { cost remaining resetAt }
+  pr0: node(id: $id0) {
+    ... on PullRequest {
+      id mergeable mergeStateStatus
+      commits(last: 1) {
+        nodes { commit {
+          oid
+          statusCheckRollup {
+            state
+            contexts(first: 100) {
+              totalCount
+              nodes {
+                __typename
+                ... on CheckRun { id name status conclusion completedAt detailsUrl }
+                ... on StatusContext { context state createdAt targetUrl }
+              }
+            }
+          }
+        } }
+      }
+    }
+  }
+  pr1: node(id: $id1) { ... }
+}
+```
+
+- It runs for an author-role PR when it is new; its head SHA, `updatedAt`,
+  rollup `state`, or context `totalCount` changed; its stored `mergeable` or
+  `mergeStateStatus` is `UNKNOWN` (GitHub computes them lazily); its last
+  fetch of this data is older than 30 minutes; or a hint forces it.
+- Other PRs carry their previous `mergeable`, `merge_state_status`,
+  `checks_state`, and check runs forward. A carried value never emits a
+  transition. Changes that move none of the triggers, such as a base branch
+  advance (`BEHIND`) or a re-run that ends in the same state, are seen within
+  the 30-minute reconciliation or on a hint.
+- At most 10 PRs are aliased per document. Errors fail the role.
+- The query also selects `headRefOid`. When it differs from the search's
+  head (a push landed between the two queries), that PR's merge and check
+  data is ignored for the poll and refetched on the next one, so checks are
+  never attributed to the wrong head.
+
+### GitHub query timeouts
+
+- When a merge and checks or detail document returns `HTTP 502` or `504`,
+  the watch halves the batch and retries within the poll, down to one PR. A
+  timeout on a one-PR document fails the role with `GitHub timed out on the
+  query (HTTP 502)`.
+- The reduced batch size is stored in connector state as soon as it shrinks,
+  so the next poll starts there even when the whole-poll deadline cut the
+  previous one short. Each poll that commits without a timeout grows it by
+  one, up to 10.
+- When the status search times out, the poll is **deferred** for 60 seconds
+  with the reason `GitHub timed out on the query (HTTP 502)` in connector
+  status. A deferral does not count as a failure. Roles that completed in the
+  same poll still commit, and another role's real error is reported instead
+  of the deferral.
 
 ### Team membership
 
@@ -852,6 +904,7 @@ watch needs a small extension:
 | Rate limited | see above | defer or back off; nothing changes |
 | Auth expired or revoked | `gh` exit with `HTTP 401`, `Bad credentials`, or `gh auth login` guidance | setup `error`, stop this poller, guidance `gh auth login` then `workgraph connectors validate github.pr_watch` |
 | SSO not authorized | GraphQL `FORBIDDEN` / SAML | the role fails visibly with SSO guidance |
+| GitHub query timeout | `gh` exit with `HTTP 502` or `504` | batches halve within the poll; a search timeout defers 60s and shows `GitHub timed out on the query` |
 | Offline or DNS failure | `gh` network error | transient backoff (5s to 5m) |
 | `gh` missing | exec error | setup `error` |
 | Malformed JSON or schema drift | decode failure | the role fails; nothing changes for it |

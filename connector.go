@@ -167,6 +167,7 @@ type connectorRuntimeEntry struct {
 	DeferredReason      string             `json:"deferred_reason,omitempty"`
 	RateLimitRemaining  *int               `json:"rate_limit_remaining,omitempty"`
 	RateLimitResetAt    string             `json:"rate_limit_reset_at,omitempty"`
+	QueryBatchSize      int                `json:"query_batch_size,omitempty"`
 	ConsecutiveFailures int                `json:"consecutive_failures,omitempty"`
 }
 
@@ -1559,11 +1560,27 @@ func writeConnectorRuntimeFile(homeDir string, state connectorRuntimeFile) error
 	if err != nil {
 		return fmt.Errorf("encode connector settings: %w", err)
 	}
-	if err := os.WriteFile(connectorRuntimePath(homeDir), append(contents, '\n'), 0o600); err != nil {
+	temp, err := os.CreateTemp(homeDir, ".connectors-*.json")
+	if err != nil {
 		return fmt.Errorf("write connector settings: %w", err)
 	}
-	if err := os.Chmod(connectorRuntimePath(homeDir), 0o600); err != nil {
+	defer os.Remove(temp.Name())
+	if _, err := temp.Write(append(contents, '\n')); err != nil {
+		temp.Close()
+		return fmt.Errorf("write connector settings: %w", err)
+	}
+	if err := temp.Sync(); err != nil {
+		temp.Close()
+		return fmt.Errorf("write connector settings: %w", err)
+	}
+	if err := temp.Close(); err != nil {
+		return fmt.Errorf("write connector settings: %w", err)
+	}
+	if err := os.Chmod(temp.Name(), 0o600); err != nil {
 		return fmt.Errorf("secure connector settings: %w", err)
+	}
+	if err := os.Rename(temp.Name(), connectorRuntimePath(homeDir)); err != nil {
+		return fmt.Errorf("write connector settings: %w", err)
 	}
 	return nil
 }
