@@ -11,7 +11,7 @@ func TestGitHubPRWatchFirstSightEmitsOneObservedEventPerPR(t *testing.T) {
 }
 
 func TestGitHubPRWatchObservationResetNeitherDuplicatesNorLoses(t *testing.T) {
-	t.Skip("TBD: after deleting observations, a comment created meanwhile emits one review_comment, comments before baseline_at emit nothing, and no second observed is stored")
+	t.Skip("TBD: after deleting observations, a comment created meanwhile emits one review_comment, comments before baseline_at emit nothing, no second observed is stored, and open items keep their ids and opened_by")
 }
 
 func TestGitHubPRWatchSameSHAAndStateProducesNoNewEvent(t *testing.T) {
@@ -23,7 +23,7 @@ func TestGitHubPRWatchChecksWaitForTheWholeRunSet(t *testing.T) {
 }
 
 func TestGitHubPRWatchCheckEventsAreKeyedByRunIdentity(t *testing.T) {
-	t.Skip("TBD: re-polling the same terminal runs emits nothing; a re-run with new run ids that finishes failed emits a second checks_failed for the SHA")
+	t.Skip("TBD: re-polling the same terminal runs emits nothing; a re-run with new run ids that finishes failed emits a second checks_failed, and so does a re-run reusing the run id with a new completedAt")
 }
 
 func TestGitHubPRWatchNewReviewsAndCommentsEmitByProviderID(t *testing.T) {
@@ -31,7 +31,7 @@ func TestGitHubPRWatchNewReviewsAndCommentsEmitByProviderID(t *testing.T) {
 }
 
 func TestGitHubPRWatchTimelinePaginationIsLossless(t *testing.T) {
-	t.Skip("TBD: 150 conversation comments between polls emit 150 events across two pages; past the page limit timeline_since is unchanged, the dimension is unknown, and the next complete fetch emits the rest")
+	t.Skip("TBD: 150 conversation comments emit 150 events across two pages in one poll; a 1500-comment backlog emits 1000 with timeline_cursor stored and the dimension unknown, then the remaining 500 on the next poll with no other change, after which timeline_since advances and timeline_cursor clears")
 }
 
 func TestGitHubPRWatchIgnoresConfiguredActorsAndCapturesBotsAndAuthorReplies(t *testing.T) {
@@ -43,11 +43,11 @@ func TestGitHubPRWatchAttributesRepliesByMarkerAndPredecessor(t *testing.T) {
 }
 
 func TestGitHubPRWatchReadinessIsLostAndRegained(t *testing.T) {
-	t.Skip("TBD: ready emits ready_to_merge; a new unresolved thread emits readiness_lost with reasons threads; resolving emits a second ready_to_merge on the same SHA; mergeable UNKNOWN and more than 20 opinionated reviews do not transition")
+	t.Skip("TBD: ready emits ready_to_merge; a new unresolved thread emits readiness_lost with reasons threads; resolving emits a second ready_to_merge on the same SHA; BLOCKED or BEHIND merge state is not ready and readiness_lost lists merge_state; mergeable UNKNOWN, merge_state_status UNKNOWN, and more than 20 opinionated reviews do not transition")
 }
 
 func TestGitHubPRWatchLeavingTheOpenSetIsResolvedByFollowUpQuery(t *testing.T) {
-	t.Skip("TBD: merged and closed emit terminal events and drop the observation; OPEN is kept for six polls then dropped and reported left search; archived drops silently; FORBIDDEN is reported unreachable; a reopened PR emits reopened")
+	t.Skip("TBD: merged and closed emit terminal events with exits merged and closed; archived exits out_of_scope; OPEN and still matching is kept six polls then exits left_search; FORBIDDEN keeps the observation unreachable with stale items while other PRs are fresh, then exits unreachable after six polls; a reopened PR emits reopened")
 }
 
 func TestGitHubPRWatchRateLimitedPollDefersAndPreservesObservations(t *testing.T) {
@@ -55,7 +55,7 @@ func TestGitHubPRWatchRateLimitedPollDefersAndPreservesObservations(t *testing.T
 }
 
 func TestGitHubPRWatchSecondaryRateLimitBacksOffWithoutLosingState(t *testing.T) {
-	t.Skip("TBD: HTTP 403 secondary rate limit or RATE_LIMITED errors record a failure with retry-after, schedule next_poll_at at or after Retry-After, and leave observations unchanged")
+	t.Skip("TBD: RATE_LIMITED with Retry-After 120 records a failure, leaves observations unchanged, and sets the not-before deadline; neither a hint nor github prs capture polls before it and capture exits non-zero with rate limited until")
 }
 
 func TestGitHubPRWatchAuthExpiryStopsOnlyThisConnector(t *testing.T) {
@@ -71,11 +71,11 @@ func TestGitHubPRWatchStoresCommentTextWithUntrustedFlag(t *testing.T) {
 }
 
 func TestGitHubPRWatchIncompleteRoleFailsWithoutChanges(t *testing.T) {
-	t.Skip("TBD: a role with GraphQL errors, issueCount above received nodes, or a count over its ceiling commits no events and no closed events, while a complete role in the same poll commits")
+	t.Skip("TBD: a role with GraphQL errors, issueCount above received nodes, or a count over its ceiling commits no events and no closed events, while a complete role in the same poll commits and poll_seq increments once")
 }
 
 func TestConnectorPollerDeferralDoesNotCountAsFailure(t *testing.T) {
-	t.Skip("TBD: a deferred poll keeps consecutive_failures unchanged and schedules next_poll_at at the not-before time; a failure with retry-after waits at least that long; other connectors keep today's schedule")
+	t.Skip("TBD: a deferred poll keeps consecutive_failures unchanged and sets the not-before deadline even beyond 30 minutes; a failure with retry-after waits at least that long; other connectors keep today's schedule")
 }
 
 func TestGitHubPRWatchInvokesOnlyReadOnlyGraphQLAndTypeWildcardFilters(t *testing.T) {
@@ -83,7 +83,7 @@ func TestGitHubPRWatchInvokesOnlyReadOnlyGraphQLAndTypeWildcardFilters(t *testin
 }
 
 func TestGitHubPRWatchEnrichmentSurvivesParticipantPolls(t *testing.T) {
-	t.Skip("TBD: an existing github.pull_request row gains branch and commit keeping matched_scopes and timestamp; a newer github poll keeps them; no row is created otherwise; either connector order gives the same row")
+	t.Skip("TBD: an existing github.pull_request row gains branch and commit keeping matched_scopes and timestamp and a newer github poll keeps them; when the watch observes first no row is created and a later participant poll inserts the row with branch and commit set; both orders give the same row")
 }
 
 func TestGitHubPRWatchAssociatesFromObservedEventsOnly(t *testing.T) {
@@ -95,11 +95,11 @@ func TestGitHubPRWatchOnlyTheUsersOwnActionsArePersonalActivity(t *testing.T) {
 }
 
 func TestGitHubPRWatchResumeRelevantUpdatesIncludeOnlyNeedsUserTransitions(t *testing.T) {
-	t.Skip("TBD: after a resume check-in, a review_comment awaiting the user and a checks_failed appear under Relevant updates since last check-in while observed, checks_passed, and author_replied do not; handoff personal work evidence is unchanged")
+	t.Skip("TBD: after a resume check-in, a review_comment awaiting the user and a checks_failed appear under Relevant updates since last check-in; a needs_user observed, checks_passed, and author_replied do not; an event first captured after the check-in with an earlier provider timestamp appears; handoff personal work evidence is unchanged")
 }
 
 func TestGitHubPRWatchConcurrentPollsDoNotDuplicate(t *testing.T) {
-	t.Skip("TBD: a github prs capture and a daemon poll that both see the same new comment store exactly one review_comment, and the losing poll retries from the winner's observations")
+	t.Skip("TBD: a github prs capture and a daemon poll that both see the same new comment store exactly one review_comment and the loser retries from the winner's observations; a poll in flight during github prs disconnect commits nothing, leaves no observations, and does not retry")
 }
 
 func TestGitHubPRWatchDirectAndTeamReviewRequestsEnterReviewerSet(t *testing.T) {
@@ -111,17 +111,33 @@ func TestGitHubPRWatchFirstReviewerPollIsBacklogAndLaterRequestsAreTransitions(t
 }
 
 func TestGitHubPRWatchReviewingRemovesTheRequestAndKeepsWatching(t *testing.T) {
-	t.Skip("TBD: a CHANGES_REQUESTED review emits review_submitted and review_request_removed reason reviewed; the PR stays watched via the reviewed search; a new head emits one pushed_since_review; a re-request emits a new review_requested")
+	t.Skip("TBD: a CHANGES_REQUESTED review emits review_submitted and review_request_removed reason reviewed; the PR stays watched via the reviewed search; a new head emits one pushed_since_review; a re-request emits a new review_requested; a later PENDING draft review emits nothing and leaves the rereview item open")
 }
 
 func TestGitHubPRWatchReviewerCommentEventsAreLimitedToTheUsersThreads(t *testing.T) {
-	t.Skip("TBD: a comment in a thread the user participates in emits review_comment and makes the thread awaiting user; other threads and conversation comments emit nothing; a requested-only PR runs no detail query")
+	t.Skip("TBD: a comment in a thread the user participates in emits review_comment and makes the thread awaiting user even when the user comment is outside the last 20; other threads and conversation comments emit nothing; a requested-only PR runs no detail query")
 }
 
 func TestGitHubPRWatchIgnoredTeamsAndAgedOutReviewsDropOut(t *testing.T) {
-	t.Skip("TBD: a PR requested only through an ignore_teams team is absent; a reviewed PR last updated before reviewed_window is dropped silently without a closed event")
+	t.Skip("TBD: a PR requested only through an ignore_teams team is absent; a reviewed PR last updated before reviewed_window is dropped silently without a closed event and its items close out_of_scope")
 }
 
 func TestGitHubPRWatchPushHintWakesThePoller(t *testing.T) {
-	t.Skip("TBD: with a 5m interval a hint 30s after a poll triggers a poll at the next 2s check; a second hint during that poll triggers exactly one follow-up; a hint within 10s of the previous poll start waits until 10s; a hint during a rate-limit deferral waits for it")
+	t.Skip("TBD: with a 5m interval a hint 30s after a poll triggers a poll at the next 2s check; a second hint during that poll triggers exactly one follow-up; a hint within 10s of the previous poll start waits until 10s; a hint naming a PR whose thread was resolved without an updatedAt change forces its detail query and closes the reply item; a hint during a deferral or secondary-limit deadline waits for it")
+}
+
+func TestGitHubPRWatchThreadWindowsKeepParticipationAndEvents(t *testing.T) {
+	t.Skip("TBD: in a 25-comment thread whose 3rd comment is the user's, a poll pages back to the known comment, emits each new comment once, and keeps user_participates true; a window still incomplete after 5 backward pages emits what it read with gap true and keeps participation")
+}
+
+func TestGitHubPRWatchNewConflictsHaveAnOpeningEvent(t *testing.T) {
+	t.Skip("TBD: a PR going from MERGEABLE to CONFLICTING emits one merge_conflict and repeated polls add nothing")
+}
+
+func TestGitHubPRWatchBacklogItemsCiteTheObservedEvent(t *testing.T) {
+	t.Skip("TBD: on first sight a PR with failed checks, changes requested, a conflict, and an awaiting thread opens four items whose opened_by is the observed event and since is baseline_at; after an observation reset the item ids and opened_by are unchanged")
+}
+
+func TestGitHubPRWatchWithdrawnRequestClosesAtOnce(t *testing.T) {
+	t.Skip("TBD: removing a request from an open PR the user never reviewed emits review_request_removed reason withdrawn on the next poll, deletes the observation, and closes the item out_of_scope without waiting six polls")
 }

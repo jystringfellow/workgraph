@@ -102,6 +102,29 @@ Scenario: Pull requests that silently leave search do not linger
   When the pull request stays open but is missing from search for six polls
   Then workgraph stops watching it
   And "workgraph connectors status" reports that it left search
+  And "workgraph next" closes its items without claiming they were resolved
+
+Scenario: Pull requests I can no longer access are marked unreachable
+  Given workgraph is watching two of my pull requests
+  When I lose access to one of them
+  Then its items in "workgraph next" are marked unreachable and out of date
+  And the other pull request's items stay current
+
+Scenario: Blocked or out-of-date pull requests are not ready to merge
+  Given my pull request is approved with passing checks and no open threads
+  When branch protection blocks it or it is behind its base branch
+  Then workgraph does not report it as ready to merge
+
+Scenario: A long thread keeps my participation and every comment
+  Given I commented early in a review thread that now has 25 comments
+  When new comments arrive in that thread
+  Then workgraph stores one event for each new comment
+  And the thread still counts as one I am part of
+
+Scenario: A large comment backlog catches up without new activity
+  Given more than 1,000 comments arrived on my pull request between polls
+  When the next two polls run with no other changes
+  Then workgraph has stored an event for every comment
 
 Scenario: Other people's pull request activity is not my activity
   Given workgraph captured review comments, check results, and readiness changes on my pull requests today
@@ -160,8 +183,16 @@ Scenario: A new review request is a transition, not backlog
   When a new pull request requests my review
   Then workgraph stores a github.pull_request.review_requested event
 
+Scenario: A withdrawn review request leaves right away
+  Given a pull request requests my review and I have not reviewed it
+  When the request is removed
+  Then workgraph stores a github.pull_request.review_request_removed event on the next poll
+  And "workgraph next" no longer lists the request
+
 Scenario: Reviewing a pull request keeps it watched for follow-up
   Given a pull request requests my review
+  When I start a review but do not submit it
+  Then workgraph records no submitted review
   When I submit a review requesting changes
   Then workgraph stores github.pull_request.review_submitted and github.pull_request.review_request_removed events
   When the author pushes a new commit
@@ -187,3 +218,14 @@ Scenario: A push hint triggers a poll within seconds
   When I run "workgraph github prs hint"
   Then workgraph polls within seconds instead of waiting for the interval
   And the hint itself changes nothing that workgraph stores
+
+Scenario: A hint naming a pull request refreshes its threads
+  Given a review thread on my pull request is waiting on my reply
+  When the thread is resolved on GitHub
+  And I run "workgraph github prs hint --pr <url>"
+  Then "workgraph next" stops listing the thread within seconds
+
+Scenario: Hints respect GitHub rate limits
+  Given GitHub asked workgraph to wait before polling again
+  When I run "workgraph github prs hint" or "workgraph github prs capture"
+  Then workgraph does not query GitHub until the wait is over

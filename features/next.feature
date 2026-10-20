@@ -55,6 +55,8 @@ Scenario: Follow item changes as they happen
   Then workgraph prints every open item followed by a synced marker
   When a poll opens one item and resolves another
   Then workgraph prints one opened line and one closed line within seconds
+  When a snoozed item's snooze ends while no poll runs
+  Then workgraph prints an opened line for that item
 
 Scenario: Resume and today point at what is next
   Given workgraph has items waiting on me

@@ -61,9 +61,12 @@ Proposed in `specs/next.md` and `specs/github-pr-watch.md`, not yet
 implemented: the default overview shows a `Waiting on you` section after
 `Where you left off` with at most five `workgraph next` items, and
 `resume <project>` shows that project's items after `Recent activity`.
-`github.pull_request.*` transition events qualify for `Relevant updates since
-last check-in` only when `triage.needs_user` is true. Personal work evidence
-for the handoff is unchanged.
+A `github.pull_request.*` event qualifies for `Relevant updates since last
+check-in` only when its type is one of the needs-user transition types listed
+in `specs/github-pr-watch.md` and its `triage.needs_user` is true;
+`github.pull_request.observed` never qualifies. The existing timestamp or
+first-capture rule still applies. Personal work evidence for the handoff is
+unchanged.
 
 ## Project List
 

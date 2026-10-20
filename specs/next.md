@@ -87,10 +87,12 @@ documented, not a priority score.
     "branch": "feature/settings-helper",
     "base_ref": "main",
     "head_sha": "1111111111111111111111111111111111111111",
+    "head_repository": "example-org/workgraph-demo",
     "is_draft": false,
     "is_cross_repository": false
   },
   "actor": {"login": "alice", "kind": "user", "association": "MEMBER"},
+  "detail": {},
   "triage": {
     "last_responder": "other",
     "previous_responder": null,
@@ -99,7 +101,7 @@ documented, not a priority score.
     "thread_depth": 1,
     "unknown": []
   },
-  "freshness": {"as_of": "2026-10-16T17:02:11Z", "stale": false},
+  "freshness": {"as_of": "2026-10-16T17:02:11Z", "stale": false, "access": "ok"},
   "untrusted": {
     "trust": "untrusted",
     "body": "Could you rename this?",
@@ -114,8 +116,25 @@ documented, not a priority score.
   does not classify; it never says whether an agent could take the item.
 - `untrusted` is present only with `--include-untrusted` and only in JSON.
   It is never rendered in text output.
-- `freshness.stale` is true when the source's last successful poll is older
-  than three intervals or the source is in setup `error`.
+- `pull_request.head_repository` is the head repository's `owner/name`, or
+  `null` when the fork was deleted, so a consumer can find the head remote of
+  a cross-repository PR.
+- `detail` holds reason-specific fields:
+
+  | Reason | `detail` |
+  |---|---|
+  | `review_requested` | `{"request": {"direct", "teams", "unresolved_team"}}` |
+  | `rereview` | `{"viewer_review": {"id", "state", "commit"}}` |
+  | `checks_failed` | `{"run_fingerprint", "failed_checks": [{"name", "conclusion", "details_url"}]}` |
+  | `changes_requested` | `{"review_id", "reviewer"}` |
+  | `reply` | `{}` (the thread or comment is in `subject`) |
+  | `conflicts` | `{"base_ref"}` |
+  | `ready_to_merge` | `{"merge_state_status"}` |
+
+- `freshness.as_of` is when the item's own subject was last verified (for
+  GitHub, the PR's `verified_at`). `freshness.stale` is true when that is
+  older than three source intervals, when the source is in setup `error`, or
+  when `freshness.access` is `unreachable`.
 - Local paths, tokens, and connector configuration never appear in an item,
   so items can be sent to a cloud agent without leaking the local machine's
   layout.
@@ -185,12 +204,23 @@ dispatcher. It writes JSON Lines to stdout:
 - On start it emits every open item as `opened` with `initial: true`, then
   `synced`. A consumer that restarts gets the full set again and must treat
   item ids idempotently.
-- After start it re-projects when any source commits a poll (its `poll_seq`
-  changes) or a `next.*` event is written, checking every second. It emits
-  `opened` and `closed` for the difference, and `changed` when an open item's
-  non-id fields change, such as `freshness.stale` or `triage.unknown`.
-- `closed.reason` is `resolved` (the condition stopped holding), `done`,
-  `snoozed`, or `pr_closed`.
+- After start it re-projects every second against the current clock and
+  local state, whether or not anything was written. That covers poll
+  commits, `next.*` events, snooze expiry, items becoming stale, setup
+  errors, and disconnects. It emits `opened` and `closed` for the
+  difference, and `changed` when an open item's non-id fields change, such as
+  `freshness.stale` or `triage.unknown`. The projection is a local SQLite
+  read, so the one-second cadence costs no provider requests.
+- `closed.reason` says what is known, not more:
+  - `resolved`: the condition stopped holding on a successful poll
+  - `done` or `snoozed`: the user hid it
+  - `merged` or `closed`: the PR was merged or closed
+  - `out_of_scope`: the subject left what the source watches, for example a
+    withdrawn review request, an archived repository, an aged-out review, or
+    a disabled source
+  - `left_search` or `unreachable`: the source could no longer see the
+    subject; this does not claim it was addressed
+- A snooze ending re-opens the item with the same id.
 - `--watch` without `--json` is a usage error.
 
 Together with push hints, the path from a provider change to a consumer is:
@@ -244,23 +274,34 @@ only. No fact invokes `gh`.
   agent answered list exactly seven items, grouped and ordered as documented,
   without the bot comment or the agent-answered thread, and without invoking
   `gh`.
-- **N2. JSON items follow `workgraph.next_item.v1`.** Each item has a stable
-  id, `opened_by`, evidence ids, and no local path or token. Without
-  `--include-untrusted` it has no `untrusted` field; with it, comment text
-  appears only there. Text output never contains comment text.
+- **N2. JSON items follow `workgraph.next_item.v1`.** For one item of each
+  reason, the item has a stable id, `opened_by`, evidence ids, the
+  documented `detail` fields, `pull_request.head_repository` (including a
+  cross-repository PR and one whose fork was deleted, which is `null`), and
+  no local path or token. Without `--include-untrusted` it has no
+  `untrusted` field; with it, comment text appears only there. Text output
+  never contains comment text.
 - **N3. Done and snooze hide only that item id.** After `done` on a thread
   item, the thread is not listed; a new reviewer comment in the thread lists
   it again under a new id. A snoozed item returns when the snooze ends. Both
   append `next.*` events and write nothing to providers.
-- **N4. Staleness is reported.** With the source in setup `error`, or its
-  last successful poll older than three intervals, `next` prints a warning
-  and items have `freshness.stale: true`. `unknown` dimensions are shown as
-  unknown.
+- **N4. Staleness is reported per subject.** With the source in setup
+  `error`, or its last successful poll older than three intervals, `next`
+  prints a warning and items have `freshness.stale: true`. An item whose PR
+  is unreachable is stale with `access: "unreachable"` while other PRs'
+  items are fresh. `unknown` dimensions are shown as unknown.
 - **N5. Watch emits the initial set, then differences.** `next --watch
   --json` emits each open item with `initial: true` and then `synced`. After a
   poll commit that opens one item and resolves another, it emits exactly one
   `opened` and one `closed` with `reason: "resolved"`, within two seconds of
-  the commit.
+  the commit. With polling stopped, advancing the clock past a snooze emits
+  `opened` for the same id, past three intervals emits `changed` with
+  `freshness.stale: true`, and disconnecting the source emits `closed` with
+  `reason: "out_of_scope"`.
+- **N9. Close reasons do not overclaim.** A PR dropped after 6 missing polls
+  closes its items with `left_search`, an unreachable one with
+  `unreachable`, and a withdrawn review request with `out_of_scope`; none
+  closes with `resolved`.
 - **N6. Resume and today show the same items.** The default `resume` overview
   lists the first five items in `next` order and a `more` line. `resume
   <project>` lists that project's items. `today` prints only the count line

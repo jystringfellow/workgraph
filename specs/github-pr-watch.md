@@ -81,9 +81,12 @@ keeps both rules:
 - The `resume` morning handoff's personal work evidence is unchanged. It still
   uses only file and git evidence.
 - `resume`'s `Relevant updates since last check-in` shows events with
-  explicit involvement. Watch events carry involvement, but only those whose
-  `triage.needs_user` is true qualify. `observed`, `checks_passed`,
-  `author_replied`, and `review_submitted` stay out of that section.
+  explicit involvement whose timestamp or first capture time is after the
+  check-in. A watch event qualifies only when both hold: its type is
+  `review_comment`, `changes_requested`, `checks_failed`, `merge_conflict`,
+  `ready_to_merge`, `review_requested`, or `pushed_since_review`, and its
+  `triage.needs_user` is true. `observed` never qualifies, even with
+  `needs_user: true`, because its backlog is already in `Waiting on you`.
 - The default `resume` overview and `resume <project>` show attention items
   from `specs/next.md`.
 
@@ -102,8 +105,11 @@ associations cannot fire. The watch fills that gap:
 - The `github` connector's newer-wins upsert (`storeGitHubEvent`) currently
   replaces the whole payload. It changes to keep the existing `branch` and
   `commit` values when the incoming payload has none, so a later participant
-  poll does not erase the enrichment. Poll order between the two connectors
-  therefore does not matter.
+  poll does not erase the enrichment.
+- When the `github` connector inserts a new PR snapshot row, it copies
+  `branch` and `commit` from the latest `github_pr_observations` row for the
+  same repository and number, if one exists. Poll order between the two
+  connectors therefore does not matter.
 
 ## Auth Decision
 
@@ -242,7 +248,8 @@ query($q: String!, $login: String!, $after: String) {
             ... on Team { slug organization { login } }
           } }
         }
-        viewerLatestReview: reviews(author: $login, last: 1) {
+        viewerLatestReview: reviews(author: $login, last: 1,
+            states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) {
           nodes { id state submittedAt commit { oid } }
         }
         commits(last: 1) {
@@ -275,6 +282,9 @@ query($q: String!, $login: String!, $after: String) {
 | reviewer, requested | `is:pr is:open review-requested:<identity> archived:false sort:updated-desc` (`user-review-requested:` for `direct`) |
 | reviewer, reviewed | `is:pr is:open reviewed-by:<identity> -author:<identity> archived:false updated:>=<now - reviewed_window> sort:updated-desc` |
 
+- `viewerLatestReview` filters out `PENDING` reviews, which are the user's
+  own unsubmitted drafts. A returned review with a null `submittedAt` is
+  treated as absent.
 - The two reviewer searches are merged by node id into one reviewer set.
 - Check status changes do not bump `updatedAt`, so the rollup is read here on
   every poll. For the reviewer role, check state is recorded but opens no
@@ -353,6 +363,7 @@ query($id0: ID!, $since0: DateTime, $after0: String, ...) {
   - its `updatedAt` differs from the previous observation
   - its last complete detail fetch is older than 30 minutes (reconciliation
     for changes that may not bump `updatedAt`, such as thread resolution)
+  - a hint forces it (see Push hints)
 - It runs for a reviewer-role PR under the same conditions, but only once the
   user has reviewed it or commented on it. A PR that only requests the user's
   review needs no detail, which keeps team queues cheap.
@@ -362,11 +373,27 @@ query($id0: ID!, $since0: DateTime, $after0: String, ...) {
   overlap. It is null on first sight. Overlap is harmless because the diff
   deduplicates by provider id.
 - **Timeline pagination.** When `hasNextPage` is true, the PR is re-queried
-  with `$afterN` until the page set is complete, up to 10 pages. Only a
-  complete fetch advances `timeline_since`. A PR that exceeds 10 pages keeps
-  its previous watermark, its comment and review dimensions are `unknown`
-  for that poll, and connector status reports `detail incomplete:
-  <repo>#<n>`. Comments are therefore never skipped by advancing past them.
+  with `$afterN` until the page set is complete, up to 10 pages per poll.
+  Only a complete fetch advances `timeline_since`.
+- **Timeline catch-up.** A PR that exceeds 10 pages in one poll commits the
+  events from the pages it read and stores the last `endCursor` as
+  `timeline_cursor` in its observation. The next poll resumes from
+  `timeline_cursor` instead of starting again from `timeline_since`, so a
+  backlog of any size completes over successive polls without an external
+  change. While catching up, the PR's comment and review dimensions are
+  `unknown` and connector status reports `detail catching up: <repo>#<n>`.
+  When a fetch reaches `hasNextPage = false`, `timeline_cursor` is cleared and
+  `timeline_since` advances. Comments are therefore never skipped by
+  advancing past them.
+- **Thread windows.** A thread's `comments(last: 20)` window is complete when
+  it contains the thread's first comment or a comment already known (stored
+  as an event, or created at or before `baseline_at`). When it is not, the
+  watch pages backward through that thread with a per-thread query
+  (`node(id: <thread_id>) { ... on PullRequestReviewThread { comments(last:
+  20, before: $cursor) { ... } } }`), up to 5 pages, until the window is
+  complete. A thread that is still incomplete after 5 pages emits the
+  comments it read, marks the earliest with `triage.gap: true`, and is
+  `unknown` for that poll rather than losing participation.
 - `latestOpinionatedReviews.totalCount > 20` makes the approval dimension
   `unknown`, so an unseen `CHANGES_REQUESTED` review cannot produce false
   readiness.
@@ -398,17 +425,20 @@ is_cross_repository, baseline_at
 review_decision        APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED | none
 opinionated_reviews    [{reviewer, actor_kind, state}]  | unknown
 checks_state           passed | failed | pending | none | unknown
-check_runs             [{id, name, status, conclusion, details_url}]
+check_runs             [{id, name, status, conclusion, completed_at,
+                         details_url}]
 threads                [{thread_id, path, line, is_resolved, resolved_by,
                          is_outdated, depth, last_author, last_responder,
-                         agent_replies, user_participates, awaiting}]
+                         agent_replies, user_participates, awaiting,
+                         window_complete}]
 conversation           {last_human_comment_at, last_user_comment_at}
 mergeable              MERGEABLE | CONFLICTING | UNKNOWN
 merge_state_status     raw value
 ready                  true | false | unknown
 review_request         {direct, teams, unresolved_team} | none   (reviewer)
 viewer_review          {id, state, submitted_at, commit} | none  (reviewer)
-timeline_since, detail_fetched_at, observed_at, missing_polls
+timeline_since, timeline_cursor, detail_fetched_at, observed_at,
+verified_at, missing_polls, access   ok | unreachable
 ```
 
 Mappings:
@@ -422,8 +452,13 @@ Mappings:
   - a null rollup is `none`, and more than 100 contexts is `unknown`
 - `responder` of a comment: `other` when not by `identity_login`, otherwise
   `author` or `agent` by `agent_reply_marker`.
-- `user_participates` is true when any returned comment in the thread is by
-  `identity_login`.
+- `user_participates` is true when any comment read in the thread is by
+  `identity_login`, or when P already had it true for that thread. Once true
+  it stays true, so a user comment scrolling out of the 20-comment window
+  never drops the thread.
+- `verified_at` is the time of the last poll that read this PR's status from
+  a complete search or the follow-up query. `access` is `unreachable` while
+  the follow-up returns null or `FORBIDDEN`.
 - `awaiting` on an unresolved thread is `user` when the last comment's
   responder is `other` and, in the reviewer role, `user_participates` is
   true. Otherwise it is `other`. Resolved threads have no `awaiting`.
@@ -463,6 +498,7 @@ Events use source `github` and type prefix `github.pull_request.`.
 | `checks_passed` | author | `checks_state` becomes `passed` for a run set not yet reported on the head | `<head_sha>:<run_fingerprint>` | empty | latest context completion |
 | `ready_to_merge` | author | `ready` goes from false to true | `<head_sha>:<observed_at>` | empty | `observed_at` |
 | `readiness_lost` | author | `ready` goes from true to false | `<head_sha>:<observed_at>` | empty | `observed_at` |
+| `merge_conflict` | author | `mergeable` becomes `CONFLICTING` from a known non-conflicting value | `<head_sha>:<observed_at>` | empty | `observed_at` |
 | `review_requested` | reviewer | a request for the user (direct or through a team) appears that P did not have | `<observed_at>` | PR author | `observed_at` |
 | `review_request_removed` | reviewer | the request for the user disappears while the PR stays open | `<observed_at>` | empty | `observed_at` |
 | `review_submitted` | reviewer | a new review by `identity_login` | `<review_id>` | `identity_login` | `submittedAt` |
@@ -555,12 +591,16 @@ Other columns:
   `user_reply`, or `lifecycle`.
 - `triage.needs_user` is true for:
   - `review_comment` events whose thread or conversation is awaiting the user
-  - `changes_requested`, `checks_failed`, and `ready_to_merge`
+  - `changes_requested`, `checks_failed`, `merge_conflict`, and
+    `ready_to_merge`
   - `review_requested`, and `pushed_since_review` when the user's latest
     review is `CHANGES_REQUESTED` or `COMMENTED`
   - `observed` events whose state opens at least one attention item
 
   It is false otherwise. It is a deterministic hint, not a priority judgment.
+  Surfaces that select on it also name the event types they accept; for
+  example `resume` never shows `observed` events (see Relationship To
+  Existing Surfaces).
 - `triage.previous_responder` is the responder (`other`, `author`, or
   `agent`) of the comment immediately before this one in the same thread, or
   `null` for the first comment. New comments are processed in chronological
@@ -580,9 +620,8 @@ Other columns:
 - `observed` events carry the full current `state`, `baseline_at`, and,
   under `untrusted`, a `threads` array of up to 20 open threads awaiting the
   user, each with path, line, URL, and last-comment body.
-- When a thread's returned 20 comments do not reach back to a comment
-  already known (stored as an event, or created at or before `baseline_at`),
-  the earliest emitted comment has `triage.gap: true`.
+- When a thread's window is still incomplete after backward paging (see
+  Thread windows), the earliest emitted comment has `triage.gap: true`.
 
 ## State Diff And Dedupe Rules
 
@@ -614,15 +653,18 @@ for the same `node_id` and role.
    - `pending` emits nothing. A failure is reported once the head's whole run
      set is terminal, not at the first failing job.
    - `run_fingerprint` is the first 12 hex characters of SHA-256 over the
-     sorted CheckRun ids and `context@createdAt` values of the terminal run
-     set.
+     sorted `id@completedAt` values of the terminal CheckRuns and
+     `context@createdAt` values of the terminal StatusContexts. Including
+     `completedAt` covers apps that reset and re-run an existing check run
+     under the same id.
    - A head emits a checks event when it reaches a terminal state whose
      fingerprint has not been reported for that head. Observing the same runs
      again cannot emit twice, and returning to an earlier SHA does not
      duplicate.
-   - A re-run creates new run ids, so a re-run that finishes failed emits a
-     new `checks_failed`. Jobs created progressively by `needs:` dependencies
-     are covered by waiting for the whole set to be terminal.
+   - A re-run creates new run ids or a new `completedAt`, so a re-run that
+     finishes failed emits a new `checks_failed`. Jobs created progressively
+     by `needs:` dependencies are covered by waiting for the whole set to be
+     terminal.
    - A new head starts at whatever C reports, normally `pending`.
 5. **Comments and reviews.** Each comment or review id that is neither stored
    as an event nor baseline emits one event, oldest first, unless its author
@@ -636,14 +678,17 @@ for the same `node_id` and role.
    - approval: `review_decision = APPROVED`, or `review_decision` is none,
      at least one `APPROVED` review exists, and no reviewer's latest
      opinionated review is `CHANGES_REQUESTED`
-   - `checks_state = passed`, or `checks_state = none` with
-     `merge_state_status = CLEAN`
+   - `checks_state` is `passed` or `none`
    - zero unresolved, non-outdated threads, which must be known
    - `mergeable = MERGEABLE`
+   - `merge_state_status` is `CLEAN` or `HAS_HOOKS`. `BLOCKED` (branch
+     protection), `BEHIND`, `UNSTABLE`, `DIRTY`, and `DRAFT` are not ready;
+     `UNKNOWN` makes `ready` unknown.
 
    `ready` false to true emits `ready_to_merge`. True to false emits
    `readiness_lost`, with `triage.reasons` listing each failed condition
-   (`draft`, `approval`, `checks`, `threads`, `conflicts`). Unknown does not
+   (`draft`, `approval`, `checks`, `threads`, `conflicts`, `merge_state`), and
+   `triage.merge_state_status` carrying the raw value. Unknown does not
    transition. The discriminator includes the observing poll's
    `observed_at`, so readiness that is lost and regained on the same SHA
    emits `ready_to_merge` again, while repeated polls of one state never
@@ -659,29 +704,48 @@ for the same `node_id` and role.
      requests are through ignored teams, and which the user has not reviewed,
      is excluded from the reviewer set.
 8. **Leaving a role's set.** A PR in P but not in C is resolved through the
-   follow-up query:
-   - Merged: emit `merged` and delete the observation.
-   - Closed and not merged: emit `closed` and delete the observation.
-   - Still `OPEN` in an archived repository: delete the observation silently.
-   - Reviewer role, still `OPEN`, no request for the user, and last updated
-     before `reviewed_window`: delete the observation silently (aged out).
-   - Still `OPEN` otherwise (search lag): keep P, increment
-     `missing_polls`, and emit nothing. After 6 consecutive missing polls,
-     delete the observation and report `left search: <repo>#<n>` in connector
-     status, so a PR cannot stay in `next` indefinitely on stale state.
-   - Null or `FORBIDDEN` (lost access): keep P, emit nothing, and report
-     `unreachable: <repo>#<n>` in connector status.
+   follow-up query. Each outcome records an `exit` on the observation before
+   it is deleted, so `next` can report why items closed:
+   - Merged: emit `merged` and delete the observation (`exit: merged`).
+   - Closed and not merged: emit `closed` and delete the observation
+     (`exit: closed`).
+   - Still `OPEN` in an archived repository: delete the observation silently
+     (`exit: out_of_scope`).
+   - Reviewer role, still `OPEN`, and the follow-up confirms no request for
+     the user (or only requests through `ignore_teams`):
+     - when the user has not reviewed it, or last reviewed it and the PR was
+       last updated before `reviewed_window`: emit `review_request_removed`
+       if P had a request, then delete the observation (`exit: out_of_scope`)
+     - otherwise the reviewed search is lagging; treat it as search lag below
+   - Still `OPEN` and the follow-up shows it still matches the role's search
+     (search lag): keep P, increment `missing_polls`, and emit nothing. After
+     6 consecutive missing polls, delete the observation (`exit: left_search`)
+     and report `left search: <repo>#<n>` in connector status.
+   - Null or `FORBIDDEN` (lost access): keep P with `access: unreachable`,
+     emit nothing, and report `unreachable: <repo>#<n>` in connector status.
+     Its items stay listed but are marked unreachable and stale (see
+     Attention Items). After 6 consecutive unreachable polls the observation
+     is deleted (`exit: unreachable`).
 9. **Missed intermediate states.** Polling observes state, not history.
    Check and readiness states that come and go between polls are not seen.
    Comments and reviews are not lost this way, because they are read by id
    from a complete timeline or a thread window marked with `gap`.
-10. **Atomicity and concurrency.** All events, the snapshot enrichment, all
-    updated observations, and the connector's `poll_seq` increment for a poll
-    commit in one transaction. The transaction first checks that `poll_seq`
-    still equals the value read when the poll started. If another poll
-    committed meanwhile, for example `github prs capture` racing the daemon,
-    the poll discards its work and retries once from the new observations.
-    Any failure rolls back everything.
+10. **Atomicity and concurrency.**
+    - A poll commits in one transaction: the events, snapshot enrichment, and
+      updated observations of every role whose set was complete, plus the
+      connector's `poll_seq` increment. A role whose search failed
+      contributes nothing and keeps its previous observations (see
+      Completeness). A database or diff error rolls back the whole
+      transaction.
+    - The transaction first checks that `poll_seq` still equals the value
+      read when the poll started. If it changed, the poll discards its work
+      and retries once from the current observations.
+    - Every operation that changes what a poll would write increments
+      `poll_seq` in the same transaction as its own change: another poll's
+      commit, `github prs disconnect`, a scope or role change, and deleting
+      observations. A poll that was already running when the user
+      disconnected therefore cannot restore deleted observations, and after
+      a disconnect its retry finds the connector disabled and stops.
 
 ## Attention Items
 
@@ -689,16 +753,22 @@ The watch defines the GitHub attention items for `workgraph next`
 (`specs/next.md`). Items are a **read-time projection** over the latest
 observations and their events. They store nothing and make no GitHub request.
 
-| Reason | Role | Open while | Since |
+| Reason | Role | Open while | Opening event |
 |---|---|---|---|
-| `review_requested` | reviewer | a request for the user is open | the `review_requested` event, or `observed` for backlog |
-| `rereview` | reviewer | the user's latest review is `CHANGES_REQUESTED` or `COMMENTED` and the head changed since | the `pushed_since_review` event |
-| `checks_failed` | author | `checks_state = failed` on the current head | the `checks_failed` event |
-| `changes_requested` | author | any reviewer's latest opinionated review is `CHANGES_REQUESTED` | that review's event |
-| `reply` | both | an unresolved, non-outdated thread is `awaiting: user` | the thread's last comment |
-| `reply` | author | a human (`actor_kind: user`) conversation comment is newer than the user's last conversation comment | that comment |
-| `conflicts` | author | `mergeable = CONFLICTING` | first observation in that state |
-| `ready_to_merge` | author | `ready = true` | the `ready_to_merge` event |
+| `review_requested` | reviewer | a request for the user is open | `review_requested` |
+| `rereview` | reviewer | the user's latest review is `CHANGES_REQUESTED` or `COMMENTED` and the head changed since | `pushed_since_review` |
+| `checks_failed` | author | `checks_state = failed` on the current head | `checks_failed` |
+| `changes_requested` | author | any reviewer's latest opinionated review is `CHANGES_REQUESTED` | `changes_requested` |
+| `reply` | both | an unresolved, non-outdated thread is `awaiting: user` | the `review_comment` for the thread's last comment |
+| `reply` | author | a human (`actor_kind: user`) conversation comment is newer than the user's last conversation comment | that comment's `review_comment` |
+| `conflicts` | author | `mergeable = CONFLICTING` | `merge_conflict` |
+| `ready_to_merge` | author | `ready = true` | `ready_to_merge` |
+
+**Opening evidence.** An item's `opened_by` is its opening event when one is
+stored. A condition that already held at baseline has no opening event, so
+`opened_by` is the PR's `observed` event for that role, and `since` is that
+event's `baseline_at`. Both are stored events, so `opened_by`, `since`, and
+the item id survive observation resets.
 
 - Conversation `reply` items come only from issue comments. Review bodies do
   not open them; a `CHANGES_REQUESTED` review opens `changes_requested`
@@ -711,21 +781,28 @@ observations and their events. They store nothing and make no GitHub request.
 - Draft PRs are included and marked `draft`.
 - Dimensions that are `unknown` are shown as `unknown` with the reason, never
   as their carried-forward value.
-- An item closes when its condition stops holding, when the PR is merged or
-  closed, or when the user marks it done (`specs/next.md`).
+- **Per-PR freshness.** An item's `freshness.as_of` is the PR's
+  `verified_at`, not the connector's last success. It is stale when
+  `verified_at` is older than three intervals or the PR's `access` is
+  `unreachable`, even while other PRs poll fine.
+- An item closes when its condition stops holding (`resolved`), when the
+  user marks it done or snoozes it, or when its PR's observation is deleted.
+  A deleted observation closes the item with the observation's `exit`:
+  `merged`, `closed`, `out_of_scope`, `left_search`, or `unreachable`. Only
+  `resolved` claims the condition was addressed.
 
 Item ids are deterministic so a consumer can track an item across polls:
 
 | Reason | Item id |
 |---|---|
-| `review_requested` | `github:review_requested:<node_id>:<opening_event_id>` |
+| `review_requested` | `github:review_requested:<node_id>:<opened_by>` |
 | `rereview` | `github:rereview:<node_id>:<head_sha>` |
 | `checks_failed` | `github:checks_failed:<node_id>:<head_sha>:<run_fingerprint>` |
 | `changes_requested` | `github:changes_requested:<node_id>:<review_id>` |
 | `reply` (thread) | `github:reply:<node_id>:<thread_id>:<last_comment_id>` |
 | `reply` (conversation) | `github:reply:<node_id>:conversation:<comment_id>` |
-| `conflicts` | `github:conflicts:<node_id>:<head_sha>` |
-| `ready_to_merge` | `github:ready_to_merge:<node_id>:<ready_event_id>` |
+| `conflicts` | `github:conflicts:<node_id>:<opened_by>` |
+| `ready_to_merge` | `github:ready_to_merge:<node_id>:<opened_by>` |
 
 A new comment in a thread produces a new item id, so marking an item done
 never hides later feedback.
@@ -750,15 +827,21 @@ up to one interval to seconds.
 
 - `workgraph github prs hint [--pr <url>]` records a hint in SQLite
   (`connector_poll_hints`: connector id, received at, optional PR URL). A hint
-  carries no state, and `--pr` is used only for logging.
+  carries no state. `--pr` is only a selector: it is matched exactly against
+  the `url` of an existing observation and otherwise ignored.
 - The daemon checks for hints every 2 seconds. When at least one is pending
   and the last poll started more than 10 seconds ago, it polls now and clears
   the hints received before that poll started. Hints arriving during a poll
   trigger at most one follow-up poll.
 - A hint-triggered poll is an ordinary full poll, so completeness and the
-  diff rules are unchanged. Its cost is a status query plus detail for what
-  changed.
-- A rate-limit deferral also defers hint-triggered polls.
+  diff rules are unchanged, with one addition: it forces the detail query for
+  every PR whose `--pr` matched, and for every PR whose last detail fetch is
+  older than 2 minutes when no hint named a PR. Changes that do not bump
+  `updatedAt`, such as thread resolution, therefore reach `next` within
+  seconds of a hint that names the PR, and within a few minutes of an
+  unnamed one.
+- A hint never overrides the connector's not-before deadline (see Runtime
+  extension).
 - Hints are local only. A webhook receiver, `gh webhook forward`, a company
   event bus, or a cloud relay can call `workgraph github prs hint`. Receiving
   provider webhooks is out of scope here because it needs a reachable endpoint
@@ -770,15 +853,21 @@ The current poller (`runConnectorPoller` in `run.go`) treats every poll as
 success or failure, resets failures on success, and always waits either the
 interval or the failure backoff. The watch needs a small extension:
 
+- The connector state gains one **not-before** deadline. No poll for the
+  connector starts before it, whether triggered by the interval, a hint, or
+  `github prs capture`. `capture` prints `rate limited until <time>` and
+  exits non-zero without querying.
 - A poll may return a **deferred** outcome with a reason and a not-before
   time. A deferral records no failure, leaves `consecutive_failures`
-  unchanged, sets `next_poll_at` to the later of the interval and the
-  not-before time (capped at 30 minutes), and shows the reason in
+  unchanged, sets the not-before deadline, and shows the reason in
   `connectors status`.
-- A failed poll may carry a **retry-after** duration. The next attempt waits
-  for the larger of the backoff and that duration.
+- A failed poll may carry a **retry-after** duration. It sets the not-before
+  deadline to now plus that duration, and the next attempt waits for the
+  larger of the backoff and the deadline.
+- Provider deadlines are honored as given. Only ordinary scheduling, the
+  interval and the failure backoff, is capped.
 - A poller may be **woken early** by a pending hint, subject to the 10-second
-  minimum spacing and any deferral.
+  minimum spacing and the not-before deadline.
 - Connectors that use none of these behave exactly as today.
 
 ### Rate limits
@@ -903,8 +992,9 @@ fuzzy matching, and no time-only matches.
   sentinel never appears under the workgraph home or in the database, and that
   `gh auth token` is never invoked.
 - **Hints carry no state.** A hint only schedules a poll. Its optional PR URL
-  is logged after the same control-character stripping as comment text and
-  is never used as data.
+  is used only as an exact-match selector against existing observations, is
+  logged after the same control-character stripping as comment text, and is
+  never stored as event data.
 - **Third-party text is stored only under `payload.untrusted`**, with
   `trust: "untrusted"` and `origin`. This covers comment bodies, review bodies,
   and diff hunks.
@@ -963,15 +1053,16 @@ fuzzy matching, and no time-only matches.
 ## Delivery Slices
 
 0. Existing connector fixes (facts G1–G4).
-1. Runtime extension: deferred polls, retry-after, and early wake (fact 19).
+1. Runtime extension: deferred polls, retry-after, the not-before deadline,
+   and early wake (fact 19).
 2. Author role capture: connect, queries, observations, diff engine, events,
-   reply attribution, snapshot enrichment, the untrusted payload, `today`
-   personal-activity rules, the `--type` wildcard, and poll concurrency
-   (facts 1–18, 20–23, 25).
-3. Author role attention items in `workgraph next` and `resume` (fact 24 and
-   `specs/next.md`).
+   reply attribution, thread windows, timeline catch-up, snapshot
+   enrichment, the untrusted payload, `today` personal-activity rules, the
+   `--type` wildcard, and poll concurrency (facts 1–18, 20–23, 25, 32, 33).
+3. Author role attention items in `workgraph next` and `resume` (facts 24,
+   34, and `specs/next.md`).
 4. Reviewer role: review-request and reviewed searches, team attribution,
-   reviewer events, and reviewer attention items (facts 26–30).
+   reviewer events, and reviewer attention items (facts 26–30, 35).
 5. Push hints (fact 31).
 
 ## Facts
@@ -979,7 +1070,7 @@ fuzzy matching, and no time-only matches.
 Facts for the watch live in `facts/github_pr_watch_test.go`. Slice-0 facts
 live in `facts/github_test.go`. All use a fake `gh` script that serves queued
 GraphQL fixtures and logs every invocation, following `writeFakeGH`, and an
-injectable clock.
+injectable clock. Facts are numbered by when they were added, not by slice.
 
 ### Slice 0 — existing connector
 
@@ -1010,23 +1101,27 @@ injectable clock.
    transition events.
 3. **A reset neither duplicates nor loses.** After deleting observations, a
    comment created while observations were missing emits one
-   `review_comment`, comments from before `baseline_at` emit nothing, and no
-   second `observed` is stored.
+   `review_comment`, comments from before `baseline_at` emit nothing, no
+   second `observed` is stored, and open items keep their ids and
+   `opened_by`.
 4. **Same SHA and same state produces no new event.**
 5. **Checks wait for the whole run set.** A head with one failed and one
    pending context emits nothing. When the pending context finishes, exactly
    one `checks_failed` is emitted. A new head that goes pending emits
    nothing.
-6. **Check runs are keyed by run identity.** Re-polling the same terminal
+6. **Check runs are keyed by run execution.** Re-polling the same terminal
    runs emits nothing. A re-run with new run ids that finishes failed emits a
-   second `checks_failed`.
+   second `checks_failed`, and so does a re-run that reuses the run id with a
+   new `completedAt`.
 7. **New reviews and comments emit by provider id**, oldest first, with
    `actor_kind`, `actor_association`, and `has_suggestion`. Three new
    comments in one thread produce three events.
-8. **Timeline pagination is lossless.** 150 conversation comments between
-   polls produce 150 events across two pages. With the page limit exceeded,
-   `timeline_since` is unchanged, the dimension is `unknown`, and the next
-   complete fetch emits the remaining comments.
+8. **Timeline pagination catches up.** 150 conversation comments between
+   polls produce 150 events across two pages in one poll. A backlog of 1,500
+   comments emits the first 1,000 on one poll with the dimension `unknown`
+   and `timeline_cursor` stored, and the remaining 500 on the next poll with
+   no other change, after which `timeline_since` advances and
+   `timeline_cursor` is cleared.
 9. **Configured actors are ignored; bots are captured.** Comments by
    `ignore_actors` emit nothing. A `Bot` comment emits `review_comment` with
    `actor_kind: "bot"`. A comment by `identity_login` emits `author_replied`
@@ -1040,13 +1135,24 @@ injectable clock.
 11. **Readiness is lost and regained.** Ready emits `ready_to_merge`. A new
     unresolved thread emits `readiness_lost` with `reasons: ["threads"]`.
     Resolving it emits a second `ready_to_merge` on the same SHA. Repeated
-    polls of each state add nothing. `mergeable: UNKNOWN` and more than 20
+    polls of each state add nothing. With passing checks, approval, no
+    threads, and `MERGEABLE`, a `merge_state_status` of `BLOCKED` or `BEHIND`
+    is not ready, and `readiness_lost` from those lists `merge_state`.
+    `mergeable: UNKNOWN`, `merge_state_status: UNKNOWN`, and more than 20
     opinionated reviews do not transition.
-12. **Leaving the open set.** Covers merged, closed, still `OPEN` (kept for
-    6 polls, then reported `left search`), archived, `FORBIDDEN`, and
-    reopened (which emits `reopened`).
+12. **Leaving the open set.** Merged and closed emit terminal events and
+    record exits `merged` and `closed`. Archived records `out_of_scope`. A PR
+    still `OPEN` and still matching search is kept for 6 polls, then
+    recorded `left_search`. A `FORBIDDEN` PR is kept with `access:
+    unreachable`, its items are marked unreachable and stale while other PRs
+    poll successfully, and after 6 polls it is recorded `unreachable`. A
+    reopened PR emits `reopened`.
 13. **A rate-limited poll defers and keeps state.**
-14. **A secondary rate limit backs off without losing state.**
+14. **A secondary rate limit sets a hard deadline.** A `RATE_LIMITED` error
+    with `Retry-After: 120` records a failure, leaves observations unchanged,
+    and sets the not-before deadline. Neither a hint nor `github prs capture`
+    polls before it; `capture` prints `rate limited until` and exits
+    non-zero.
 15. **Auth expiry stops only this connector.**
 16. **No token is ever persisted.**
 17. **Comment text is stored with the untrusted flag.** A body with
@@ -1059,20 +1165,21 @@ injectable clock.
 18. **An incomplete role fails without changes.** A role whose search is
     incomplete, has GraphQL errors, or is over its ceiling commits nothing
     and emits no `closed` events, while a complete role in the same poll
-    commits.
+    commits and `poll_seq` increments once.
 19. **Deferred polls do not count as failures.** A poller returning a
-    deferral keeps `consecutive_failures` unchanged and schedules
-    `next_poll_at` at the not-before time. A failure with retry-after waits at
-    least that long. A connector returning neither keeps today's schedule.
+    deferral keeps `consecutive_failures` unchanged and sets the not-before
+    deadline, even when it is more than 30 minutes away. A failure with
+    retry-after waits at least that long. A connector returning neither keeps
+    today's schedule.
 20. **Read-only invocation and the type wildcard.** No `gh api graphql`
     invocation contains `mutation`, and `events today --type
     github.pull_request.*` lists transitions but not snapshots or issues.
-21. **Snapshot enrichment survives participant polls.** An existing
+21. **Snapshot enrichment is order-independent.** An existing
     `github.pull_request` row gains `branch` and `commit` while keeping
-    `matched_scopes` and its `timestamp`. A newer `github` participant poll
-    keeps them. No snapshot row is created for a PR the `github` connector
-    never captured. Running the two connectors in either order gives the same
-    row.
+    `matched_scopes` and its `timestamp`, and a newer `github` participant
+    poll keeps them. When the watch observes a PR first, no snapshot row is
+    created, and a later participant poll inserts the row with `branch` and
+    `commit` already set. Both orders give the same row.
 22. **Associations use observed events only.** `head_sha` on an `observed`
     event associates with a captured `git.commit`. Transition events are not
     candidates. A URL inside `untrusted` creates no association. Event ids
@@ -1085,13 +1192,29 @@ injectable clock.
     `events today` lists all of them.
 24. **Resume relevant updates include only needs-user transitions.** After a
     resume check-in, a `review_comment` awaiting the user and a
-    `checks_failed` appear under `Relevant updates since last check-in`, while
-    `observed`, `checks_passed`, and `author_replied` do not. The morning
-    handoff's personal work evidence is unchanged.
-25. **Concurrent polls do not duplicate.** A `github prs capture` and a
-    daemon poll that both see the same new comment store exactly one
+    `checks_failed` appear under `Relevant updates since last check-in`. An
+    `observed` event with `needs_user: true`, a `checks_passed`, and an
+    `author_replied` do not. An event captured after the check-in with an
+    earlier provider timestamp still appears. The morning handoff's personal
+    work evidence is unchanged.
+25. **Polls are fenced by `poll_seq`.** A `github prs capture` and a daemon
+    poll that both see the same new comment store exactly one
     `review_comment`, and the losing poll retries from the winner's
-    observations.
+    observations. A poll in flight when `github prs disconnect` runs commits
+    nothing, leaves no observations behind, and does not retry.
+32. **Thread windows keep participation and events.** In a thread with 25
+    comments where the user's comment is the 3rd, a poll reads back to the
+    known comment, emits each new comment once, and keeps
+    `user_participates` true. A thread whose window cannot be completed in
+    5 backward pages emits what it read with `triage.gap: true` and keeps
+    participation.
+33. **New conflicts have an opening event.** A PR going from `MERGEABLE` to
+    `CONFLICTING` emits one `merge_conflict`. Repeated polls add nothing.
+34. **Backlog items cite the observed event.** On first sight, a PR with
+    failed checks, changes requested, a conflict, and an awaiting thread
+    opens four items whose `opened_by` is the PR's `observed` event and whose
+    `since` is `baseline_at`. After an observation reset the item ids and
+    `opened_by` are unchanged.
 
 ### Reviewer role
 
@@ -1107,14 +1230,23 @@ injectable clock.
     submits a `CHANGES_REQUESTED` review, the poll emits `review_submitted`
     and `review_request_removed` with `reason: "reviewed"`, the PR stays in
     the reviewer set through the reviewed search, and a new head emits one
-    `pushed_since_review`. A re-request emits a new `review_requested`.
+    `pushed_since_review`. A re-request emits a new `review_requested`. A
+    later `PENDING` draft review by the user changes nothing: it emits no
+    `review_submitted` and the `rereview` item stays open.
 29. **Reviewer comment events are limited to the user's threads.** A comment
     in a thread the user participates in emits `review_comment` and makes the
-    thread `awaiting: user`. A comment in another thread, and conversation
+    thread `awaiting: user`, including when the user's own comment is no
+    longer in the last 20. A comment in another thread, and conversation
     comments, emit nothing. A requested-only PR runs no detail query.
 30. **Ignored teams and aging out.** A PR requested only through an
     `ignore_teams` team is absent. A reviewed PR last updated before
-    `reviewed_window` is dropped silently without a `closed` event.
+    `reviewed_window` is dropped silently without a `closed` event and its
+    items close with `out_of_scope`.
+35. **A withdrawn request closes at once.** When a request is removed from an
+    open PR the user never reviewed, the next poll emits
+    `review_request_removed` with `reason: "withdrawn"`, deletes the
+    observation, and closes the item with `out_of_scope`, without waiting 6
+    polls.
 
 ### Push hints
 
@@ -1122,5 +1254,7 @@ injectable clock.
     hint recorded 30 seconds after a poll triggers a poll at the next
     2-second check. A second hint during that poll triggers exactly one
     follow-up. A hint within 10 seconds of the previous poll start waits until
-    10 seconds have passed. A hint while deferred for rate limits waits for
-    the deferral.
+    10 seconds have passed. A hint naming a PR whose thread was resolved
+    without an `updatedAt` change forces its detail query, so the `reply` item
+    closes on that poll. A hint during a rate-limit deferral or a
+    secondary-limit deadline waits for the deadline.
