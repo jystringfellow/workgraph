@@ -104,6 +104,11 @@ Scenario: Pull requests that silently leave search do not linger
   And "workgraph connectors status" reports that it left search
   And "workgraph next" closes its items without claiming they were resolved
 
+Scenario: Disconnecting while a poll runs leaves nothing behind
+  Given a github.pr_watch poll is running
+  When I run "workgraph github prs disconnect"
+  Then the poll stores no events or observations
+
 Scenario: Pull requests I can no longer access are marked unreachable
   Given workgraph is watching two of my pull requests
   When I lose access to one of them
@@ -115,14 +120,25 @@ Scenario: Blocked or out-of-date pull requests are not ready to merge
   When branch protection blocks it or it is behind its base branch
   Then workgraph does not report it as ready to merge
 
-Scenario: A long thread keeps my participation and every comment
-  Given I commented early in a review thread that now has 25 comments
-  When new comments arrive in that thread
-  Then workgraph stores one event for each new comment
-  And the thread still counts as one I am part of
+Scenario: My unsubmitted draft replies do not count
+  Given a review thread on my pull request is waiting on my reply
+  When I write a reply as part of a review I have not submitted
+  Then the thread is still waiting on my reply
+  When I submit the review
+  Then workgraph stores my reply and the thread no longer waits on me
+
+Scenario: Ignored actors do not put work on my list
+  Given github.pr_watch ignores the actor "my-automation"
+  When "my-automation" comments on a thread and requests changes on my pull request
+  Then "workgraph next" lists nothing for those
+
+Scenario: Comments made just before a merge are kept
+  Given workgraph has observed my open pull request
+  When a collaborator comments and then merges it between polls
+  Then workgraph stores the comment and the merge
 
 Scenario: A large comment backlog catches up without new activity
-  Given more than 1,000 comments arrived on my pull request between polls
+  Given 1,500 comments arrived on my pull request between polls
   When the next two polls run with no other changes
   Then workgraph has stored an event for every comment
 
@@ -189,29 +205,20 @@ Scenario: A withdrawn review request leaves right away
   Then workgraph stores a github.pull_request.review_request_removed event on the next poll
   And "workgraph next" no longer lists the request
 
-Scenario: Reviewing a pull request keeps it watched for follow-up
+Scenario: Reviewing a pull request clears the request
   Given a pull request requests my review
   When I start a review but do not submit it
   Then workgraph records no submitted review
   When I submit a review requesting changes
   Then workgraph stores github.pull_request.review_submitted and github.pull_request.review_request_removed events
-  When the author pushes a new commit
-  Then workgraph stores one github.pull_request.pushed_since_review event
+  And "workgraph next" no longer lists the request
   When the author requests my review again
   Then workgraph stores a new github.pull_request.review_requested event
 
-Scenario: Only threads I am part of follow up on pull requests I review
-  Given I reviewed a pull request and started one review thread
-  When the author replies in my thread and comments in another thread
-  Then workgraph stores a review_comment event for the reply in my thread
-  And workgraph stores no event for the other thread
-
-Scenario: Ignored teams and stale reviews drop out
+Scenario: Ignored teams drop out
   Given github.pr_watch ignores the team "acme/everyone"
   When a pull request requests a review only from "acme/everyone"
   Then workgraph does not watch it
-  When a pull request I reviewed has not been updated within the reviewed window
-  Then workgraph stops watching it without recording it as closed
 
 Scenario: A push hint triggers a poll within seconds
   Given github.pr_watch polls every five minutes

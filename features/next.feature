@@ -5,7 +5,7 @@ Scenario: See everything waiting on me in one place
   And a reviewer is waiting on my reply and another pull request requests my review
   And one of my pull requests has changes requested, another has failed checks, and another is ready to merge
   When I run "workgraph next"
-  Then workgraph lists the items waiting on others first, then my blocked work, then work ready to finish
+  Then workgraph lists items where someone is waiting on me first, then my blocked work, then work ready to finish
   And each item shows its pull request, reason, and link
   And workgraph makes no GitHub request
 

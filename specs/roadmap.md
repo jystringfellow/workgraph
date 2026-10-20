@@ -49,8 +49,8 @@ Priority labels used below:
   review (directly or through a team) through the existing `gh` CLI auth, as
   the first `next` source: read-only, deterministic transition events,
   untrusted comment handling, and local push hints for near-real-time polls.
-  Fix the existing GitHub connector's rate-limit, auth, and bridged identity
-  bugs first. [spec: `specs/github-pr-watch.md`]
+  Separately, fix the existing GitHub connector's rate-limit, auth, and
+  bridged identity bugs. [spec: `specs/github-pr-watch.md`]
 - `P1` Add preference modeling and locally resettable ranking weights while
   preserving the explicit suggestion lifecycle. [spec:
   `specs/personalization-feedback.md`]
@@ -64,6 +64,8 @@ Priority labels used below:
   enforced write scope, per-run attribution, and explicit approval.
 - `P2` Receive GitHub webhooks (or a relay) and turn them into local poll
   hints.
+- `P2` Follow PRs after reviewing them: re-review after new commits and
+  replies in the user's review threads.
 - `P2` Stronger local security: SQLite encryption, OS credential-store-backed
   keys, Windows credential ACLs, and Windows CI coverage.
 - `P2` Broader distribution: Scoop, plugin expansion, and an open-source

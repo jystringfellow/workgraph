@@ -49,7 +49,7 @@ Each source defines, for every reason it produces:
 
 Items are ordered by reason group, then oldest `since` first:
 
-1. someone is waiting on the user: `reply`, `review_requested`, `rereview`
+1. someone is waiting on the user: `reply`, `review_requested`
 2. the user's own work is blocked: `changes_requested`, `checks_failed`,
    `conflicts`
 3. the user's own work can finish: `ready_to_merge`
@@ -124,17 +124,17 @@ documented, not a priority score.
   | Reason | `detail` |
   |---|---|
   | `review_requested` | `{"request": {"direct", "teams", "unresolved_team"}}` |
-  | `rereview` | `{"viewer_review": {"id", "state", "commit"}}` |
   | `checks_failed` | `{"run_fingerprint", "failed_checks": [{"name", "conclusion", "details_url"}]}` |
   | `changes_requested` | `{"review_id", "reviewer"}` |
   | `reply` | `{}` (the thread or comment is in `subject`) |
   | `conflicts` | `{"base_ref"}` |
   | `ready_to_merge` | `{"merge_state_status"}` |
 
-- `freshness.as_of` is when the item's own subject was last verified (for
-  GitHub, the PR's `verified_at`). `freshness.stale` is true when that is
-  older than three source intervals, when the source is in setup `error`, or
-  when `freshness.access` is `unreachable`.
+- `freshness.as_of` is when the facts behind this item were last read from
+  the provider; each source defines which timestamp that is and when it goes
+  stale (see `specs/github-pr-watch.md`, Attention Items). Items are also
+  stale while their source is in setup `error`, and when
+  `freshness.access` is `unreachable`.
 - Local paths, tokens, and connector configuration never appear in an item,
   so items can be sent to a cloud agent without leaking the local machine's
   layout.
@@ -216,8 +216,8 @@ dispatcher. It writes JSON Lines to stdout:
   - `done` or `snoozed`: the user hid it
   - `merged` or `closed`: the PR was merged or closed
   - `out_of_scope`: the subject left what the source watches, for example a
-    withdrawn review request, an archived repository, an aged-out review, or
-    a disabled source
+    withdrawn or completed review request, an archived repository, or a
+    disabled source
   - `left_search` or `unreachable`: the source could no longer see the
     subject; this does not claim it was addressed
 - A snooze ending re-opens the item with the same id.
@@ -248,13 +248,11 @@ into tool descriptions or instructions (`specs/llm-integration.md`).
 
 ## Dispatch Boundary
 
-`next` is the input to a later dispatch design; it does not dispatch. That
-design (roadmap P2, draft parked on `agent/4f0e34fb/pr-routing-draft`) must
-consume `next --watch --json` or the MCP tool rather than reading source
-tables, and must resolve its own review findings: write enforcement, leases
-and crash recovery, push safety, per-run attribution, and standing approval.
-Keeping that boundary means routing can be added, replaced, or run in the
-cloud without changing capture.
+`next` does not dispatch. `next --watch --json` and the MCP tool are the
+intended starting point for a later dispatch design (roadmap P2; an earlier
+draft is parked on `agent/4f0e34fb/pr-routing-draft`), because they let
+routing be added or replaced without changing capture. That design makes its
+own choices.
 
 ## Out Of Scope
 
@@ -269,9 +267,9 @@ Facts live in `facts/next_test.go` and use stored events and observations
 only. No fact invokes `gh`.
 
 - **N1. Lists each reason in documented order.** Fixtures for a thread
-  awaiting the user, a review request, a re-review, changes requested, failed
-  checks, a conflict, a ready PR, a bot conversation comment, and a thread an
-  agent answered list exactly seven items, grouped and ordered as documented,
+  awaiting the user, a review request, changes requested, failed checks, a
+  conflict, a ready PR, a bot conversation comment, and a thread an agent
+  answered list exactly six items, grouped and ordered as documented,
   without the bot comment or the agent-answered thread, and without invoking
   `gh`.
 - **N2. JSON items follow `workgraph.next_item.v1`.** For one item of each
@@ -285,11 +283,11 @@ only. No fact invokes `gh`.
   item, the thread is not listed; a new reviewer comment in the thread lists
   it again under a new id. A snoozed item returns when the snooze ends. Both
   append `next.*` events and write nothing to providers.
-- **N4. Staleness is reported per subject.** With the source in setup
-  `error`, or its last successful poll older than three intervals, `next`
-  prints a warning and items have `freshness.stale: true`. An item whose PR
-  is unreachable is stale with `access: "unreachable"` while other PRs'
-  items are fresh. `unknown` dimensions are shown as unknown.
+- **N4. Staleness is reported per item.** With the source in setup `error`,
+  `next` prints a warning and every item is stale. An item whose own
+  `as_of` is past its source's threshold is stale while other items are
+  fresh, and an item whose PR is unreachable is stale with
+  `access: "unreachable"`. `unknown` dimensions are shown as unknown.
 - **N5. Watch emits the initial set, then differences.** `next --watch
   --json` emits each open item with `initial: true` and then `synced`. After a
   poll commit that opens one item and resolves another, it emits exactly one
