@@ -33,6 +33,7 @@ type GitHubPRWatchCaptureConfig struct {
 	GitHubCommand string
 	Context       context.Context
 	Now           func() time.Time
+	takeHints     func(*sql.DB) (githubPRWatchHints, error)
 }
 
 type GitHubPRWatchCaptureResult struct {

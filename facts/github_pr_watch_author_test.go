@@ -1276,6 +1276,7 @@ func TestGitHubPRWatchRateLimitsSetOneDeadline(t *testing.T) {
 		capture, err := workgraph.StartRun(workgraph.RunConfig{
 			HomeDir: harness.homeDir, DatabasePath: harness.dbPath, WatchDirs: []string{harness.watchDir}, GitHubCommand: harness.gh.Path,
 			ConnectorRetryInitial: 10 * time.Millisecond, ConnectorRetryMax: 20 * time.Millisecond,
+			ConnectorHintCheckInterval: 10 * time.Millisecond, ConnectorWakeSpacing: 10 * time.Millisecond,
 		})
 		if err != nil {
 			t.Fatalf("start run: %v", err)
@@ -1288,6 +1289,9 @@ func TestGitHubPRWatchRateLimitsSetOneDeadline(t *testing.T) {
 				t.Fatalf("timed out waiting for the rate-limited failure: %#v", watchConnectorStatus(t, harness.homeDir))
 			}
 			time.Sleep(20 * time.Millisecond)
+		}
+		if output, err := harness.cli("github", "prs", "hint", "--home", harness.homeDir); err != nil {
+			t.Fatalf("github prs hint: %v\n%s", err, output)
 		}
 		time.Sleep(200 * time.Millisecond)
 		cancel()

@@ -195,5 +195,138 @@ func TestGitHubPRWatchBacklogItemsCiteTheObservedEvent(t *testing.T) {
 }
 
 func TestGitHubPRWatchPushHintWakesThePoller(t *testing.T) {
-	t.Skip("TBD: with a 5m interval a hint 30s after a poll triggers a poll at the next 2s check and a second hint during that poll triggers exactly one follow-up; a hint within 10s of the previous poll start waits until 10s; a hint naming a PR whose thread was resolved without an updatedAt change forces its detail query and closes the reply item; a hint before the not-before deadline waits for it")
+	harness := newPRWatchHarness(t, authorParams)
+	question := commentFixture{ID: "PRRC_q", Author: "alice", Body: "Why this default?", CreatedAt: watchTime(-time.Hour)}
+	thread := threadFixture{ID: "PRRT_one", Path: "settings.go", Line: 18, Comments: []commentFixture{question}}
+	resolved := thread
+	resolved.Resolved = true
+	harness.gh.Queue(t, statusResponse(t, watchPR()))
+	harness.gh.Queue(t, detailResponse(t, detailFixture{ID: watchPRNodeID, Threads: []threadFixture{thread}}))
+	harness.gh.Queue(t, statusResponse(t, watchPR()))
+	harness.gh.HookLastQueued(t, "sleep 1\n")
+	harness.gh.Queue(t, statusResponse(t, watchPR()))
+	harness.gh.Queue(t, statusResponse(t, watchPR()))
+	harness.gh.Queue(t, detailResponse(t, detailFixture{ID: watchPRNodeID, Threads: []threadFixture{resolved}}))
+
+	const spacing = time.Second
+	const startJitter = 250 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir: harness.homeDir, DatabasePath: harness.dbPath, WatchDirs: []string{harness.watchDir}, GitHubCommand: harness.gh.Path,
+		ConnectorHintCheckInterval: 20 * time.Millisecond, ConnectorWakeSpacing: spacing,
+	})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- capture.Run(ctx) }()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("run returned error: %v", err)
+		}
+	}()
+
+	hint := func(args ...string) {
+		t.Helper()
+		output, err := harness.cli(append([]string{"github", "prs", "hint", "--home", harness.homeDir}, args...)...)
+		if err != nil {
+			t.Fatalf("github prs hint: %v\n%s", err, output)
+		}
+	}
+	waitForCalls := func(want int) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for len(harness.gh.GraphQLInputs(t)) < want {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for graphql call %d, got %d", want, len(harness.gh.GraphQLInputs(t)))
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	callStart := func(call int) time.Time {
+		t.Helper()
+		info, err := os.Stat(filepath.Join(harness.tempDir, "gh-graphql-inputs", fmt.Sprintf("%d.json", call)))
+		if err != nil {
+			t.Fatalf("stat graphql call %d: %v", call, err)
+		}
+		return info.ModTime()
+	}
+	assertCallsStay := func(want int, wait time.Duration) {
+		t.Helper()
+		time.Sleep(wait)
+		if got := len(harness.gh.GraphQLInputs(t)); got != want {
+			t.Fatalf("expected %d graphql calls, got %d", want, got)
+		}
+	}
+
+	waitForReply := func(open bool) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			if _, got := nextItemsByReason(t, harness, time.Now())["reply"]; got == open {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for the reply item to be open=%t", open)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+
+	waitForCalls(3)
+	waitForReply(true)
+	eventsBefore := len(harness.events())
+
+	hint()
+	hinted := time.Now()
+	if got := countRows(t, harness.dbPath, `SELECT COUNT(*) FROM connector_poll_hints WHERE connector_id = 'github.pr_watch'`); got != 1 {
+		t.Fatalf("expected the hint to be recorded, got %d rows", got)
+	}
+	waitForCalls(4)
+	earliest := callStart(2).Add(spacing)
+	if started := callStart(4); started.Before(earliest.Add(-startJitter)) || started.After(laterOf(earliest, hinted).Add(2*time.Second)) {
+		t.Fatalf("expected the hint to poll promptly but not within the spacing of the previous poll start, got %s after it", started.Sub(callStart(2)))
+	}
+	for range 2 {
+		if _, err := workgraph.RecordGitHubPRWatchHint(workgraph.GitHubPRWatchHintConfig{HomeDir: harness.homeDir}); err != nil {
+			t.Fatalf("record hint during the poll: %v", err)
+		}
+	}
+	waitForCalls(5)
+	if elapsed := callStart(5).Sub(callStart(4)); elapsed < spacing-startJitter || elapsed > spacing+2*time.Second {
+		t.Fatalf("expected one follow-up after the spacing, got %s", elapsed)
+	}
+	assertCallsStay(5, 2*spacing)
+	inputs := harness.gh.GraphQLInputs(t)
+	for _, call := range []int{3, 4} {
+		if strings.Contains(inputs[call], "reviewThreads") {
+			t.Fatalf("expected an unnamed hint not to force a recent detail query, call %d: %s", call+1, inputs[call])
+		}
+	}
+	if got := countRows(t, harness.dbPath, `SELECT COUNT(*) FROM connector_poll_hints`); got != 0 {
+		t.Fatalf("expected polls to clear the hints, got %d rows", got)
+	}
+	if got := len(harness.events()); got != eventsBefore {
+		t.Fatalf("expected hints and unchanged polls to store no events, got %d (was %d)", got, eventsBefore)
+	}
+
+	hint("--pr", "https://github.com/acme/widget/pull/42")
+	waitForCalls(7)
+	if !strings.Contains(harness.gh.GraphQLInputs(t)[6], watchPRNodeID) {
+		t.Fatalf("expected the named hint to force the detail query for its PR")
+	}
+	waitForReply(false)
+	for _, event := range harness.events() {
+		if strings.Contains(event.Raw, "connector_poll_hints") || strings.Contains(event.Raw, `"hint"`) {
+			t.Fatalf("expected the hint never to be stored as event data: %s", event.Raw)
+		}
+	}
+}
+
+func laterOf(first, second time.Time) time.Time {
+	if first.After(second) {
+		return first
+	}
+	return second
 }

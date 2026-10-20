@@ -2724,6 +2724,8 @@ func runGitHubPRs(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runGitHubPRsCapture(args[1:], stdout, stderr)
 	case "disconnect":
 		return runGitHubPRsDisconnect(args[1:], stdout, stderr)
+	case "hint":
+		return runGitHubPRsHint(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown github prs command: %s\n", args[0])
 		return 2
@@ -2808,6 +2810,36 @@ func runGitHubPRsDisconnect(args []string, stdout io.Writer, stderr io.Writer) i
 	result, err := workgraph.DisconnectGitHubPRWatch(workgraph.ConnectorConnectConfig{HomeDir: *homeDir})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph github prs disconnect: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func runGitHubPRsHint(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("github prs hint", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
+	prURL := flags.String("pr", "", "pull request URL whose details the next poll refreshes")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph github prs hint [--pr <url>]")
+		return 2
+	}
+
+	result, err := workgraph.RecordGitHubPRWatchHint(workgraph.GitHubPRWatchHintConfig{
+		HomeDir:      *homeDir,
+		DatabasePath: *databasePath,
+		PRURL:        *prURL,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph github prs hint: %v\n", err)
 		return 1
 	}
 
