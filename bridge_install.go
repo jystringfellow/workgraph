@@ -157,7 +157,6 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 }
 
 var claudeBridgeDrainPermissions = []string{
-	"mcp__plugin_workgraph_workgraph__next_items",
 	"mcp__plugin_workgraph_workgraph__capture_requests_list",
 	"mcp__plugin_workgraph_workgraph__capture_requests_claim",
 	"mcp__plugin_workgraph_workgraph__capture_request_renew",

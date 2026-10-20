@@ -330,7 +330,7 @@ func projectNextObservation(o githubPRObservation, events []nextStoredEvent, con
 	conversation := o.Conversation
 	if conversation.LastHumanCommentID != "" && parseNextTime(conversation.LastHumanCommentAt).After(parseNextTime(conversation.LastUserCommentAt)) {
 		event, ok := nextOpeningEvent(o, relevant, githubPREventReviewComment, conversation.LastHumanCommentID)
-		if ok && (event.Type == githubPREventObserved || (event.Payload.ActorKind == "user" && event.Payload.Untrusted["origin"] == "github.issue_comment")) {
+		if ok && (event.Type == githubPREventObserved || event.Payload.ActorKind == "user") {
 			add(nextReasonReply, githubPREventReviewComment, conversation.LastHumanCommentID, NextItemSubject{Kind: "comment", ID: conversation.LastHumanCommentID, URL: o.URL}, map[string]any{}, nil)
 		}
 	}
@@ -695,7 +695,7 @@ func recordNextAction(config NextConfig, id string, duration time.Duration) erro
 		return err
 	}
 	defer db.Close()
-	_, err = db.Exec(`INSERT INTO events(id,source,type,timestamp,payload_json,project,created_at) VALUES (?,'workgraph',?,?,?,?,?) ON CONFLICT(id) DO NOTHING`, eventID, typ, at.Format(time.RFC3339Nano), string(raw), project, at.Format(time.RFC3339Nano))
+	_, err = db.Exec(`INSERT INTO events(id,source,type,timestamp,payload_json,project,created_at,involvement_json) VALUES (?,'workgraph',?,?,?,?,?,'[]') ON CONFLICT(id) DO NOTHING`, eventID, typ, at.Format(time.RFC3339Nano), string(raw), project, at.Format(time.RFC3339Nano))
 	return err
 }
 

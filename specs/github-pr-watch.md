@@ -616,10 +616,14 @@ Other columns:
   `unreachable`.
 - On `author_replied`, `triage.responder` is `author` or `agent`, and the
   payload has no `untrusted` body. The user's own text is not copied.
+- `untrusted.origin` is `github.review_thread_comment`,
+  `github.issue_comment`, or `github.review_body`.
 - `observed` events carry the full current `state`, `baseline_at`, a
-  `baseline` object with the provider ids baseline items need (see Opening
-  evidence), and, under `untrusted`, up to 20 open threads awaiting the user
-  with path, line, URL, and last-comment body.
+  `baseline` object with `head_sha`, `run_fingerprint`, `review_ids`,
+  `threads` (entries with `thread_id` and `last_comment_id`), and
+  `conversation.last_human_comment_id` (see Opening evidence), and, under
+  `untrusted`, up to 20 open threads awaiting the user with path, line, URL,
+  and last-comment body.
 
 ## State Diff And Dedupe Rules
 
@@ -737,10 +741,13 @@ observations and stored events. They store nothing and make no GitHub request.
 **Opening evidence.** An item's `opened_by` is its opening event when one is
 stored. A condition that already held at baseline has no opening event, so
 `opened_by` is the PR's `observed` event for that role and `since` is its
-`baseline_at`. The `observed` event's `baseline` object stores the provider
-ids those items need (review ids, thread ids and last-comment ids, the latest
-conversation comment id, the head SHA and run fingerprint), so their ids and
-`opened_by` survive observation resets.
+`baseline_at`. The `observed` event's `baseline` object stores `head_sha`
+and `run_fingerprint` for checks, `review_ids` for reviews, `threads` entries
+with `thread_id` and `last_comment_id`, and
+`conversation.last_human_comment_id` for the latest human conversation
+comment. Provider ids are matched recursively within `baseline`; checks use
+`baseline.head_sha` and `baseline.run_fingerprint` explicitly. These values
+let item ids and `opened_by` survive observation resets.
 
 - Conversation `reply` items come only from issue comments. Review bodies do
   not open them.

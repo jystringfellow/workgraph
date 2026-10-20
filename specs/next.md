@@ -1,7 +1,6 @@
 # Next
 
-Status: implemented for local GitHub PR observations and events, with active
-executable facts in `facts/next_test.go`.
+Status: projection implemented over `github.pr_watch` state; it shows no items until the GitHub PR watch capture lands.
 
 ## Intent
 

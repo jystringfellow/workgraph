@@ -239,7 +239,18 @@ func (f *nextFixture) project(t *testing.T, config workgraph.NextConfig) []workg
 func TestNextDoneAndSnoozeHideOnlyThatItemID(t *testing.T) {
 	f := newNextFixture(t)
 	items := f.items(t)
+	beforeDone, err := workgraph.Today(workgraph.TodayConfig{HomeDir: f.home, Now: f.now})
+	if err != nil {
+		t.Fatal(err)
+	}
 	f.cli(t, "next", "done", items[0].ID)
+	afterDone, err := workgraph.Today(workgraph.TodayConfig{HomeDir: f.home, Now: f.now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(afterDone.Events) != len(beforeDone.Events) {
+		t.Fatalf("done changed today's event count: before=%d after=%d", len(beforeDone.Events), len(afterDone.Events))
+	}
 	if got := f.items(t); len(got) != 5 {
 		t.Fatalf("done: %v", got)
 	}
@@ -426,7 +437,7 @@ func TestNextWatchEmitsTheInitialSetThenDifferences(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	payload := `{"node_id":"PR0","role":"author","actor_kind":"user","untrusted":{"origin":"github.issue_comment","body":"PRIVATE"}}`
+	payload := `{"node_id":"PR0","role":"author","actor_kind":"user","untrusted":{"body":"PRIVATE"}}`
 	if _, err := tx.Exec(`INSERT INTO events(id,source,type,timestamp,created_at,project,actor,payload_json,involvement_json) VALUES ('github.pull_request.review_comment:PR0:C3','github','github.pull_request.review_comment',?,?,'demo','alice',?,'["authored"]')`, at, at, payload); err != nil {
 		t.Fatal(err)
 	}
