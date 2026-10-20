@@ -163,6 +163,8 @@ Ready
 ```
 
 - Each line is built only from structured fields. Comment text never appears.
+  Text output strips ANSI sequences, C0/C1 controls, bidi overrides and isolates,
+  and zero-width format characters from provider strings; JSON preserves them.
 - A source in setup `error`, or stale, adds a warning line naming the problem
   and the command to fix it, before the items.
 - With no enabled sources, `next` says which connectors provide items and how
@@ -243,6 +245,9 @@ into tool descriptions or instructions (`specs/llm-integration.md`).
 - **`today`**: stays a personal activity view. When at least one source is
   enabled and items are open, it ends with `Waiting on you: <n> items
   (workgraph next)`.
+- A failed next projection does not fail `today` or `resume`. They omit the
+  waiting items and show one short `Waiting on you unavailable: <error class>`
+  warning. `next` itself still reports the error.
 - **`connectors status`** shows each source's freshness.
 
 ## Dispatch Boundary

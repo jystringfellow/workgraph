@@ -1,9 +1,13 @@
 package workgraph
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"os"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -196,6 +200,81 @@ func TestConnectorPollerOrdinaryScheduleAndBackoff(t *testing.T) {
 			}
 			previous = started
 		}
+	})
+}
+
+func TestConnectorPollerUnreadableSettingsKeepsScheduleAndLogsOnceUntilRecovery(t *testing.T) {
+	homeDir := t.TempDir()
+	var logs bytes.Buffer
+	previousOutput := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(previousOutput)
+	synctest.Test(t, func(t *testing.T) {
+		capture := testConnectorPollCapture(homeDir)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		starts := map[string]chan time.Time{
+			"notion": make(chan time.Time, 8),
+			"github": make(chan time.Time, 8),
+		}
+		for id, channel := range starts {
+			go capture.runConnectorPoller(ctx, connectorPoller{
+				id: id, interval: 3 * time.Second,
+				poll: func(context.Context) error {
+					channel <- time.Now()
+					return nil
+				},
+			})
+		}
+		assertPolls := func(want time.Time) {
+			t.Helper()
+			synctest.Wait()
+			for id, channel := range starts {
+				select {
+				case got := <-channel:
+					if !got.Equal(want) {
+						t.Fatalf("%s poll at %s, want %s", id, got, want)
+					}
+				default:
+					t.Fatalf("%s stopped polling at %s", id, want)
+				}
+			}
+		}
+		assertLogs := func(want int) {
+			t.Helper()
+			for id := range starts {
+				if got := strings.Count(logs.String(), "connector="+id+" "); got != want {
+					t.Fatalf("%s logged %d times, want %d: %s", id, got, want, &logs)
+				}
+			}
+		}
+		writeSettings := func(raw string) {
+			t.Helper()
+			if err := os.WriteFile(connectorRuntimePath(homeDir), []byte(raw), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		assertPolls(time.Now())
+		writeSettings("{")
+		for range 3 {
+			time.Sleep(3 * time.Second)
+			assertPolls(time.Now())
+			assertLogs(1)
+		}
+		deadline := time.Now().Add(9 * time.Second)
+		writeSettings(fmt.Sprintf(`{"connectors":{"notion":{"not_before":%q},"github":{"not_before":%q}}}`, deadline.Format(time.RFC3339Nano), deadline.Format(time.RFC3339Nano)))
+		time.Sleep(6 * time.Second)
+		synctest.Wait()
+		for _, channel := range starts {
+			assertNoConnectorPoll(t, channel)
+		}
+		time.Sleep(3 * time.Second)
+		assertPolls(deadline)
+		assertLogs(1)
+		writeSettings("{")
+		time.Sleep(3 * time.Second)
+		assertPolls(time.Now())
+		assertLogs(2)
 	})
 }
 

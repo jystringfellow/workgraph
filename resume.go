@@ -111,12 +111,14 @@ func Resume(config ResumeConfig) (ResumeResult, error) {
 
 	project := strings.TrimSpace(config.Project)
 	result := ResumeResult{Project: project, AsOf: now}
+	nextWarning := ""
 	if !config.AllProjects && !config.DebugRelevance {
 		next, nextErr := Next(NextConfig{HomeDir: config.HomeDir, DatabasePath: dbPath, Project: project, Now: now})
 		if nextErr != nil {
-			return ResumeResult{}, nextErr
+			nextWarning = "\n\n" + nextUnavailableMessage(nextErr)
+		} else {
+			result.NextItems = next.Items
 		}
-		result.NextItems = next.Items
 	}
 	if project == "" {
 		if config.AllProjects {
@@ -151,6 +153,7 @@ func Resume(config ResumeConfig) (ResumeResult, error) {
 			result.Message = prefix + "\n\n" + result.Message
 		}
 		result.Message += memoryDiscoveryHints(db, events, MemoryDoctorConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir})
+		result.Message += nextWarning
 		return result, nil
 	}
 	project = canonicalResumeProjectName(project, events)
@@ -174,6 +177,7 @@ func Resume(config ResumeConfig) (ResumeResult, error) {
 	}
 	result.Message = resumeProjectMessage(result, location)
 	result.Message += memoryDiscoveryHints(db, events, MemoryDoctorConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir, Project: config.Project})
+	result.Message += nextWarning
 	return result, nil
 }
 

@@ -149,9 +149,8 @@ func Today(config TodayConfig) (TodayResult, error) {
 
 	next, err := Next(NextConfig{HomeDir: config.HomeDir, DatabasePath: dbPath, Now: now})
 	if err != nil {
-		return TodayResult{}, err
-	}
-	if len(next.Items) > 0 {
+		result.Message += "\n\n" + nextUnavailableMessage(err)
+	} else if len(next.Items) > 0 {
 		result.Message += fmt.Sprintf("\n\nWaiting on you: %d items (workgraph next)", len(next.Items))
 	}
 

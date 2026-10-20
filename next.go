@@ -9,9 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 type NextConfig struct {
@@ -613,7 +615,33 @@ func nextItemLine(item NextItem) string {
 	if unknown, ok := item.Triage["unknown"].([]string); ok && len(unknown) > 0 {
 		reason += " [unknown: " + strings.Join(unknown, ", ") + "]"
 	}
-	return fmt.Sprintf("#%d %s (%s): %s — %s [%s]", item.PullRequest.Number, item.PullRequest.Title, item.PullRequest.Repository, reason, item.Subject.URL, item.ID)
+	return fmt.Sprintf("#%d %s (%s): %s — %s [%s]", item.PullRequest.Number,
+		nextDisplayText(item.PullRequest.Title), nextDisplayText(item.PullRequest.Repository),
+		nextDisplayText(reason), nextDisplayText(item.Subject.URL), nextDisplayText(item.ID))
+}
+
+var nextANSISequence = regexp.MustCompile(
+	`(?:\x1b\[|\x{009b})[0-?]*[ -/]*[@-~]|` +
+		`(?:\x1b[\]PX^_]|[\x{0090}\x{0098}\x{009d}-\x{009f}])[^\x07\x1b\x{009c}]*(?:\x07|\x1b\\|\x{009c}|$)|` +
+		`\x1b[ -/]*[0-~]`)
+
+func nextDisplayText(value string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '\u034f' {
+			return -1
+		}
+		return r
+	}, nextANSISequence.ReplaceAllString(value, ""))
+}
+
+func nextUnavailableMessage(err error) string {
+	class := "projection error"
+	var syntaxError *json.SyntaxError
+	var typeError *json.UnmarshalTypeError
+	if errors.As(err, &syntaxError) || errors.As(err, &typeError) {
+		class = "invalid JSON"
+	}
+	return "Waiting on you unavailable: " + class
 }
 
 func nextWaitingMessage(items []NextItem, limit int) string {

@@ -123,7 +123,11 @@ func (f *nextFixture) runtime(t *testing.T, state string) {
 }
 func (f *nextFixture) cli(t *testing.T, args ...string) string {
 	t.Helper()
-	args = append(args, "--home", f.home)
+	if args[0] == "resume" {
+		args = append([]string{"resume", "--home", f.home}, args[1:]...)
+	} else {
+		args = append(args, "--home", f.home)
+	}
 	command := exec.Command(workgraphFactsBinary, args...)
 	output, err := command.CombinedOutput()
 	if err != nil {
@@ -222,6 +226,38 @@ func TestNextJSONItemsFollowTheV1Schema(t *testing.T) {
 			t.Fatalf("usage error: %v", err)
 		}
 	}
+
+	t.Run("provider strings are safe only in text", func(t *testing.T) {
+		f := newNextFixture(t)
+		unsafe := "\x1b7\x1b8\x1bc\u009b31m\u009b0m\x1b[31m\u202e\u2066\u200b\u200c\u200d\u2060\ufeff\x00\t\r\n\u0085\x1b[0m\x1b]0;hidden title\a"
+		title := "Visible" + unsafe + " title"
+		f.observations[0]["title"] = title
+		f.observations[0]["threads"].([]any)[0].(map[string]any)["path"] = "settings" + unsafe + ".go"
+		f.save(t, f.observations[0])
+		f.exec(t, `UPDATE events SET actor=? WHERE type='github.pull_request.review_comment'`, "ali"+unsafe+"ce")
+		f.observations[1]["review_request"].(map[string]any)["teams"] = []string{"acme/plat" + unsafe + "form"}
+		f.save(t, f.observations[1])
+		f.observations[2]["opinionated_reviews"].([]any)[0].(map[string]any)["reviewer"] = "b" + unsafe + "ob"
+		f.save(t, f.observations[2])
+		items := f.items(t)
+		if items[0].PullRequest.Title != title || items[0].Actor.Login != "ali"+unsafe+"ce" || items[0].Subject.Path != "settings"+unsafe+".go" {
+			t.Fatalf("JSON changed provider strings: %+v", items[0])
+		}
+		if items[1].Detail["request"].(map[string]any)["teams"].([]any)[0] != "acme/plat"+unsafe+"form" || items[2].Detail["reviewer"] != "b"+unsafe+"ob" {
+			t.Fatal("JSON changed team or reviewer")
+		}
+		for _, args := range [][]string{{"next"}, {"resume"}, {"resume", "demo"}} {
+			out := f.cli(t, args...)
+			for _, want := range []string{"Visible title", "alice replied on settings.go:18", "review requested via acme/platform", "changes requested by bob"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("%v missing sanitized %q: %q", args, want, out)
+				}
+			}
+			if strings.ContainsAny(out, "\x1b\u202e\u2066\u200b\u200c\u200d\u2060\ufeff\x00\r\u0085") || strings.Contains(out, "hidden title") {
+				t.Errorf("%v contains unsafe provider text: %q", args, out)
+			}
+		}
+	})
 
 }
 
@@ -540,6 +576,46 @@ func TestNextResumeAndTodayShowTheSameItems(t *testing.T) {
 	if !reflect.DeepEqual(today.Events, disabled.Events) {
 		t.Fatal("attention items changed today's activity")
 	}
+	for _, corrupt := range []string{"event", "observation", "settings"} {
+		t.Run(corrupt, func(t *testing.T) {
+			f := newNextFixture(t)
+			switch corrupt {
+			case "event":
+				f.exec(t, `UPDATE events SET payload_json='{"node_id":[]}' WHERE type='github.pull_request.review_comment'`)
+			case "observation":
+				f.exec(t, `UPDATE github_pr_observations SET observation_json='{"node_id":[]}' WHERE node_id='PR0'`)
+			case "settings":
+				if err := os.WriteFile(filepath.Join(f.home, "connectors.json"), []byte("{"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := workgraph.Next(f.config()); err == nil {
+				t.Fatal("next must report the projection error")
+			}
+			for _, args := range [][]string{{"today"}, {"resume"}, {"resume", "demo"}, {"resume", "elsewhere"}} {
+				t.Run(strings.Join(args, " "), func(t *testing.T) {
+					out := f.cli(t, args...)
+					if strings.Count(out, "Waiting on you") != 1 || !strings.Contains(out, "Waiting on you unavailable: invalid JSON") {
+						t.Fatalf("expected exactly one short warning: %s", out)
+					}
+					if strings.Contains(out, "[github:") || strings.Contains(out, "Waiting on you:") {
+						t.Fatalf("partial waiting items leaked: %s", out)
+					}
+					want := "Today"
+					if args[0] == "resume" {
+						want = "Where you left off"
+						if len(args) > 1 {
+							want = "Resume " + args[1]
+						}
+					}
+					if !strings.Contains(out, want) {
+						t.Fatalf("activity view missing: %s", out)
+					}
+				})
+			}
+		})
+	}
+
 }
 func TestNextExplainCitesTheRuleAndEvidence(t *testing.T) {
 	f := newNextFixture(t)

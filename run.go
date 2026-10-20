@@ -508,9 +508,10 @@ func (capture *RunCapture) connectorPollers() []connectorPoller {
 
 func (capture *RunCapture) runConnectorPoller(ctx context.Context, poller connectorPoller) {
 	failures := 0
+	settingsErrorLogged := false
 	var nextPoll, lastStart time.Time
 	for {
-		entry, ready := capture.waitForConnectorPoll(ctx, poller, nextPoll, lastStart)
+		entry, ready := capture.waitForConnectorPoll(ctx, poller, nextPoll, lastStart, &settingsErrorLogged)
 		if !ready {
 			return
 		}
@@ -549,7 +550,10 @@ func (capture *RunCapture) runConnectorPoller(ctx context.Context, poller connec
 			capture.logConnectorPollError(poller.id, err)
 		}
 		if stateErr := recordConnectorPollAttempt(capture.homeDir, poller.id, completedAt, nextPoll, failures, err); stateErr != nil {
-			capture.logConnectorPollError(poller.id, fmt.Errorf("record poll state: %w", stateErr))
+			if !settingsErrorLogged {
+				capture.logConnectorPollError(poller.id, fmt.Errorf("record poll state: %w", stateErr))
+				settingsErrorLogged = true
+			}
 		}
 		if err != nil && !isDeferred && connectorAuthFailure(err.Error()) {
 			return
@@ -557,20 +561,27 @@ func (capture *RunCapture) runConnectorPoller(ctx context.Context, poller connec
 	}
 }
 
-func (capture *RunCapture) waitForConnectorPoll(ctx context.Context, poller connectorPoller, nextPoll time.Time, lastStart time.Time) (connectorRuntimeEntry, bool) {
+func (capture *RunCapture) waitForConnectorPoll(ctx context.Context, poller connectorPoller, nextPoll time.Time, lastStart time.Time, settingsErrorLogged *bool) (connectorRuntimeEntry, bool) {
 	wake := poller.wake
 	for ctx.Err() == nil {
 		entry, err := readConnectorPollState(capture.homeDir, poller.id)
 		var notBefore time.Time
-		if err == nil {
-			notBefore, err = connectorNotBefore(entry)
-		}
 		if err != nil {
-			capture.logConnectorPollError(poller.id, err)
-			if !waitForConnectorSchedule(ctx, positiveDuration(capture.connectorRetryInitial, defaultConnectorRetryInitial)) {
-				return connectorRuntimeEntry{}, false
+			if !*settingsErrorLogged {
+				capture.logConnectorPollError(poller.id, err)
+				*settingsErrorLogged = true
 			}
-			continue
+			entry = connectorRuntimeEntry{}
+		} else {
+			*settingsErrorLogged = false
+			notBefore, err = connectorNotBefore(entry)
+			if err != nil {
+				capture.logConnectorPollError(poller.id, err)
+				if !waitForConnectorSchedule(ctx, positiveDuration(capture.connectorRetryInitial, defaultConnectorRetryInitial)) {
+					return connectorRuntimeEntry{}, false
+				}
+				continue
+			}
 		}
 		readyAt := nextPoll
 		if notBefore.After(readyAt) {

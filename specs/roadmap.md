@@ -99,6 +99,9 @@ Priority labels used below:
   `specs/connector-runtime.md` and `specs/provider-tool-requirements.md`]
 - [x] Connector poll deferrals, retry-after deadlines, and early wake with
   minimum spacing (PR watch delivery slice 1). [spec: `specs/github-pr-watch.md`]
+- [x] Keep today/resume available on next projection errors, sanitize next
+  item text, and preserve polling through unreadable settings. [specs:
+  `specs/next.md` and `specs/connector-runtime.md`]
 - Bridged capture hardening, executable provider recipes, cancellation,
   worker model persistence, and operator documentation. [spec:
   `specs/bridged-capture.md`]
