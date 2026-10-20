@@ -336,6 +336,9 @@ func createSchema(db *sql.DB) error {
 			updated_at TEXT NOT NULL
 		);`,
 		resumeCheckInSchema,
+		githubPRObservationsSchema,
+		githubPRWatchStateSchema,
+		connectorPollHintsSchema,
 		`CREATE TABLE IF NOT EXISTS bridge_workers (
 			worker TEXT PRIMARY KEY,
 			last_heartbeat_at TEXT NOT NULL,
