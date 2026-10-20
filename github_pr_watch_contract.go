@@ -108,6 +108,8 @@ type githubPRObservation struct {
 	TimelineSince      string                       `json:"timeline_since,omitempty"`
 	TimelineCursor     string                       `json:"timeline_cursor,omitempty"`
 	DetailFetchedAt    string                       `json:"detail_fetched_at,omitempty"`
+	ChecksRollup       string                       `json:"checks_rollup,omitempty"`
+	MergeFetchedAt     string                       `json:"merge_fetched_at,omitempty"`
 
 	ReviewRequest *githubPRReviewRequest `json:"review_request,omitempty"`
 	ViewerReview  *githubPRViewerReview  `json:"viewer_review,omitempty"`

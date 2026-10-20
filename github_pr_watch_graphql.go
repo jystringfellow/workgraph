@@ -27,7 +27,7 @@ const githubPRWatchStatusQuery = `query($q: String!, $login: String!, $after: St
         headRepository { nameWithOwner }
         isCrossRepository
         headRefName headRefOid baseRefName
-        reviewDecision mergeable mergeStateStatus
+        reviewDecision
         reviewRequests(first: 50) {
           totalCount
           nodes { requestedReviewer {
@@ -41,25 +41,35 @@ const githubPRWatchStatusQuery = `query($q: String!, $login: String!, $after: St
           nodes { id state submittedAt commit { oid } }
         }
         commits(last: 1) {
-          nodes { commit {
-            oid
-            statusCheckRollup {
-              state
-              contexts(first: 100) {
-                totalCount
-                nodes {
-                  __typename
-                  ... on CheckRun { id name status conclusion completedAt detailsUrl }
-                  ... on StatusContext { context state createdAt targetUrl }
-                }
-              }
-            }
-          } }
+          nodes { commit { oid statusCheckRollup { state contexts { totalCount } } } }
         }
       }
     }
   }
 }`
+
+const githubPRWatchMergeAlias = `
+  prN: node(id: $idN) {
+    ... on PullRequest {
+      id mergeable mergeStateStatus
+      commits(last: 1) {
+        nodes { commit {
+          oid
+          statusCheckRollup {
+            state
+            contexts(first: 100) {
+              totalCount
+              nodes {
+                __typename
+                ... on CheckRun { id name status conclusion completedAt detailsUrl }
+                ... on StatusContext { context state createdAt targetUrl }
+              }
+            }
+          }
+        } }
+      }
+    }
+  }`
 
 const githubPRWatchDetailAlias = `
   prN: node(id: $idN) {
@@ -138,7 +148,20 @@ const githubPRWatchReviewerFollowUpQuery = `query($ids: [ID!]!, $login: String!)
   }
 }`
 
-const githubPRWatchDetailBatchSize = 10
+const githubPRWatchBatchSize = 10
+
+var errGitHubGraphQLTimeout = errors.New("GitHub timed out on the query")
+
+func githubPRWatchMergeQuery(count int) string {
+	params := []string{}
+	aliases := []string{}
+	for index := 0; index < count; index++ {
+		suffix := fmt.Sprint(index)
+		params = append(params, "$id"+suffix+": ID!")
+		aliases = append(aliases, strings.NewReplacer("prN", "pr"+suffix, "$idN", "$id"+suffix).Replace(githubPRWatchMergeAlias))
+	}
+	return "query(" + strings.Join(params, ", ") + ") {\n  rateLimit { cost remaining resetAt }" + strings.Join(aliases, "") + "\n}"
+}
 
 func githubPRWatchDetailQuery(count int) string {
 	params := []string{}
@@ -239,6 +262,11 @@ func githubGHCommandError(stderr string, runErr error) error {
 	if details == "" {
 		details = runErr.Error()
 	}
+	for _, status := range []string{"HTTP 502", "HTTP 504"} {
+		if strings.Contains(strings.ToUpper(details), status) {
+			return fmt.Errorf("%w (%s)", errGitHubGraphQLTimeout, status)
+		}
+	}
 	if githubGHRateLimited(details) {
 		return githubRateLimitError(fmt.Errorf("gh api graphql: %s", details))
 	}
@@ -311,27 +339,44 @@ type githubPRStatusNode struct {
 	HeadRepository *struct {
 		NameWithOwner string `json:"nameWithOwner"`
 	} `json:"headRepository"`
-	IsCrossRepository bool   `json:"isCrossRepository"`
-	HeadRefName       string `json:"headRefName"`
-	HeadRefOid        string `json:"headRefOid"`
-	BaseRefName       string `json:"baseRefName"`
-	ReviewDecision    string `json:"reviewDecision"`
-	Mergeable         string `json:"mergeable"`
-	MergeStateStatus  string `json:"mergeStateStatus"`
-	Commits           struct {
-		Nodes []struct {
-			Commit struct {
-				Oid               string `json:"oid"`
-				StatusCheckRollup *struct {
-					State    string `json:"state"`
-					Contexts struct {
-						TotalCount int                    `json:"totalCount"`
-						Nodes      []githubPRCheckContext `json:"nodes"`
-					} `json:"contexts"`
-				} `json:"statusCheckRollup"`
-			} `json:"commit"`
-		} `json:"nodes"`
-	} `json:"commits"`
+	IsCrossRepository bool                      `json:"isCrossRepository"`
+	HeadRefName       string                    `json:"headRefName"`
+	HeadRefOid        string                    `json:"headRefOid"`
+	BaseRefName       string                    `json:"baseRefName"`
+	ReviewDecision    string                    `json:"reviewDecision"`
+	Mergeable         string                    `json:"mergeable"`
+	MergeStateStatus  string                    `json:"mergeStateStatus"`
+	Commits           githubPRCommitsConnection `json:"commits"`
+}
+
+type githubPRMergeNode struct {
+	ID               string                    `json:"id"`
+	Mergeable        string                    `json:"mergeable"`
+	MergeStateStatus string                    `json:"mergeStateStatus"`
+	Commits          githubPRCommitsConnection `json:"commits"`
+}
+
+type githubPRCommitsConnection struct {
+	Nodes []struct {
+		Commit struct {
+			Oid               string `json:"oid"`
+			StatusCheckRollup *struct {
+				State    string `json:"state"`
+				Contexts struct {
+					TotalCount int                    `json:"totalCount"`
+					Nodes      []githubPRCheckContext `json:"nodes"`
+				} `json:"contexts"`
+			} `json:"statusCheckRollup"`
+		} `json:"commit"`
+	} `json:"nodes"`
+}
+
+func (connection githubPRCommitsConnection) rollupKey() string {
+	if len(connection.Nodes) == 0 || connection.Nodes[0].Commit.StatusCheckRollup == nil {
+		return "none"
+	}
+	rollup := connection.Nodes[0].Commit.StatusCheckRollup
+	return fmt.Sprintf("%s:%d", rollup.State, rollup.Contexts.TotalCount)
 }
 
 type githubPRReviewerStatus struct {

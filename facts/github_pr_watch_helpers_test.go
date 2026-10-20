@@ -1,6 +1,7 @@
 package facts
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,7 +24,11 @@ func writeFakeGHGraphQL(t *testing.T, dir string) *fakeGHGraphQL {
 		dir:      dir,
 		queueDir: filepath.Join(dir, "gh-graphql-queue"),
 	}
-	for _, sub := range []string{fake.queueDir, filepath.Join(dir, "gh-graphql-inputs")} {
+	testBinary, err := filepath.Abs(os.Args[0])
+	if err != nil {
+		t.Fatalf("resolve facts test binary: %v", err)
+	}
+	for _, sub := range []string{fake.queueDir, filepath.Join(dir, "gh-graphql-inputs"), filepath.Join(dir, "gh-merge")} {
 		if err := os.MkdirAll(sub, 0o755); err != nil {
 			t.Fatalf("create fake gh dir: %v", err)
 		}
@@ -40,16 +45,26 @@ if [ "$1" = "auth" ] && [ "$2" = "token" ]; then
   exit 0
 fi
 if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
-  n=$(cat "$dir/gh-graphql-count" 2>/dev/null || echo 0)
-  n=$((n + 1))
-  echo "$n" > "$dir/gh-graphql-count"
   input=""
   prev=""
   for arg in "$@"; do
     if [ "$prev" = "--input" ]; then input="$arg"; fi
     prev="$arg"
   done
-  if [ -n "$input" ]; then cp "$input" "$dir/gh-graphql-inputs/$n.json"; fi
+  seq=$(cat "$dir/gh-input-count" 2>/dev/null || echo 0)
+  seq=$((seq + 1))
+  echo "$seq" > "$dir/gh-input-count"
+  if [ -n "$input" ]; then cp "$input" "$dir/gh-graphql-inputs/$seq.json"; fi
+  if grep -q 'mergeStateStatus' "$input"; then
+    if grep -q 'search(' "$input"; then
+      printf 'gh: HTTP 502: 502 Bad Gateway (https://api.github.com/graphql)\n' >&2
+      exit 1
+    fi
+    WORKGRAPH_FACTS_FAKE_GH_DIR="$dir" WORKGRAPH_FACTS_FAKE_GH_INPUT="$input" exec "` + testBinary + `"
+  fi
+  n=$(cat "$dir/gh-graphql-count" 2>/dev/null || echo 0)
+  n=$((n + 1))
+  echo "$n" > "$dir/gh-graphql-count"
   response="$dir/gh-graphql-queue/$n"
   if [ ! -f "$response.out" ]; then
     printf 'fake gh: no queued graphql response %s\n' "$n" >&2
@@ -80,6 +95,7 @@ func (fake *fakeGHGraphQL) Queue(t *testing.T, stdout string) {
 
 func (fake *fakeGHGraphQL) QueueResult(t *testing.T, stdout, stderr string, exitCode int) {
 	t.Helper()
+	stdout = fake.registerMergeStates(t, stdout)
 	fake.queued++
 	base := filepath.Join(fake.queueDir, fmt.Sprint(fake.queued))
 	files := map[string]string{".out": stdout, ".code": fmt.Sprint(exitCode)}
@@ -125,4 +141,112 @@ func (fake *fakeGHGraphQL) GraphQLInputs(t *testing.T) []string {
 		inputs = append(inputs, string(data))
 	}
 	return inputs
+}
+
+func (fake *fakeGHGraphQL) LimitMergeAliases(t *testing.T, limit int) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(fake.dir, "gh-merge-limit"), []byte(fmt.Sprint(limit)), 0o644); err != nil {
+		t.Fatalf("write merge alias limit: %v", err)
+	}
+}
+
+func (fake *fakeGHGraphQL) registerMergeStates(t *testing.T, stdout string) string {
+	t.Helper()
+	var response map[string]any
+	if json.Unmarshal([]byte(stdout), &response) != nil {
+		return stdout
+	}
+	data, _ := response["data"].(map[string]any)
+	search, _ := data["search"].(map[string]any)
+	nodes, _ := search["nodes"].([]any)
+	if len(nodes) == 0 {
+		return stdout
+	}
+	for _, value := range nodes {
+		node, _ := value.(map[string]any)
+		id, _ := node["id"].(string)
+		if id == "" {
+			continue
+		}
+		mergeState := map[string]any{"id": id, "mergeable": node["mergeable"], "mergeStateStatus": node["mergeStateStatus"], "commits": node["commits"]}
+		encoded, err := json.Marshal(mergeState)
+		if err != nil {
+			t.Fatalf("encode merge state fixture: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(fake.dir, "gh-merge", id+".json"), encoded, 0o644); err != nil {
+			t.Fatalf("write merge state fixture: %v", err)
+		}
+		delete(node, "mergeable")
+		delete(node, "mergeStateStatus")
+		stripCheckContextNodes(node)
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("encode status fixture: %v", err)
+	}
+	return string(encoded)
+}
+
+func stripCheckContextNodes(node map[string]any) {
+	commits, _ := node["commits"].(map[string]any)
+	commitNodes, _ := commits["nodes"].([]any)
+	stripped := []any{}
+	for _, value := range commitNodes {
+		entry, _ := value.(map[string]any)
+		commit, _ := entry["commit"].(map[string]any)
+		copied := map[string]any{"oid": commit["oid"], "statusCheckRollup": nil}
+		if rollup, ok := commit["statusCheckRollup"].(map[string]any); ok {
+			contexts, _ := rollup["contexts"].(map[string]any)
+			copied["statusCheckRollup"] = map[string]any{"state": rollup["state"], "contexts": map[string]any{"totalCount": contexts["totalCount"]}}
+		}
+		stripped = append(stripped, map[string]any{"commit": copied})
+	}
+	if commits != nil {
+		node["commits"] = map[string]any{"nodes": stripped}
+	}
+}
+
+func serveFakeGHMergeQuery(dir string, inputPath string) int {
+	contents, err := os.ReadFile(inputPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fake gh: read input: %v\n", err)
+		return 1
+	}
+	var request struct {
+		Variables map[string]any `json:"variables"`
+	}
+	if err := json.Unmarshal(contents, &request); err != nil {
+		fmt.Fprintf(os.Stderr, "fake gh: parse input: %v\n", err)
+		return 1
+	}
+	ids := []string{}
+	for index := 0; ; index++ {
+		id, ok := request.Variables[fmt.Sprintf("id%d", index)].(string)
+		if !ok {
+			break
+		}
+		ids = append(ids, id)
+	}
+	if limit, err := os.ReadFile(filepath.Join(dir, "gh-merge-limit")); err == nil {
+		var max int
+		if _, scanErr := fmt.Sscan(string(limit), &max); scanErr == nil && len(ids) > max {
+			fmt.Fprintln(os.Stderr, "gh: HTTP 502: 502 Bad Gateway (https://api.github.com/graphql)")
+			return 1
+		}
+	}
+	data := map[string]any{}
+	for index, id := range ids {
+		var node any
+		if raw, err := os.ReadFile(filepath.Join(dir, "gh-merge", id+".json")); err == nil {
+			node = json.RawMessage(raw)
+		}
+		data[fmt.Sprintf("pr%d", index)] = node
+	}
+	encoded, err := json.Marshal(map[string]any{"data": data})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fake gh: encode response: %v\n", err)
+		return 1
+	}
+	fmt.Print(string(encoded))
+	return 0
 }

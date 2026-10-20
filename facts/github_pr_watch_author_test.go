@@ -179,8 +179,8 @@ func TestGitHubPRWatchUnchangedStateProducesNoNewEvent(t *testing.T) {
 			t.Fatalf("expected %s to advance to %s, got %#v", key, later, observation[key])
 		}
 	}
-	if len(harness.gh.GraphQLInputs(t)) != 4 {
-		t.Fatalf("expected probe, status, detail, status without a second detail query, got %d calls", len(harness.gh.GraphQLInputs(t)))
+	if len(harness.gh.GraphQLInputs(t)) != 5 {
+		t.Fatalf("expected probe, status, merge state, detail, status without refetching unchanged state, got %d calls", len(harness.gh.GraphQLInputs(t)))
 	}
 }
 
@@ -232,8 +232,8 @@ func TestGitHubPRWatchCheckEventsAreKeyedByExecution(t *testing.T) {
 	if got := len(harness.eventsOfType("github.pull_request.checks_failed")); got != 1 {
 		t.Fatalf("expected re-polling the same runs to emit nothing new, got %d checks_failed", got)
 	}
-	harness.mustPoll(watchBase.Add(15*time.Minute), statusResponse(t, failedRun("run-2", watchTime(14*time.Minute))))
-	harness.mustPoll(watchBase.Add(20*time.Minute), statusResponse(t, failedRun("run-2", watchTime(19*time.Minute))))
+	harness.mustPoll(watchBase.Add(45*time.Minute), statusResponse(t, failedRun("run-2", watchTime(44*time.Minute))), detailResponse(t, detailFixture{ID: watchPRNodeID}))
+	harness.mustPoll(watchBase.Add(80*time.Minute), statusResponse(t, failedRun("run-2", watchTime(79*time.Minute))), detailResponse(t, detailFixture{ID: watchPRNodeID}))
 	failed := harness.eventsOfType("github.pull_request.checks_failed")
 	if len(failed) != 3 {
 		t.Fatalf("expected a re-run with new ids and a re-run with a new completedAt to each emit, got %d", len(failed))
@@ -505,15 +505,17 @@ func TestGitHubPRWatchReadinessAndConflictsUseTheLastKnownValue(t *testing.T) {
 			})
 		}
 		harness.mustPoll(watchBase, statusResponse(t, watchPR(func(pr *prFixture) { pr.Checks = passing })), detailResponse(t, detailFixture{ID: watchPRNodeID}))
-		harness.mustPoll(watchBase.Add(5*time.Minute), statusResponse(t, ready(nil)))
+		harness.mustPoll(watchBase.Add(5*time.Minute), statusResponse(t, ready(func(pr *prFixture) { pr.UpdatedAt = watchTime(4 * time.Minute) })), detailResponse(t, detailFixture{ID: watchPRNodeID}))
 		open := threadFixture{ID: "PRRT_one", Path: "settings.go", Line: 18, Comments: []commentFixture{{ID: "PRRC_1", Author: "alice", Body: "Hmm", CreatedAt: watchTime(6 * time.Minute)}}}
 		harness.mustPoll(watchBase.Add(10*time.Minute), statusResponse(t, ready(func(pr *prFixture) { pr.UpdatedAt = watchTime(6 * time.Minute) })),
 			detailResponse(t, detailFixture{ID: watchPRNodeID, Threads: []threadFixture{open}}))
 		open.Resolved = true
 		harness.mustPoll(watchBase.Add(15*time.Minute), statusResponse(t, ready(func(pr *prFixture) { pr.UpdatedAt = watchTime(12 * time.Minute) })),
 			detailResponse(t, detailFixture{ID: watchPRNodeID, Threads: []threadFixture{open}}))
-		harness.mustPoll(watchBase.Add(20*time.Minute), statusResponse(t, ready(func(pr *prFixture) { pr.UpdatedAt, pr.MergeState = watchTime(12*time.Minute), "BLOCKED" })))
-		harness.mustPoll(watchBase.Add(25*time.Minute), statusResponse(t, ready(func(pr *prFixture) { pr.UpdatedAt, pr.MergeState = watchTime(12*time.Minute), "BEHIND" })))
+		harness.mustPoll(watchBase.Add(20*time.Minute), statusResponse(t, ready(func(pr *prFixture) { pr.UpdatedAt, pr.MergeState = watchTime(18*time.Minute), "BLOCKED" })),
+			detailResponse(t, detailFixture{ID: watchPRNodeID, Threads: []threadFixture{open}}))
+		harness.mustPoll(watchBase.Add(25*time.Minute), statusResponse(t, ready(func(pr *prFixture) { pr.UpdatedAt, pr.MergeState = watchTime(24*time.Minute), "BEHIND" })),
+			detailResponse(t, detailFixture{ID: watchPRNodeID, Threads: []threadFixture{open}}))
 
 		got := eventTypes(harness.events())
 		want := []string{"observed", "ready_to_merge", "review_comment", "readiness_lost", "ready_to_merge", "readiness_lost"}
@@ -532,14 +534,17 @@ func TestGitHubPRWatchReadinessAndConflictsUseTheLastKnownValue(t *testing.T) {
 
 	t.Run("conflicts after unknown", func(t *testing.T) {
 		harness := newPRWatchHarness(t, authorParams)
-		state := func(mergeable, mergeState, decision string) prFixture {
-			return watchPR(func(pr *prFixture) { pr.Mergeable, pr.MergeState, pr.Decision = mergeable, mergeState, decision })
+		state := func(mergeable, mergeState string, updated time.Duration) prFixture {
+			return watchPR(func(pr *prFixture) {
+				pr.Mergeable, pr.MergeState, pr.Decision, pr.UpdatedAt = mergeable, mergeState, "APPROVED", watchTime(updated)
+			})
 		}
-		harness.mustPoll(watchBase, statusResponse(t, state("UNKNOWN", "UNKNOWN", "APPROVED")), detailResponse(t, detailFixture{ID: watchPRNodeID}))
-		harness.mustPoll(watchBase.Add(5*time.Minute), statusResponse(t, state("CONFLICTING", "DIRTY", "APPROVED")))
-		harness.mustPoll(watchBase.Add(10*time.Minute), statusResponse(t, state("UNKNOWN", "UNKNOWN", "APPROVED")))
-		harness.mustPoll(watchBase.Add(15*time.Minute), statusResponse(t, state("MERGEABLE", "CLEAN", "APPROVED")))
-		harness.mustPoll(watchBase.Add(20*time.Minute), statusResponse(t, state("UNKNOWN", "UNKNOWN", "APPROVED")))
+		empty := detailResponse(t, detailFixture{ID: watchPRNodeID})
+		harness.mustPoll(watchBase, statusResponse(t, state("UNKNOWN", "UNKNOWN", -time.Hour)), empty)
+		harness.mustPoll(watchBase.Add(5*time.Minute), statusResponse(t, state("CONFLICTING", "DIRTY", -time.Hour)))
+		harness.mustPoll(watchBase.Add(10*time.Minute), statusResponse(t, state("UNKNOWN", "UNKNOWN", 8*time.Minute)), empty)
+		harness.mustPoll(watchBase.Add(15*time.Minute), statusResponse(t, state("MERGEABLE", "CLEAN", 13*time.Minute)), empty)
+		harness.mustPoll(watchBase.Add(20*time.Minute), statusResponse(t, state("UNKNOWN", "UNKNOWN", 18*time.Minute)), empty)
 		got := eventTypes(harness.events())
 		want := []string{"observed", "merge_conflict", "ready_to_merge"}
 		if !reflect.DeepEqual(got, want) {
@@ -1432,4 +1437,143 @@ func nextItemsByReason(t *testing.T, harness *prWatchHarness, now time.Time) map
 		items[item.Reason] = item
 	}
 	return items
+}
+
+func watchPRSet(count int, mutate func(index int, pr *prFixture)) []prFixture {
+	prs := []prFixture{}
+	for index := 0; index < count; index++ {
+		prs = append(prs, watchPR(func(pr *prFixture) {
+			pr.ID, pr.Number = fmt.Sprintf("PR_kwDOwidget%03d", index), 100+index
+			pr.HeadSHA = fmt.Sprintf("%040d", index+1)
+			if mutate != nil {
+				mutate(index, pr)
+			}
+		}))
+	}
+	return prs
+}
+
+func emptyDetails(t *testing.T, prs []prFixture) []string {
+	t.Helper()
+	responses := []string{}
+	for start := 0; start < len(prs); start += 10 {
+		details := []detailFixture{}
+		for _, pr := range prs[start:min(start+10, len(prs))] {
+			details = append(details, detailFixture{ID: pr.ID})
+		}
+		responses = append(responses, detailResponse(t, details...))
+	}
+	return responses
+}
+
+func TestGitHubPRWatchSearchStaysCheapAndBatchesAtMostTenPRs(t *testing.T) {
+	harness := newPRWatchHarness(t, authorParams)
+	prs := watchPRSet(12, func(index int, pr *prFixture) {
+		pr.Checks = []checkFixture{{ID: fmt.Sprintf("run-%d", index), Name: "unit", Status: "COMPLETED", Conclusion: "SUCCESS", CompletedAt: watchTime(-time.Hour)}}
+	})
+	harness.mustPoll(watchBase, append([]string{statusResponse(t, prs...)}, emptyDetails(t, prs)...)...)
+
+	mergeDocuments := 0
+	for _, input := range harness.gh.GraphQLInputs(t) {
+		if strings.Contains(input, "search(") {
+			for _, expensive := range []string{"mergeStateStatus", "mergeable", "CheckRun", "StatusContext"} {
+				if strings.Contains(input, expensive) {
+					t.Fatalf("expected the search document not to select %s: %s", expensive, input)
+				}
+			}
+		}
+		if aliases := strings.Count(input, "node(id:"); aliases > 10 {
+			t.Fatalf("expected at most 10 aliased PRs per document, got %d", aliases)
+		}
+		if strings.Contains(input, "mergeStateStatus") {
+			mergeDocuments++
+		}
+	}
+	if mergeDocuments != 2 {
+		t.Fatalf("expected 12 new PRs to need two merge state documents, got %d", mergeDocuments)
+	}
+	if got := len(harness.eventsOfType("github.pull_request.observed")); got != 12 {
+		t.Fatalf("expected 12 observed events, got %d", got)
+	}
+	if payloadString(harness.observation(prs[11].ID), "checks_state") != "passed" || payloadString(harness.observation(prs[11].ID), "mergeable") != "MERGEABLE" {
+		t.Fatalf("expected merge state and checks from the batched query, got %#v", harness.observation(prs[11].ID))
+	}
+}
+
+func TestGitHubPRWatchShrinksBatchesWhenGitHubTimesOut(t *testing.T) {
+	harness := newPRWatchHarness(t, authorParams)
+	harness.gh.LimitMergeAliases(t, 3)
+	prs := watchPRSet(7, func(index int, pr *prFixture) {
+		if index == 4 {
+			pr.Mergeable, pr.MergeState = "CONFLICTING", "DIRTY"
+		}
+	})
+	harness.mustPoll(watchBase, append([]string{statusResponse(t, prs...)}, emptyDetails(t, prs)...)...)
+	sizes := []int{}
+	for _, input := range harness.gh.GraphQLInputs(t) {
+		if strings.Contains(input, "mergeStateStatus") {
+			sizes = append(sizes, strings.Count(input, "node(id:"))
+		}
+	}
+	if !reflect.DeepEqual(sizes, []int{7, 3, 3, 1}) {
+		t.Fatalf("expected merge state batches to halve after a timeout, got %v", sizes)
+	}
+	if got := len(harness.eventsOfType("github.pull_request.observed")); got != 7 || payloadString(harness.observation(prs[4].ID), "mergeable") != "CONFLICTING" {
+		t.Fatalf("expected every PR observed with its merge state, got %d observed", got)
+	}
+
+	prs[2] = watchPR(func(pr *prFixture) {
+		*pr = prs[2]
+		pr.Checks = []checkFixture{{ID: "run-late", Name: "lint", Status: "COMPLETED", Conclusion: "FAILURE", CompletedAt: watchTime(4 * time.Minute)}}
+	})
+	harness.mustPoll(watchBase.Add(5*time.Minute), statusResponse(t, prs...))
+	failed := harness.eventsOfType("github.pull_request.checks_failed")
+	if len(failed) != 1 || payloadString(failed[0].Payload, "node_id") != prs[2].ID {
+		t.Fatalf("expected one checks_failed for the PR whose rollup changed, got %v", eventTypes(harness.events()))
+	}
+}
+
+func TestGitHubPRWatchSearchTimeoutDefersWithoutFailures(t *testing.T) {
+	const timeout = "gh: HTTP 502: 502 Bad Gateway (https://api.github.com/graphql)\n"
+	cli := newPRWatchHarness(t, authorParams)
+	cli.gh.QueueResult(t, "", timeout, 1)
+	output, err := cli.cli("github", "prs", "capture", "--home", cli.homeDir, "--gh", cli.gh.Path)
+	if err == nil || !strings.Contains(output, "GitHub timed out on the query (HTTP 502)") {
+		t.Fatalf("expected capture to report the GitHub timeout, got %v:\n%s", err, output)
+	}
+
+	harness := newPRWatchHarness(t, authorParams)
+	harness.gh.QueueResult(t, "", timeout, 1)
+	started := time.Now()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir: harness.homeDir, DatabasePath: harness.dbPath, WatchDirs: []string{harness.watchDir}, GitHubCommand: harness.gh.Path,
+		ConnectorRetryInitial: 10 * time.Millisecond, ConnectorRetryMax: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- capture.Run(ctx) }()
+	deadline := time.Now().Add(3 * time.Second)
+	for !strings.Contains(watchConnectorStatus(t, harness.homeDir).DeferredReason, "GitHub timed out on the query (HTTP 502)") {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for the deferral: %#v", watchConnectorStatus(t, harness.homeDir))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(300 * time.Millisecond)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	status := watchConnectorStatus(t, harness.homeDir)
+	notBefore, err := workgraph.ConnectorPollNotBefore(harness.homeDir, "github.pr_watch")
+	if err != nil || status.ConsecutiveFailures != 0 || notBefore.Before(started.Add(50*time.Second)) {
+		t.Fatalf("expected a deferral about a minute out without counting a failure, got %#v (not before %s, %v)", status, notBefore, err)
+	}
+	if calls := len(harness.gh.GraphQLInputs(t)); calls != 2 {
+		t.Fatalf("expected no retry before the deferral ends, got %d graphql calls", calls)
+	}
 }

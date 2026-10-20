@@ -274,7 +274,7 @@ func TestGitHubPRWatchPushHintWakesThePoller(t *testing.T) {
 		}
 	}
 
-	waitForCalls(3)
+	waitForCalls(4)
 	waitForReply(true)
 	eventsBefore := len(harness.events())
 
@@ -283,9 +283,9 @@ func TestGitHubPRWatchPushHintWakesThePoller(t *testing.T) {
 	if got := countRows(t, harness.dbPath, `SELECT COUNT(*) FROM connector_poll_hints WHERE connector_id = 'github.pr_watch'`); got != 1 {
 		t.Fatalf("expected the hint to be recorded, got %d rows", got)
 	}
-	waitForCalls(4)
+	waitForCalls(5)
 	earliest := callStart(2).Add(spacing)
-	if started := callStart(4); started.Before(earliest.Add(-startJitter)) || started.After(laterOf(earliest, hinted).Add(2*time.Second)) {
+	if started := callStart(5); started.Before(earliest.Add(-startJitter)) || started.After(laterOf(earliest, hinted).Add(2*time.Second)) {
 		t.Fatalf("expected the hint to poll promptly but not within the spacing of the previous poll start, got %s after it", started.Sub(callStart(2)))
 	}
 	for range 2 {
@@ -293,13 +293,13 @@ func TestGitHubPRWatchPushHintWakesThePoller(t *testing.T) {
 			t.Fatalf("record hint during the poll: %v", err)
 		}
 	}
-	waitForCalls(5)
-	if elapsed := callStart(5).Sub(callStart(4)); elapsed < spacing-startJitter || elapsed > spacing+2*time.Second {
+	waitForCalls(6)
+	if elapsed := callStart(6).Sub(callStart(5)); elapsed < spacing-startJitter || elapsed > spacing+2*time.Second {
 		t.Fatalf("expected one follow-up after the spacing, got %s", elapsed)
 	}
-	assertCallsStay(5, 2*spacing)
+	assertCallsStay(6, 2*spacing)
 	inputs := harness.gh.GraphQLInputs(t)
-	for _, call := range []int{3, 4} {
+	for _, call := range []int{4, 5} {
 		if strings.Contains(inputs[call], "reviewThreads") {
 			t.Fatalf("expected an unnamed hint not to force a recent detail query, call %d: %s", call+1, inputs[call])
 		}
@@ -312,8 +312,8 @@ func TestGitHubPRWatchPushHintWakesThePoller(t *testing.T) {
 	}
 
 	hint("--pr", "https://github.com/acme/widget/pull/42")
-	waitForCalls(7)
-	if !strings.Contains(harness.gh.GraphQLInputs(t)[6], watchPRNodeID) {
+	waitForCalls(9)
+	if inputs := harness.gh.GraphQLInputs(t); !strings.Contains(inputs[8], "reviewThreads") || !strings.Contains(inputs[8], watchPRNodeID) {
 		t.Fatalf("expected the named hint to force the detail query for its PR")
 	}
 	waitForReply(false)

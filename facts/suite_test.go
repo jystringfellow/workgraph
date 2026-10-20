@@ -12,6 +12,9 @@ import (
 var workgraphFactsBinary string
 
 func TestMain(m *testing.M) {
+	if dir := os.Getenv("WORKGRAPH_FACTS_FAKE_GH_DIR"); dir != "" {
+		os.Exit(serveFakeGHMergeQuery(dir, os.Getenv("WORKGRAPH_FACTS_FAKE_GH_INPUT")))
+	}
 	workingDir, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "find facts working directory: %v\n", err)
