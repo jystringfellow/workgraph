@@ -194,22 +194,6 @@ func TestGitHubPRWatchBacklogItemsCiteTheObservedEvent(t *testing.T) {
 	}
 }
 
-func TestGitHubPRWatchDirectAndTeamReviewRequestsEnterReviewerSet(t *testing.T) {
-	t.Skip("TBD: with direct_and_team a direct request and a cached-team request are watched in the reviewer role labeled direct and via org/team; an uncached team is via team (unresolved); with direct the team-only PR is absent; no detail query runs for reviewer-role PRs")
-}
-
-func TestGitHubPRWatchFirstReviewerPollIsBacklogAndLaterRequestsAreTransitions(t *testing.T) {
-	t.Skip("TBD: the first reviewer poll emits only observed per PR; a request appearing on a later poll emits observed and review_requested")
-}
-
-func TestGitHubPRWatchReviewRequestsCloseAtOnce(t *testing.T) {
-	t.Skip("TBD: a submitted review emits review_submitted and review_request_removed reason reviewed and the item closes out_of_scope; a request withdrawn before any review emits reason withdrawn; a PENDING draft review emits nothing; a re-request emits a new review_requested")
-}
-
-func TestGitHubPRWatchIgnoredTeamsAreAbsent(t *testing.T) {
-	t.Skip("TBD: a PR requested only through an ignore_teams team is absent from the reviewer set")
-}
-
 func TestGitHubPRWatchPushHintWakesThePoller(t *testing.T) {
 	t.Skip("TBD: with a 5m interval a hint 30s after a poll triggers a poll at the next 2s check and a second hint during that poll triggers exactly one follow-up; a hint within 10s of the previous poll start waits until 10s; a hint naming a PR whose thread was resolved without an updatedAt change forces its detail query and closes the reply item; a hint before the not-before deadline waits for it")
 }

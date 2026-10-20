@@ -157,6 +157,9 @@ func ConnectGitHubPRWatch(config ConnectorConnectConfig) (ConnectorConnectResult
 	if err := enableGitHubPRWatch(homeDir, params); err != nil {
 		return ConnectorConnectResult{}, err
 	}
+	if _, err := refreshGitHubPRTeams(context.Background(), homeDir, githubCommandOrDefault(config.GitHubCommand), params, time.Now().UTC(), true); err != nil {
+		return ConnectorConnectResult{}, err
+	}
 	return ConnectorConnectResult{
 		HomeDir: homeDir,
 		ID:      githubPRWatchConnectorID,
@@ -241,6 +244,9 @@ func enableGitHubPRWatch(homeDir string, params githubPRWatchParams) error {
 	}
 	entry := state.entry(githubPRWatchConnectorID)
 	entry.BridgeParams = encoded
+	if !params.hasRole(githubPRRoleReviewer) || params.ReviewRequests == "direct" {
+		entry.GitHubPRTeams = nil
+	}
 	state.Connectors[githubPRWatchConnectorID] = entry
 	return writeConnectorRuntimeFile(homeDir, state)
 }
@@ -266,6 +272,7 @@ func DisconnectGitHubPRWatch(config ConnectorConnectConfig) (ConnectorConnectRes
 	disabled := false
 	entry.Enabled = &disabled
 	entry.BridgeParams = nil
+	entry.GitHubPRTeams = nil
 	state.Connectors[githubPRWatchConnectorID] = entry
 	if err := writeConnectorRuntimeFile(homeDir, state); err != nil {
 		return ConnectorConnectResult{}, err
@@ -315,7 +322,7 @@ func ensureGitHubPRWatchSchema(db *sql.DB) error {
 			return fmt.Errorf("prepare github.pr_watch schema: %w", err)
 		}
 	}
-	return nil
+	return ensureColumn(db, "github_pr_watch_state", "reviewer_polled", "INTEGER NOT NULL DEFAULT 0")
 }
 
 type githubPRWatchFence struct {
@@ -350,6 +357,9 @@ func applyGitHubPRWatchFence(db *sql.DB, enabled bool, scopeHash string) error {
 	if !enabled || currentHash != scopeHash {
 		if _, err := tx.Exec(`DELETE FROM github_pr_observations WHERE connector_id = ?`, githubPRWatchConnectorID); err != nil {
 			return fmt.Errorf("delete github.pr_watch observations: %w", err)
+		}
+		if _, err := tx.Exec(`UPDATE github_pr_watch_state SET reviewer_polled = 0 WHERE connector_id = ?`, githubPRWatchConnectorID); err != nil {
+			return fmt.Errorf("reset github.pr_watch reviewer poll state: %w", err)
 		}
 	}
 	if _, err := tx.Exec(`INSERT INTO github_pr_watch_state (connector_id, enabled, scope_hash, poll_seq) VALUES (?, ?, ?, 1)

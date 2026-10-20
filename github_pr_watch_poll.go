@@ -28,6 +28,7 @@ const (
 )
 
 type githubPRWatchPoll struct {
+	teams          *githubPRTeamCache
 	ctx            context.Context
 	gh             string
 	db             *sql.DB
@@ -40,9 +41,10 @@ type githubPRWatchPoll struct {
 }
 
 type githubPRWatchChanges struct {
-	events  []githubPRWatchEvent
-	upserts []githubPRObservation
-	deletes []githubPRObservation
+	reviewerPolled bool
+	events         []githubPRWatchEvent
+	upserts        []githubPRObservation
+	deletes        []githubPRObservation
 }
 
 type githubPRWatchEvent struct {
@@ -180,6 +182,10 @@ func CaptureGitHubPRWatch(config GitHubPRWatchCaptureConfig) (GitHubPRWatchCaptu
 			now: pollStart, remoteProjects: remoteProjects,
 		}
 		poll.observedAt = poll.now.Format(time.RFC3339Nano)
+		poll.teams, err = refreshGitHubPRTeams(ctx, status.HomeDir, poll.gh, params, pollStart, false)
+		if err != nil {
+			return result, err
+		}
 		changes, roleErr := poll.run()
 		if err := recordGitHubPRWatchBudget(status.HomeDir, poll.rateLimit); err != nil {
 			return result, err
@@ -282,10 +288,13 @@ func (poll *githubPRWatchPoll) run() (*githubPRWatchChanges, error) {
 	var combined *githubPRWatchChanges
 	var failures []error
 	for _, role := range poll.params.Roles {
-		if role != githubPRRoleAuthor {
-			continue
+		var changes githubPRWatchChanges
+		var err error
+		if role == githubPRRoleReviewer {
+			changes, err = poll.runReviewer()
+		} else {
+			changes, err = poll.runAuthor()
 		}
-		changes, err := poll.runAuthor()
 		if err != nil {
 			failures = append(failures, fmt.Errorf("%s role: %w", role, err))
 			continue
@@ -293,6 +302,7 @@ func (poll *githubPRWatchPoll) run() (*githubPRWatchChanges, error) {
 		if combined == nil {
 			combined = &githubPRWatchChanges{}
 		}
+		combined.reviewerPolled = combined.reviewerPolled || changes.reviewerPolled
 		combined.events = append(combined.events, changes.events...)
 		combined.upserts = append(combined.upserts, changes.upserts...)
 		combined.deletes = append(combined.deletes, changes.deletes...)
@@ -372,7 +382,14 @@ func (poll *githubPRWatchPoll) graphQL(document string, variables map[string]any
 }
 
 func (poll *githubPRWatchPoll) search(role string) ([]githubPRStatusNode, error) {
-	query := fmt.Sprintf("is:pr is:open author:%s archived:false sort:updated-desc", poll.params.Identity)
+	qualifier := "author"
+	if role == githubPRRoleReviewer {
+		qualifier = "review-requested"
+		if poll.params.ReviewRequests == "direct" {
+			qualifier = "user-review-requested"
+		}
+	}
+	query := fmt.Sprintf("is:pr is:open %s:%s archived:false sort:updated-desc", qualifier, poll.params.Identity)
 	var nodes []githubPRStatusNode
 	var after any
 	issueCount := 0
@@ -1426,6 +1443,11 @@ func commitGitHubPRWatchChanges(db *sql.DB, fence githubPRWatchFence, changes gi
 		if _, err := tx.Exec(`DELETE FROM github_pr_observations WHERE connector_id = ? AND node_id = ? AND role = ?`,
 			githubPRWatchConnectorID, observation.NodeID, observation.Role); err != nil {
 			return 0, fmt.Errorf("delete github.pr_watch observation: %w", err)
+		}
+	}
+	if changes.reviewerPolled {
+		if _, err := tx.Exec(`UPDATE github_pr_watch_state SET reviewer_polled = 1 WHERE connector_id = ?`, githubPRWatchConnectorID); err != nil {
+			return 0, err
 		}
 	}
 	if err := tx.Commit(); err != nil {

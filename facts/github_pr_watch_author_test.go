@@ -808,6 +808,19 @@ func TestGitHubPRWatchStoresCommentTextWithUntrustedFlag(t *testing.T) {
 }
 
 func TestGitHubPRWatchIncompleteRoleFailsWithoutChanges(t *testing.T) {
+	t.Run("a complete role in the same poll commits", func(t *testing.T) {
+		h := reviewerHarness(t, `{"roles":["author","reviewer"],"max_open_prs":{"reviewer":1}}`)
+		h.gh.Queue(t, statusResponse(t, watchPR()))
+		h.gh.Queue(t, detailResponse(t, detailFixture{ID: watchPRNodeID}))
+		h.gh.Queue(t, reviewerStatus(t, requestedPR("review-1", watchIdentity), requestedPR("review-2", watchIdentity)))
+		if _, err := h.poll(watchBase); err == nil || !strings.Contains(err.Error(), "max_open_prs.reviewer") {
+			t.Fatalf("expected reviewer ceiling failure: %v", err)
+		}
+		if h.observationCount() != 1 || h.observation(watchPRNodeID) == nil || len(h.events()) != 1 {
+			t.Fatal("complete author role did not commit independently")
+		}
+	})
+
 	other := watchPR(func(pr *prFixture) { pr.ID, pr.Number = "PR_kwDOwidget43", 43 })
 	for _, test := range []struct {
 		name     string

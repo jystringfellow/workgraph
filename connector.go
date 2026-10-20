@@ -43,6 +43,7 @@ type ConnectorStatus struct {
 	LastSuccess         string
 	LastIngest          string
 	LastError           string
+	Warning             string
 	NextPoll            string
 	NotBefore           string
 	DeferredReason      string
@@ -149,23 +150,24 @@ type connectorRuntimeFile struct {
 }
 
 type connectorRuntimeEntry struct {
-	Enabled             *bool           `json:"enabled,omitempty"`
-	CaptureMode         string          `json:"capture_mode,omitempty"`
-	BridgeParams        json.RawMessage `json:"bridge_params,omitempty"`
-	Interval            string          `json:"interval,omitempty"`
-	SetupState          string          `json:"setup_state,omitempty"`
-	LastValidated       string          `json:"last_validated_at,omitempty"`
-	LastValidationError string          `json:"last_validation_error,omitempty"`
-	LastPoll            string          `json:"last_poll_at,omitempty"`
-	LastSuccess         string          `json:"last_success_at,omitempty"`
-	LastIngest          string          `json:"last_ingest_at,omitempty"`
-	LastError           string          `json:"last_error,omitempty"`
-	NextPoll            string          `json:"next_poll_at,omitempty"`
-	NotBefore           string          `json:"not_before,omitempty"`
-	DeferredReason      string          `json:"deferred_reason,omitempty"`
-	RateLimitRemaining  *int            `json:"rate_limit_remaining,omitempty"`
-	RateLimitResetAt    string          `json:"rate_limit_reset_at,omitempty"`
-	ConsecutiveFailures int             `json:"consecutive_failures,omitempty"`
+	GitHubPRTeams       *githubPRTeamCache `json:"github_pr_teams,omitempty"`
+	Enabled             *bool              `json:"enabled,omitempty"`
+	CaptureMode         string             `json:"capture_mode,omitempty"`
+	BridgeParams        json.RawMessage    `json:"bridge_params,omitempty"`
+	Interval            string             `json:"interval,omitempty"`
+	SetupState          string             `json:"setup_state,omitempty"`
+	LastValidated       string             `json:"last_validated_at,omitempty"`
+	LastValidationError string             `json:"last_validation_error,omitempty"`
+	LastPoll            string             `json:"last_poll_at,omitempty"`
+	LastSuccess         string             `json:"last_success_at,omitempty"`
+	LastIngest          string             `json:"last_ingest_at,omitempty"`
+	LastError           string             `json:"last_error,omitempty"`
+	NextPoll            string             `json:"next_poll_at,omitempty"`
+	NotBefore           string             `json:"not_before,omitempty"`
+	DeferredReason      string             `json:"deferred_reason,omitempty"`
+	RateLimitRemaining  *int               `json:"rate_limit_remaining,omitempty"`
+	RateLimitResetAt    string             `json:"rate_limit_reset_at,omitempty"`
+	ConsecutiveFailures int                `json:"consecutive_failures,omitempty"`
 }
 
 var connectorPollStateMu sync.Mutex
@@ -1321,6 +1323,7 @@ func connectorStatuses(homeDir string, state connectorRuntimeFile) []ConnectorSt
 			LastSuccess:         entry.LastSuccess,
 			LastIngest:          entry.LastIngest,
 			LastError:           entry.LastError,
+			Warning:             githubPRTeamsWarning(entry),
 			NextPoll:            connectorNextPoll(entry, defaultConnectorInterval(id)),
 			NotBefore:           entry.NotBefore,
 			DeferredReason:      entry.DeferredReason,
@@ -1776,6 +1779,9 @@ func connectorListMessage(result ConnectorListResult) string {
 		if status.LastError != "" {
 			line += ", last error " + status.LastError
 		}
+		if status.Warning != "" {
+			line += ", warning " + status.Warning
+		}
 		if status.DeferredReason != "" {
 			line += ", deferred " + status.DeferredReason
 		}
@@ -1862,6 +1868,9 @@ func connectorStatusMessage(result ConnectorListResult) string {
 		}
 		if status.LastError != "" {
 			line += ", last error " + status.LastError
+		}
+		if status.Warning != "" {
+			line += ", warning " + status.Warning
 		}
 		if status.DeferredReason != "" {
 			line += ", deferred " + status.DeferredReason

@@ -64,7 +64,8 @@ const githubPRWatchStateSchema = `CREATE TABLE IF NOT EXISTS github_pr_watch_sta
 	connector_id TEXT PRIMARY KEY,
 	enabled INTEGER NOT NULL DEFAULT 0,
 	scope_hash TEXT NOT NULL DEFAULT '',
-	poll_seq INTEGER NOT NULL DEFAULT 0
+	poll_seq INTEGER NOT NULL DEFAULT 0,
+	reviewer_polled INTEGER NOT NULL DEFAULT 0
 )`
 
 const connectorPollHintsSchema = `CREATE TABLE IF NOT EXISTS connector_poll_hints (

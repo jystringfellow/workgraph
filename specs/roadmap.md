@@ -99,6 +99,10 @@ Priority labels used below:
   `specs/connector-runtime.md` and `specs/provider-tool-requirements.md`]
 - [x] Connector poll deferrals, retry-after deadlines, and early wake with
   minimum spacing (PR watch delivery slice 1). [spec: `specs/github-pr-watch.md`]
+- [x] GitHub PR reviewer capture with direct and team requests, hourly team
+  attribution, request lifecycle events, per-role completeness, and captured
+  review requests in `next` (PR watch delivery slice 4). [spec:
+  `specs/github-pr-watch.md`]
 - [x] Keep today/resume available on next projection errors, sanitize next
   item text, and preserve polling through unreadable settings. [specs:
   `specs/next.md` and `specs/connector-runtime.md`]
