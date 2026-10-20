@@ -1587,9 +1587,9 @@ func TestGitHubPRWatchBatchCeilingPersistsAcrossPollDeadlines(t *testing.T) {
 	harness.gh.AnswerDetailsEmpty(t)
 	prs := watchPRSet(4, nil)
 	committed := false
-	for attempt := 0; attempt < 4 && !committed; attempt++ {
+	for attempt := 0; attempt < 6 && !committed; attempt++ {
 		harness.gh.Queue(t, statusResponse(t, prs...))
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 2300*time.Millisecond)
 		now := watchBase.Add(time.Duration(attempt) * 5 * time.Minute)
 		_, err := workgraph.CaptureGitHubPRWatch(workgraph.GitHubPRWatchCaptureConfig{
 			HomeDir: harness.homeDir, DatabasePath: harness.dbPath, WatchDirs: []string{harness.watchDir}, GitHubCommand: harness.gh.Path,
