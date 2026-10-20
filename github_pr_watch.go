@@ -167,7 +167,11 @@ func validateGitHubPRWatchConnector(homeDir string, config ConnectorValidateConf
 	if err != nil {
 		return ConnectorValidateResult{}, err
 	}
-	params, err := parseGitHubPRWatchParams(state.entry(githubPRWatchConnectorID).BridgeParams)
+	raw := state.entry(githubPRWatchConnectorID).BridgeParams
+	if len(raw) == 0 {
+		return ConnectorValidateResult{}, fmt.Errorf("connector %s is not connected; run workgraph github prs connect", githubPRWatchConnectorID)
+	}
+	params, err := parseGitHubPRWatchParams(raw)
 	if err != nil {
 		return ConnectorValidateResult{}, err
 	}

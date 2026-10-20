@@ -371,6 +371,10 @@ func githubSearchWindow(ctx context.Context, gh string, kind string, baseArgs []
 	)
 	output, err := exec.CommandContext(ctx, gh, args...).Output()
 	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && len(bytesTrimSpace(exitErr.Stderr)) > 0 {
+			return nil, fmt.Errorf("gh %s: %w: %s", strings.Join(args, " "), err, bytesTrimSpace(exitErr.Stderr))
+		}
 		return nil, fmt.Errorf("gh %s: %w", strings.Join(args, " "), err)
 	}
 	var items []githubSearchItem

@@ -1114,7 +1114,81 @@ func TestGitHubPollFailsVisiblyWhenRateLimitCheckFails(t *testing.T) {
 }
 
 func TestGitHubPollTreatsGHBadCredentialsAsAuthFailure(t *testing.T) {
-	t.Skip("TBD: gh HTTP 401 Bad credentials marks github setup error and stops its poller")
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	codeDir := filepath.Join(tempDir, "Code")
+	if err := os.MkdirAll(codeDir, 0o755); err != nil {
+		t.Fatalf("create code dir: %v", err)
+	}
+	ghPath := filepath.Join(tempDir, "gh")
+	script := `#!/bin/sh
+echo "$@" >> "` + filepath.Join(tempDir, "gh.log") + `"
+if [ "$1" = "api" ] && [ "$2" = "rate_limit" ]; then
+  printf '{"resources":{"core":{"remaining":5000}}}'
+  exit 0
+fi
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+  printf 'github.com\n  Logged in\n'
+  exit 0
+fi
+printf 'HTTP 401: Bad credentials (https://api.github.com/search/issues)\nTry authenticating with:  gh auth login\n' >&2
+exit 1
+`
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	connectGitHubForTest(t, homeDir, ghPath)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:               homeDir,
+		DatabasePath:          initResult.DatabasePath,
+		WatchDirs:             []string{codeDir},
+		GitHubPollInterval:    20 * time.Millisecond,
+		GitHubCommand:         ghPath,
+		ConnectorRetryInitial: 10 * time.Millisecond,
+		ConnectorRetryMax:     20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("run start failed: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- capture.Run(ctx) }()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		status, err := workgraph.StatusConnectors(workgraph.ConnectorListConfig{HomeDir: homeDir})
+		if err != nil {
+			t.Fatalf("connector status: %v", err)
+		}
+		var github workgraph.ConnectorStatus
+		for _, candidate := range status.Connectors {
+			if candidate.ID == "github" {
+				github = candidate
+			}
+		}
+		if github.SetupState == "error" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected gh bad credentials to mark github setup error, got %#v", github)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	searches := countGHInvocations(readGHLog(t, tempDir), "search prs", "")
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	if after := countGHInvocations(readGHLog(t, tempDir), "search prs", ""); after != searches {
+		t.Fatalf("expected the github poller to stop after the auth failure, searches went from %d to %d", searches, after)
+	}
 }
 
 func TestGitHubPollGatesOnSearchRateLimitBucket(t *testing.T) {
