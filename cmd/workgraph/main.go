@@ -3352,7 +3352,7 @@ func runResume(args []string, stdout io.Writer, stderr io.Writer) int {
 		project = flags.Arg(0)
 	}
 
-	result, err := workgraph.Resume(workgraph.ResumeConfig{
+	config := workgraph.ResumeConfig{
 		HomeDir:        *homeDir,
 		DatabasePath:   *databasePath,
 		MemoryDir:      *memoryDir,
@@ -3361,13 +3361,23 @@ func runResume(args []string, stdout io.Writer, stderr io.Writer) int {
 		GitEmails:      localGitEmails(),
 		GitHubLogins:   localGitHubLogins(),
 		DebugRelevance: *debugRelevance,
-	})
+	}
+	result, err := workgraph.Resume(config)
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph resume: %v\n", err)
 		return 1
 	}
 
-	fmt.Fprintln(stdout, result.Message)
+	if _, err := fmt.Fprintln(stdout, result.Message); err != nil {
+		fmt.Fprintf(stderr, "workgraph resume: write output: %v\n", err)
+		return 1
+	}
+	if project == "" && !*allProjects && !*debugRelevance {
+		if err := workgraph.RecordResumeCheckIn(config, result.AsOf); err != nil {
+			fmt.Fprintf(stderr, "workgraph resume: %v\n", err)
+			return 1
+		}
+	}
 	return 0
 }
 

@@ -174,6 +174,7 @@ func loadTodayEvents(db *sql.DB, now time.Time, actor string, involvement string
 	} else if !includeAllEvidence {
 		query += ` AND (involvement_json IS NULL OR json_array_length(involvement_json) > 0)`
 		query += ` AND NOT (source = 'notion' AND type IN ('notion.page', 'notion.database'))`
+		query += ` AND type NOT IN ('github.issue', 'github.pull_request')`
 	}
 	query += ` ORDER BY timestamp ASC, id ASC`
 	rows, err := db.Query(query, args...)

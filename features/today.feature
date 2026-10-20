@@ -22,11 +22,27 @@ Scenario: Group sessions by project
   When I run "workgraph today"
   Then I see sessions grouped by project
 
-Scenario: Show GitHub activity with useful labels
-  Given workgraph has captured GitHub pull request and issue events today
+Scenario: Keep GitHub work snapshots out of personal activity
+  Given workgraph has captured GitHub pull request and issue snapshots updated today
   When I run "workgraph today"
-  Then GitHub pull requests include title, number, and state
-  And GitHub issues include title, number, and state
+  Then the snapshots do not count as my activity or create sessions and projects
+  And the snapshots do not act as association targets
+  When I run "workgraph events today"
+  Then the snapshots remain inspectable with title, number, and state
+
+Scenario: Do not infer personal action from GitHub search provenance
+  Given a GitHub issue snapshot was updated today and matched a participant search
+  When I run "workgraph today"
+  Then the issue is absent because its latest updater is unknown
+  When I run "workgraph today --involvement involved"
+  Then the issue is visible as explicitly requested relationship evidence
+
+Scenario: Preserve a GitHub snapshot as related context
+  Given a personal event today qualifies as an association target
+  And a GitHub snapshot within the existing association window matches that event
+  When I run "workgraph today"
+  Then the snapshot may appear as the related association candidate
+  And it does not count as my activity or create a session
 
 Scenario: Show predictable output sections
   Given workgraph has captured events today

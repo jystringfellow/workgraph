@@ -479,7 +479,12 @@ func runWorkgraphBinaryWithTimeout(t *testing.T, env []string, timeout time.Dura
 }
 
 func daemonCommandEnv(env []string) []string {
-	commandEnv := append([]string{}, os.Environ()...)
+	var commandEnv []string
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "WORKGRAPH_AI_") {
+			commandEnv = append(commandEnv, entry)
+		}
+	}
 	if os.Getenv("GOMODCACHE") == "" {
 		if userHome, err := os.UserHomeDir(); err == nil {
 			commandEnv = append(commandEnv, "GOMODCACHE="+filepath.Join(userHome, "go", "pkg", "mod"))

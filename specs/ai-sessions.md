@@ -195,11 +195,17 @@ errors are written to stderr, not persisted in the payload.
 does not introduce an implicit shell. Stdin, stdout, and stderr pass through
 unchanged.
 
-`filepath.Base` of the resolved executable is stored as `tool`. The normalized
-resolved executable path is stored separately as `tool_path` so a later native
-resume launches the same local executable rather than trusting a changed
-`PATH`. If the user explicitly launches `sh -c ...` or `npx ...`, the tool is
-`sh` or `npx`. Workgraph never persists the remaining arguments.
+The `tool` is the basename of the invoked executable when that basename names
+a verified adapter, otherwise the basename of the symlink-resolved executable
+when that names a verified adapter, otherwise the symlink-resolved basename.
+A `claude` launcher that links to a versioned file such as
+`versions/2.1.302` is therefore recorded as `claude`. The absolute, cleaned
+invoked executable path is stored as `tool_path`, keeping symlinks so the
+adapter identity can be derived again. The symlink-resolved executable is
+stored as `tool_resolved_path` and is the file workgraph executes, with the
+invoked path as the child's `argv[0]`. Neither path trusts a changed `PATH`.
+If the user explicitly launches `sh -c ...` or `npx ...`, the tool is `sh` or
+`npx`. Workgraph never persists the remaining arguments.
 
 Native behavior comes from a small verified adapter registry. An adapter
 defines the executable basename, how to capture a native session ID, how to
@@ -294,7 +300,9 @@ wrapped but cannot be natively bound unless an exact `--session` ID was already
 provided.
 
 Before launch, workgraph rejects the command if `WORKGRAPH_AI_SESSION_ID` is
-already present. Nested wrapped sessions are not supported in V1. This also
+already present. Nested wrapped sessions are not supported in V1, except that
+`ai handoff` invoked inside its selected wrapped source may launch the
+destination as a new wrapped session; see [AI Handoff](ai-handoff.md). This also
 applies to `ai resume`, because resume uses the same wrapper lifecycle and
 workgraph cannot safely distinguish an active ancestor session from a manually
 exported stale value. The error must explain that resume should run outside the
@@ -503,7 +511,18 @@ persistence only. Lifecycle timestamps are not duplicated as `started_at`,
 `checkpointed_at`, or `ended_at` inside payloads. Readers parse timestamps into
 time values before ordering; they do not rely on lexicographic SQLite ordering
 of variable-width RFC3339Nano strings. Equal event timestamps are ordered by
-event ID.
+event ID. An AI event with a readable session ID but an unparseable event
+timestamp is unorderable evidence for that session, regardless of event type
+or schema version. Readers retain an integrity warning and exclude it from
+time-ordered projections. Handoff rejects the session before appending a
+checkpoint or launching a destination: it cannot prove that the selected
+checkpoint and observation are current. Unassociated invalid envelopes do not
+create or block an unrelated session. A session whose only events have invalid
+timestamps has no projected row and is omitted from `ai sessions`, including
+its session counts; the listing still reports integrity warnings. Selecting
+that session for handoff fails as not found. If any timestamp is valid, the
+session retains its row and unorderable-evidence warning regardless of event
+read order.
 
 Every payload begins with the stable envelope fields `schema_version` and
 `session_id`. V1 writes schema version 1.
@@ -516,6 +535,7 @@ Every payload begins with the stable envelope fields `schema_version` and
   "session_id": "00000000-0000-4000-8000-000000000000",
   "tool": "codex",
   "tool_path": "/usr/local/bin/codex",
+  "tool_resolved_path": "/opt/codex/bin/codex",
   "native_session_id": "native-id-if-known-at-launch",
   "predecessor_session_id": "prior-workgraph-id-if-known",
   "pid": 1234,
@@ -549,7 +569,11 @@ wrapped lifetime. Repeated callbacks for the same workgraph session, tool, and
 native ID are idempotent. A binding can add predecessor lineage when the
 native ID was selected inside the child and therefore was unavailable in the
 launch arguments. `source` is the adapter's bounded lifecycle value and never
-contains prompt or transcript data.
+contains prompt or transcript data. A predecessor recorded in the start event
+always takes precedence over one suggested by a native binding. The binding
+supplies predecessor lineage only when the start event has none, preserving
+explicit handoff lineage even if the destination binds to a native session
+associated with another workgraph lifetime.
 
 ### Checkpoint payload
 
@@ -794,8 +818,17 @@ Resume requires:
 - a latest native session ID
 - a verified adapter for the stored tool
 - a stored latest observed cwd that still resolves locally
-- a resolvable stored `tool_path`, with the stored basename still matching the
-  adapter
+- an absolute, resolvable stored `tool_path` whose tool identity, derived as
+  for `ai run`, still matches the stored tool
+- a `tool_path` that still resolves to the stored `tool_resolved_path`, checked
+  immediately before launch; sessions recorded without `tool_resolved_path`
+  stored the resolved executable as `tool_path` itself
+
+Resume never follows a launcher that was repointed after the session started,
+even to a newer version of the same tool, because the adapter name alone does
+not prove the new target is that tool. It refuses before recording a session
+and names the explicit `workgraph ai run -- <tool-path> <native resume argv>`
+command the user can run to continue deliberately with the new executable.
 
 Running and `unknown` sessions are rejected conservatively. Missing native
 identity or adapter support produces an actionable nonzero error and does not
@@ -916,7 +949,8 @@ the explicitly selected local session and verified adapter command.
 - `gh copilot` wrapper adaptation; the verified Copilot adapter targets the
   direct `copilot` executable
 - vendor-native selection by ambiguous prefix, name, picker, or "last session"
-- nested sessions
+- nested sessions, other than the `ai handoff` exception in
+  [AI Handoff](ai-handoff.md)
 - multi-repository sessions
 - worktree creation or management
 - non-Git project inference without an explicit mapping

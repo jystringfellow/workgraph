@@ -22,3 +22,7 @@ func platformAIChildOutcome(state *os.ProcessState, waitErr error) (aiOutcome, i
 	}
 	return aiOutcome{Kind: "unknown"}, 1, nil
 }
+
+func openAIControllingTerminal() (*os.File, error) {
+	return os.OpenFile("CONIN$", os.O_RDWR, 0)
+}

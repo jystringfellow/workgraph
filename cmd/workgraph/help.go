@@ -22,6 +22,10 @@ type helpTopic struct {
 	description string
 }
 
+var helpDetails = map[string]string{
+	"ai handoff": "Handoff rejects unsupported newer source evidence. Source transcripts, environment, terminal output, arguments, file contents, and diffs are not persisted or transported. The tool retains normal child-process capabilities.",
+}
+
 var helpTopics = map[string]helpTopic{
 	"memory doctor":           {"workgraph memory doctor [--interactive] [project] [options]", "Inspect project mappings and review possible captured project matches."},
 	"memory link":             {"workgraph memory link --source <captured-project> <memory-project> [options]", "Associate captured project evidence with an existing memory project."},
@@ -30,9 +34,10 @@ var helpTopics = map[string]helpTopic{
 	"service install":         {"workgraph service install [--home path]", "Enable login startup and automatic capture restart."},
 	"service status":          {"workgraph service status [--home path]", "Inspect supervisor state and capture health."},
 	"service uninstall":       {"workgraph service uninstall [--home path]", "Stop and remove the user service, preserving captured data."},
-	"ai":                      {"workgraph ai <subcommand>", "Capture and resume durable local CLI AI session context."},
+	"ai":                      {"workgraph ai <subcommand>", "Capture, hand off, and resume durable local CLI AI session context."},
 	"ai archive":              {"workgraph ai archive <session-id> [<session-id>...] [options]", "Hide AI sessions from the default list without deleting their events."},
 	"ai checkpoint":           {"workgraph ai checkpoint [session-id] --stdin [options]", "Append a validated structured checkpoint to an AI session."},
+	"ai handoff":              {"workgraph ai handoff <codex|claude|copilot|opencode> [--from <session-id>] [--stdin] [options]", "Launch a linked AI session with structured checkpoint and repository context."},
 	"ai resume":               {"workgraph ai resume <session-id> [options]", "Launch a verified native codex, claude, copilot, or opencode session as a linked lifetime."},
 	"ai run":                  {"workgraph ai run [options] -- <agent-command>", "Launch and record one CLI AI child-process lifetime; native adapters: codex, claude, copilot, opencode."},
 	"ai sessions":             {"workgraph ai sessions [--status <status>] [--limit <count>] [--all | --archived] [options]", "List known local AI sessions and their derived status."},
@@ -116,7 +121,7 @@ var helpTopics = map[string]helpTopic{
 	"plugin":                  {"workgraph plugin <subcommand>", "Install and diagnose the workgraph agent plugin for supported AI clients."},
 	"plugin doctor":           {"workgraph plugin doctor --client <codex|claude-code> [options]", "Verify the workgraph plugin, bundled skills, local MCP, worker, and heartbeat."},
 	"plugin install":          {"workgraph plugin install --client <codex|claude-code> [--model <model> | --clear-model] [options]", "Install or update the workgraph plugin, bundled skills, local MCP, and macOS bridge worker."},
-	"resume":                  {"workgraph resume [project] [--all] [--debug-relevance] [options]", "Restore context for recent work or a specific project."},
+	"resume":                  {"workgraph resume [project] [--all] [--debug-relevance] [options]", "Show last personal work and updates; the plain overview records a local check-in."},
 	"review":                  {"workgraph review [--since week|7d|30d] [--format text|json] [options]", "Review local suggestion effectiveness over a time window."},
 	"security":                {"workgraph security <subcommand>", "Inspect local security posture."},
 	"security report":         {"workgraph security report [--format text|json] [options]", "Produce a secret-free local endpoint security report."},
@@ -252,6 +257,10 @@ func writeTopicHelp(output io.Writer, key string, topic helpTopic) {
 	fmt.Fprintf(output, "  %s\n", topic.usage)
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, topic.description)
+	if detail := helpDetails[key]; detail != "" {
+		fmt.Fprintln(output)
+		fmt.Fprintln(output, detail)
+	}
 
 	if children := immediateSubcommands(key); len(children) > 0 {
 		fmt.Fprintln(output)

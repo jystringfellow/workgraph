@@ -10,6 +10,53 @@ The command is deterministic and local-first:
 - renders plain text without an LLM
 - avoids unsupported claims or invented next steps
 
+## Morning Handoff
+
+The default `workgraph resume` overview starts with `Where you left off` before
+the existing resumable project list. It uses the latest captured personal work
+session, looking back seven days from the current time. If the latest known
+personal work is older, it still shows that session and labels it older than a
+week rather than claiming there is no context. A session contains consecutive
+events from the same project no more than 30 minutes apart. It shows at most
+three events, newest first, with their recorded time and labels, and a command
+to inspect the project. If no supported personal work evidence exists, it says
+so without guessing what the user worked on.
+
+Personal work evidence for this first handoff is a non-transient file
+modification or deletion in a specific project, or a git commit whose author
+email matches a configured local git identity. File creation alone does not
+qualify because a new clone can create an entire tree without personal work.
+Broad folder and home-folder projects do not qualify.
+GitHub issue and pull request snapshots do not qualify, even when the connected
+user authored the item, because their stored timestamp is the item's latest
+update by anyone. Other captured events remain available in project resume;
+the handoff does not silently infer personal action from them.
+
+Plain `workgraph resume` records a local check-in only after successfully
+rendering its overview. Its next run shows the previous check-in time and
+`Personal work since last check-in`, including supported personal events whose
+event timestamp or first capture time is later than that check-in. The section
+reports the count and at most five newest event lines, or says no new personal
+work was captured. A separate `Relevant updates since last check-in` section
+shows up to five other events with non-empty explicit involvement metadata,
+such as a mention or review request, under the same timestamp or first-capture
+rule. Unclassified and explicitly ambient events are omitted from this section;
+GitHub work snapshots without direct involvement do not re-enter the handoff.
+These sections report evidence from the local event store, not a claim that all
+remote changes have been observed. The check-in advances even when no new work
+is found, so a second run does not repeat the same interval.
+
+The check-in is stored per workgraph database in SQLite. It is absent on first
+use and created lazily for databases initialized before this feature.
+Older databases without `events.involvement_json` remain readable; their events
+are treated as unclassified for `Relevant updates since last check-in` until
+the normal schema migration adds that column.
+`workgraph resume <project>`, `workgraph resume --all`, and
+`workgraph resume --debug-relevance` inspect context without advancing the
+default overview's check-in. Calling the Go `Resume` query API also does not
+advance it; the CLI records the check-in after successful output. A failed
+render, query, or output does not advance the check-in.
+
 ## Project List
 
 When no project is provided, `workgraph resume` lists projects with user-work

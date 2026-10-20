@@ -476,6 +476,67 @@ workgraph connectors required-tools calendar.microsoft
 Each operation is labeled `fetch`, `identity`, or both. The names are stable
 logical capabilities rather than client-specific MCP permission strings.
 
+## AI Session Handoff
+
+Continue a wrapped AI coding session in another verified local CLI:
+
+```sh
+workgraph ai handoff codex
+workgraph ai handoff claude --from <session-id>
+workgraph ai handoff copilot --stdin < checkpoint.json
+workgraph ai handoff opencode --from <session-id>
+```
+
+The supported destinations are `codex`, `claude`, `copilot`, and `opencode`.
+Without `--from`, handoff uses `WORKGRAPH_AI_SESSION_ID`. It reuses the source
+session's latest structured checkpoint, or `--stdin` can append a fresh
+checkpoint while the source is still active. Ended sessions cannot accept a
+new checkpoint but can hand off from their latest stored one. Same-agent
+handoff starts a new linked Workgraph lifetime; it does not resume or copy the
+provider conversation.
+
+Handoff is the deliberate handoff-only exception to the nested-session guard:
+it may be invoked from the wrapped source session so that the destination gets
+its own Workgraph session identity. Ordinary `ai run` and `ai resume` continue
+to reject nested sessions. A reused checkpoint and repository observation must
+be the latest compatible evidence. If a newer checkpoint or repository
+observation is unsupported or invalid, handoff stops before launch instead of
+silently using an older projection. Any source event with an unparseable
+timestamp also blocks handoff because its evidence cannot be ordered.
+
+With `--stdin`, checkpoint validation and append happen before destination
+launch. Because the checkpoint consumes standard input, the destination reads
+from the controlling terminal instead, so run `--stdin` handoffs from an
+interactive terminal. Without one, the checkpoint is kept on the source and
+handoff stops before launch with the `--from` command to rerun from a
+terminal. If that append succeeds but launch later fails, the successfully
+appended checkpoint remains on the source session for inspection or retry. The
+error says it was saved and gives a retry command without `--stdin`, preserving
+the selected home and database; no destination lifecycle or lineage is created.
+A destination that does launch and exits nonzero retains its truthful start and
+end events and returns the tool's exit outcome.
+
+The continuation context is passed as one command-line argument and is kept
+within 30,720 bytes, and within what remains of the 32,767-character Windows
+command line after the destination path and adapter arguments. Dirty paths
+are trimmed first and marked truncated; a checkpoint too large to fit on its
+own stops the handoff before launch. A `--stdin` handoff also stops before
+launch if the source already holds a checkpoint dated after the one just
+appended.
+
+The destination receives a deliberately constructed prompt containing only
+the six checkpoint fields and bounded repository metadata already permitted by
+the AI-session model. Credential patterns in branch, cwd, worktree root, or
+any dirty path reject the handoff without echoing or redacting the matched
+value. Workgraph does not persist or transport transcripts,
+source prompts, terminal output, shell history, environment values, complete
+command arguments, file contents, or source diffs. The destination start event
+records `predecessor_session_id`, while the continuation prompt itself is not
+stored in Workgraph events. These exclusions bound the context Workgraph
+captures and constructs. The launched tool retains normal child-process
+capabilities, including whatever filesystem or network access it ordinarily
+has.
+
 ## Agent Plugin
 
 Install or update one logical `workgraph` plugin for Codex or Claude Code:

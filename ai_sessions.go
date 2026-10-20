@@ -33,6 +33,8 @@ type AIRunConfig struct {
 	Stdin                io.Reader
 	Stdout               io.Writer
 	Stderr               io.Writer
+
+	expectedResolvedExecutable string
 }
 
 type AIRunResult struct {
@@ -57,6 +59,7 @@ type aiStartedPayload struct {
 	SessionID            string          `json:"session_id"`
 	Tool                 string          `json:"tool"`
 	ToolPath             string          `json:"tool_path,omitempty"`
+	ToolResolvedPath     string          `json:"tool_resolved_path,omitempty"`
 	NativeSessionID      string          `json:"native_session_id,omitempty"`
 	PredecessorSessionID string          `json:"predecessor_session_id,omitempty"`
 	PID                  int             `json:"pid"`
@@ -197,24 +200,29 @@ type AIShowResult struct {
 }
 
 type aiSessionProjection struct {
-	Summary            AISessionSummary
-	Started            *aiStartedPayload
-	LatestCheckpoint   *aiCheckpointPayload
-	CheckpointAt       time.Time
-	Ended              *aiEndedPayload
-	LatestNative       *aiNativeBoundPayload
-	NativeBoundAt      time.Time
-	EndedExists        bool
-	Warnings           []string
-	latestEventID      string
-	latestCheckpointID string
-	latestNativeID     string
-	ArchiveEventAt     time.Time
-	archiveEventID     string
-	LatestObserved     *AIObservedState
-	ObservedEventAt    time.Time
-	ObservedSource     string
-	observedEventID    string
+	Summary             AISessionSummary
+	Started             *aiStartedPayload
+	LatestCheckpoint    *aiCheckpointPayload
+	CheckpointAt        time.Time
+	Ended               *aiEndedPayload
+	LatestNative        *aiNativeBoundPayload
+	NativeBoundAt       time.Time
+	unorderableEvidence bool
+	EndedExists         bool
+	Warnings            []string
+	latestEventID       string
+	latestCheckpointID  string
+	newestCheckpointAt  time.Time
+	newestCheckpointID  string
+	newestObservationAt time.Time
+	newestObservationID string
+	latestNativeID      string
+	ArchiveEventAt      time.Time
+	archiveEventID      string
+	LatestObserved      *AIObservedState
+	ObservedEventAt     time.Time
+	ObservedSource      string
+	observedEventID     string
 }
 
 type aiEventEnvelope struct {
@@ -223,10 +231,14 @@ type aiEventEnvelope struct {
 }
 
 func RunAISession(config AIRunConfig) (AIRunResult, error) {
+	return runAISession(config, "")
+}
+
+func runAISession(config AIRunConfig, permittedParentSessionID string) (AIRunResult, error) {
 	if len(config.Command) == 0 {
 		return AIRunResult{}, errors.New("agent command is required")
 	}
-	if _, present := os.LookupEnv("WORKGRAPH_AI_SESSION_ID"); present {
+	if inheritedSessionID, present := os.LookupEnv("WORKGRAPH_AI_SESSION_ID"); present && (permittedParentSessionID == "" || strings.TrimSpace(inheritedSessionID) != permittedParentSessionID) {
 		message := "nested AI sessions are not supported"
 		if config.PredecessorSessionID != "" {
 			message += "; run resume outside the wrapped agent, or unset it if it is stale"
@@ -250,15 +262,23 @@ func RunAISession(config AIRunConfig) (AIRunResult, error) {
 		return AIRunResult{}, fmt.Errorf("resolve AI session working directory: %w", err)
 	}
 
-	resolvedExecutable, err := exec.LookPath(config.Command[0])
+	invokedExecutable, err := exec.LookPath(config.Command[0])
 	if err != nil {
 		return AIRunResult{}, fmt.Errorf("resolve AI tool %q: %w", filepath.Base(config.Command[0]), err)
 	}
-	resolvedExecutable, err = canonicalAIPath(resolvedExecutable)
+	invokedExecutable, err = filepath.Abs(invokedExecutable)
 	if err != nil {
 		return AIRunResult{}, fmt.Errorf("resolve AI tool path %q: %w", filepath.Base(config.Command[0]), err)
 	}
-	tool := filepath.Base(resolvedExecutable)
+	resolvedExecutable, err := canonicalAIPath(invokedExecutable)
+	if err != nil {
+		return AIRunResult{}, fmt.Errorf("resolve AI tool path %q: %w", filepath.Base(config.Command[0]), err)
+	}
+	if config.expectedResolvedExecutable != "" && resolvedExecutable != config.expectedResolvedExecutable {
+		return AIRunResult{}, fmt.Errorf("AI tool %s no longer resolves to the recorded executable %s (now %s); refusing to launch a changed executable. To continue with it deliberately, run `workgraph ai run -- %s`",
+			invokedExecutable, config.expectedResolvedExecutable, resolvedExecutable, aiShellCommand(append([]string{invokedExecutable}, config.Command[1:]...)))
+	}
+	tool := aiToolIdentity(invokedExecutable, resolvedExecutable)
 	now := time.Now().UTC()
 	observed, project, err := observeAIWorkingState(workingDir, now)
 	if err != nil {
@@ -291,6 +311,7 @@ func RunAISession(config AIRunConfig) (AIRunResult, error) {
 	}
 
 	command := exec.Command(resolvedExecutable, nativeLaunch.Args...)
+	command.Args[0] = invokedExecutable
 	command.Dir = workingDir
 	command.Stdin = config.Stdin
 	command.Stdout = config.Stdout
@@ -305,7 +326,8 @@ func RunAISession(config AIRunConfig) (AIRunResult, error) {
 		SchemaVersion:        aiSchemaVersion,
 		SessionID:            sessionID,
 		Tool:                 tool,
-		ToolPath:             resolvedExecutable,
+		ToolPath:             invokedExecutable,
+		ToolResolvedPath:     resolvedExecutable,
 		NativeSessionID:      nativeSessionID,
 		PredecessorSessionID: predecessorSessionID,
 		PID:                  command.Process.Pid,
@@ -759,33 +781,51 @@ func loadAISessionProjections(homeDir string, databasePath string, inspector AIP
 	}
 	defer rows.Close()
 	byID := make(map[string]*aiSessionProjection)
+	unorderableWarnings := make(map[string][]string)
 	var warnings []string
 	for rows.Next() {
 		var id, eventType, timestampText, project, payloadText string
 		if err := rows.Scan(&id, &eventType, &timestampText, &project, &payloadText); err != nil {
 			return nil, nil, fmt.Errorf("scan AI event: %w", err)
 		}
-		timestamp, err := time.Parse(time.RFC3339Nano, timestampText)
-		if err != nil {
-			warnings = append(warnings, "ignored AI event with invalid timestamp: "+id)
-			continue
+		var identity struct {
+			SessionID string `json:"session_id"`
 		}
-		var envelope aiEventEnvelope
-		if err := json.Unmarshal([]byte(payloadText), &envelope); err != nil || envelope.SessionID == "" {
+		if err := json.Unmarshal([]byte(payloadText), &identity); err != nil || identity.SessionID == "" {
 			warnings = append(warnings, "ignored AI event with invalid envelope: "+id)
 			continue
 		}
-		projection := byID[envelope.SessionID]
+		timestamp, err := time.Parse(time.RFC3339Nano, timestampText)
+		if err != nil {
+			unorderableWarnings[identity.SessionID] = append(unorderableWarnings[identity.SessionID], "ignored AI event with invalid timestamp: "+id)
+			continue
+		}
+		projection := byID[identity.SessionID]
 		if projection == nil {
-			projection = &aiSessionProjection{Summary: AISessionSummary{SessionID: envelope.SessionID, Project: project, Tool: "unknown"}}
-			byID[envelope.SessionID] = projection
+			projection = &aiSessionProjection{Summary: AISessionSummary{SessionID: identity.SessionID, Project: project, Tool: "unknown"}}
+			byID[identity.SessionID] = projection
 		}
 		if projection.Summary.LatestEventAt.IsZero() || timestamp.After(projection.Summary.LatestEventAt) || (timestamp.Equal(projection.Summary.LatestEventAt) && id > projection.latestEventID) {
 			projection.Summary.LatestEventAt = timestamp
 			projection.latestEventID = id
 		}
+		if eventType == "ai.session_checkpointed" && (projection.newestCheckpointAt.IsZero() || timestamp.After(projection.newestCheckpointAt) || (timestamp.Equal(projection.newestCheckpointAt) && id > projection.newestCheckpointID)) {
+			projection.newestCheckpointAt = timestamp
+			projection.newestCheckpointID = id
+		}
+		var envelope aiEventEnvelope
+		if err := json.Unmarshal([]byte(payloadText), &envelope); err != nil {
+			projection.Warnings = append(projection.Warnings, "invalid envelope at "+timestamp.Format(time.RFC3339Nano))
+			if aiEventCanCarryObservation(eventType) {
+				selectAINewestObservationEvidence(projection, timestamp, id)
+			}
+			continue
+		}
 		if envelope.SchemaVersion != aiSchemaVersion {
 			projection.Warnings = append(projection.Warnings, fmt.Sprintf("unsupported schema version %d at %s", envelope.SchemaVersion, timestamp.Format(time.RFC3339Nano)))
+			if aiEventCanCarryObservation(eventType) {
+				selectAINewestObservationEvidence(projection, timestamp, id)
+			}
 			if eventType == "ai.session_ended" {
 				projection.EndedExists = true
 			}
@@ -796,8 +836,10 @@ func loadAISessionProjections(homeDir string, databasePath string, inspector AIP
 			var started aiStartedPayload
 			if err := json.Unmarshal([]byte(payloadText), &started); err != nil {
 				projection.Warnings = append(projection.Warnings, "invalid supported start payload")
+				selectAINewestObservationEvidence(projection, timestamp, id)
 				continue
 			}
+			selectAINewestObservationEvidence(projection, timestamp, id)
 			projection.Started = &started
 			projection.Summary.Tool = started.Tool
 			projection.Summary.StartedAt = timestamp
@@ -806,8 +848,10 @@ func loadAISessionProjections(homeDir string, databasePath string, inspector AIP
 			var checkpoint aiCheckpointPayload
 			if err := json.Unmarshal([]byte(payloadText), &checkpoint); err != nil {
 				projection.Warnings = append(projection.Warnings, "invalid supported checkpoint payload")
+				selectAINewestObservationEvidence(projection, timestamp, id)
 				continue
 			}
+			selectAINewestObservationEvidence(projection, timestamp, id)
 			if projection.LatestCheckpoint == nil || timestamp.After(projection.CheckpointAt) || (timestamp.Equal(projection.CheckpointAt) && id > projection.latestCheckpointID) {
 				projection.LatestCheckpoint = &checkpoint
 				projection.CheckpointAt = timestamp
@@ -831,10 +875,12 @@ func loadAISessionProjections(homeDir string, databasePath string, inspector AIP
 			if err := json.Unmarshal([]byte(payloadText), &ended); err == nil {
 				projection.Ended = &ended
 				if ended.Observed != nil {
+					selectAINewestObservationEvidence(projection, timestamp, id)
 					selectAILatestObserved(projection, ended.Observed, timestamp, id, "end")
 				}
 			} else {
 				projection.Warnings = append(projection.Warnings, "invalid supported end payload")
+				selectAINewestObservationEvidence(projection, timestamp, id)
 			}
 		case "ai.session_archived", "ai.session_unarchived":
 			if projection.ArchiveEventAt.IsZero() || timestamp.After(projection.ArchiveEventAt) || (timestamp.Equal(projection.ArchiveEventAt) && id > projection.archiveEventID) {
@@ -847,17 +893,28 @@ func loadAISessionProjections(homeDir string, databasePath string, inspector AIP
 	if err := rows.Err(); err != nil {
 		return nil, nil, fmt.Errorf("iterate AI events: %w", err)
 	}
+	for sessionID, invalidWarnings := range unorderableWarnings {
+		if projection := byID[sessionID]; projection != nil {
+			projection.unorderableEvidence = true
+			projection.Warnings = append(projection.Warnings, invalidWarnings...)
+		} else {
+			warnings = append(warnings, invalidWarnings...)
+		}
+	}
 	if inspector == nil {
 		inspector = localAIProcessInspector{}
 	}
 	projections := make([]aiSessionProjection, 0, len(byID))
 	for _, projection := range byID {
-		if projection.LatestNative != nil {
-			projection.Summary.NativeSessionID = projection.LatestNative.NativeSessionID
-			projection.Summary.PredecessorSessionID = projection.LatestNative.PredecessorSessionID
-		} else if projection.Started != nil {
+		if projection.Started != nil {
 			projection.Summary.NativeSessionID = projection.Started.NativeSessionID
 			projection.Summary.PredecessorSessionID = projection.Started.PredecessorSessionID
+		}
+		if projection.LatestNative != nil {
+			projection.Summary.NativeSessionID = projection.LatestNative.NativeSessionID
+			if projection.Summary.PredecessorSessionID == "" {
+				projection.Summary.PredecessorSessionID = projection.LatestNative.PredecessorSessionID
+			}
 		}
 		projection.Summary.Status = deriveAIStatus(projection, inspector)
 		if projection.LatestCheckpoint != nil {
@@ -868,6 +925,17 @@ func loadAISessionProjections(homeDir string, databasePath string, inspector AIP
 		projections = append(projections, *projection)
 	}
 	return projections, warnings, nil
+}
+
+func aiEventCanCarryObservation(eventType string) bool {
+	return eventType == "ai.session_started" || eventType == "ai.session_checkpointed" || eventType == "ai.session_ended"
+}
+
+func selectAINewestObservationEvidence(projection *aiSessionProjection, eventAt time.Time, eventID string) {
+	if projection.newestObservationAt.IsZero() || eventAt.After(projection.newestObservationAt) || (eventAt.Equal(projection.newestObservationAt) && eventID > projection.newestObservationID) {
+		projection.newestObservationAt = eventAt
+		projection.newestObservationID = eventID
+	}
 }
 
 func selectAILatestObserved(projection *aiSessionProjection, observed *AIObservedState, eventAt time.Time, eventID string, source string) {
@@ -1156,6 +1224,41 @@ func validateAICheckpointInput(input io.Reader) (map[string]any, error) {
 	return result, nil
 }
 
+func validateAIStoredCheckpoint(fields map[string]any) (map[string]any, error) {
+	allowed := map[string]bool{"goal": true, "current_state": true, "completed": true, "next_actions": true, "blockers": true, "decisions": true}
+	arrayField := map[string]bool{"completed": true, "next_actions": true, "blockers": true, "decisions": true}
+	result := make(map[string]any)
+	meaningful := false
+	for field, value := range fields {
+		if !allowed[field] {
+			return nil, fmt.Errorf("checkpoint field %q is unknown", field)
+		}
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("checkpoint field %q is invalid", field)
+		}
+		if arrayField[field] {
+			values, hasText, err := validateAIStringArray(field, raw)
+			if err != nil {
+				return nil, err
+			}
+			result[field] = values
+			meaningful = meaningful || hasText
+			continue
+		}
+		normalized, err := validateAIString(field, raw, 16*1024)
+		if err != nil {
+			return nil, err
+		}
+		result[field] = normalized
+		meaningful = meaningful || normalized != ""
+	}
+	if !meaningful {
+		return nil, errors.New("checkpoint must contain meaningful text")
+	}
+	return result, nil
+}
+
 func validateAIStringArray(field string, raw json.RawMessage) ([]string, bool, error) {
 	var items []json.RawMessage
 	if err := json.Unmarshal(raw, &items); err != nil || items == nil {
@@ -1196,16 +1299,29 @@ func validateAIString(field string, raw json.RawMessage, maximum int) (string, e
 			return "", fmt.Errorf("checkpoint field %q contains a control character", field)
 		}
 	}
-	patterns, _, err := llmOutboundRedactionPatterns()
-	if err != nil {
-		return "", fmt.Errorf("load checkpoint sensitive patterns: %w", err)
-	}
-	for _, pattern := range patterns {
-		if pattern.Pattern.MatchString(value) {
-			return "", fmt.Errorf("checkpoint field %q contains a %s credential pattern", field, pattern.Name)
-		}
+	if err := validateAICredentialPatterns(fmt.Sprintf("checkpoint field %q", field), value); err != nil {
+		return "", err
 	}
 	return value, nil
+}
+
+func validateAICredentialPatterns(field string, values ...string) error {
+	patterns, _, err := llmOutboundRedactionPatterns()
+	if err != nil {
+		return fmt.Errorf("load AI sensitive patterns: %w", err)
+	}
+	return validateAICredentialPatternMatches(patterns, field, values...)
+}
+
+func validateAICredentialPatternMatches(patterns []llmRedactionPattern, field string, values ...string) error {
+	for _, value := range values {
+		for _, pattern := range patterns {
+			if pattern.Pattern.MatchString(value) {
+				return fmt.Errorf("%s contains a %s credential pattern", field, pattern.Name)
+			}
+		}
+	}
+	return nil
 }
 
 func aiPathWithin(root string, candidate string) bool {
@@ -1438,6 +1554,31 @@ func parseAIDirtyPaths(output []byte) ([]string, error) {
 	}
 	sort.Strings(result)
 	return result, nil
+}
+
+func aiShellCommand(arguments []string) string {
+	quoted := make([]string, len(arguments))
+	for index, argument := range arguments {
+		quoted[index] = aiShellQuote(argument)
+	}
+	return strings.Join(quoted, " ")
+}
+
+func aiShellQuote(value string) string {
+	if value != "" && strings.Trim(value, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_./=:@+,") == "" {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
+
+func aiToolIdentity(invokedPath, resolvedPath string) string {
+	for _, candidate := range []string{invokedPath, resolvedPath} {
+		name := filepath.Base(candidate)
+		if _, known := aiNativeAdapters[name]; known {
+			return name
+		}
+	}
+	return filepath.Base(resolvedPath)
 }
 
 func canonicalAIPath(path string) (string, error) {
