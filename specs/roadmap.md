@@ -97,6 +97,8 @@ Priority labels used below:
 - Connector registry, setup state, polling isolation, deadlines, retry
   backoff, and provider tool requirements. [specs:
   `specs/connector-runtime.md` and `specs/provider-tool-requirements.md`]
+- [x] Connector poll deferrals, retry-after deadlines, and early wake with
+  minimum spacing (PR watch delivery slice 1). [spec: `specs/github-pr-watch.md`]
 - Bridged capture hardening, executable provider recipes, cancellation,
   worker model persistence, and operator documentation. [spec:
   `specs/bridged-capture.md`]
