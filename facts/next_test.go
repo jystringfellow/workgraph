@@ -3,7 +3,7 @@ package facts
 import "testing"
 
 func TestNextListsEachReasonInDocumentedOrder(t *testing.T) {
-	t.Skip("TBD: fixtures for an awaiting thread, a review request, a re-review, changes requested, failed checks, a conflict, a ready PR, a bot conversation comment, and an agent-answered thread list exactly seven grouped items in order without invoking gh")
+	t.Skip("TBD: fixtures for an awaiting thread, a review request, changes requested, failed checks, a conflict, a ready PR, a bot conversation comment, and an agent-answered thread list exactly six grouped items in order without invoking gh")
 }
 
 func TestNextJSONItemsFollowTheV1Schema(t *testing.T) {
@@ -15,7 +15,7 @@ func TestNextDoneAndSnoozeHideOnlyThatItemID(t *testing.T) {
 }
 
 func TestNextReportsStaleness(t *testing.T) {
-	t.Skip("TBD: with the source in setup error or its last successful poll older than three intervals next warns and items are stale; an unreachable PR's items are stale with access unreachable while other PRs' items are fresh; unknown dimensions show as unknown")
+	t.Skip("TBD: with the source in setup error next warns and every item is stale; an item whose own as_of is past its source threshold is stale while other items are fresh; an unreachable PR's items are stale with access unreachable; unknown dimensions show as unknown")
 }
 
 func TestNextWatchEmitsTheInitialSetThenDifferences(t *testing.T) {
