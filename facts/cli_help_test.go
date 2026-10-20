@@ -70,6 +70,7 @@ var publicCommandPaths = []string{
 	"github prs capture",
 	"github prs connect",
 	"github prs disconnect",
+	"github prs hint",
 	"help",
 	"init",
 	"llm",

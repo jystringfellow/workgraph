@@ -34,6 +34,7 @@ type githubPRWatchPoll struct {
 	observedAt     string
 	remoteProjects map[string]string
 	rateLimit      *githubGraphQLRateLimit
+	hints          githubPRWatchHints
 }
 
 type githubPRWatchChanges struct {
@@ -134,6 +135,7 @@ func CaptureGitHubPRWatch(config GitHubPRWatchCaptureConfig) (GitHubPRWatchCaptu
 	remoteProjects := githubRemoteProjects(ctx, status.WatchDirs, status.HomeDir, status.DatabasePath, status.IgnorePaths, status.IgnoreNames)
 
 	result := GitHubPRWatchCaptureResult{HomeDir: status.HomeDir, DatabasePath: status.DatabasePath}
+	var hints githubPRWatchHints
 	for attempt := 0; ; attempt++ {
 		state, err := readConnectorRuntimeFile(status.HomeDir)
 		if err != nil {
@@ -164,9 +166,14 @@ func CaptureGitHubPRWatch(config GitHubPRWatchCaptureConfig) (GitHubPRWatchCaptu
 			}
 			return result, deferred
 		}
+		if attempt == 0 && config.takeHints != nil {
+			if hints, err = config.takeHints(db); err != nil {
+				return result, err
+			}
+		}
 		poll := &githubPRWatchPoll{
 			ctx: ctx, gh: githubCommandOrDefault(config.GitHubCommand), db: db, params: params,
-			now: pollStart, remoteProjects: remoteProjects,
+			now: pollStart, remoteProjects: remoteProjects, hints: hints,
 		}
 		poll.observedAt = poll.now.Format(time.RFC3339Nano)
 		changes, roleErr := poll.run()
@@ -382,7 +389,11 @@ func (poll *githubPRWatchPoll) needsDetail(previous *githubPRObservation, node g
 		return true
 	}
 	fetchedAt, err := time.Parse(time.RFC3339Nano, previous.DetailFetchedAt)
-	return err != nil || poll.now.Sub(fetchedAt) > githubPRWatchDetailRefresh
+	if err != nil {
+		return true
+	}
+	age := poll.now.Sub(fetchedAt)
+	return age > githubPRWatchDetailRefresh || poll.hints.forcesDetail(previous.URL, age)
 }
 
 func (poll *githubPRWatchPoll) fetchDetails(ids []string, previous map[string]*githubPRObservation) (map[string]*githubPRDetail, error) {

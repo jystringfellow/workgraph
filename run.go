@@ -41,41 +41,44 @@ const (
 	defaultConnectorRetryMax     = 5 * time.Minute
 	connectorShutdownTimeout     = 5 * time.Second
 	defaultConnectorWakeSpacing  = 10 * time.Second
+	defaultConnectorHintCheck    = 2 * time.Second
 )
 
 type RunConfig struct {
 	// Capture closes a supplied Watcher, including when watcher setup fails.
-	Watcher                 *fsnotify.Watcher
-	HomeDir                 string
-	DatabasePath            string
-	WatchDirs               []string
-	ConservativeWatchDirs   []string
-	MaxWatchEntries         int
-	PollInterval            time.Duration
-	GitPollInterval         time.Duration
-	GitHubPollInterval      time.Duration
-	GitHubCommand           string
-	SlackPollInterval       time.Duration
-	SlackListPollInterval   time.Duration
-	SlackToken              string
-	SlackChannels           []string
-	SlackListIDs            []string
-	SlackListOptions        map[string]SlackListOptions
-	SlackIncludeDMs         bool
-	SlackSelfUserID         string
-	SlackAPIBaseURL         string
-	SlackHTTPClient         *http.Client
-	CalendarPollInterval    time.Duration
-	CalendarHTTPClient      *http.Client
-	MailPollInterval        time.Duration
-	MailHTTPClient          *http.Client
-	NotionPollInterval      time.Duration
-	NotionHTTPClient        *http.Client
-	AzureBoardsPollInterval time.Duration
-	AzureBoardsHTTPClient   *http.Client
-	ConnectorPollTimeout    time.Duration
-	ConnectorRetryInitial   time.Duration
-	ConnectorRetryMax       time.Duration
+	Watcher                    *fsnotify.Watcher
+	HomeDir                    string
+	DatabasePath               string
+	WatchDirs                  []string
+	ConservativeWatchDirs      []string
+	MaxWatchEntries            int
+	PollInterval               time.Duration
+	GitPollInterval            time.Duration
+	GitHubPollInterval         time.Duration
+	GitHubCommand              string
+	SlackPollInterval          time.Duration
+	SlackListPollInterval      time.Duration
+	SlackToken                 string
+	SlackChannels              []string
+	SlackListIDs               []string
+	SlackListOptions           map[string]SlackListOptions
+	SlackIncludeDMs            bool
+	SlackSelfUserID            string
+	SlackAPIBaseURL            string
+	SlackHTTPClient            *http.Client
+	CalendarPollInterval       time.Duration
+	CalendarHTTPClient         *http.Client
+	MailPollInterval           time.Duration
+	MailHTTPClient             *http.Client
+	NotionPollInterval         time.Duration
+	NotionHTTPClient           *http.Client
+	AzureBoardsPollInterval    time.Duration
+	AzureBoardsHTTPClient      *http.Client
+	ConnectorPollTimeout       time.Duration
+	ConnectorRetryInitial      time.Duration
+	ConnectorRetryMax          time.Duration
+	ConnectorHintCheckInterval time.Duration
+	ConnectorWakeSpacing       time.Duration
 }
 
 type RunStatus struct {
@@ -150,6 +153,10 @@ type RunCapture struct {
 	connectorPollTimeout    time.Duration
 	connectorRetryInitial   time.Duration
 	connectorRetryMax       time.Duration
+	connectorHintCheck      time.Duration
+	connectorWakeSpacing    time.Duration
+	githubPRWatchWake       chan struct{}
+	githubPRWatchHintMu     sync.Mutex
 	suppressedCreates       map[string]time.Time
 	deleteCoalesceDelay     time.Duration
 	events                  chan CapturedEvent
@@ -333,6 +340,9 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 		connectorPollTimeout:    positiveDuration(config.ConnectorPollTimeout, defaultConnectorPollTimeout),
 		connectorRetryInitial:   positiveDuration(config.ConnectorRetryInitial, defaultConnectorRetryInitial),
 		connectorRetryMax:       positiveDuration(config.ConnectorRetryMax, defaultConnectorRetryMax),
+		connectorHintCheck:      positiveDuration(config.ConnectorHintCheckInterval, defaultConnectorHintCheck),
+		connectorWakeSpacing:    config.ConnectorWakeSpacing,
+		githubPRWatchWake:       make(chan struct{}, 1),
 		suppressedCreates:       map[string]time.Time{},
 		deleteCoalesceDelay:     75 * time.Millisecond,
 		events:                  events,
@@ -350,6 +360,13 @@ func (capture *RunCapture) Run(ctx context.Context) (runErr error) {
 			defer pollers.Done()
 			capture.runConnectorPoller(pollContext, poller)
 		}(poller)
+	}
+	if capture.githubPRWatchEnabled {
+		pollers.Add(1)
+		go func() {
+			defer pollers.Done()
+			capture.watchGitHubPRWatchHints(pollContext)
+		}()
 	}
 	for id, interval := range capture.bridgedConnectors {
 		pollers.Add(1)
@@ -483,7 +500,10 @@ func (capture *RunCapture) connectorPollers() []connectorPoller {
 		pollers = append(pollers, connectorPoller{id: "github", interval: capture.githubPollInterval, poll: capture.captureGitHubEvents})
 	}
 	if capture.githubPRWatchEnabled {
-		pollers = append(pollers, connectorPoller{id: githubPRWatchConnectorID, interval: capture.githubPRWatchInterval, poll: capture.captureGitHubPRWatch})
+		pollers = append(pollers, connectorPoller{
+			id: githubPRWatchConnectorID, interval: capture.githubPRWatchInterval, poll: capture.captureGitHubPRWatch,
+			wake: capture.githubPRWatchWake, minSpacing: capture.connectorWakeSpacing,
+		})
 	}
 	if capture.slackEnabled && capture.slackToken != "" {
 		pollers = append(pollers, connectorPoller{id: "slack", interval: capture.slackPollInterval, poll: capture.captureSlackEvents})
@@ -800,6 +820,7 @@ func (capture *RunCapture) captureGitHubPRWatch(ctx context.Context) error {
 		WatchDirs:     capture.watchDirs,
 		GitHubCommand: capture.githubCommand,
 		Context:       ctx,
+		takeHints:     capture.takeGitHubPRWatchHints,
 	})
 	return err
 }
