@@ -630,7 +630,11 @@ func TestGitHubPRWatchLeavingTheOpenSetIsResolvedByFollowUpQuery(t *testing.T) {
 		})
 		for poll := 1; poll <= 6; poll++ {
 			now := watchBase.Add(time.Duration(poll) * 5 * time.Minute)
-			harness.mustPoll(now, statusResponse(t, other), detailResponse(t, detailFixture{}), forbidden)
+			forbiddenDetail := watchJSON(t, map[string]any{
+				"data":   map[string]any{"rateLimit": watchRateLimit(), "pr0": nil},
+				"errors": []any{map[string]any{"type": "FORBIDDEN", "message": "Resource protected by organization SAML enforcement.", "path": []any{"pr0"}}},
+			})
+			harness.mustPoll(now, statusResponse(t, other), forbiddenDetail, forbidden)
 			if poll < 6 {
 				observation := harness.observation(watchPRNodeID)
 				if payloadString(observation, "access") != "unreachable" || payloadString(observation, "verified_at") != watchBase.Format(time.RFC3339Nano) {
@@ -842,6 +846,25 @@ func TestGitHubPRWatchIncompleteRoleFailsWithoutChanges(t *testing.T) {
 	}
 }
 
+func TestGitHubPRWatchDetailErrorsFailTheRoleUntilRetried(t *testing.T) {
+	harness := newPRWatchHarness(t, authorParams)
+	harness.gh.Queue(t, statusResponse(t, watchPR()))
+	harness.gh.Queue(t, watchJSON(t, map[string]any{
+		"data":   map[string]any{"rateLimit": watchRateLimit(), "pr0": nil},
+		"errors": []any{map[string]any{"type": "FORBIDDEN", "message": "Resource protected by organization SAML enforcement.", "path": []any{"pr0"}}},
+	}))
+	if _, err := harness.poll(watchBase); err == nil || !strings.Contains(err.Error(), "detail incomplete") {
+		t.Fatalf("expected detail errors to fail the role, got %v", err)
+	}
+	if len(harness.events()) != 0 || harness.observationCount() != 0 {
+		t.Fatalf("expected nothing committed from a failed detail fetch, got %v and %d observations", eventTypes(harness.events()), harness.observationCount())
+	}
+	harness.mustPoll(watchBase.Add(5*time.Minute), statusResponse(t, watchPR()), detailResponse(t, detailFixture{ID: watchPRNodeID}))
+	if got := eventTypes(harness.events()); !reflect.DeepEqual(got, []string{"observed"}) || payloadString(harness.observation(watchPRNodeID), "detail_fetched_at") == "" {
+		t.Fatalf("expected the next poll to retry the detail fetch and baseline the PR, got %v", got)
+	}
+}
+
 func TestGitHubPRWatchInvokesOnlyReadOnlyGraphQLAndTypeWildcardFilters(t *testing.T) {
 	clock := time.Now()
 	noon := time.Date(clock.Year(), clock.Month(), clock.Day(), 12, 0, 0, 0, clock.Location()).UTC()
@@ -1025,6 +1048,20 @@ func TestGitHubPRWatchPollsAreFenced(t *testing.T) {
 		}
 		return strings.Join(quoted, " ") + " >> " + fmt.Sprintf("%q", filepath.Join(harness.tempDir, "hook.log")) + " 2>&1\n"
 	}
+
+	t.Run("captures only into the fenced home database", func(t *testing.T) {
+		harness := newPRWatchHarness(t, authorParams)
+		other := filepath.Join(harness.tempDir, "other.db")
+		if err := os.WriteFile(other, nil, 0o644); err != nil {
+			t.Fatalf("create other database: %v", err)
+		}
+		_, err := workgraph.CaptureGitHubPRWatch(workgraph.GitHubPRWatchCaptureConfig{
+			HomeDir: harness.homeDir, DatabasePath: other, WatchDirs: []string{harness.watchDir}, GitHubCommand: harness.gh.Path,
+		})
+		if err == nil || !strings.Contains(err.Error(), "home database") || len(harness.gh.GraphQLInputs(t)) != 1 {
+			t.Fatalf("expected a capture against another database to be refused before querying, got %v", err)
+		}
+	})
 
 	t.Run("concurrent polls store one comment", func(t *testing.T) {
 		harness := newPRWatchHarness(t, authorParams)
@@ -1210,11 +1247,14 @@ func TestGitHubPRWatchRateLimitsSetOneDeadline(t *testing.T) {
 		assertCaptureWaits(t, harness, calls)
 	})
 
-	t.Run("retry-after records a failure", func(t *testing.T) {
+	t.Run("rate limited until the budget resets records a failure", func(t *testing.T) {
 		harness := newPRWatchHarness(t, authorParams)
-		harness.mustPoll(time.Now().UTC(), statusResponse(t, watchPR()), detailResponse(t, detailFixture{ID: watchPRNodeID}))
+		resetAt := time.Now().UTC().Truncate(time.Second).Add(120 * time.Second)
+		harness.mustPoll(time.Now().UTC(),
+			withRateLimit(t, statusResponse(t, watchPR()), 4000, resetAt),
+			withRateLimit(t, detailResponse(t, detailFixture{ID: watchPRNodeID}), 3999, resetAt))
 		before := harness.observation(watchPRNodeID)
-		harness.gh.QueueResult(t, `{"data":null,"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded"}]}`, "Retry-After: 120\n", 1)
+		harness.gh.QueueResult(t, `{"data":null,"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded for user ID 1."}]}`, "gh: API rate limit exceeded for user ID 1.\n", 1)
 		calls := len(harness.gh.GraphQLInputs(t)) + 1
 
 		started := time.Now()
@@ -1243,8 +1283,8 @@ func TestGitHubPRWatchRateLimitsSetOneDeadline(t *testing.T) {
 		}
 
 		notBefore, err := workgraph.ConnectorPollNotBefore(harness.homeDir, "github.pr_watch")
-		if err != nil || notBefore.Before(started.Add(110*time.Second)) || notBefore.After(time.Now().Add(130*time.Second)) {
-			t.Fatalf("expected a not-before deadline about 120s out, got %s (%v)", notBefore, err)
+		if err != nil || notBefore.Before(resetAt.Add(-time.Second)) || notBefore.After(resetAt.Add(time.Second)) || !notBefore.After(started) {
+			t.Fatalf("expected the not-before deadline at the budget reset %s, got %s (%v)", resetAt, notBefore, err)
 		}
 		if !reflect.DeepEqual(harness.observation(watchPRNodeID), before) {
 			t.Fatalf("expected observations unchanged after a rate-limited poll")
@@ -1313,6 +1353,33 @@ func TestGitHubPRWatchCaptureFeedsNext(t *testing.T) {
 	}
 	if items["conflicts"].OpenedBy != observedID {
 		t.Fatalf("expected the still-open conflict to keep citing the observed event, got %q", items["conflicts"].OpenedBy)
+	}
+
+	for _, enabled := range []bool{false, true} {
+		if _, err := workgraph.SetConnectorEnabled(workgraph.ConnectorUpdateConfig{HomeDir: harness.homeDir, ID: "github.pr_watch", Enabled: enabled}); err != nil {
+			t.Fatalf("set github.pr_watch enabled %v: %v", enabled, err)
+		}
+	}
+	if harness.observationCount() != 0 {
+		t.Fatalf("expected disabling the watch to reset observations")
+	}
+	resetHead := "4444444444444444444444444444444444444444"
+	harness.mustPoll(watchBase.Add(10*time.Minute), statusResponse(t, failingOn(resetHead, "run-3", watchTime(8*time.Minute), watchTime(8*time.Minute))),
+		detailResponse(t, detailFixture{ID: watchPRNodeID, Threads: []threadFixture{{ID: "PRRT_one", Path: "settings.go", Line: 18, Comments: []commentFixture{question, followUp}}}}))
+	if got := len(harness.eventsOfType("github.pull_request.observed")); got != 1 {
+		t.Fatalf("expected the reset not to re-baseline, got %d observed events", got)
+	}
+	items = nextItemsByReason(t, harness, watchBase.Add(11*time.Minute))
+	stored = map[string]bool{}
+	for _, event := range harness.events() {
+		stored[event.ID] = true
+	}
+	checks = items["checks_failed"]
+	if !strings.HasPrefix(checks.OpenedBy, "github.pull_request.checks_failed:"+watchPRNodeID+":"+resetHead+":") || !stored[checks.OpenedBy] {
+		t.Fatalf("expected a failing head pushed while observations were missing to emit checks_failed, got %q", checks.OpenedBy)
+	}
+	if conflicts := items["conflicts"].OpenedBy; !strings.HasPrefix(conflicts, "github.pull_request.merge_conflict:"+watchPRNodeID+":"+resetHead+":") || !stored[conflicts] {
+		t.Fatalf("expected the conflict on the new head to emit merge_conflict after the reset, got %q", conflicts)
 	}
 }
 

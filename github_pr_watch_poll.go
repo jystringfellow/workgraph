@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -34,6 +35,7 @@ type githubPRWatchPoll struct {
 	observedAt     string
 	remoteProjects map[string]string
 	rateLimit      *githubGraphQLRateLimit
+	leaving        map[string]bool
 }
 
 type githubPRWatchChanges struct {
@@ -115,6 +117,9 @@ func CaptureGitHubPRWatch(config GitHubPRWatchCaptureConfig) (GitHubPRWatchCaptu
 	if err != nil {
 		return GitHubPRWatchCaptureResult{}, err
 	}
+	if homeDatabase := filepath.Join(status.HomeDir, "workgraph.db"); status.DatabasePath != homeDatabase {
+		return GitHubPRWatchCaptureResult{}, fmt.Errorf("connector %s captures only into the home database %s, not %s", githubPRWatchConnectorID, homeDatabase, status.DatabasePath)
+	}
 	db, err := sql.Open("sqlite3", status.DatabasePath)
 	if err != nil {
 		return GitHubPRWatchCaptureResult{}, fmt.Errorf("open database: %w", err)
@@ -147,6 +152,10 @@ func CaptureGitHubPRWatch(config GitHubPRWatchCaptureConfig) (GitHubPRWatchCaptu
 		if err != nil {
 			return result, err
 		}
+		_, scopeHash, err := params.encode()
+		if err != nil {
+			return result, err
+		}
 		if err := reconcileGitHubPRWatchFence(db, state); err != nil {
 			return result, err
 		}
@@ -157,6 +166,7 @@ func CaptureGitHubPRWatch(config GitHubPRWatchCaptureConfig) (GitHubPRWatchCaptu
 		if !fence.Enabled {
 			return result, fmt.Errorf("connector %s is disabled", githubPRWatchConnectorID)
 		}
+		fence.ScopeHash = scopeHash
 		pollStart := now().UTC()
 		if deferred := githubPRWatchDeferral(state.entry(githubPRWatchConnectorID), pollStart); deferred != nil {
 			if err := extendConnectorNotBefore(status.HomeDir, githubPRWatchConnectorID, deferred.NotBefore); err != nil {
@@ -175,6 +185,9 @@ func CaptureGitHubPRWatch(config GitHubPRWatchCaptureConfig) (GitHubPRWatchCaptu
 		}
 		var retryAfter *ConnectorPollRetryAfter
 		if errors.As(roleErr, &retryAfter) {
+			if resetAt := githubPRWatchResetAt(poll.rateLimit, state.entry(githubPRWatchConnectorID)); resetAt.After(pollStart) {
+				retryAfter.RetryAfter = resetAt.Sub(pollStart)
+			}
 			if err := extendConnectorNotBefore(status.HomeDir, githubPRWatchConnectorID, pollStart.Add(retryAfter.RetryAfter)); err != nil {
 				return result, err
 			}
@@ -216,6 +229,18 @@ func githubPRWatchDeferral(entry connectorRuntimeEntry, now time.Time) *Connecto
 		return nil
 	}
 	return &ConnectorPollDeferred{Reason: "rate limited until " + resetAt.UTC().Format(time.RFC3339), NotBefore: resetAt}
+}
+
+func githubPRWatchResetAt(budget *githubGraphQLRateLimit, entry connectorRuntimeEntry) time.Time {
+	resetAt := entry.RateLimitResetAt
+	if budget != nil {
+		resetAt = budget.ResetAt
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, resetAt)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed
 }
 
 func recordGitHubPRWatchBudget(homeDir string, budget *githubGraphQLRateLimit) error {
@@ -300,6 +325,10 @@ func (poll *githubPRWatchPoll) runAuthor() (githubPRWatchChanges, error) {
 		}
 	}
 	sort.Strings(leavingIDs)
+	poll.leaving = map[string]bool{}
+	for _, id := range leavingIDs {
+		poll.leaving[id] = true
+	}
 	sort.Slice(leaving, func(i, j int) bool { return leaving[i].NodeID < leaving[j].NodeID })
 
 	details, err := poll.fetchDetails(append(detailIDs, leavingIDs...), previous)
@@ -413,8 +442,20 @@ func (poll *githubPRWatchPoll) fetchDetails(ids []string, previous map[string]*g
 			variables[fmt.Sprintf("after%d", index)] = graphQLNullable(page.after)
 		}
 		var data map[string]json.RawMessage
-		if _, err := poll.graphQL(githubPRWatchDetailQuery(len(batch)), variables, &data); err != nil {
+		graphQLErrors, err := poll.graphQL(githubPRWatchDetailQuery(len(batch)), variables, &data)
+		if err != nil {
 			return nil, err
+		}
+		leavingAlias := func(field any) bool {
+			alias, _ := field.(string)
+			var index int
+			if _, scanErr := fmt.Sscanf(alias, "pr%d", &index); scanErr != nil || index < 0 || index >= len(batch) {
+				return false
+			}
+			return poll.leaving[batch[index].id]
+		}
+		if len(graphQLErrors) > 0 && !graphQLErrors.onlyInaccessibleNodes(leavingAlias) {
+			return nil, fmt.Errorf("detail incomplete: %w", graphQLErrors)
 		}
 		for index, page := range batch {
 			raw := data[fmt.Sprintf("pr%d", index)]
@@ -453,8 +494,12 @@ func (poll *githubPRWatchPoll) fetchFollowUps(ids []string) (map[string]*githubP
 	var data struct {
 		Nodes []*githubPRFollowUpNode `json:"nodes"`
 	}
-	if _, err := poll.graphQL(githubPRWatchFollowUpQuery, map[string]any{"ids": ids}, &data); err != nil {
+	graphQLErrors, err := poll.graphQL(githubPRWatchFollowUpQuery, map[string]any{"ids": ids}, &data)
+	if err != nil {
 		return nil, err
+	}
+	if len(graphQLErrors) > 0 && !graphQLErrors.onlyInaccessibleNodes(func(field any) bool { return field == "nodes" }) {
+		return nil, fmt.Errorf("follow-up incomplete: %w", graphQLErrors)
 	}
 	for index, id := range ids {
 		if index < len(data.Nodes) && data.Nodes[index] != nil && data.Nodes[index].ID != "" {
@@ -517,20 +562,19 @@ func (poll *githubPRWatchPoll) observeAuthor(changes *githubPRWatchChanges, prev
 			changes.events = append(changes.events, poll.event(current, githubPREventReopened, closedAt, "", poll.observedAt,
 				fmt.Sprintf("PR #%d reopened", current.Number), map[string]any{"category": "lifecycle", "needs_user": false}))
 		}
-		if terminal {
-			current.ReportedRunSets = append(current.ReportedRunSets, runSet)
+		if !hasStoredObserved {
+			if terminal {
+				current.ReportedRunSets = append(current.ReportedRunSets, runSet)
+			}
+			if current.Ready != "unknown" {
+				current.LastKnown.Ready = current.Ready
+			}
+			if current.Mergeable != "UNKNOWN" && current.Mergeable != "" {
+				current.LastKnown.Mergeable = current.Mergeable
+			}
+			changes.upserts = append(changes.upserts, current)
+			return nil
 		}
-		if current.Ready != "unknown" {
-			current.LastKnown.Ready = current.Ready
-		}
-		if current.Mergeable != "UNKNOWN" && current.Mergeable != "" {
-			current.LastKnown.Mergeable = current.Mergeable
-		}
-		if hasStoredObserved && detail != nil {
-			changes.events = append(changes.events, poll.feedbackEvents(current, detail, views)...)
-		}
-		changes.upserts = append(changes.upserts, current)
-		return nil
 	}
 
 	if detail != nil {

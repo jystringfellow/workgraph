@@ -833,8 +833,11 @@ watch needs a small extension:
 - If the stored `remaining < 200` and its `resetAt` is in the future, the
   poll is **deferred** until `resetAt`.
 - HTTP 200 with `errors[].type = RATE_LIMITED`, `HTTP 403` or `429`,
-  `API rate limit exceeded`, `secondary rate limit`, or a `Retry-After`
-  header is a failure with retry-after. Observations are untouched.
+  `API rate limit exceeded`, or `secondary rate limit` is a failure with
+  retry-after. The retry-after runs until the last known `resetAt` when it is
+  in the future, otherwise 60 seconds. `gh api` does not expose response
+  headers on errors, so `Retry-After` headers are not read. Observations are
+  untouched.
 
 ### Failure modes
 
@@ -1065,7 +1068,8 @@ serves queued GraphQL fixtures and logs every invocation, following
     emits `unwatched` with `exit: unreachable`. A reopened PR emits
     `reopened`.
 14. **Rate limits set one deadline.** A stored low budget defers the poll;
-    a `RATE_LIMITED` error with `Retry-After: 120` records a failure. Either
+    a `RATE_LIMITED` error records a failure with the deadline at the last
+    known `resetAt`. Either
     way observations are unchanged, and neither a hint nor `github prs
     capture` polls before the deadline.
 15. **Auth expiry stops only this connector.**
