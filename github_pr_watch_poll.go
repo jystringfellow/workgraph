@@ -940,7 +940,7 @@ func (poll *githubPRWatchPoll) reviewEvent(observation githubPRObservation, item
 		return githubPRWatchEvent{}, false
 	}
 	if strings.TrimSpace(item.Body) != "" {
-		event.Payload.Untrusted = poll.untrusted("github.review", login, item.URL, item.Body, "")
+		event.Payload.Untrusted = poll.untrusted("github.review_body", login, item.URL, item.Body, "")
 	}
 	event.Payload.ActorKind = item.Author.kind()
 	event.Payload.ActorAssociation = item.AuthorAssociation
@@ -974,25 +974,25 @@ func (poll *githubPRWatchPoll) checksEvent(observation githubPRObservation, chec
 }
 
 func (poll *githubPRWatchPoll) observedEvent(observation githubPRObservation, node githubPRStatusNode, checks githubPRChecks, views []githubPRThreadView) githubPRWatchEvent {
-	baseline := githubPRBaseline{ChangesRequestedReviewIDs: []string{}, AwaitingThreads: []githubPRBaselineThread{}, HeadSHA: observation.HeadSHA}
+	baseline := githubPRBaseline{ReviewIDs: []string{}, Threads: []githubPRBaselineThread{}, HeadSHA: observation.HeadSHA}
 	if checks.state == "passed" || checks.state == "failed" {
 		baseline.RunFingerprint = checks.fingerprint
 	}
 	if observation.OpinionatedReviews != nil {
 		for _, review := range *observation.OpinionatedReviews {
 			if review.State == "CHANGES_REQUESTED" {
-				baseline.ChangesRequestedReviewIDs = append(baseline.ChangesRequestedReviewIDs, review.ReviewID)
+				baseline.ReviewIDs = append(baseline.ReviewIDs, review.ReviewID)
 			}
 		}
 	}
-	baseline.ConversationCommentID = observation.Conversation.LastHumanCommentID
+	baseline.Conversation.LastHumanCommentID = observation.Conversation.LastHumanCommentID
 	backlog := []map[string]any{}
 	for _, view := range views {
 		thread := view.thread
 		if thread.Awaiting != "user" || thread.IsOutdated || thread.Unknown {
 			continue
 		}
-		baseline.AwaitingThreads = append(baseline.AwaitingThreads, githubPRBaselineThread{ThreadID: thread.ThreadID, LastCommentID: thread.LastCommentID})
+		baseline.Threads = append(baseline.Threads, githubPRBaselineThread{ThreadID: thread.ThreadID, LastCommentID: thread.LastCommentID})
 		if len(backlog) < githubPRWatchBacklogThreads {
 			last := view.comments[len(view.comments)-1].comment
 			entry := poll.untrusted("github.review_thread_comment", last.Author.login(), last.URL, last.Body, "")
@@ -1005,14 +1005,14 @@ func (poll *githubPRWatchPoll) observedEvent(observation githubPRObservation, no
 		}
 	}
 	conversationAwaitsUser := githubTimeAfter(observation.Conversation.LastHumanCommentAt, observation.Conversation.LastUserCommentAt)
-	needsUser := len(baseline.AwaitingThreads) > 0 || conversationAwaitsUser || len(baseline.ChangesRequestedReviewIDs) > 0 ||
+	needsUser := len(baseline.Threads) > 0 || conversationAwaitsUser || len(baseline.ReviewIDs) > 0 ||
 		checks.state == "failed" || observation.Mergeable == "CONFLICTING" || observation.Ready == "true"
 	event := poll.event(observation, githubPREventObserved, observation.Role, observation.AuthorLogin, poll.observedAt,
 		fmt.Sprintf("PR #%d observed (%s)", observation.Number, observation.Role), map[string]any{"category": "lifecycle", "needs_user": needsUser})
 	event.Payload.ActorKind = node.Author.kind()
 	event.Payload.BaselineAt = observation.BaselineAt
 	event.Payload.Baseline = &baseline
-	event.Payload.Untrusted = map[string]any{"trust": "untrusted", "origin": "github.observed_backlog", "threads": backlog}
+	event.Payload.Untrusted = map[string]any{"trust": "untrusted", "origin": "github.review_thread_comment", "threads": backlog}
 	return event
 }
 

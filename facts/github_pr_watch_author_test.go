@@ -113,21 +113,21 @@ func TestGitHubPRWatchFirstSightEmitsOneObservedEventPerPR(t *testing.T) {
 	if payloadString(observed.Payload, "baseline_at") == "" || payloadString(observed.Payload, "baseline", "head_sha") != watchHeadSHA || payloadString(observed.Payload, "baseline", "run_fingerprint") == "" {
 		t.Fatalf("expected baseline_at and baseline head ids, got %s", observed.Raw)
 	}
-	if ids := payloadValue(observed.Payload, "baseline", "changes_requested_review_ids"); !reflect.DeepEqual(ids, []any{"PRR_alice"}) {
+	if ids := payloadValue(observed.Payload, "baseline", "review_ids"); !reflect.DeepEqual(ids, []any{"PRR_alice"}) {
 		t.Fatalf("expected baseline changes-requested review ids, got %#v", ids)
 	}
-	threads, _ := payloadValue(observed.Payload, "baseline", "awaiting_threads").([]any)
+	threads, _ := payloadValue(observed.Payload, "baseline", "threads").([]any)
 	if len(threads) != 1 || payloadString(threads[0], "thread_id") != "PRRT_one" || payloadString(threads[0], "last_comment_id") != "PRRC_one" {
 		t.Fatalf("expected the awaiting thread in the baseline, got %#v", threads)
 	}
-	if payloadString(observed.Payload, "baseline", "conversation_comment_id") != "IC_bob" {
+	if payloadString(observed.Payload, "baseline", "conversation", "last_human_comment_id") != "IC_bob" {
 		t.Fatalf("expected baseline conversation comment, got %s", observed.Raw)
 	}
 	if payloadValue(observed.Payload, "triage", "needs_user") != true {
 		t.Fatalf("expected the failing PR's observed event to need the user, got %s", observed.Raw)
 	}
 	backlogThreads, _ := payloadValue(observed.Payload, "untrusted", "threads").([]any)
-	if payloadString(observed.Payload, "untrusted", "trust") != "untrusted" || len(backlogThreads) != 1 || payloadString(backlogThreads[0], "body") != "Could you rename this?" {
+	if payloadString(observed.Payload, "untrusted", "trust") != "untrusted" || payloadString(observed.Payload, "untrusted", "origin") != "github.review_thread_comment" || len(backlogThreads) != 1 || payloadString(backlogThreads[0], "body") != "Could you rename this?" {
 		t.Fatalf("expected the awaiting-user backlog under untrusted, got %s", observed.Raw)
 	}
 	if harness.observationCount() != 2 {
