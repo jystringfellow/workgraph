@@ -40,6 +40,7 @@ const (
 	defaultConnectorRetryInitial = 5 * time.Second
 	defaultConnectorRetryMax     = 5 * time.Minute
 	connectorShutdownTimeout     = 5 * time.Second
+	defaultConnectorWakeSpacing  = 10 * time.Second
 )
 
 type RunConfig struct {
@@ -466,9 +467,11 @@ func waitForConnectorSchedule(ctx context.Context, delay time.Duration) bool {
 }
 
 type connectorPoller struct {
-	id       string
-	interval time.Duration
-	poll     func(context.Context) error
+	id         string
+	interval   time.Duration
+	poll       func(context.Context) error
+	wake       <-chan struct{}
+	minSpacing time.Duration
 }
 
 func (capture *RunCapture) connectorPollers() []connectorPoller {
@@ -515,21 +518,15 @@ func (capture *RunCapture) connectorPollers() []connectorPoller {
 
 func (capture *RunCapture) runConnectorPoller(ctx context.Context, poller connectorPoller) {
 	failures := 0
-	delay := time.Duration(0)
+	settingsErrorLogged := false
+	var nextPoll, lastStart time.Time
 	for {
-		if ctx.Err() != nil {
+		entry, ready := capture.waitForConnectorPoll(ctx, poller, nextPoll, lastStart, &settingsErrorLogged)
+		if !ready {
 			return
 		}
-		if delay > 0 {
-			timer := time.NewTimer(delay)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return
-			case <-timer.C:
-			}
-		}
 
+		lastStart = time.Now()
 		pollCtx, cancel := context.WithTimeout(ctx, capture.connectorPollTimeout)
 		err := poller.poll(pollCtx)
 		timedOut := errors.Is(pollCtx.Err(), context.DeadlineExceeded)
@@ -542,22 +539,87 @@ func (capture *RunCapture) runConnectorPoller(ctx context.Context, poller connec
 		}
 
 		completedAt := time.Now()
-		if err == nil {
+		var deferred *ConnectorPollDeferred
+		var retryAfter *ConnectorPollRetryAfter
+		isDeferred := errors.As(err, &deferred)
+		if isDeferred {
+			failures = entry.ConsecutiveFailures
+			nextPoll = deferred.NotBefore
+		} else if err == nil {
 			failures = 0
-			delay = poller.interval
+			nextPoll = completedAt.Add(poller.interval)
 		} else {
 			failures++
-			delay = connectorRetryDelay(capture.connectorRetryInitial, capture.connectorRetryMax, failures)
+			nextPoll = completedAt.Add(connectorRetryDelay(capture.connectorRetryInitial, capture.connectorRetryMax, failures))
+			if errors.As(err, &retryAfter) && retryAfter.RetryAfter > 0 {
+				notBefore := completedAt.Add(retryAfter.RetryAfter)
+				if nextPoll.Before(notBefore) {
+					nextPoll = notBefore
+				}
+			}
 			capture.logConnectorPollError(poller.id, err)
 		}
-		nextPoll := completedAt.Add(delay)
 		if stateErr := recordConnectorPollAttempt(capture.homeDir, poller.id, completedAt, nextPoll, failures, err); stateErr != nil {
-			capture.logConnectorPollError(poller.id, fmt.Errorf("record poll state: %w", stateErr))
+			if !settingsErrorLogged {
+				capture.logConnectorPollError(poller.id, fmt.Errorf("record poll state: %w", stateErr))
+				settingsErrorLogged = true
+			}
 		}
-		if err != nil && connectorAuthFailure(err.Error()) {
+		if err != nil && !isDeferred && connectorAuthFailure(err.Error()) {
 			return
 		}
 	}
+}
+
+func (capture *RunCapture) waitForConnectorPoll(ctx context.Context, poller connectorPoller, nextPoll time.Time, lastStart time.Time, settingsErrorLogged *bool) (connectorRuntimeEntry, bool) {
+	wake := poller.wake
+	for ctx.Err() == nil {
+		entry, err := readConnectorPollState(capture.homeDir, poller.id)
+		var notBefore time.Time
+		if err != nil {
+			if !*settingsErrorLogged {
+				capture.logConnectorPollError(poller.id, err)
+				*settingsErrorLogged = true
+			}
+			entry = connectorRuntimeEntry{}
+		} else {
+			*settingsErrorLogged = false
+			notBefore, err = connectorNotBefore(entry)
+			if err != nil {
+				capture.logConnectorPollError(poller.id, err)
+				if !waitForConnectorSchedule(ctx, positiveDuration(capture.connectorRetryInitial, defaultConnectorRetryInitial)) {
+					return connectorRuntimeEntry{}, false
+				}
+				continue
+			}
+		}
+		readyAt := nextPoll
+		if notBefore.After(readyAt) {
+			readyAt = notBefore
+		}
+		delay := time.Until(readyAt)
+		if delay <= 0 {
+			return entry, true
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return connectorRuntimeEntry{}, false
+		case _, open := <-wake:
+			timer.Stop()
+			if !open {
+				wake = nil
+				continue
+			}
+			early := lastStart.Add(positiveDuration(poller.minSpacing, defaultConnectorWakeSpacing))
+			if early.Before(nextPoll) {
+				nextPoll = early
+			}
+		case <-timer.C:
+		}
+	}
+	return connectorRuntimeEntry{}, false
 }
 
 func connectorRetryDelay(initial time.Duration, maximum time.Duration, failures int) time.Duration {

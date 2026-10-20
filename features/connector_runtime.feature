@@ -69,3 +69,9 @@ Scenario: Validate Azure CLI authentication with a real token request
   Then workgraph runs "az account get-access-token"
   And a cached profile with an expired refresh token is reported as unhealthy
   And a successful token request remains valid even if login reported no subscriptions
+
+Scenario: Polling survives unreadable runtime settings
+  Given a connector poller is running
+  When connectors.json becomes unparseable
+  Then polling continues on its in-memory schedule without a persisted deadline
+  And the settings error is logged once per poller until settings recover

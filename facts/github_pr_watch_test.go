@@ -1,21 +1,201 @@
 package facts
 
-import "testing"
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	workgraph "github.com/jystringfellow/workgraph"
+)
 
 func TestGitHubPRWatchRateLimitsSetOneDeadline(t *testing.T) {
 	t.Skip("TBD: a stored low budget defers the poll and a RATE_LIMITED error with Retry-After 120 records a failure; observations are unchanged and neither a hint nor github prs capture polls before the deadline")
 }
 
 func TestConnectorPollerDeferralDoesNotCountAsFailure(t *testing.T) {
-	t.Skip("TBD: a deferred poll keeps consecutive_failures unchanged and sets the not-before deadline; a connector returning neither outcome keeps today's schedule")
+	for _, failures := range []int{0, 2} {
+		t.Run(fmt.Sprintf("previous failures %d", failures), func(t *testing.T) {
+			homeDir := filepath.Join(t.TempDir(), ".workgraph")
+			if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(homeDir, "notion.json"), []byte(`{"access_token":"test-token"}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			const lastSuccess = "2026-06-10T09:00:00Z"
+			if err := os.WriteFile(filepath.Join(homeDir, "connectors.json"), []byte(fmt.Sprintf(
+				`{"connectors":{"git":{"enabled":false},"notion":{"enabled":true,"setup_state":"ready","interval":"1h","consecutive_failures":%d,"last_success_at":%q}}}`,
+				failures, lastSuccess)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			starts := make(chan time.Time, 8)
+			deadlines := make(chan time.Time, 1)
+			attempts := 0
+			client := &http.Client{Transport: prWatchPollTransport(func(request *http.Request) (*http.Response, error) {
+				started := time.Now()
+				starts <- started
+				attempts++
+				if attempts == 1 {
+					deadline := started.Add(time.Second)
+					deadlines <- deadline
+					return nil, &workgraph.ConnectorPollDeferred{Reason: "budget low", NotBefore: deadline}
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(`{"results":[],"has_more":false}`)),
+					Request:    request,
+				}, nil
+			})}
+			capture, err := workgraph.StartRun(workgraph.RunConfig{
+				HomeDir: homeDir, NotionHTTPClient: client,
+				ConnectorRetryInitial: 10 * time.Millisecond, ConnectorRetryMax: 20 * time.Millisecond,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() { done <- capture.Run(ctx) }()
+			defer func() {
+				cancel()
+				if err := <-done; err != nil {
+					t.Error(err)
+				}
+			}()
+			select {
+			case <-starts:
+			case <-time.After(3 * time.Second):
+				t.Fatal("connector did not poll immediately")
+			}
+			deadline := <-deadlines
+			var deferred workgraph.ConnectorStatus
+			for until := time.Now().Add(500 * time.Millisecond); time.Now().Before(until); {
+				result, err := workgraph.StatusConnectors(workgraph.ConnectorListConfig{HomeDir: homeDir})
+				if err == nil {
+					for _, status := range result.Connectors {
+						if status.ID == "notion" && status.LastPoll != "" {
+							deferred = status
+						}
+					}
+					if deferred.LastPoll != "" {
+						if !strings.Contains(result.Message, "deferred budget low") {
+							t.Fatalf("status must show deferral reason: %s", result.Message)
+						}
+						break
+					}
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			if deferred.LastPoll == "" || deferred.ConsecutiveFailures != failures || deferred.LastError != "" || deferred.LastSuccess != lastSuccess {
+				t.Fatalf("deferral must preserve failure count and last success without recording an error: %+v", deferred)
+			}
+			notBefore, err := workgraph.ConnectorPollNotBefore(homeDir, "notion")
+			if err != nil || !notBefore.Equal(deadline) || deferred.NotBefore != deadline.UTC().Format(time.RFC3339Nano) {
+				t.Fatalf("expected persisted deadline %s, got %s and status %q (%v)", deadline, notBefore, deferred.NotBefore, err)
+			}
+			next, err := time.Parse(time.RFC3339Nano, deferred.NextPoll)
+			if err != nil || !next.Equal(deadline) {
+				t.Fatalf("expected resume at %s, got %q (%v)", deadline, deferred.NextPoll, err)
+			}
+			select {
+			case started := <-starts:
+				if started.Before(deadline) {
+					t.Fatalf("poll started before deadline: %s < %s", started, deadline)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("deferred connector did not resume at its deadline")
+			}
+			select {
+			case <-starts:
+				t.Fatal("successful connector did not return to its normal one-hour interval")
+			case <-time.After(100 * time.Millisecond):
+			}
+		})
+	}
+}
+
+type prWatchPollTransport func(*http.Request) (*http.Response, error)
+
+func (transport prWatchPollTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	return transport(request)
 }
 
 func TestGitHubPRWatchResumeRelevantUpdatesIncludeOnlyNeedsUserTransitions(t *testing.T) {
-	t.Skip("TBD: after a resume check-in, a review_comment awaiting the user and a checks_failed appear under Relevant updates since last check-in; a needs_user observed, checks_passed, and author_replied do not")
+	f := newNextFixture(t)
+	f.exec(t, `DELETE FROM events`)
+	if err := workgraph.RecordResumeCheckIn(workgraph.ResumeConfig{HomeDir: f.home}, f.now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		typ       string
+		needsUser bool
+	}{
+		{"review_comment", true}, {"checks_failed", true}, {"observed", true}, {"checks_passed", true}, {"author_replied", true}, {"review_comment", false}, {"changes_requested", false}, {"merge_conflict", false}, {"ready_to_merge", false}, {"review_requested", false},
+	}
+	for i, entry := range cases {
+		at := f.now.Add(time.Duration(i-20) * time.Minute).Format(time.RFC3339Nano)
+		f.event(t, entry.typ+at, entry.typ, at, map[string]any{"node_id": "PR0", "role": "author", "triage": map[string]any{"needs_user": entry.needsUser}})
+	}
+	resume, err := workgraph.Resume(workgraph.ResumeConfig{HomeDir: f.home, Now: f.now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := []string{}
+	for _, event := range resume.Updates {
+		got = append(got, event.Type)
+	}
+	if !reflect.DeepEqual(got, []string{"github.pull_request.checks_failed", "github.pull_request.review_comment"}) || resume.UpdateCount != 2 {
+		t.Fatalf("relevant updates: %v (%d)", got, resume.UpdateCount)
+	}
 }
 
 func TestGitHubPRWatchBacklogItemsCiteTheObservedEvent(t *testing.T) {
-	t.Skip("TBD: on first sight a PR with failed checks, changes requested, a conflict, and an awaiting thread opens four items whose opened_by is the observed event and since is baseline_at; after an observation reset the item ids and opened_by are unchanged")
+	f := newNextFixture(t)
+	f.exec(t, `DELETE FROM events`)
+	f.exec(t, `DELETE FROM github_pr_observations`)
+	o := f.observations[0]
+	o["opinionated_reviews"] = f.observations[2]["opinionated_reviews"]
+	o["checks_state"] = "failed"
+	o["check_runs"] = f.observations[3]["check_runs"]
+	o["mergeable"] = "CONFLICTING"
+	baselineAt := f.now.Add(-time.Hour).Format(time.RFC3339Nano)
+	o["baseline_at"] = baselineAt
+	baseline := map[string]any{
+		"review_ids": []string{"R1"},
+		"threads":    []any{map[string]any{"thread_id": "T1", "last_comment_id": "C1"}},
+		"head_sha":   "abc123", "run_fingerprint": "fixturehash1",
+	}
+	id := "github.pull_request.observed:PR0:author"
+	f.event(t, id, "observed", baselineAt, map[string]any{"node_id": "PR0", "role": "author", "baseline_at": baselineAt, "baseline": baseline, "state": map[string]any{"checks_state": "failed", "mergeable": "CONFLICTING"}, "triage": map[string]any{"needs_user": true}, "untrusted": map[string]any{"threads": []any{map[string]any{"thread_id": "T1", "last_comment_id": "C1", "body": "BASELINE PRIVATE", "comment_url": "https://github.com/acme/demo/pull/1#discussion_r1"}}}})
+	f.save(t, o)
+	items := f.items(t, "--include-untrusted")
+	if len(items) != 4 {
+		t.Fatalf("backlog: %+v", items)
+	}
+	for _, item := range items {
+		if item.OpenedBy != id || item.Since.Format(time.RFC3339Nano) != baselineAt || !reflect.DeepEqual(item.Evidence, []string{id}) {
+			t.Fatalf("opening evidence: %+v", item)
+		}
+	}
+	if items[0].Untrusted["body"] != "BASELINE PRIVATE" {
+		t.Fatalf("baseline body: %v", items[0].Untrusted)
+	}
+	f.exec(t, `DELETE FROM github_pr_observations`)
+	o["observed_at"] = f.now.Add(time.Minute).Format(time.RFC3339Nano)
+	o["baseline_at"] = o["observed_at"]
+	f.save(t, o)
+	reset := f.items(t, "--include-untrusted")
+	if !reflect.DeepEqual(items, reset) {
+		t.Fatalf("reset changed items:\nbefore %+v\nafter %+v", items, reset)
+	}
 }
 
 func TestGitHubPRWatchDirectAndTeamReviewRequestsEnterReviewerSet(t *testing.T) {

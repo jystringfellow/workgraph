@@ -98,6 +98,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runCaptureStatus(args[1:], stdout, stderr)
 	case "stop":
 		return runCaptureStop(args[1:], stdout, stderr)
+	case "next":
+		return runNext(args[1:], stdout, stderr)
 	case "today":
 		return runToday(args[1:], stdout, stderr)
 	case "version":

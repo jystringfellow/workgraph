@@ -70,3 +70,15 @@ Scenario: Agents read the same items through MCP
   When an agent calls the workgraph MCP next_items tool
   Then it receives the same items as "workgraph next --json"
   And the tool cannot change anything
+
+Scenario: Provider display strings cannot control the terminal
+  Given an item has ANSI escapes, control characters, or invisible format characters in provider strings
+  When I run "workgraph next"
+  Then those characters and escape sequences are stripped from item lines
+  And JSON output preserves the original provider strings
+
+Scenario: A broken next projection does not hide activity
+  Given a stored pull request payload or observation is malformed
+  When I run "workgraph today" or "workgraph resume"
+  Then the command succeeds and shows its activity view
+  And one short warning replaces the waiting items

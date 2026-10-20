@@ -27,6 +27,10 @@ var helpDetails = map[string]string{
 }
 
 var helpTopics = map[string]helpTopic{
+	"next":                    {"workgraph next [--project <p>] [--reason <r>] [--json [--include-untrusted]] [--watch]", "List local attention items and their evidence."},
+	"next explain":            {"workgraph next explain <item-id> [options]", "Explain the rule and evidence for an open item."},
+	"next done":               {"workgraph next done <item-id> [options]", "Hide one item with a local bookkeeping event."},
+	"next snooze":             {"workgraph next snooze <item-id> --for <duration> [options]", "Hide one item locally until the duration expires."},
 	"memory doctor":           {"workgraph memory doctor [--interactive] [project] [options]", "Inspect project mappings and review possible captured project matches."},
 	"memory link":             {"workgraph memory link --source <captured-project> <memory-project> [options]", "Associate captured project evidence with an existing memory project."},
 	"memory unlink":           {"workgraph memory unlink --source <captured-project> <memory-project> [options]", "Remove a captured project mapping, preserving promoted evidence."},
@@ -340,6 +344,8 @@ func helpOptionArgs(key string) []string {
 	args := strings.Fields(key)
 	placeholder := ""
 	switch key {
+	case "next explain", "next done", "next snooze":
+		placeholder = "item-id"
 	case "associations explain":
 		placeholder = "event-id"
 	case "calendar connect", "calendar disconnect", "mail connect", "mail disconnect":
@@ -415,6 +421,8 @@ func runCommandForOptionHelp(args []string, stdout io.Writer, stderr io.Writer) 
 		return runCaptureStatus(args[1:], stdout, stderr)
 	case "stop":
 		return runCaptureStop(args[1:], stdout, stderr)
+	case "next":
+		return runNext(args[1:], stdout, stderr)
 	case "today":
 		return runToday(args[1:], stdout, stderr)
 	case "version":

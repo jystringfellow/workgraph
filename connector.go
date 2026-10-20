@@ -44,6 +44,8 @@ type ConnectorStatus struct {
 	LastIngest          string
 	LastError           string
 	NextPoll            string
+	NotBefore           string
+	DeferredReason      string
 	ConsecutiveFailures int
 	CaptureRequestID    string
 	CaptureStatus       string
@@ -159,10 +161,60 @@ type connectorRuntimeEntry struct {
 	LastIngest          string          `json:"last_ingest_at,omitempty"`
 	LastError           string          `json:"last_error,omitempty"`
 	NextPoll            string          `json:"next_poll_at,omitempty"`
+	NotBefore           string          `json:"not_before,omitempty"`
+	DeferredReason      string          `json:"deferred_reason,omitempty"`
 	ConsecutiveFailures int             `json:"consecutive_failures,omitempty"`
 }
 
 var connectorPollStateMu sync.Mutex
+
+type ConnectorPollDeferred struct {
+	Reason    string
+	NotBefore time.Time
+}
+
+func (result *ConnectorPollDeferred) Error() string {
+	return result.Reason
+}
+
+type ConnectorPollRetryAfter struct {
+	Err        error
+	RetryAfter time.Duration
+}
+
+func (result *ConnectorPollRetryAfter) Error() string {
+	return result.Err.Error()
+}
+
+func (result *ConnectorPollRetryAfter) Unwrap() error {
+	return result.Err
+}
+
+func ConnectorPollNotBefore(homeDir string, id string) (time.Time, error) {
+	entry, err := readConnectorPollState(homeDir, id)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return connectorNotBefore(entry)
+}
+
+func readConnectorPollState(homeDir string, id string) (connectorRuntimeEntry, error) {
+	connectorPollStateMu.Lock()
+	defer connectorPollStateMu.Unlock()
+	state, err := readConnectorRuntimeFile(homeDir)
+	return state.entry(id), err
+}
+
+func connectorNotBefore(entry connectorRuntimeEntry) (time.Time, error) {
+	if entry.NotBefore == "" {
+		return time.Time{}, nil
+	}
+	deadline, err := time.Parse(time.RFC3339Nano, entry.NotBefore)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse connector not-before deadline: %w", err)
+	}
+	return deadline, nil
+}
 
 func ConnectBridgedConnector(config ConnectorModeConfig) (ConnectorConnectResult, error) {
 	config.Mode = "bridged"
@@ -1144,6 +1196,15 @@ func pollConnectorIDs(homeDir string, state connectorRuntimeFile, requested stri
 }
 
 func pollConnectorOnce(homeDir string, databasePath string, id string) error {
+	notBefore, err := ConnectorPollNotBefore(homeDir, id)
+	if err != nil {
+		return err
+	}
+	if time.Now().Before(notBefore) {
+		return &ConnectorPollDeferred{
+			Reason: "rate limited until " + notBefore.UTC().Format(time.RFC3339Nano), NotBefore: notBefore,
+		}
+	}
 	state, err := readConnectorRuntimeFile(homeDir)
 	if err != nil {
 		return err
@@ -1259,6 +1320,8 @@ func connectorStatuses(homeDir string, state connectorRuntimeFile) []ConnectorSt
 			LastIngest:          entry.LastIngest,
 			LastError:           entry.LastError,
 			NextPoll:            connectorNextPoll(entry, defaultConnectorInterval(id)),
+			NotBefore:           entry.NotBefore,
+			DeferredReason:      entry.DeferredReason,
 			ConsecutiveFailures: entry.ConsecutiveFailures,
 			CaptureRequestID:    request.ID,
 			CaptureStatus:       request.Status,
@@ -1288,11 +1351,7 @@ func recordConnectorPollSuccess(homeDir string, id string, when time.Time) error
 }
 
 func recordConnectorPollError(homeDir string, id string, when time.Time, pollErr error) error {
-	message := ""
-	if pollErr != nil {
-		message = pollErr.Error()
-	}
-	return recordConnectorPollResult(homeDir, id, when, message)
+	return recordConnectorPollAttempt(homeDir, id, when, time.Time{}, -1, pollErr)
 }
 
 func recordConnectorPollResult(homeDir string, id string, when time.Time, lastError string) error {
@@ -1313,7 +1372,15 @@ func recordConnectorPollAttempt(homeDir string, id string, when time.Time, nextP
 	}
 	entry := state.entry(id)
 	entry.LastPoll = when.UTC().Format(time.RFC3339)
-	if pollErr == nil {
+	var deferred *ConnectorPollDeferred
+	var retryAfter *ConnectorPollRetryAfter
+	isDeferred := errors.As(pollErr, &deferred)
+	entry.DeferredReason = ""
+	if isDeferred {
+		entry.DeferredReason = strings.TrimSpace(deferred.Reason)
+		entry.NotBefore = deferred.NotBefore.UTC().Format(time.RFC3339Nano)
+		nextPoll = deferred.NotBefore
+	} else if pollErr == nil {
 		entry.LastSuccess = entry.LastPoll
 		entry.LastError = ""
 		entry.ConsecutiveFailures = 0
@@ -1325,12 +1392,22 @@ func recordConnectorPollAttempt(homeDir string, id string, when time.Time, nextP
 			entry.ConsecutiveFailures++
 		}
 	}
+	if !isDeferred && errors.As(pollErr, &retryAfter) && retryAfter.RetryAfter > 0 {
+		entry.NotBefore = when.Add(retryAfter.RetryAfter).UTC().Format(time.RFC3339Nano)
+	}
+	if notBefore, err := connectorNotBefore(entry); err == nil && notBefore.After(when) {
+		if nextPoll.Before(notBefore) {
+			nextPoll = notBefore
+		}
+	} else if !isDeferred {
+		entry.NotBefore = ""
+	}
 	if nextPoll.IsZero() {
 		entry.NextPoll = ""
 	} else {
-		entry.NextPoll = nextPoll.UTC().Format(time.RFC3339)
+		entry.NextPoll = nextPoll.UTC().Format(time.RFC3339Nano)
 	}
-	if pollErr != nil && connectorAuthFailure(pollErr.Error()) {
+	if pollErr != nil && !isDeferred && connectorAuthFailure(pollErr.Error()) {
 		entry.SetupState = "error"
 		entry.LastValidated = entry.LastPoll
 		entry.LastValidationError = "last poll failed with invalid credentials; reconnect " + id
@@ -1697,6 +1774,12 @@ func connectorListMessage(result ConnectorListResult) string {
 		if status.LastError != "" {
 			line += ", last error " + status.LastError
 		}
+		if status.DeferredReason != "" {
+			line += ", deferred " + status.DeferredReason
+		}
+		if status.NotBefore != "" {
+			line += ", not before " + status.NotBefore
+		}
 		if status.NextPoll != "" {
 			line += ", next poll " + status.NextPoll
 		}
@@ -1777,6 +1860,12 @@ func connectorStatusMessage(result ConnectorListResult) string {
 		}
 		if status.LastError != "" {
 			line += ", last error " + status.LastError
+		}
+		if status.DeferredReason != "" {
+			line += ", deferred " + status.DeferredReason
+		}
+		if status.NotBefore != "" {
+			line += ", not before " + status.NotBefore
 		}
 		if status.NextPoll != "" {
 			line += ", next poll " + status.NextPoll
