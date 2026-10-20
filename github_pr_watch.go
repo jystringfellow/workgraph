@@ -164,7 +164,12 @@ func ConnectGitHubPRWatch(config ConnectorConnectConfig) (ConnectorConnectResult
 	return ConnectorConnectResult{
 		HomeDir: homeDir,
 		ID:      githubPRWatchConnectorID,
-		Message: connectorConnectMessage(homeDir, githubPRWatchConnectorID),
+		Message: connectorConnectMessage(homeDir, githubPRWatchConnectorID) + "\n" + strings.Join([]string{
+			"Background capture polls the watch only after it starts or restarts:",
+			"  workgraph start               (if capture is not running)",
+			"  workgraph stop && workgraph start   (if capture is already running)",
+			"Verify now: workgraph github prs capture, then workgraph next",
+		}, "\n"),
 	}, nil
 }
 

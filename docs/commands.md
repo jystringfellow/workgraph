@@ -475,6 +475,11 @@ workgraph events today --type 'github.pull_request.*'
 workgraph github prs disconnect
 ```
 
+Background capture polls the watch only after it starts or restarts, so
+after `github prs connect` run `workgraph start`, or `workgraph stop` then
+`workgraph start` if capture is already running. To verify immediately, run
+`workgraph github prs capture` and then `workgraph next`.
+
 `github prs disconnect` deletes the watch's observations and keeps captured
 events.
 

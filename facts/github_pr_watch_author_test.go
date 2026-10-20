@@ -36,7 +36,10 @@ func TestGitHubPRWatchConnectValidatesGHAndStaysOptIn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("github prs connect failed: %v\n%s", err, output)
 	}
-	for _, expected := range []string{"workgraph connectors disable github.pr_watch", "workgraph connectors interval github.pr_watch"} {
+	for _, expected := range []string{
+		"workgraph connectors disable github.pr_watch", "workgraph connectors interval github.pr_watch",
+		"only after it starts or restarts", "workgraph stop && workgraph start", "workgraph github prs capture, then workgraph next",
+	} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("expected connect output to include %q, got:\n%s", expected, output)
 		}
