@@ -1477,7 +1477,10 @@ func TestGitHubPRWatchSearchStaysCheapAndBatchesAtMostTenPRs(t *testing.T) {
 	mergeDocuments := 0
 	for _, input := range harness.gh.GraphQLInputs(t) {
 		if strings.Contains(input, "search(") {
-			for _, expensive := range []string{"mergeStateStatus", "mergeable", "CheckRun", "StatusContext"} {
+			if !strings.Contains(input, `"first":20`) {
+				t.Fatalf("expected the search to request pages of 20: %s", input)
+			}
+			for _, expensive := range []string{"mergeStateStatus", "mergeable", "CheckRun", "StatusContext", "reviewDecision", "reviewRequests", "viewerLatestReview"} {
 				if strings.Contains(input, expensive) {
 					t.Fatalf("expected the search document not to select %s: %s", expensive, input)
 				}
@@ -1488,6 +1491,9 @@ func TestGitHubPRWatchSearchStaysCheapAndBatchesAtMostTenPRs(t *testing.T) {
 		}
 		if strings.Contains(input, "mergeStateStatus") {
 			mergeDocuments++
+			if !strings.Contains(input, "reviewDecision") {
+				t.Fatalf("expected the batched merge state query to carry reviewDecision: %s", input)
+			}
 		}
 	}
 	if mergeDocuments != 2 {
@@ -1535,17 +1541,23 @@ func TestGitHubPRWatchShrinksBatchesWhenGitHubTimesOut(t *testing.T) {
 	}
 }
 
+func queueSearchTimeouts(t *testing.T, gh *fakeGHGraphQL) {
+	t.Helper()
+	for range []int{20, 10, 5} {
+		gh.QueueResult(t, "", "gh: HTTP 502: 502 Bad Gateway (https://api.github.com/graphql)\n", 1)
+	}
+}
+
 func TestGitHubPRWatchSearchTimeoutDefersWithoutFailures(t *testing.T) {
-	const timeout = "gh: HTTP 502: 502 Bad Gateway (https://api.github.com/graphql)\n"
 	cli := newPRWatchHarness(t, authorParams)
-	cli.gh.QueueResult(t, "", timeout, 1)
+	queueSearchTimeouts(t, cli.gh)
 	output, err := cli.cli("github", "prs", "capture", "--home", cli.homeDir, "--gh", cli.gh.Path)
 	if err == nil || !strings.Contains(output, "GitHub timed out on the query (HTTP 502)") {
 		t.Fatalf("expected capture to report the GitHub timeout, got %v:\n%s", err, output)
 	}
 
 	harness := newPRWatchHarness(t, authorParams)
-	harness.gh.QueueResult(t, "", timeout, 1)
+	queueSearchTimeouts(t, harness.gh)
 	started := time.Now()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1575,8 +1587,8 @@ func TestGitHubPRWatchSearchTimeoutDefersWithoutFailures(t *testing.T) {
 	if err != nil || status.ConsecutiveFailures != 0 || notBefore.Before(started.Add(50*time.Second)) {
 		t.Fatalf("expected a deferral about a minute out without counting a failure, got %#v (not before %s, %v)", status, notBefore, err)
 	}
-	if calls := len(harness.gh.GraphQLInputs(t)); calls != 2 {
-		t.Fatalf("expected no retry before the deferral ends, got %d graphql calls", calls)
+	if calls := len(harness.gh.GraphQLInputs(t)); calls != 4 {
+		t.Fatalf("expected the search to shrink to its minimum page and then wait for the deferral, got %d graphql calls", calls)
 	}
 }
 
@@ -1645,7 +1657,7 @@ func TestGitHubPRWatchSearchTimeoutKeepsTheOtherRole(t *testing.T) {
 	harness := newPRWatchHarness(t, `{"scope":"open_prs","identity":"@me","roles":["author","reviewer"],"review_requests":"direct"}`)
 	harness.gh.Queue(t, statusResponse(t, watchPR()))
 	harness.gh.Queue(t, detailResponse(t, detailFixture{ID: watchPRNodeID}))
-	harness.gh.QueueResult(t, "", "gh: HTTP 502: 502 Bad Gateway (https://api.github.com/graphql)\n", 1)
+	queueSearchTimeouts(t, harness.gh)
 	_, err := harness.poll(watchBase)
 	var deferred *workgraph.ConnectorPollDeferred
 	if !errors.As(err, &deferred) || !strings.Contains(deferred.Reason, "GitHub timed out on the query") {
@@ -1653,5 +1665,113 @@ func TestGitHubPRWatchSearchTimeoutKeepsTheOtherRole(t *testing.T) {
 	}
 	if harness.observation(watchPRNodeID) == nil || len(harness.eventsOfType("github.pull_request.observed")) != 1 {
 		t.Fatalf("expected the author role's changes to be committed despite the reviewer timeout")
+	}
+}
+
+func authorSearchInputs(t *testing.T, harness *prWatchHarness) []string {
+	t.Helper()
+	searches := []string{}
+	for _, input := range harness.gh.GraphQLInputs(t) {
+		if strings.Contains(input, "search(") && strings.Contains(input, `"q":"is:pr is:open author:`) {
+			searches = append(searches, input)
+		}
+	}
+	return searches
+}
+
+func TestGitHubPRWatchCompletesFiftyOnePRsOverPagesOfTwenty(t *testing.T) {
+	harness := newPRWatchHarness(t, authorParams)
+	harness.gh.AnswerDetailsEmpty(t)
+	prs := watchPRSet(51, nil)
+	harness.mustPoll(watchBase, statusPages(t, 20, prs...)...)
+	searches := authorSearchInputs(t, harness)
+	if len(searches) != 3 || !strings.Contains(searches[1], `"after":"page-1"`) || !strings.Contains(searches[2], `"after":"page-2"`) {
+		t.Fatalf("expected three chained search pages, got %d", len(searches))
+	}
+	for _, search := range searches {
+		if !strings.Contains(search, `"first":20`) {
+			t.Fatalf("expected pages of 20: %s", search)
+		}
+	}
+	if harness.observationCount() != 51 || len(harness.eventsOfType("github.pull_request.observed")) != 51 {
+		t.Fatalf("expected all 51 PRs observed, got %d observations", harness.observationCount())
+	}
+}
+
+func TestGitHubPRWatchShrinksSearchPagesAndRemembersTheSize(t *testing.T) {
+	harness := newPRWatchHarness(t, authorParams)
+	harness.gh.LimitSearchPageSize(t, 10)
+	harness.gh.AnswerDetailsEmpty(t)
+	prs := watchPRSet(25, nil)
+	harness.mustPoll(watchBase, statusPages(t, 10, prs...)...)
+	searches := authorSearchInputs(t, harness)
+	if len(searches) != 4 || !strings.Contains(searches[0], `"first":20`) || !strings.Contains(searches[1], `"first":10`) || strings.Contains(searches[1], `"after":"page`) {
+		t.Fatalf("expected a timed-out page of 20 retried from the start at 10, got %d searches", len(searches))
+	}
+	if harness.observationCount() != 25 {
+		t.Fatalf("expected every page completed and committed, got %d observations", harness.observationCount())
+	}
+	if size := watchSearchPageSize(t, harness.homeDir); size != 10 {
+		t.Fatalf("expected the reduced page size stored, got %d", size)
+	}
+
+	harness.mustPoll(watchBase.Add(5*time.Minute), statusPages(t, 10, prs...)...)
+	searches = authorSearchInputs(t, harness)[4:]
+	if len(searches) != 3 || !strings.Contains(searches[0], `"first":10`) {
+		t.Fatalf("expected the next poll to start at the reduced page size, got %d searches", len(searches))
+	}
+	if size := watchSearchPageSize(t, harness.homeDir); size != 15 {
+		t.Fatalf("expected a clean poll to grow the page size by a small step, got %d", size)
+	}
+}
+
+func watchSearchPageSize(t *testing.T, homeDir string) int {
+	t.Helper()
+	contents, err := os.ReadFile(filepath.Join(homeDir, "connectors.json"))
+	if err != nil {
+		t.Fatalf("read connectors.json: %v", err)
+	}
+	var state struct {
+		Connectors map[string]struct {
+			SearchPageSize int `json:"search_page_size"`
+		} `json:"connectors"`
+	}
+	if err := json.Unmarshal(contents, &state); err != nil {
+		t.Fatalf("parse connectors.json: %v", err)
+	}
+	return state.Connectors["github.pr_watch"].SearchPageSize
+}
+
+func TestGitHubPRWatchMinimumSearchPageStaysAfterAnotherRoleTimesOut(t *testing.T) {
+	harness := newPRWatchHarness(t, `{"scope":"open_prs","identity":"@me","roles":["author","reviewer"],"review_requests":"direct"}`)
+	path := filepath.Join(harness.homeDir, "connectors.json")
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read connectors.json: %v", err)
+	}
+	var state map[string]map[string]map[string]any
+	if err := json.Unmarshal(contents, &state); err != nil {
+		t.Fatalf("parse connectors.json: %v", err)
+	}
+	state["connectors"]["github.pr_watch"]["search_page_size"] = 5
+	if err := os.WriteFile(path, []byte(watchJSON(t, state)), 0o600); err != nil {
+		t.Fatalf("write connectors.json: %v", err)
+	}
+
+	harness.gh.Queue(t, statusResponse(t, watchPR()))
+	harness.gh.Queue(t, detailResponse(t, detailFixture{ID: watchPRNodeID}))
+	harness.gh.QueueResult(t, "", "gh: HTTP 502: 502 Bad Gateway (https://api.github.com/graphql)\n", 1)
+	_, err = harness.poll(watchBase)
+	var deferred *workgraph.ConnectorPollDeferred
+	if !errors.As(err, &deferred) || harness.observation(watchPRNodeID) == nil {
+		t.Fatalf("expected the author role to commit and the reviewer timeout to defer, got %v", err)
+	}
+	if size := watchSearchPageSize(t, harness.homeDir); size != 5 {
+		t.Fatalf("expected a search timeout at the minimum page size to keep it at 5, got %d", size)
+	}
+	for _, input := range harness.gh.GraphQLInputs(t) {
+		if strings.Contains(input, `"q":"is:pr is:open user-review-requested:`) && strings.Contains(input, "reviewDecision") {
+			t.Fatalf("expected the reviewer search not to select reviewDecision: %s", input)
+		}
 	}
 }

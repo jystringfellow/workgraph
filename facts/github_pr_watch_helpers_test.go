@@ -59,6 +59,17 @@ if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
   if [ -f "$dir/gh-detail-auto" ] && grep -q 'reviewThreads' "$input"; then
     WORKGRAPH_FACTS_FAKE_GH_DIR="$dir" WORKGRAPH_FACTS_FAKE_GH_INPUT="$input" exec "` + testBinary + `"
   fi
+  if grep -q 'search(' "$input"; then
+    if grep -q '"q":"is:pr is:open author:' "$input" && grep -Eq 'reviewDecision|viewerLatestReview|reviewRequests' "$input"; then
+      printf 'gh: HTTP 502: 502 Bad Gateway (https://api.github.com/graphql)\n' >&2
+      exit 1
+    fi
+    first=$(grep -o '"first":[0-9]*' "$input" | head -1 | cut -d: -f2)
+    if [ -f "$dir/gh-search-page-limit" ] && [ "$first" -gt "$(cat "$dir/gh-search-page-limit")" ]; then
+      printf 'gh: HTTP 502: 502 Bad Gateway (https://api.github.com/graphql)\n' >&2
+      exit 1
+    fi
+  fi
   if grep -q 'mergeStateStatus' "$input"; then
     if grep -q 'search(' "$input"; then
       printf 'gh: HTTP 502: 502 Bad Gateway (https://api.github.com/graphql)\n' >&2
@@ -166,6 +177,13 @@ func (fake *fakeGHGraphQL) AnswerDetailsEmpty(t *testing.T) {
 	}
 }
 
+func (fake *fakeGHGraphQL) LimitSearchPageSize(t *testing.T, limit int) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(fake.dir, "gh-search-page-limit"), []byte(fmt.Sprint(limit)), 0o644); err != nil {
+		t.Fatalf("write search page limit: %v", err)
+	}
+}
+
 func (fake *fakeGHGraphQL) LimitMergeAliases(t *testing.T, limit int) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(fake.dir, "gh-merge-limit"), []byte(fmt.Sprint(limit)), 0o644); err != nil {
@@ -191,7 +209,7 @@ func (fake *fakeGHGraphQL) registerMergeStates(t *testing.T, stdout string) stri
 		if id == "" {
 			continue
 		}
-		mergeState := map[string]any{"id": id, "headRefOid": node["headRefOid"], "mergeable": node["mergeable"], "mergeStateStatus": node["mergeStateStatus"], "commits": node["commits"]}
+		mergeState := map[string]any{"id": id, "headRefOid": node["headRefOid"], "reviewDecision": node["reviewDecision"], "mergeable": node["mergeable"], "mergeStateStatus": node["mergeStateStatus"], "commits": node["commits"]}
 		encoded, err := json.Marshal(mergeState)
 		if err != nil {
 			t.Fatalf("encode merge state fixture: %v", err)
@@ -199,6 +217,7 @@ func (fake *fakeGHGraphQL) registerMergeStates(t *testing.T, stdout string) stri
 		if err := os.WriteFile(filepath.Join(fake.dir, "gh-merge", id+".json"), encoded, 0o644); err != nil {
 			t.Fatalf("write merge state fixture: %v", err)
 		}
+		delete(node, "reviewDecision")
 		delete(node, "mergeable")
 		delete(node, "mergeStateStatus")
 		stripCheckContextNodes(node)

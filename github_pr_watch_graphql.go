@@ -13,10 +13,10 @@ import (
 
 const githubPRWatchProbeQuery = `query { viewer { login } rateLimit { remaining resetAt } }`
 
-const githubPRWatchStatusQuery = `query($q: String!, $login: String!, $after: String) {
+const githubPRWatchAuthorStatusQuery = `query($q: String!, $first: Int!, $after: String) {
   viewer { login }
   rateLimit { cost remaining resetAt }
-  search(type: ISSUE, query: $q, first: 50, after: $after) {
+  search(type: ISSUE, query: $q, first: $first, after: $after) {
     issueCount
     pageInfo { hasNextPage endCursor }
     nodes {
@@ -27,7 +27,28 @@ const githubPRWatchStatusQuery = `query($q: String!, $login: String!, $after: St
         headRepository { nameWithOwner }
         isCrossRepository
         headRefName headRefOid baseRefName
-        reviewDecision
+        commits(last: 1) {
+          nodes { commit { oid statusCheckRollup { state contexts { totalCount } } } }
+        }
+      }
+    }
+  }
+}`
+
+const githubPRWatchReviewerStatusQuery = `query($q: String!, $login: String!, $first: Int!, $after: String) {
+  viewer { login }
+  rateLimit { cost remaining resetAt }
+  search(type: ISSUE, query: $q, first: $first, after: $after) {
+    issueCount
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      ... on PullRequest {
+        id number url title isDraft state createdAt updatedAt
+        author { __typename login }
+        repository { nameWithOwner }
+        headRepository { nameWithOwner }
+        isCrossRepository
+        headRefName headRefOid baseRefName
         reviewRequests(first: 50) {
           totalCount
           nodes { requestedReviewer {
@@ -51,7 +72,7 @@ const githubPRWatchStatusQuery = `query($q: String!, $login: String!, $after: St
 const githubPRWatchMergeAlias = `
   prN: node(id: $idN) {
     ... on PullRequest {
-      id headRefOid mergeable mergeStateStatus
+      id headRefOid reviewDecision mergeable mergeStateStatus
       commits(last: 1) {
         nodes { commit {
           oid
@@ -149,6 +170,12 @@ const githubPRWatchReviewerFollowUpQuery = `query($ids: [ID!]!, $login: String!)
 }`
 
 const githubPRWatchBatchSize = 10
+
+const (
+	githubPRWatchSearchPageSize    = 20
+	githubPRWatchMinSearchPageSize = 5
+	githubPRWatchSearchPageGrowth  = 5
+)
 
 var errGitHubGraphQLTimeout = errors.New("GitHub timed out on the query")
 
@@ -352,6 +379,7 @@ type githubPRStatusNode struct {
 type githubPRMergeNode struct {
 	ID               string                    `json:"id"`
 	HeadRefOid       string                    `json:"headRefOid"`
+	ReviewDecision   string                    `json:"reviewDecision"`
 	Mergeable        string                    `json:"mergeable"`
 	MergeStateStatus string                    `json:"mergeStateStatus"`
 	Commits          githubPRCommitsConnection `json:"commits"`
