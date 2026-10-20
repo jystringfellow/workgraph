@@ -20,6 +20,8 @@ const (
 	githubPRWatchMaxCommentRunes     = 65536
 	githubPRWatchMinInterval         = time.Minute
 	githubPRWatchPollInterval        = 5 * time.Minute
+	githubPRWatchDefaultRetryAfter   = time.Minute
+	githubPRWatchMinRemaining        = 200
 )
 
 var errGitHubPRWatchFenced = errors.New("github.pr_watch poll discarded because the watch changed during the poll")

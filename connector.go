@@ -163,6 +163,8 @@ type connectorRuntimeEntry struct {
 	NextPoll            string          `json:"next_poll_at,omitempty"`
 	NotBefore           string          `json:"not_before,omitempty"`
 	DeferredReason      string          `json:"deferred_reason,omitempty"`
+	RateLimitRemaining  *int            `json:"rate_limit_remaining,omitempty"`
+	RateLimitResetAt    string          `json:"rate_limit_reset_at,omitempty"`
 	ConsecutiveFailures int             `json:"consecutive_failures,omitempty"`
 }
 

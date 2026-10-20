@@ -8,7 +8,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const githubPRWatchProbeQuery = `query { viewer { login } rateLimit { remaining resetAt } }`
@@ -183,7 +186,7 @@ func runGitHubGraphQL(ctx context.Context, gh string, document string, variables
 	}
 	for _, graphQLErr := range response.Errors {
 		if graphQLErr.Type == "RATE_LIMITED" {
-			return nil, fmt.Errorf("github graphql rate limited: %s", graphQLErr.Message)
+			return nil, githubRateLimitError(stderr.String(), fmt.Errorf("github graphql rate limited: %s", graphQLErr.Message))
 		}
 	}
 	if len(response.Data) > 0 && string(response.Data) != "null" && out != nil {
@@ -199,6 +202,9 @@ func githubGHCommandError(stderr string, runErr error) error {
 	if details == "" {
 		details = runErr.Error()
 	}
+	if githubGHRateLimited(details) {
+		return githubRateLimitError(details, fmt.Errorf("gh api graphql: %s", details))
+	}
 	if githubGHAuthFailure(details) {
 		return fmt.Errorf("gh api graphql: %s; GitHub CLI authentication failed: run gh auth login then workgraph connectors validate %s", details, githubPRWatchConnectorID)
 	}
@@ -209,9 +215,36 @@ func githubGHCommandError(stderr string, runErr error) error {
 	return fmt.Errorf("gh api graphql: %s", details)
 }
 
+var githubRetryAfterPattern = regexp.MustCompile(`(?i)retry-after:\s*(\d+)`)
+
+func githubGHRateLimited(details string) bool {
+	normalized := strings.ToLower(details)
+	for _, marker := range []string{"http 403", "http 429", "rate limit exceeded", "secondary rate limit", "retry-after"} {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func githubRateLimitError(details string, err error) error {
+	retryAfter := githubPRWatchDefaultRetryAfter
+	if match := githubRetryAfterPattern.FindStringSubmatch(details); match != nil {
+		if seconds, parseErr := strconv.Atoi(match[1]); parseErr == nil && seconds > 0 {
+			retryAfter = time.Duration(seconds) * time.Second
+		}
+	}
+	return &ConnectorPollRetryAfter{Err: err, RetryAfter: retryAfter}
+}
+
 func githubGHAuthFailure(details string) bool {
 	normalized := strings.ToLower(details)
 	return strings.Contains(normalized, "http 401") || strings.Contains(normalized, "bad credentials") || strings.Contains(normalized, "gh auth login")
+}
+
+type githubGraphQLRateLimit struct {
+	Remaining *int   `json:"remaining"`
+	ResetAt   string `json:"resetAt"`
 }
 
 type githubPageInfo struct {

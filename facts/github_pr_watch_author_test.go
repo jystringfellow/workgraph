@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -1171,4 +1172,162 @@ func watchBridgeParams(t *testing.T, homeDir string) map[string]any {
 		t.Fatalf("parse connectors.json: %v", err)
 	}
 	return state.Connectors["github.pr_watch"].BridgeParams
+}
+
+func TestGitHubPRWatchRateLimitsSetOneDeadline(t *testing.T) {
+	assertCaptureWaits := func(t *testing.T, harness *prWatchHarness, calls int) {
+		output, err := harness.cli("github", "prs", "capture", "--home", harness.homeDir, "--gh", harness.gh.Path)
+		if err == nil || !strings.Contains(output, "rate limited until") {
+			t.Fatalf("expected github prs capture to refuse before the deadline, got %v:\n%s", err, output)
+		}
+		if got := len(harness.gh.GraphQLInputs(t)); got != calls {
+			t.Fatalf("expected no query before the deadline, got %d calls (want %d)", got, calls)
+		}
+	}
+
+	t.Run("low stored budget defers", func(t *testing.T) {
+		harness := newPRWatchHarness(t, authorParams)
+		now := time.Now().UTC().Truncate(time.Second)
+		resetAt := now.Add(time.Hour)
+		harness.mustPoll(now,
+			withRateLimit(t, statusResponse(t, watchPR()), 150, resetAt),
+			withRateLimit(t, detailResponse(t, detailFixture{ID: watchPRNodeID}), 149, resetAt))
+		before := harness.observation(watchPRNodeID)
+		calls := len(harness.gh.GraphQLInputs(t))
+
+		_, err := harness.poll(now.Add(time.Minute))
+		var deferred *workgraph.ConnectorPollDeferred
+		if !errors.As(err, &deferred) || !deferred.NotBefore.Equal(resetAt) {
+			t.Fatalf("expected a deferral until %s, got %v", resetAt, err)
+		}
+		notBefore, err := workgraph.ConnectorPollNotBefore(harness.homeDir, "github.pr_watch")
+		if err != nil || !notBefore.Equal(resetAt) {
+			t.Fatalf("expected the not-before deadline at the reset time, got %s (%v)", notBefore, err)
+		}
+		if !reflect.DeepEqual(harness.observation(watchPRNodeID), before) || len(harness.gh.GraphQLInputs(t)) != calls {
+			t.Fatalf("expected a deferred poll to query nothing and change nothing")
+		}
+		assertCaptureWaits(t, harness, calls)
+	})
+
+	t.Run("retry-after records a failure", func(t *testing.T) {
+		harness := newPRWatchHarness(t, authorParams)
+		harness.mustPoll(time.Now().UTC(), statusResponse(t, watchPR()), detailResponse(t, detailFixture{ID: watchPRNodeID}))
+		before := harness.observation(watchPRNodeID)
+		harness.gh.QueueResult(t, `{"data":null,"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded"}]}`, "Retry-After: 120\n", 1)
+		calls := len(harness.gh.GraphQLInputs(t)) + 1
+
+		started := time.Now()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		capture, err := workgraph.StartRun(workgraph.RunConfig{
+			HomeDir: harness.homeDir, DatabasePath: harness.dbPath, WatchDirs: []string{harness.watchDir}, GitHubCommand: harness.gh.Path,
+			ConnectorRetryInitial: 10 * time.Millisecond, ConnectorRetryMax: 20 * time.Millisecond,
+		})
+		if err != nil {
+			t.Fatalf("start run: %v", err)
+		}
+		done := make(chan error, 1)
+		go func() { done <- capture.Run(ctx) }()
+		deadline := time.Now().Add(3 * time.Second)
+		for watchConnectorStatus(t, harness.homeDir).ConsecutiveFailures != 1 {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for the rate-limited failure: %#v", watchConnectorStatus(t, harness.homeDir))
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatalf("run returned error: %v", err)
+		}
+
+		notBefore, err := workgraph.ConnectorPollNotBefore(harness.homeDir, "github.pr_watch")
+		if err != nil || notBefore.Before(started.Add(110*time.Second)) || notBefore.After(time.Now().Add(130*time.Second)) {
+			t.Fatalf("expected a not-before deadline about 120s out, got %s (%v)", notBefore, err)
+		}
+		if !reflect.DeepEqual(harness.observation(watchPRNodeID), before) {
+			t.Fatalf("expected observations unchanged after a rate-limited poll")
+		}
+		if got := len(harness.gh.GraphQLInputs(t)); got != calls {
+			t.Fatalf("expected the daemon not to poll again before the deadline, got %d calls (want %d)", got, calls)
+		}
+		assertCaptureWaits(t, harness, calls)
+	})
+}
+
+func withRateLimit(t *testing.T, response string, remaining int, resetAt time.Time) string {
+	t.Helper()
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(response), &decoded); err != nil {
+		t.Fatalf("decode fixture: %v", err)
+	}
+	decoded["data"].(map[string]any)["rateLimit"] = map[string]any{"cost": 1, "remaining": remaining, "resetAt": resetAt.Format(time.RFC3339)}
+	return watchJSON(t, decoded)
+}
+
+func TestGitHubPRWatchCaptureFeedsNext(t *testing.T) {
+	harness := newPRWatchHarness(t, authorParams)
+	failingOn := func(sha, runID, completedAt, updatedAt string) prFixture {
+		return watchPR(func(pr *prFixture) {
+			pr.HeadSHA, pr.UpdatedAt, pr.Mergeable, pr.MergeState = sha, updatedAt, "CONFLICTING", "DIRTY"
+			pr.Checks = []checkFixture{{ID: runID, Name: "lint", Status: "COMPLETED", Conclusion: "FAILURE", CompletedAt: completedAt}}
+		})
+	}
+	question := commentFixture{ID: "PRRC_q", Author: "alice", Body: "Why this default?", CreatedAt: watchTime(-time.Hour)}
+	harness.mustPoll(watchBase, statusResponse(t, failingOn(watchHeadSHA, "run-1", watchTime(-30*time.Minute), watchUpdatedAt)),
+		detailResponse(t, detailFixture{ID: watchPRNodeID, Threads: []threadFixture{{ID: "PRRT_one", Path: "settings.go", Line: 18, Comments: []commentFixture{question}}}}))
+
+	observedID := "github.pull_request.observed:" + watchPRNodeID + ":author"
+	items := nextItemsByReason(t, harness, watchBase.Add(time.Minute))
+	for _, reason := range []string{"checks_failed", "conflicts", "reply"} {
+		item, ok := items[reason]
+		if !ok {
+			t.Fatalf("expected a %s item on first sight, got %#v", reason, items)
+		}
+		if item.OpenedBy != observedID || !item.Since.Equal(watchBase) {
+			t.Fatalf("expected the %s backlog item to cite the observed event at baseline, got opened_by %q since %s", reason, item.OpenedBy, item.Since)
+		}
+	}
+	if items["reply"].ID != "github:reply:"+watchPRNodeID+":PRRT_one:PRRC_q" {
+		t.Fatalf("unexpected reply item id %q", items["reply"].ID)
+	}
+
+	newHead := "3333333333333333333333333333333333333333"
+	followUp := commentFixture{ID: "PRRC_more", Author: "alice", Body: "Still unsure.", CreatedAt: watchTime(3 * time.Minute)}
+	harness.mustPoll(watchBase.Add(5*time.Minute), statusResponse(t, failingOn(newHead, "run-2", watchTime(4*time.Minute), watchTime(3*time.Minute))),
+		detailResponse(t, detailFixture{ID: watchPRNodeID, Threads: []threadFixture{{ID: "PRRT_one", Path: "settings.go", Line: 18, Comments: []commentFixture{question, followUp}}}}))
+
+	items = nextItemsByReason(t, harness, watchBase.Add(6*time.Minute))
+	stored := map[string]bool{}
+	for _, event := range harness.events() {
+		stored[event.ID] = true
+	}
+	checks := items["checks_failed"]
+	if !strings.HasPrefix(checks.OpenedBy, "github.pull_request.checks_failed:"+watchPRNodeID+":"+newHead+":") || !stored[checks.OpenedBy] {
+		t.Fatalf("expected the checks item to cite the stored checks_failed transition, got %q", checks.OpenedBy)
+	}
+	reply := items["reply"]
+	if reply.OpenedBy != "github.pull_request.review_comment:"+watchPRNodeID+":PRRC_more" || !stored[reply.OpenedBy] {
+		t.Fatalf("expected the reply item to cite the stored review_comment, got %q", reply.OpenedBy)
+	}
+	if items["conflicts"].OpenedBy != observedID {
+		t.Fatalf("expected the still-open conflict to keep citing the observed event, got %q", items["conflicts"].OpenedBy)
+	}
+}
+
+func nextItemsByReason(t *testing.T, harness *prWatchHarness, now time.Time) map[string]workgraph.NextItem {
+	t.Helper()
+	result, err := workgraph.Next(workgraph.NextConfig{HomeDir: harness.homeDir, DatabasePath: harness.dbPath, Now: now})
+	if err != nil {
+		t.Fatalf("next: %v", err)
+	}
+	items := map[string]workgraph.NextItem{}
+	for _, item := range result.Items {
+		if _, duplicate := items[item.Reason]; duplicate {
+			t.Fatalf("expected one item per reason, got %#v", result.Items)
+		}
+		items[item.Reason] = item
+	}
+	return items
 }

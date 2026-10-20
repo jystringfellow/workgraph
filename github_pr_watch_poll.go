@@ -33,6 +33,7 @@ type githubPRWatchPoll struct {
 	now            time.Time
 	observedAt     string
 	remoteProjects map[string]string
+	rateLimit      *githubGraphQLRateLimit
 }
 
 type githubPRWatchChanges struct {
@@ -156,12 +157,29 @@ func CaptureGitHubPRWatch(config GitHubPRWatchCaptureConfig) (GitHubPRWatchCaptu
 		if !fence.Enabled {
 			return result, fmt.Errorf("connector %s is disabled", githubPRWatchConnectorID)
 		}
+		pollStart := now().UTC()
+		if deferred := githubPRWatchDeferral(state.entry(githubPRWatchConnectorID), pollStart); deferred != nil {
+			if err := extendConnectorNotBefore(status.HomeDir, githubPRWatchConnectorID, deferred.NotBefore); err != nil {
+				return result, err
+			}
+			return result, deferred
+		}
 		poll := &githubPRWatchPoll{
 			ctx: ctx, gh: githubCommandOrDefault(config.GitHubCommand), db: db, params: params,
-			now: now().UTC(), remoteProjects: remoteProjects,
+			now: pollStart, remoteProjects: remoteProjects,
 		}
 		poll.observedAt = poll.now.Format(time.RFC3339Nano)
 		changes, roleErr := poll.run()
+		if err := recordGitHubPRWatchBudget(status.HomeDir, poll.rateLimit); err != nil {
+			return result, err
+		}
+		var retryAfter *ConnectorPollRetryAfter
+		if errors.As(roleErr, &retryAfter) {
+			if err := extendConnectorNotBefore(status.HomeDir, githubPRWatchConnectorID, pollStart.Add(retryAfter.RetryAfter)); err != nil {
+				return result, err
+			}
+			return result, retryAfter
+		}
 		if changes == nil {
 			return result, roleErr
 		}
@@ -184,6 +202,54 @@ func CaptureGitHubPRWatch(config GitHubPRWatchCaptureConfig) (GitHubPRWatchCaptu
 		}, "\n")
 		return result, roleErr
 	}
+}
+
+func githubPRWatchDeferral(entry connectorRuntimeEntry, now time.Time) *ConnectorPollDeferred {
+	if notBefore, err := connectorNotBefore(entry); err == nil && notBefore.After(now) {
+		return &ConnectorPollDeferred{Reason: "rate limited until " + notBefore.UTC().Format(time.RFC3339), NotBefore: notBefore}
+	}
+	if entry.RateLimitRemaining == nil || *entry.RateLimitRemaining >= githubPRWatchMinRemaining {
+		return nil
+	}
+	resetAt, err := time.Parse(time.RFC3339Nano, entry.RateLimitResetAt)
+	if err != nil || !resetAt.After(now) {
+		return nil
+	}
+	return &ConnectorPollDeferred{Reason: "rate limited until " + resetAt.UTC().Format(time.RFC3339), NotBefore: resetAt}
+}
+
+func recordGitHubPRWatchBudget(homeDir string, budget *githubGraphQLRateLimit) error {
+	if budget == nil {
+		return nil
+	}
+	connectorPollStateMu.Lock()
+	defer connectorPollStateMu.Unlock()
+	state, err := readConnectorRuntimeFile(homeDir)
+	if err != nil {
+		return err
+	}
+	entry := state.entry(githubPRWatchConnectorID)
+	remaining := *budget.Remaining
+	entry.RateLimitRemaining = &remaining
+	entry.RateLimitResetAt = budget.ResetAt
+	state.Connectors[githubPRWatchConnectorID] = entry
+	return writeConnectorRuntimeFile(homeDir, state)
+}
+
+func extendConnectorNotBefore(homeDir string, id string, deadline time.Time) error {
+	connectorPollStateMu.Lock()
+	defer connectorPollStateMu.Unlock()
+	state, err := readConnectorRuntimeFile(homeDir)
+	if err != nil {
+		return err
+	}
+	entry := state.entry(id)
+	if current, err := connectorNotBefore(entry); err == nil && !deadline.After(current) {
+		return nil
+	}
+	entry.NotBefore = deadline.UTC().Format(time.RFC3339Nano)
+	state.Connectors[id] = entry
+	return writeConnectorRuntimeFile(homeDir, state)
 }
 
 func (poll *githubPRWatchPoll) run() (*githubPRWatchChanges, error) {
@@ -257,6 +323,24 @@ func (poll *githubPRWatchPoll) runAuthor() (githubPRWatchChanges, error) {
 	return changes, nil
 }
 
+func (poll *githubPRWatchPoll) graphQL(document string, variables map[string]any, out any) (githubGraphQLErrors, error) {
+	var data json.RawMessage
+	graphQLErrors, err := runGitHubGraphQL(poll.ctx, poll.gh, document, variables, &data)
+	if err != nil || len(data) == 0 {
+		return graphQLErrors, err
+	}
+	var budget struct {
+		RateLimit *githubGraphQLRateLimit `json:"rateLimit"`
+	}
+	if json.Unmarshal(data, &budget) == nil && budget.RateLimit != nil && budget.RateLimit.Remaining != nil {
+		poll.rateLimit = budget.RateLimit
+	}
+	if err := json.Unmarshal(data, out); err != nil {
+		return nil, fmt.Errorf("parse gh api graphql data: %w", err)
+	}
+	return graphQLErrors, nil
+}
+
 func (poll *githubPRWatchPoll) search(role string) ([]githubPRStatusNode, error) {
 	query := fmt.Sprintf("is:pr is:open author:%s archived:false sort:updated-desc", poll.params.Identity)
 	var nodes []githubPRStatusNode
@@ -264,7 +348,7 @@ func (poll *githubPRWatchPoll) search(role string) ([]githubPRStatusNode, error)
 	issueCount := 0
 	for {
 		var data githubPRStatusData
-		graphQLErrors, err := runGitHubGraphQL(poll.ctx, poll.gh, githubPRWatchStatusQuery, map[string]any{"q": query, "login": poll.params.IdentityLogin, "after": after}, &data)
+		graphQLErrors, err := poll.graphQL(githubPRWatchStatusQuery, map[string]any{"q": query, "login": poll.params.IdentityLogin, "after": after}, &data)
 		if err != nil {
 			return nil, err
 		}
@@ -329,7 +413,7 @@ func (poll *githubPRWatchPoll) fetchDetails(ids []string, previous map[string]*g
 			variables[fmt.Sprintf("after%d", index)] = graphQLNullable(page.after)
 		}
 		var data map[string]json.RawMessage
-		if _, err := runGitHubGraphQL(poll.ctx, poll.gh, githubPRWatchDetailQuery(len(batch)), variables, &data); err != nil {
+		if _, err := poll.graphQL(githubPRWatchDetailQuery(len(batch)), variables, &data); err != nil {
 			return nil, err
 		}
 		for index, page := range batch {
@@ -369,7 +453,7 @@ func (poll *githubPRWatchPoll) fetchFollowUps(ids []string) (map[string]*githubP
 	var data struct {
 		Nodes []*githubPRFollowUpNode `json:"nodes"`
 	}
-	if _, err := runGitHubGraphQL(poll.ctx, poll.gh, githubPRWatchFollowUpQuery, map[string]any{"ids": ids}, &data); err != nil {
+	if _, err := poll.graphQL(githubPRWatchFollowUpQuery, map[string]any{"ids": ids}, &data); err != nil {
 		return nil, err
 	}
 	for index, id := range ids {

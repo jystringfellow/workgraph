@@ -15,10 +15,6 @@ import (
 	workgraph "github.com/jystringfellow/workgraph"
 )
 
-func TestGitHubPRWatchRateLimitsSetOneDeadline(t *testing.T) {
-	t.Skip("TBD: a stored low budget defers the poll and a RATE_LIMITED error with Retry-After 120 records a failure; observations are unchanged and neither a hint nor github prs capture polls before the deadline")
-}
-
 func TestConnectorPollerDeferralDoesNotCountAsFailure(t *testing.T) {
 	for _, failures := range []int{0, 2} {
 		t.Run(fmt.Sprintf("previous failures %d", failures), func(t *testing.T) {
