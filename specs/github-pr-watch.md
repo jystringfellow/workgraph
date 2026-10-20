@@ -1,7 +1,11 @@
 # GitHub Pull Request Watch
 
-Status: proposed. No behavior described here is implemented until its facts in
-`facts/github_pr_watch_test.go` are active.
+Status: implemented for the author and reviewer roles and push hints, with
+active facts in `facts/github_pr_watch_test.go`,
+`facts/github_pr_watch_author_test.go`, and
+`facts/github_pr_watch_reviewer_test.go`. The related `github` connector
+fixes listed below are separate; only the `gh` auth classification fix is
+implemented.
 
 ## Intent
 

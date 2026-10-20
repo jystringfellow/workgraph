@@ -1,6 +1,7 @@
 # Next
 
-Status: projection implemented over `github.pr_watch` state; it shows no items until the GitHub PR watch capture lands.
+Status: implemented, with the GitHub pull request watch (`github.pr_watch`) as
+its first source. Facts live in `facts/next_test.go`.
 
 ## Intent
 

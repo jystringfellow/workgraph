@@ -41,16 +41,9 @@ Priority labels used below:
 - `P1` Expand connector coverage to meetings, work tracking, and knowledge
   bases as user-verifiable integrations. [specs: `specs/calendar.md`,
   `specs/azure-boards.md`, and `specs/notion.md`]
-- `P1` Add `workgraph next`, one local list of what is waiting on the user,
-  with stable item ids, `done` and `snooze`, and a `--watch --json` feed that
-  later dispatch can consume. Show its items in `resume` and a count in
-  `today`. [spec: `specs/next.md`]
-- `P1` Watch open GitHub pull requests the user authored or is asked to
-  review (directly or through a team) through the existing `gh` CLI auth, as
-  the first `next` source: read-only, deterministic transition events,
-  untrusted comment handling, and local push hints for near-real-time polls.
-  Separately, fix the existing GitHub connector's rate-limit, auth, and
-  bridged identity bugs. [spec: `specs/github-pr-watch.md`]
+- `P1` Fix the existing GitHub connector's rate-limit pre-check and search
+  bucket, and bridged identity duplicates. [spec: `specs/github-pr-watch.md`,
+  Related `github` Connector Fixes]
 - `P1` Add preference modeling and locally resettable ranking weights while
   preserving the explicit suggestion lifecycle. [spec:
   `specs/personalization-feedback.md`]
@@ -73,6 +66,17 @@ Priority labels used below:
 - `P2` Desktop UI after the local CLI and data contracts are stable.
 
 ## Recently Delivered
+
+- [x] `workgraph next`: one local list of what is waiting on the user, with
+  stable item ids, `explain`, `done`, `snooze`, a `--watch --json` feed, and a
+  read-only `next_items` MCP tool; items appear in `resume`, with a count in
+  `today`. [spec: `specs/next.md`]
+
+- [x] GitHub pull request watch (`github.pr_watch`) as the first `next`
+  source: open PRs the user authored or is asked to review (directly or
+  through a team) via the existing `gh` login, read-only transition events,
+  untrusted comment handling, rate-limit deferral, and local push hints.
+  [spec: `specs/github-pr-watch.md`]
 
 - [x] A seven-day `resume` handoff with last-known-work fallback and a durable
   overview check-in for personal work captured since the previous run. [spec:
@@ -97,15 +101,8 @@ Priority labels used below:
 - Connector registry, setup state, polling isolation, deadlines, retry
   backoff, and provider tool requirements. [specs:
   `specs/connector-runtime.md` and `specs/provider-tool-requirements.md`]
-- [x] Connector poll deferrals, retry-after deadlines, and early wake with
-  minimum spacing (PR watch delivery slice 1). [spec: `specs/github-pr-watch.md`]
-- [x] GitHub PR reviewer capture with direct and team requests, hourly team
-  attribution, request lifecycle events, per-role completeness, and captured
-  review requests in `next` (PR watch delivery slice 4). [spec:
-  `specs/github-pr-watch.md`]
-- [x] Keep today/resume available on next projection errors, sanitize next
-  item text, and preserve polling through unreadable settings. [specs:
-  `specs/next.md` and `specs/connector-runtime.md`]
+- Connector poll deferrals, retry-after deadlines, and early wake with
+  minimum spacing. [spec: `specs/connector-runtime.md`]
 - Bridged capture hardening, executable provider recipes, cancellation,
   worker model persistence, and operator documentation. [spec:
   `specs/bridged-capture.md`]

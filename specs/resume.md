@@ -57,8 +57,8 @@ default overview's check-in. Calling the Go `Resume` query API also does not
 advance it; the CLI records the check-in after successful output. A failed
 render, query, or output does not advance the check-in.
 
-Proposed in `specs/next.md` and `specs/github-pr-watch.md`, not yet
-implemented: the default overview shows a `Waiting on you` section after
+With `workgraph next` (`specs/next.md`) and the GitHub pull request watch
+(`specs/github-pr-watch.md`): the default overview shows a `Waiting on you` section after
 `Where you left off` with at most five `workgraph next` items, and
 `resume <project>` shows that project's items after `Recent activity`.
 A `github.pull_request.*` event qualifies for `Relevant updates since last

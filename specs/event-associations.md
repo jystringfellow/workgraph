@@ -103,7 +103,7 @@ The generic stop-token set is exactly: `a`, `an`, `and`, `are`, `as`, `at`,
 `meeting`, `message`, `of`, `on`, `or`, `project`, `pull`, `request`, `status`,
 `task`, `the`, `to`, `update`, `updated`, `with`, `work`, and `working`.
 
-Proposed with `specs/github-pr-watch.md`, not yet implemented: signal
+With the GitHub pull request watch (`specs/github-pr-watch.md`), signal
 extraction skips any payload subtree named `untrusted`. Of the
 `github.pull_request.*` transition events, only `github.pull_request.observed`
 is a related candidate, and only `author_replied` with `responder: author`

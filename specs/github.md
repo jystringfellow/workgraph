@@ -113,15 +113,16 @@ identity. Recapturing the same PR or issue with a newer GitHub `updated_at`
 refreshes the stored timestamp, state, title, actor, and payload without
 creating a duplicate row. Older snapshots must not replace newer GitHub state.
 
-Proposed in `specs/github-pr-watch.md`, not yet implemented:
+With the GitHub pull request watch (`specs/github-pr-watch.md`):
 
 - The opt-in `github.pr_watch` connector sets `branch` and `commit` on
   existing PR snapshot rows. A newer snapshot refresh keeps those values when
   the incoming payload has none.
-- The rate-limit pre-check reads the `search` bucket with a threshold sized
-  to the poll's searches, and a pre-check command failure fails the poll
-  instead of recording an empty success.
 - `gh` `HTTP 401: Bad credentials` is classified as an auth failure.
+
+Proposed, not yet implemented: the rate-limit pre-check reads the `search`
+bucket with a threshold sized to the poll's searches, and a pre-check command
+failure fails the poll instead of recording an empty success.
 
 The first MVP ingests:
 
