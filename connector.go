@@ -167,6 +167,7 @@ type connectorRuntimeEntry struct {
 	DeferredReason      string             `json:"deferred_reason,omitempty"`
 	RateLimitRemaining  *int               `json:"rate_limit_remaining,omitempty"`
 	RateLimitResetAt    string             `json:"rate_limit_reset_at,omitempty"`
+	QueryBatchSize      int                `json:"query_batch_size,omitempty"`
 	ConsecutiveFailures int                `json:"consecutive_failures,omitempty"`
 }
 

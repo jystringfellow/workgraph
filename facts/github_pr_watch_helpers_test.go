@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeGHGraphQL struct {
@@ -55,6 +56,9 @@ if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
   seq=$((seq + 1))
   echo "$seq" > "$dir/gh-input-count"
   if [ -n "$input" ]; then cp "$input" "$dir/gh-graphql-inputs/$seq.json"; fi
+  if [ -f "$dir/gh-detail-auto" ] && grep -q 'reviewThreads' "$input"; then
+    WORKGRAPH_FACTS_FAKE_GH_DIR="$dir" WORKGRAPH_FACTS_FAKE_GH_INPUT="$input" exec "` + testBinary + `"
+  fi
   if grep -q 'mergeStateStatus' "$input"; then
     if grep -q 'search(' "$input"; then
       printf 'gh: HTTP 502: 502 Bad Gateway (https://api.github.com/graphql)\n' >&2
@@ -143,6 +147,25 @@ func (fake *fakeGHGraphQL) GraphQLInputs(t *testing.T) []string {
 	return inputs
 }
 
+func (fake *fakeGHGraphQL) RegisterMergeStates(t *testing.T, statusResponse string) {
+	t.Helper()
+	fake.registerMergeStates(t, statusResponse)
+}
+
+func (fake *fakeGHGraphQL) DelayTimeouts(t *testing.T, delay time.Duration) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(fake.dir, "gh-timeout-delay"), []byte(delay.String()), 0o644); err != nil {
+		t.Fatalf("write timeout delay: %v", err)
+	}
+}
+
+func (fake *fakeGHGraphQL) AnswerDetailsEmpty(t *testing.T) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(fake.dir, "gh-detail-auto"), nil, 0o644); err != nil {
+		t.Fatalf("enable automatic detail answers: %v", err)
+	}
+}
+
 func (fake *fakeGHGraphQL) LimitMergeAliases(t *testing.T, limit int) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(fake.dir, "gh-merge-limit"), []byte(fmt.Sprint(limit)), 0o644); err != nil {
@@ -168,7 +191,7 @@ func (fake *fakeGHGraphQL) registerMergeStates(t *testing.T, stdout string) stri
 		if id == "" {
 			continue
 		}
-		mergeState := map[string]any{"id": id, "mergeable": node["mergeable"], "mergeStateStatus": node["mergeStateStatus"], "commits": node["commits"]}
+		mergeState := map[string]any{"id": id, "headRefOid": node["headRefOid"], "mergeable": node["mergeable"], "mergeStateStatus": node["mergeStateStatus"], "commits": node["commits"]}
 		encoded, err := json.Marshal(mergeState)
 		if err != nil {
 			t.Fatalf("encode merge state fixture: %v", err)
@@ -227,9 +250,28 @@ func serveFakeGHMergeQuery(dir string, inputPath string) int {
 		}
 		ids = append(ids, id)
 	}
+	if strings.Contains(string(contents), "reviewThreads") {
+		data := map[string]any{}
+		for index, id := range ids {
+			data[fmt.Sprintf("pr%d", index)] = map[string]any{
+				"id":                       id,
+				"latestOpinionatedReviews": map[string]any{"totalCount": 0, "nodes": []any{}},
+				"timelineItems":            map[string]any{"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil}, "nodes": []any{}},
+				"reviewThreads":            map[string]any{"totalCount": 0, "nodes": []any{}},
+			}
+		}
+		encoded, _ := json.Marshal(map[string]any{"data": data})
+		fmt.Print(string(encoded))
+		return 0
+	}
 	if limit, err := os.ReadFile(filepath.Join(dir, "gh-merge-limit")); err == nil {
 		var max int
 		if _, scanErr := fmt.Sscan(string(limit), &max); scanErr == nil && len(ids) > max {
+			if raw, err := os.ReadFile(filepath.Join(dir, "gh-timeout-delay")); err == nil {
+				if delay, err := time.ParseDuration(string(raw)); err == nil {
+					time.Sleep(delay)
+				}
+			}
 			fmt.Fprintln(os.Stderr, "gh: HTTP 502: 502 Bad Gateway (https://api.github.com/graphql)")
 			return 1
 		}

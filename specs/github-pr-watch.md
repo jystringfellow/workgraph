@@ -339,6 +339,10 @@ query($id0: ID!, ...) {
   advance (`BEHIND`) or a re-run that ends in the same state, are seen within
   the 30-minute reconciliation or on a hint.
 - At most 10 PRs are aliased per document. Errors fail the role.
+- The query also selects `headRefOid`. When it differs from the search's
+  head (a push landed between the two queries), that PR's merge and check
+  data is ignored for the poll and refetched on the next one, so checks are
+  never attributed to the wrong head.
 
 ### GitHub query timeouts
 
@@ -346,9 +350,15 @@ query($id0: ID!, ...) {
   the watch halves the batch and retries within the poll, down to one PR. A
   timeout on a one-PR document fails the role with `GitHub timed out on the
   query (HTTP 502)`.
+- The reduced batch size is stored in connector state as soon as it shrinks,
+  so the next poll starts there even when the whole-poll deadline cut the
+  previous one short. Each poll that commits without a timeout grows it by
+  one, up to 10.
 - When the status search times out, the poll is **deferred** for 60 seconds
   with the reason `GitHub timed out on the query (HTTP 502)` in connector
-  status. A deferral does not count as a failure.
+  status. A deferral does not count as a failure. Roles that completed in the
+  same poll still commit, and another role's real error is reported instead
+  of the deferral.
 
 ### Team membership
 

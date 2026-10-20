@@ -39,6 +39,10 @@ type githubPRWatchPoll struct {
 	rateLimit      *githubGraphQLRateLimit
 	leaving        map[string]bool
 	hints          githubPRWatchHints
+	homeDir        string
+	batchSize      int
+	timedOut       bool
+	deferred       *ConnectorPollDeferred
 }
 
 type githubPRWatchChanges struct {
@@ -188,6 +192,7 @@ func CaptureGitHubPRWatch(config GitHubPRWatchCaptureConfig) (GitHubPRWatchCaptu
 		poll := &githubPRWatchPoll{
 			ctx: ctx, gh: githubCommandOrDefault(config.GitHubCommand), db: db, params: params,
 			now: pollStart, remoteProjects: remoteProjects, hints: hints,
+			homeDir: status.HomeDir, batchSize: githubPRWatchStoredBatchSize(state.entry(githubPRWatchConnectorID)),
 		}
 		poll.observedAt = poll.now.Format(time.RFC3339Nano)
 		var changes *githubPRWatchChanges
@@ -199,12 +204,13 @@ func CaptureGitHubPRWatch(config GitHubPRWatchCaptureConfig) (GitHubPRWatchCaptu
 		if err := recordGitHubPRWatchBudget(status.HomeDir, poll.rateLimit); err != nil {
 			return result, err
 		}
-		var deferred *ConnectorPollDeferred
-		if errors.As(roleErr, &deferred) {
-			if err := extendConnectorNotBefore(status.HomeDir, githubPRWatchConnectorID, deferred.NotBefore); err != nil {
+		if poll.deferred != nil {
+			if err := extendConnectorNotBefore(status.HomeDir, githubPRWatchConnectorID, poll.deferred.NotBefore); err != nil {
 				return result, err
 			}
-			return result, deferred
+			if roleErr == nil && changes == nil {
+				return result, poll.deferred
+			}
 		}
 		var retryAfter *ConnectorPollRetryAfter
 		if errors.As(roleErr, &retryAfter) {
@@ -229,6 +235,11 @@ func CaptureGitHubPRWatch(config GitHubPRWatchCaptureConfig) (GitHubPRWatchCaptu
 		if err != nil {
 			return result, err
 		}
+		if !poll.timedOut && poll.batchSize < githubPRWatchBatchSize {
+			if err := recordGitHubPRWatchBatchSize(status.HomeDir, poll.batchSize+1); err != nil {
+				return result, err
+			}
+		}
 		result.EventsStored = stored
 		result.Message = strings.Join([]string{
 			"GitHub PR watch capture complete",
@@ -236,6 +247,9 @@ func CaptureGitHubPRWatch(config GitHubPRWatchCaptureConfig) (GitHubPRWatchCaptu
 			"Database: " + result.DatabasePath,
 			fmt.Sprintf("Events stored: %d", stored),
 		}, "\n")
+		if roleErr == nil && poll.deferred != nil {
+			return result, poll.deferred
+		}
 		return result, roleErr
 	}
 }
@@ -310,6 +324,11 @@ func (poll *githubPRWatchPoll) run() (*githubPRWatchChanges, error) {
 			changes, err = poll.runReviewer()
 		} else {
 			changes, err = poll.runAuthor()
+		}
+		var deferred *ConnectorPollDeferred
+		if errors.As(err, &deferred) {
+			poll.deferred = deferred
+			continue
 		}
 		if err != nil {
 			failures = append(failures, fmt.Errorf("%s role: %w", role, err))
@@ -477,12 +496,37 @@ func (poll *githubPRWatchPoll) needsMergeState(previous *githubPRObservation, no
 	return age > githubPRWatchDetailRefresh || poll.hints.forcesDetail(previous.URL, age)
 }
 
+func (poll *githubPRWatchPoll) shrinkBatches(failedSize int) error {
+	poll.timedOut = true
+	poll.batchSize = max(1, failedSize/2)
+	return recordGitHubPRWatchBatchSize(poll.homeDir, poll.batchSize)
+}
+
+func githubPRWatchStoredBatchSize(entry connectorRuntimeEntry) int {
+	if entry.QueryBatchSize > 0 && entry.QueryBatchSize < githubPRWatchBatchSize {
+		return entry.QueryBatchSize
+	}
+	return githubPRWatchBatchSize
+}
+
+func recordGitHubPRWatchBatchSize(homeDir string, size int) error {
+	connectorPollStateMu.Lock()
+	defer connectorPollStateMu.Unlock()
+	state, err := readConnectorRuntimeFile(homeDir)
+	if err != nil {
+		return err
+	}
+	entry := state.entry(githubPRWatchConnectorID)
+	entry.QueryBatchSize = size
+	state.Connectors[githubPRWatchConnectorID] = entry
+	return writeConnectorRuntimeFile(homeDir, state)
+}
+
 func (poll *githubPRWatchPoll) fetchMergeStates(ids []string) (map[string]*githubPRMergeNode, error) {
 	results := map[string]*githubPRMergeNode{}
 	queue := append([]string(nil), ids...)
-	batchSize := githubPRWatchBatchSize
 	for len(queue) > 0 {
-		size := min(len(queue), batchSize)
+		size := min(len(queue), poll.batchSize)
 		batch := queue[:size]
 		variables := map[string]any{}
 		for index, id := range batch {
@@ -491,7 +535,9 @@ func (poll *githubPRWatchPoll) fetchMergeStates(ids []string) (map[string]*githu
 		var data map[string]json.RawMessage
 		graphQLErrors, err := poll.graphQL(githubPRWatchMergeQuery(len(batch)), variables, &data)
 		if errors.Is(err, errGitHubGraphQLTimeout) && size > 1 {
-			batchSize = size / 2
+			if err := poll.shrinkBatches(size); err != nil {
+				return nil, err
+			}
 			continue
 		}
 		if err != nil {
@@ -533,9 +579,8 @@ func (poll *githubPRWatchPoll) fetchDetails(ids []string, previous map[string]*g
 		queue = append(queue, page)
 	}
 	results := map[string]*githubPRDetail{}
-	batchSize := githubPRWatchBatchSize
 	for len(queue) > 0 {
-		size := min(len(queue), batchSize)
+		size := min(len(queue), poll.batchSize)
 		batch := queue[:size]
 		variables := map[string]any{}
 		for index, page := range batch {
@@ -546,7 +591,9 @@ func (poll *githubPRWatchPoll) fetchDetails(ids []string, previous map[string]*g
 		var data map[string]json.RawMessage
 		graphQLErrors, err := poll.graphQL(githubPRWatchDetailQuery(len(batch)), variables, &data)
 		if errors.Is(err, errGitHubGraphQLTimeout) && size > 1 {
-			batchSize = size / 2
+			if err := poll.shrinkBatches(size); err != nil {
+				return nil, err
+			}
 			continue
 		}
 		if err != nil {
@@ -620,6 +667,9 @@ func (poll *githubPRWatchPoll) observeAuthor(changes *githubPRWatchChanges, prev
 	rollupKey := node.Commits.rollupKey()
 	var checks githubPRChecks
 	mergeFetchedAt := ""
+	if mergeState != nil && mergeState.HeadRefOid != node.HeadRefOid {
+		mergeState = nil
+	}
 	switch {
 	case mergeState != nil:
 		node.Mergeable, node.MergeStateStatus, node.Commits = mergeState.Mergeable, mergeState.MergeStateStatus, mergeState.Commits

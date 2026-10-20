@@ -51,7 +51,7 @@ const githubPRWatchStatusQuery = `query($q: String!, $login: String!, $after: St
 const githubPRWatchMergeAlias = `
   prN: node(id: $idN) {
     ... on PullRequest {
-      id mergeable mergeStateStatus
+      id headRefOid mergeable mergeStateStatus
       commits(last: 1) {
         nodes { commit {
           oid
@@ -351,6 +351,7 @@ type githubPRStatusNode struct {
 
 type githubPRMergeNode struct {
 	ID               string                    `json:"id"`
+	HeadRefOid       string                    `json:"headRefOid"`
 	Mergeable        string                    `json:"mergeable"`
 	MergeStateStatus string                    `json:"mergeStateStatus"`
 	Commits          githubPRCommitsConnection `json:"commits"`
