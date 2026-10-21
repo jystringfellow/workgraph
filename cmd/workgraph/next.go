@@ -38,6 +38,7 @@ func runNext(args []string, stdout, stderr io.Writer) int {
 		flags.StringVar(&config.Project, "project", "", "Exact project to include")
 		flags.StringVar(&config.Reason, "reason", "", "Exact reason to include")
 		flags.BoolVar(&jsonOutput, "json", false, "Print versioned JSON items")
+		flags.BoolVar(&config.ShowIDs, "ids", false, "Show item ids in text output")
 		flags.BoolVar(&config.IncludeUntrusted, "include-untrusted", false, "Include delimited untrusted content in JSON")
 		flags.BoolVar(&watch, "watch", false, "Stream item changes as JSON Lines")
 	}
@@ -59,7 +60,7 @@ func runNext(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if (action != "" && id == "") || (action == "snooze" && duration <= 0) || (watch && !jsonOutput) || (config.IncludeUntrusted && !jsonOutput) {
-		fmt.Fprintln(stderr, "usage: workgraph next [--json [--watch] [--include-untrusted]] | explain <id> | done <id> | snooze <id> --for <duration>")
+		fmt.Fprintln(stderr, "usage: workgraph next [--ids | --json [--watch] [--include-untrusted]] | explain <id> | done <id> | snooze <id> --for <duration>")
 		return 2
 	}
 	config.HomeDir = *home

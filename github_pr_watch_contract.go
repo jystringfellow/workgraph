@@ -83,6 +83,7 @@ type githubPRObservation struct {
 	URL               string `json:"url"`
 	Title             string `json:"title"`
 	AuthorLogin       string `json:"author_login"`
+	AuthorKind        string `json:"author_kind,omitempty"`
 	IsDraft           bool   `json:"is_draft"`
 	State             string `json:"state"`
 	CreatedAt         string `json:"created_at"`
@@ -223,17 +224,24 @@ type NextItemSubject struct {
 }
 
 type NextItemPR struct {
-	Repository        string  `json:"repository"`
-	Number            int     `json:"number"`
-	NodeID            string  `json:"node_id"`
-	URL               string  `json:"url"`
-	Title             string  `json:"title"`
-	Branch            string  `json:"branch"`
-	BaseRef           string  `json:"base_ref"`
-	HeadSHA           string  `json:"head_sha"`
-	HeadRepository    *string `json:"head_repository"`
-	IsDraft           bool    `json:"is_draft"`
-	IsCrossRepository bool    `json:"is_cross_repository"`
+	Repository        string          `json:"repository"`
+	Number            int             `json:"number"`
+	NodeID            string          `json:"node_id"`
+	URL               string          `json:"url"`
+	Title             string          `json:"title"`
+	Branch            string          `json:"branch"`
+	BaseRef           string          `json:"base_ref"`
+	HeadSHA           string          `json:"head_sha"`
+	HeadRepository    *string         `json:"head_repository"`
+	IsDraft           bool            `json:"is_draft"`
+	IsCrossRepository bool            `json:"is_cross_repository"`
+	Author            *NextItemAuthor `json:"author,omitempty"`
+}
+
+type NextItemAuthor struct {
+	Login    string `json:"login"`
+	Kind     string `json:"kind"`
+	OnBehalf bool   `json:"on_behalf"`
 }
 
 type NextItemActor struct {

@@ -89,7 +89,8 @@ documented, not a priority score.
     "head_sha": "1111111111111111111111111111111111111111",
     "head_repository": "example-org/workgraph-demo",
     "is_draft": false,
-    "is_cross_repository": false
+    "is_cross_repository": false,
+    "author": {"login": "octo", "kind": "user", "on_behalf": false}
   },
   "actor": {"login": "alice", "kind": "user", "association": "MEMBER"},
   "detail": {},
@@ -119,6 +120,10 @@ documented, not a priority score.
 - `pull_request.head_repository` is the head repository's `owner/name`, or
   `null` when the fork was deleted, so a consumer can find the head remote of
   a cross-repository PR.
+- `pull_request.author` is the PR author's login and `kind` (`user` or
+  `bot`). `on_behalf` is true when a bot authored a PR that the source
+  watches as the user's own, such as a PR `copilot-swe-agent` opened for the
+  user. It is absent when the author is unknown.
 - `detail` holds reason-specific fields:
 
   | Reason | `detail` |
@@ -142,7 +147,7 @@ documented, not a priority score.
 ## Commands
 
 ```text
-workgraph next [--project <p>] [--reason <r>] [--json [--include-untrusted]]
+workgraph next [--project <p>] [--reason <r>] [--ids | --json [--include-untrusted]]
 workgraph next --watch --json [--include-untrusted]
 workgraph next explain <item-id>
 workgraph next done <item-id>
@@ -153,16 +158,36 @@ workgraph next snooze <item-id> --for <duration>
 
 ```text
 Next (as of 17:02)
+Capture freshness: 2026-10-16T17:02:11Z
 Waiting on you
-  #77 Cache eviction (acme/api): review requested via acme/platform
-  #42 Add settings helper: alice replied on settings.go:18
+  acme/api#77 Cache eviction [bot] — https://github.com/acme/api/pull/77
+    review requested via acme/platform
+  acme/workgraph-demo#42 Add settings helper (copilot-swe-agent, on your behalf) — https://github.com/acme/workgraph-demo/pull/42
+    alice replied on settings.go:18 — https://github.com/acme/workgraph-demo/pull/42#discussion_r1
+    checks failed on 1111111 (lint, unit)
+    review requested
 Blocked
-  #57 Cache warmup: changes requested by bob
-  #42 Add settings helper: checks failed on 1111111 (lint, unit)
+  acme/api#57 Cache warmup — https://github.com/acme/api/pull/57
+    changes requested by bob
 Ready
-  #61 Retry policy: ready to merge
+  acme/api#61 Retry policy — https://github.com/acme/api/pull/61
+    ready to merge
 ```
 
+- Text output groups items by pull request: one header line per PR, then one
+  indented line per item. A PR appears once, in the section of its first
+  item, so PR groups follow the documented item order of their most urgent
+  item. Grouping is text-only: JSON, `--watch`, MCP, and item ids are per
+  item, so `explain`, `done`, and `snooze` still act on one item.
+- The header leads with `owner/repo#number title`, so equal numbers in
+  different repositories stay distinct, then `[draft]`, the author label, and
+  the PR link. A bot-authored PR the user is only asked to review is tagged
+  `[bot]`; one a bot opened on the user's behalf is labeled `(<bot login>,
+  on your behalf)`.
+- An item line carries its own link only when it differs from the PR link,
+  such as a review comment.
+- Text output omits item ids; `--ids` appends `[<item id>]` to each item
+  line. `--json` and `next explain` always carry them.
 - Each line is built only from structured fields. Comment text never appears.
   Text output strips ANSI sequences, C0/C1 controls, bidi overrides and isolates,
   and zero-width format characters from provider strings; JSON preserves them.
@@ -239,8 +264,9 @@ into tool descriptions or instructions (`specs/llm-integration.md`).
 ## Other Surfaces
 
 - **`resume`**: the default overview shows `Waiting on you` after `Where you
-  left off`, listing at most five items in `next` order, then `<n> more:
-  workgraph next` when more exist. `resume <project>` shows that project's
+  left off`, listing at most five pull requests in `next` order in the same
+  grouped format as `next`, then `<n> more: workgraph next` with the number
+  of remaining pull requests when more exist. `resume <project>` shows that project's
   items after `Recent activity`. Showing items does not advance the resume
   check-in beyond the existing rules.
 - **`today`**: stays a personal activity view. When at least one source is
@@ -276,7 +302,8 @@ only. No fact invokes `gh`.
   conflict, a ready PR, a bot conversation comment, and a thread an agent
   answered list exactly six items, grouped and ordered as documented,
   without the bot comment or the agent-answered thread, and without invoking
-  `gh`.
+  `gh`. Text lines lead with `owner/repo#number title` and contain no item
+  id; `--ids` shows them.
 - **N2. JSON items follow `workgraph.next_item.v1`.** For one item of each
   reason, the item has a stable id, `opened_by`, evidence ids, the
   documented `detail` fields, `pull_request.head_repository` (including a
@@ -306,10 +333,15 @@ only. No fact invokes `gh`.
   `unreachable`, and a withdrawn review request with `out_of_scope`; none
   closes with `resolved`.
 - **N6. Resume and today show the same items.** The default `resume` overview
-  lists the first five items in `next` order and a `more` line. `resume
+  lists the first five pull requests in `next` order, by `owner/repo#number
+  title` and without item ids, and a `more` line. `resume
   <project>` lists that project's items. `today` prints only the count line
   and still counts only personal activity.
 - **N7. Explain cites the rule and evidence.** `next explain <id>` prints the
   reason, the holding condition, and every evidence event id.
+- **N10. A PR is shown once with all its reasons.** A bot-authored PR in
+  both roles renders one header labeled `on your behalf` with its reply and
+  review request under it, while JSON keeps both items and their ids
+  (`facts/github_pr_watch_reviewer_test.go`).
 - **N8. MCP returns the same items read-only.** The `next_items` tool returns
   the same ids as `next --json` and has no write behavior.

@@ -51,6 +51,8 @@ type githubPRWatchParams struct {
 	ReviewRequests      string         `json:"review_requests"`
 	IgnoreActors        []string       `json:"ignore_actors"`
 	IgnoreTeams         []string       `json:"ignore_teams"`
+	IgnoreAuthors       []string       `json:"ignore_authors,omitempty"`
+	IgnoreRepositories  []string       `json:"ignore_repositories,omitempty"`
 	CommentBodyMaxRunes *int           `json:"comment_body_max_runes"`
 	AgentReplyMarker    string         `json:"agent_reply_marker"`
 	MaxOpenPRs          map[string]int `json:"max_open_prs"`
@@ -93,6 +95,17 @@ func parseGitHubPRWatchParams(raw json.RawMessage) (githubPRWatchParams, error) 
 	if params.IgnoreTeams == nil {
 		params.IgnoreTeams = []string{}
 	}
+	for _, login := range params.IgnoreAuthors {
+		if githubPRAuthorKey(login) == "" {
+			return githubPRWatchParams{}, fmt.Errorf("github.pr_watch ignore_authors entries must be logins or bots")
+		}
+	}
+	for _, repository := range params.IgnoreRepositories {
+		owner, name, ok := strings.Cut(strings.TrimSpace(repository), "/")
+		if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+			return githubPRWatchParams{}, fmt.Errorf("github.pr_watch ignore_repositories entries must be owner/name, got %q", repository)
+		}
+	}
 	if params.CommentBodyMaxRunes == nil {
 		limit := githubPRWatchDefaultCommentRunes
 		params.CommentBodyMaxRunes = &limit
@@ -127,6 +140,30 @@ func (params githubPRWatchParams) ignoresActor(login string) bool {
 		}
 	}
 	return false
+}
+
+func (params githubPRWatchParams) ignoresPullRequest(role string, node githubPRStatusNode) bool {
+	for _, repository := range params.IgnoreRepositories {
+		if strings.EqualFold(strings.TrimSpace(repository), node.Repository.NameWithOwner) {
+			return true
+		}
+	}
+	if role != githubPRRoleReviewer {
+		return false
+	}
+	author := githubPRAuthorKey(node.Author.login())
+	for _, ignored := range params.IgnoreAuthors {
+		key := githubPRAuthorKey(ignored)
+		if key == author || (key == "bots" && node.Author.kind() == "bot") {
+			return true
+		}
+	}
+	return false
+}
+
+func githubPRAuthorKey(login string) string {
+	login = strings.ToLower(strings.TrimSpace(login))
+	return strings.TrimSuffix(strings.TrimPrefix(login, "app/"), "[bot]")
 }
 
 func (params githubPRWatchParams) hasRole(role string) bool {
