@@ -1248,6 +1248,268 @@ func TestBridgeRenewsLeaseAndReportsRetryableFailureAfterExpiry(t *testing.T) {
 	}
 }
 
+func TestBridgedBackfillEmitsOneDayAtATimeAndStaysDue(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+	start := time.Now().UTC().Add(-72 * time.Hour)
+	for _, connector := range []string{"slack", "calendar.microsoft", "slack.lists"} {
+		connectBridgedConnector(t, repoRoot, homeDir, connector)
+		completeBridgedRequestAt(t, homeDir, connector, start)
+	}
+
+	now := time.Now().UTC()
+	slack, err := workgraph.EmitBridgedCaptureRequest(workgraph.CaptureRequestEmitConfig{HomeDir: homeDir, ConnectorID: "slack", Now: now})
+	if err != nil {
+		t.Fatalf("emit slack backfill request: %v", err)
+	}
+	since, until := parseRequestWindow(t, slack.Request)
+	if !since.Equal(start.Add(-5*time.Minute)) || until.Sub(since) != 24*time.Hour {
+		t.Fatalf("expected one-day backfill window from cursor minus overlap, got %s to %s", slack.Request.Since, slack.Request.Until)
+	}
+	if !connectorNextPollDue(t, homeDir, "slack", now) {
+		t.Fatal("expected a behind connector to be due again immediately after completion")
+	}
+
+	for _, connector := range []string{"calendar.microsoft", "slack.lists"} {
+		emitted, err := workgraph.EmitBridgedCaptureRequest(workgraph.CaptureRequestEmitConfig{HomeDir: homeDir, ConnectorID: connector, Now: now})
+		if err != nil {
+			t.Fatalf("emit %s request: %v", connector, err)
+		}
+		if _, until := parseRequestWindow(t, emitted.Request); !until.Equal(now) {
+			t.Fatalf("expected %s request to end now, got %s", connector, emitted.Request.Until)
+		}
+	}
+}
+
+func TestBridgedNineteenDayGapDrainsDayByDayWithoutGaps(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	connectBridgedConnector(t, repoRoot(t), homeDir, "slack")
+	cursor := time.Now().UTC().Add(-19 * 24 * time.Hour)
+	completeBridgedRequestAt(t, homeDir, "slack", cursor)
+
+	cycles := 0
+	for {
+		cycles++
+		if cycles > 25 {
+			t.Fatal("expected the 19-day gap to drain within 25 one-day cycles")
+		}
+		now := time.Now().UTC()
+		emitted, err := workgraph.EmitBridgedCaptureRequest(workgraph.CaptureRequestEmitConfig{HomeDir: homeDir, ConnectorID: "slack", Now: now})
+		if err != nil || emitted.Coalesced {
+			t.Fatalf("cycle %d emit: coalesced=%v error=%v", cycles, emitted.Coalesced, err)
+		}
+		since, until := parseRequestWindow(t, emitted.Request)
+		if overlap := cursor.Sub(since); overlap != 5*time.Minute {
+			t.Fatalf("cycle %d expected exact 5m overlap with cursor %s, got since %s", cycles, cursor.Format(time.RFC3339Nano), emitted.Request.Since)
+		}
+		caughtUp := until.Equal(now)
+		if !caughtUp && until.Sub(since) != 24*time.Hour {
+			t.Fatalf("cycle %d expected a 24h window while behind, got %s to %s", cycles, emitted.Request.Since, emitted.Request.Until)
+		}
+		claims, err := workgraph.ClaimCaptureRequests(workgraph.CaptureRequestClaimConfig{HomeDir: homeDir, ConnectorID: "slack", Worker: "facts", Max: 1, Now: now})
+		if err != nil || len(claims) != 1 || claims[0].Request.ID != emitted.Request.ID {
+			t.Fatalf("cycle %d claim: claims=%d error=%v", cycles, len(claims), err)
+		}
+		if _, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{
+			HomeDir: homeDir, RequestID: emitted.Request.ID, ClaimToken: claims[0].ClaimToken,
+			Input: strings.NewReader(`{"events":[],"empty_proof":{"exhaustive_query":true}}`),
+		}); err != nil {
+			t.Fatalf("cycle %d complete: %v", cycles, err)
+		}
+		watermark, err := workgraph.CaptureWatermark(workgraph.CaptureRequestListConfig{HomeDir: homeDir, ConnectorID: "slack"})
+		if err != nil || watermark != emitted.Request.Until {
+			t.Fatalf("cycle %d expected cursor at %s, got %q error=%v", cycles, emitted.Request.Until, watermark, err)
+		}
+		if caughtUp {
+			break
+		}
+		if !connectorNextPollDue(t, homeDir, "slack", time.Now().UTC()) {
+			t.Fatalf("cycle %d expected the next request to be due immediately while behind", cycles)
+		}
+		cursor = until
+	}
+	if cycles != 20 {
+		t.Fatalf("expected 19 days to drain in 20 overlapping one-day cycles, got %d", cycles)
+	}
+	if connectorNextPollDue(t, homeDir, "slack", time.Now().UTC()) {
+		t.Fatal("expected a caught-up connector to wait for its interval")
+	}
+}
+
+func TestStalledBridgeIsVisibleInConnectorsTodayAndResume(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+	connectBridgedConnector(t, repoRoot, homeDir, "slack")
+	stalledAt := time.Now().UTC().Add(-19*24*time.Hour - time.Hour)
+	if _, err := workgraph.EmitBridgedCaptureRequest(workgraph.CaptureRequestEmitConfig{HomeDir: homeDir, ConnectorID: "slack", Now: stalledAt}); err != nil {
+		t.Fatalf("emit stalled request: %v", err)
+	}
+	clientPath := filepath.Join(t.TempDir(), "codex")
+	if err := os.WriteFile(clientPath, []byte("#!/bin/sh\necho 'starting session'\necho 'Failed to authenticate: OAuth session expired' >&2\nexit 1\n"), 0o700); err != nil {
+		t.Fatalf("write failing fake Codex: %v", err)
+	}
+	if output, err := runworkgraph(t, repoRoot, "bridge", "drain", "--home", homeDir, "--client", "codex", "--client-command", clientPath); err == nil {
+		t.Fatalf("expected expired client login to fail the drain:\n%s", output)
+	}
+
+	for _, command := range []string{"list", "status"} {
+		output, err := runworkgraph(t, repoRoot, "connectors", command, "--home", homeDir)
+		if err != nil {
+			t.Fatalf("connectors %s: %v\n%s", command, err, output)
+		}
+		for _, expected := range []string{"bridge stalled 19d: no completed capture yet", "last drain error (codex): Failed to authenticate: OAuth session expired"} {
+			if !strings.Contains(string(output), expected) {
+				t.Fatalf("connectors %s omitted %q:\n%s", command, expected, output)
+			}
+		}
+	}
+
+	warning := "Bridge stalled: slack (19d); run workgraph plugin doctor --client codex"
+	today, err := workgraph.Today(workgraph.TodayConfig{HomeDir: homeDir, MemoryDir: filepath.Join(t.TempDir(), "memory")})
+	if err != nil {
+		t.Fatalf("today: %v", err)
+	}
+	if strings.Count(today.Message, warning) != 1 {
+		t.Fatalf("today omitted one stalled bridge warning %q:\n%s", warning, today.Message)
+	}
+	resume, err := workgraph.Resume(workgraph.ResumeConfig{HomeDir: homeDir, MemoryDir: filepath.Join(t.TempDir(), "memory")})
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if strings.Count(resume.Message, warning) != 1 {
+		t.Fatalf("resume omitted one stalled bridge warning %q:\n%s", warning, resume.Message)
+	}
+}
+
+func TestExpiredClaimIsLabeledAndRecycledByEmitCycle(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+	connectBridgedConnector(t, repoRoot, homeDir, "slack")
+	start := time.Now().UTC().Add(-3 * time.Hour)
+	emitted, err := workgraph.EmitBridgedCaptureRequest(workgraph.CaptureRequestEmitConfig{HomeDir: homeDir, ConnectorID: "slack", Now: start})
+	if err != nil {
+		t.Fatalf("emit request: %v", err)
+	}
+	if claims, err := workgraph.ClaimCaptureRequests(workgraph.CaptureRequestClaimConfig{
+		HomeDir: homeDir, ConnectorID: "slack", Worker: "hung-worker", Max: 1, Now: start, Lease: time.Hour,
+	}); err != nil || len(claims) != 1 {
+		t.Fatalf("claim request: claims=%d error=%v", len(claims), err)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "capture", "requests", "--list", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("list requests: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), emitted.Request.ID+": claimed (lease expired 2h ago)") {
+		t.Fatalf("expected expired lease label in request list:\n%s", output)
+	}
+	requests, err := workgraph.ListCaptureRequests(workgraph.CaptureRequestListConfig{HomeDir: homeDir, ConnectorID: "slack"})
+	if err != nil || len(requests) != 1 {
+		t.Fatalf("list requests for MCP: requests=%d error=%v", len(requests), err)
+	}
+	if requests[0].Status != "claimed" || requests[0].StatusDetail != "claimed (lease expired 2h ago)" {
+		t.Fatalf("expected MCP listing to keep status and add expired lease detail, got %#v", requests[0])
+	}
+
+	recycled, err := workgraph.EmitBridgedCaptureRequest(workgraph.CaptureRequestEmitConfig{HomeDir: homeDir, ConnectorID: "slack"})
+	if err != nil {
+		t.Fatalf("daemon emit cycle: %v", err)
+	}
+	if !recycled.Coalesced || recycled.Request.ID != emitted.Request.ID || recycled.Request.Status != "pending" || recycled.Request.ClaimedBy != "" {
+		t.Fatalf("expected emit cycle to return the expired claim to pending, got %#v", recycled)
+	}
+}
+
+func TestDisablingBridgedConnectorCancelsItsActiveRequest(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+	connectBridgedConnector(t, repoRoot, homeDir, "slack")
+	emitted, err := workgraph.EmitBridgedCaptureRequest(workgraph.CaptureRequestEmitConfig{HomeDir: homeDir, ConnectorID: "slack"})
+	if err != nil {
+		t.Fatalf("emit request: %v", err)
+	}
+	claims, err := workgraph.ClaimCaptureRequests(workgraph.CaptureRequestClaimConfig{HomeDir: homeDir, ConnectorID: "slack", Worker: "facts", Max: 1})
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("claim request: claims=%d error=%v", len(claims), err)
+	}
+
+	output, err := runworkgraph(t, repoRoot, "connectors", "disable", "--home", homeDir, "slack")
+	if err != nil {
+		t.Fatalf("disable connector: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Cancelled capture request "+emitted.Request.ID+" (connector disabled; was claimed by facts)") {
+		t.Fatalf("expected disable to report cancelled claimed work:\n%s", output)
+	}
+	db := openBridgedCaptureDatabase(t, homeDir)
+	var status, lastError string
+	var claimToken sql.NullString
+	if err := db.QueryRow(`SELECT status, last_error, claim_token FROM capture_requests WHERE id = ?`, emitted.Request.ID).Scan(&status, &lastError, &claimToken); err != nil {
+		t.Fatalf("read disabled request: %v", err)
+	}
+	if status != "cancelled" || lastError != "connector disabled" || claimToken.Valid {
+		t.Fatalf("expected cancelled request without claim token, got status=%q error=%q token=%v", status, lastError, claimToken.Valid)
+	}
+	if _, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{
+		HomeDir: homeDir, RequestID: emitted.Request.ID, ClaimToken: claims[0].ClaimToken, Input: strings.NewReader(`{"events":[],"empty_proof":{"exhaustive_query":true}}`),
+	}); err == nil {
+		t.Fatal("expected cancelled claim to reject ingest")
+	}
+}
+
+func completeBridgedRequestAt(t *testing.T, homeDir string, connector string, at time.Time) {
+	t.Helper()
+	emitted, err := workgraph.EmitBridgedCaptureRequest(workgraph.CaptureRequestEmitConfig{HomeDir: homeDir, ConnectorID: connector, Now: at})
+	if err != nil {
+		t.Fatalf("emit %s request: %v", connector, err)
+	}
+	claims, err := workgraph.ClaimCaptureRequests(workgraph.CaptureRequestClaimConfig{
+		HomeDir: homeDir, ConnectorID: connector, Worker: "facts", Max: 1, Now: at, Lease: time.Since(at) + time.Hour,
+	})
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("claim %s request: claims=%d error=%v", connector, len(claims), err)
+	}
+	if _, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{
+		HomeDir: homeDir, RequestID: emitted.Request.ID, ClaimToken: claims[0].ClaimToken,
+		Input: strings.NewReader(`{"events":[],"empty_proof":{"exhaustive_query":true}}`),
+	}); err != nil {
+		t.Fatalf("complete %s request: %v", connector, err)
+	}
+}
+
+func parseRequestWindow(t *testing.T, request workgraph.CaptureRequest) (time.Time, time.Time) {
+	t.Helper()
+	since, err := time.Parse(time.RFC3339Nano, request.Since)
+	if err != nil {
+		t.Fatalf("parse request since: %v", err)
+	}
+	until, err := time.Parse(time.RFC3339Nano, request.Until)
+	if err != nil {
+		t.Fatalf("parse request until: %v", err)
+	}
+	return since, until
+}
+
+func connectorNextPollDue(t *testing.T, homeDir string, connector string, now time.Time) bool {
+	t.Helper()
+	contents, err := os.ReadFile(filepath.Join(homeDir, "connectors.json"))
+	if err != nil {
+		t.Fatalf("read connector state: %v", err)
+	}
+	var state struct {
+		Connectors map[string]struct {
+			NextPoll string `json:"next_poll_at"`
+		} `json:"connectors"`
+	}
+	if err := json.Unmarshal(contents, &state); err != nil {
+		t.Fatalf("parse connector state: %v", err)
+	}
+	next, err := time.Parse(time.RFC3339, state.Connectors[connector].NextPoll)
+	if err != nil {
+		t.Fatalf("parse %s next poll %q: %v", connector, state.Connectors[connector].NextPoll, err)
+	}
+	return !next.After(now)
+}
+
 func initBridgedCaptureHome(t *testing.T) string {
 	t.Helper()
 	homeDir := filepath.Join(t.TempDir(), ".workgraph")

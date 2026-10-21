@@ -115,6 +115,10 @@ func Resume(config ResumeConfig) (ResumeResult, error) {
 	project := strings.TrimSpace(config.Project)
 	result := ResumeResult{Project: project, AsOf: now}
 	nextWarning := ""
+	bridgeWarning := ""
+	if homeDir, err := resolveHomeDir(config.HomeDir); err == nil {
+		bridgeWarning = bridgeStallWarning(homeDir, dbPath, now)
+	}
 	if !config.AllProjects && !config.DebugRelevance {
 		next, nextErr := Next(NextConfig{HomeDir: config.HomeDir, DatabasePath: dbPath, Project: project, Now: now})
 		if nextErr != nil {
@@ -160,7 +164,7 @@ func Resume(config ResumeConfig) (ResumeResult, error) {
 			result.Message = prefix + "\n\n" + result.Message
 		}
 		result.Message += memoryDiscoveryHints(db, events, MemoryDoctorConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir})
-		result.Message += nextWarning
+		result.Message += nextWarning + bridgeWarning
 		return result, nil
 	}
 	project = canonicalResumeProjectName(project, events)
@@ -184,7 +188,7 @@ func Resume(config ResumeConfig) (ResumeResult, error) {
 	}
 	result.Message = resumeProjectMessage(result, location)
 	result.Message += memoryDiscoveryHints(db, events, MemoryDoctorConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir, Project: config.Project})
-	result.Message += nextWarning
+	result.Message += nextWarning + bridgeWarning
 	return result, nil
 }
 

@@ -73,7 +73,9 @@ the same declarations over local MCP before claiming a request.
 
 The first runtime control slice stores polling preferences in
 `connectors.json`. Disabling a connector stops polling without removing OAuth
-credentials from the provider-specific config file.
+credentials from the provider-specific config file. Disabling a bridged
+connector also cancels its pending and claimed capture requests with reason
+`connector disabled` (see `specs/bridged-capture.md`).
 
 Next runtime commands should include:
 

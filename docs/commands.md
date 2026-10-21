@@ -689,6 +689,11 @@ workgraph capture requests --fail <request-id> \
   --claim-file /private/path/claim.json --error-json -
 ```
 
+`bridge drain` stops the client session after `--timeout` (default `20m`),
+returns only the requests that drain's worker claimed to `pending`, and records the failure for
+`connectors status`. `workgraph connectors disable <id>` cancels that
+connector's pending or claimed request.
+
 Claim output includes `Capture semantics`. Most connectors return
 `bounded_events`; `slack.lists` returns `complete_snapshot`. For Slack Lists,
 read every configured List with `slack_read_file`. An MCP worker handling a

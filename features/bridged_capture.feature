@@ -46,6 +46,43 @@ Feature: Bridged connector capture
     And repeating the cancellation is idempotent
     And unattended bridge workers cannot call request cancellation
 
+  Scenario: Backfill a behind connector one day at a time
+    Given a bounded-events bridged connector's cursor is days behind
+    When the daemon emits its next request
+    Then the request spans at most 24 hours from the cursor minus overlap
+    And completing it makes the next request due immediately
+    And calendar and complete-snapshot requests still end now
+
+  Scenario: Make a stalled bridge visible
+    Given a bridged request has waited longer than max(3 x interval, 30m)
+    When I read connector list, connector status, today, or resume
+    Then workgraph reports the bridge as stalled with its age and the last drain error
+    And today and resume name the stalled connectors with a plugin doctor hint
+    And plugin doctor reports the round trip as stale when the heartbeat is old
+
+  Scenario: Recover an expired claim without a new claimant
+    Given a bridge worker's claim lease has expired
+    When I list capture requests
+    Then the expired claim is labeled with how long ago its lease expired
+    And the daemon's next emit cycle returns it to pending
+
+  Scenario: Reject an unknown MCP claim filter
+    Given a Slack request is pending
+    When a worker claims through MCP with an undeclared argument such as connector_id
+    Then the call fails naming the allowed arguments
+    And the Slack request stays pending
+
+  Scenario: Disable a bridged connector with active work
+    Given a bridged connector has a pending or claimed request
+    When I disable the connector
+    Then workgraph cancels that work with reason connector disabled and reports it
+
+  Scenario: Bound an unattended drain session
+    Given a bridge drain client session claims a request and hangs
+    When the drain timeout elapses
+    Then workgraph stops the session and returns the claimed request for retry
+    And it records the drain error for status
+
   Scenario: Complete one bridged capture transaction
     Given an approved bridge worker has claimed a request
     When it ingests a valid normalized event batch
