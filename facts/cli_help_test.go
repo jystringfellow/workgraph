@@ -12,6 +12,8 @@ var publicCommandPaths = []string{
 	"memory doctor",
 	"memory link",
 	"memory unlink",
+	"projects",
+	"projects list",
 	"service",
 	"service install",
 	"service status",

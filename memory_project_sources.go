@@ -18,6 +18,7 @@ type MemoryProjectSourcesConfig struct {
 	DatabasePath string
 	MemoryDir    string
 	Project      string
+	Workstream   string
 	Sources      []string
 	Unlink       bool
 }
@@ -26,18 +27,7 @@ func UpdateMemoryProjectSources(config MemoryProjectSourcesConfig) (string, erro
 	if len(config.Sources) == 0 {
 		return "", fmt.Errorf("at least one --source is required")
 	}
-	memoryDir, err := resolveMemoryDir(config.MemoryDir)
-	if err != nil {
-		return "", err
-	}
-	doc, path, err := loadProjectMemory(memoryDir, config.Project)
-	if err != nil {
-		return "", err
-	}
-	if doc == nil {
-		return "", fmt.Errorf("project memory does not exist; run workgraph memory init %q first", config.Project)
-	}
-	path, err = filepath.Abs(path)
+	key, target, err := memoryProjectSourceKey(config)
 	if err != nil {
 		return "", err
 	}
@@ -60,10 +50,10 @@ func UpdateMemoryProjectSources(config MemoryProjectSourcesConfig) (string, erro
 	}
 	for _, source := range config.Sources {
 		if strings.TrimSpace(source) == "" {
-			return "", fmt.Errorf("captured project identifier cannot be empty")
+			return "", fmt.Errorf("container cannot be empty")
 		}
 		if config.Unlink {
-			if _, err := tx.Exec(`DELETE FROM memory_project_sources WHERE memory_doc_path = ? AND captured_project = ?`, path, source); err != nil {
+			if _, err := tx.Exec(`DELETE FROM memory_project_sources WHERE memory_doc_path = ? AND captured_project = ?`, key, source); err != nil {
 				return "", err
 			}
 			continue
@@ -73,9 +63,9 @@ func UpdateMemoryProjectSources(config MemoryProjectSourcesConfig) (string, erro
 			return "", err
 		}
 		if !exists {
-			return "", fmt.Errorf("captured project %q was not found; inspect workgraph today or resume --all", source)
+			return "", fmt.Errorf("container %q was not found; inspect workgraph today or resume --all", source)
 		}
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO memory_project_sources (memory_doc_path, captured_project) VALUES (?, ?)`, path, source); err != nil {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO memory_project_sources (memory_doc_path, captured_project) VALUES (?, ?)`, key, source); err != nil {
 			return "", err
 		}
 	}
@@ -86,7 +76,35 @@ func UpdateMemoryProjectSources(config MemoryProjectSourcesConfig) (string, erro
 	if config.Unlink {
 		action = "Unlinked"
 	}
-	return fmt.Sprintf("%s captured projects for %s: %s\nAuthored memory and captured events were preserved.", action, config.Project, strings.Join(config.Sources, ", ")), nil
+	return fmt.Sprintf("%s containers for %s: %s\nAuthored memory and captured events were preserved.", action, target, strings.Join(config.Sources, ", ")), nil
+}
+
+func memoryProjectSourceKey(config MemoryProjectSourcesConfig) (string, string, error) {
+	if config.Workstream != "" {
+		if config.Project != "" {
+			return "", "", fmt.Errorf("a container maps to either a workstream or a project, not both")
+		}
+		if !validWorkstreamSlug(config.Workstream) {
+			return "", "", fmt.Errorf("workstream %q is not a lowercase kebab-case slug", config.Workstream)
+		}
+		return workstreamSourcePrefix + config.Workstream, "workstream " + config.Workstream, nil
+	}
+	memoryDir, err := resolveMemoryDir(config.MemoryDir)
+	if err != nil {
+		return "", "", err
+	}
+	doc, path, err := loadProjectMemory(memoryDir, config.Project)
+	if err != nil {
+		return "", "", err
+	}
+	if doc == nil {
+		return "", "", fmt.Errorf("project memory does not exist; run workgraph memory init %q first", config.Project)
+	}
+	path, err = filepath.Abs(path)
+	if err != nil {
+		return "", "", err
+	}
+	return path, config.Project, nil
 }
 
 func memoryProjectSources(db *sql.DB, memoryPath string) ([]string, error) {

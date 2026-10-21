@@ -630,7 +630,7 @@ func limitResumeRelevanceDecisions(decisions map[string]resumeRelevanceDecision,
 		}
 		decision := decisions[project.Name]
 		decision.Shown = false
-		decision.Reason = fmt.Sprintf("beyond the %d most recent projects", resumeProjectListLimit)
+		decision.Reason = fmt.Sprintf("beyond the %d most recent containers", resumeProjectListLimit)
 		if project.LastActive.Before(now.Add(-resumeProjectListWindow)) {
 			decision.Reason = "no user-work evidence in the last 14 days"
 		}
@@ -876,7 +876,7 @@ func resumeProjectsMessage(projects []ResumeProject, more int, location *time.Lo
 func resumeRelevanceMessage(decisions []resumeRelevanceDecision, location *time.Location) string {
 	lines := []string{"Resume relevance"}
 	if len(decisions) == 0 {
-		lines = append(lines, "No projects with captured events found.")
+		lines = append(lines, "No containers with captured events found.")
 		return strings.Join(lines, "\n")
 	}
 	for _, decision := range decisions {
@@ -894,7 +894,7 @@ func resumeProjectMessage(result ResumeResult, location *time.Location) string {
 	if len(result.Events) == 0 {
 		lines = append(lines,
 			fmt.Sprintf("No recent activity found for %s.", result.Project),
-			"Check the project name or run workgraph start to capture activity.",
+			"Check the project or container name, or run workgraph start to capture activity.",
 		)
 		if result.Memory != nil {
 			lines = append(lines, "", "Project memory", result.Memory.Content)

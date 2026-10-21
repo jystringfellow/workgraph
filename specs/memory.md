@@ -59,16 +59,21 @@ include:
 Project memory remains readable Markdown without required frontmatter or
 LLM-generated content.
 
-Planned (`specs/projects.md`): project memory may start with optional
-frontmatter naming a `workstream`, `aliases`, and a one-line `description`.
-These feed the project catalog used for categorization. A file without
-frontmatter is still a project.
+Project memory may start with optional frontmatter naming a `workstream`,
+`aliases`, and a one-line `description`. These feed the project catalog in
+`specs/projects.md`, listed by `workgraph projects list`. A file without
+frontmatter is still a project, and its title is the first H1 after any
+frontmatter.
 
-## Captured Project Mappings
+## Container Mappings
 
-`memory link --source <captured-project> [--source <captured-project> ...]
-<memory-project>` explicitly associates an existing memory file with captured
-project identifiers. `memory unlink` removes those associations. Both accept
+A captured project identifier, stored in the events `project` column, is a
+container: where activity happened, such as a repository or Slack channel.
+User-facing text calls it a container.
+
+`memory link --source <container> [--source <container> ...]
+<memory-project>` explicitly associates an existing memory file with
+containers. `memory unlink` removes those associations. Both accept
 `--home`, `--database` and `--memory`. Flags precede the project argument.
 All sources must exist in captured events when linking; an invalid source
 rejects the entire request. Repeated links and unlinks are idempotent.
@@ -83,22 +88,23 @@ read-only queries do not migrate the database.
 Suggest, resume and promotion validation include exact-name evidence plus all
 explicitly mapped sources, deduplicated by event identity. Unlinking removes
 that source from future queries but preserves already promoted evidence.
-`memory links` shows captured project mappings separately from promoted evidence
+`memory links` shows container mappings separately from promoted evidence
 links. Linking a source does not manufacture an evidence link.
 
-Planned (`specs/projects.md`): the captured project is a container, and
-user-facing text calls it a container or source. A mapped container links all
-of its units of work to the project. `memory link --workstream <slug> --source
-<container>` maps a container to a workstream instead of one project; it is
-stored under the reserved pseudo-path `workstream:<slug>`, creates no project
-links, and narrows categorization for that container to the workstream's
-projects. The prefix is parsed before any path handling and never reaches
-absolute-path resolution or memory-document helpers.
+`memory link --workstream <slug> --source <container>` maps a container to a
+workstream instead of one project, and `memory unlink --workstream <slug>
+--source <container>` removes it. It takes no project argument, the slug must
+be lowercase kebab-case, and the container must exist in captured events. It
+is stored under the reserved pseudo-path `workstream:<slug>`, creates no
+project links, adds no evidence to project suggest or resume, and narrows
+categorization for that container to the workstream's projects (see
+`specs/projects.md`). The prefix is parsed before any path handling and never
+reaches absolute-path resolution or memory-document helpers.
 
 ## Discover Project Mismatches
 
-`memory doctor [<project>]` reports stored mappings and up to five candidate
-captured projects per memory document. It compares the filename and first H1
+`memory doctor [<project>]` reports stored mappings, invalid project
+frontmatter, and up to five candidate containers per memory document. It compares the filename and first H1
 title with captured identifiers using deterministic local signals: normalized
 name equality, an acronym of at least three words, or shared non-generic tokens
 of at least three characters. CamelCase is split into words. Generic container
@@ -112,9 +118,12 @@ and EOF leave mappings untouched. An explicit `memory link` is also approval.
 There is no automatic merge or rewrite. If names do not provide a reliable
 candidate, doctor lists captured identifiers for manual selection.
 
-Planned (`specs/projects.md`): a shared-acronym candidate is a workstream
-signal rather than evidence that two projects are the same. Doctor shows it
-with a `memory link --workstream` command alongside the project link command.
+A shared-acronym candidate is a workstream signal rather than evidence that
+two projects are the same. Doctor shows it as a workstream suggestion with a
+`memory link --workstream` command alongside the project link command. The
+suggested workstream is the project's declared workstream, or else the
+lowercased acronym. Containers mapped to any workstream are excluded from
+candidates.
 
 Candidate hints also appear in today and resume, and after an empty memory
 suggest result. Today considers only events included in its filtered daily view.

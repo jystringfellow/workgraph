@@ -837,7 +837,7 @@ func memoryLinksMessage(result MemoryLinksResult) string {
 		"Path: " + result.MemoryPath,
 	}
 	if len(result.Sources) > 0 {
-		lines = append(lines, "", "Captured project mappings")
+		lines = append(lines, "", "Container mappings")
 		for _, source := range result.Sources {
 			lines = append(lines, "- "+source)
 		}

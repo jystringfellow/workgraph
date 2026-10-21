@@ -1,7 +1,7 @@
 # Projects, Workstreams, And Categorization
 
-Status: planned. Slices D1 through D4 are listed in `specs/roadmap.md`. Facts
-will live in `facts/projects_test.go`.
+Status: D1 implemented; D2 through D4 planned. Slices are listed in
+`specs/roadmap.md`. Facts live in `facts/projects*_test.go`.
 
 ## Intent
 
@@ -72,6 +72,12 @@ description: Go-to-market segment definitions for the MMO launch.
 - A file without frontmatter is still a project with no workstream or
   aliases. Invalid frontmatter is reported by `memory doctor` and treated as
   absent; it never hides the project.
+- Frontmatter starts with `---` on the first line and ends at the next `---`
+  line. Each line is `key: value`, a `- item` continuing a list, blank, or a
+  `#` comment. `aliases` is a `[a, b]` flow list or a `- item` block list.
+  Values may be quoted. Unknown keys are ignored. Frontmatter is invalid when
+  it is not closed, a line has no key, `workstream` is not a slug, or
+  `description` is longer than 200 characters.
 
 A catalog entry is `{slug, title, workstream, aliases, description}`. The
 title is the first H1, falling back to the slug.
@@ -181,7 +187,8 @@ workgraph memory link --workstream mmo --source Mindbody.Modernization.Orchestra
 A workstream mapping creates no link. It narrows the LLM catalog for that
 container's units to the workstream's projects (plus `none` and
 `new_project`), and today and resume group its unlinked units under the
-workstream. Workstream mappings are stored in `memory_project_sources` keyed by
+workstream. `memory unlink --workstream <slug> --source <container>` removes
+the mapping. Workstream mappings are stored in `memory_project_sources` keyed by
 the reserved pseudo-path `workstream:<slug>`. The `workstream:` prefix is
 parsed before any path handling: it is never passed to `filepath.Abs` or the
 memory-document helpers, and memory document paths, which are absolute, cannot
@@ -410,8 +417,10 @@ workgraph projects undo <link-id> | --run <run-id>
 workgraph projects explain <unit-id>
 ```
 
-- `projects list` prints workstreams, their projects, and projects with no
-  workstream, with applied unit counts for the last 7 days.
+- `projects list` prints workstreams, their projects, and the containers
+  mapped to each workstream, then projects with no workstream. It names how
+  many project files have invalid frontmatter and points to `memory doctor`.
+  From D2 each project shows its applied unit count for the last 7 days.
 - Interactive `projects review` shows each proposed unit, oldest first:
   container, time range, kind, summary, proposed target, confidence, and
   evidence ids. Keys: `a` approve, `r` reassign (prompts for a slug), `n` new
@@ -458,7 +467,8 @@ workgraph projects explain <unit-id>
   workstream mappings, doctor workstream suggestions, and "container" wording
   in memory and resume output.
 - **D2 Units and deterministic linking**: unit grouping, `project_links`,
-  deterministic rules, `projects explain`, `undo`, and flag-form review.
+  deterministic rules, `projects explain`, `undo`, flag-form review, and
+  applied unit counts in `projects list`.
 - **D3 LLM categorization**: Slack conversation type capture, `llm
   associate` with dry run, source opt-in, validation, auto-apply, accuracy
   gate, interactive review, and review metrics. D3 runs only directly or
