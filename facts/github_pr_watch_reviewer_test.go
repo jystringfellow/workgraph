@@ -443,3 +443,142 @@ func TestGitHubPRWatchTeamMembershipFailureAtConnectIsWarning(t *testing.T) {
 		t.Fatalf("membership failure not reported: %+v %v", status, err)
 	}
 }
+
+func nextTextLines(t *testing.T, h *prWatchHarness, args ...string) []string {
+	t.Helper()
+	output, err := h.cli(append([]string{"next", "--home", h.homeDir}, args...)...)
+	if err != nil {
+		t.Fatalf("next failed: %s %v", output, err)
+	}
+	return strings.Split(output, "\n")
+}
+
+func linesContaining(lines []string, value string) []string {
+	matches := []string{}
+	for _, line := range lines {
+		if strings.Contains(line, value) {
+			matches = append(matches, line)
+		}
+	}
+	return matches
+}
+
+func TestGitHubPRWatchBotPRInBothRolesRendersOnceOnYourBehalf(t *testing.T) {
+	h := reviewerHarness(t, `{"roles":["author","reviewer"]}`)
+	copilot := watchActor("copilot-swe-agent", true)
+	authored := watchPR().node()
+	authored["author"] = copilot
+	requested := requestedPR(watchPRNodeID, watchIdentity)
+	requested["author"] = copilot
+	question := commentFixture{ID: "PRRC_q", Author: "alice", Body: "Why this default?", CreatedAt: watchTime(-time.Hour)}
+	h.mustPoll(watchBase, reviewerStatus(t, authored),
+		detailResponse(t, detailFixture{ID: watchPRNodeID, Threads: []threadFixture{{ID: "PRRT_one", Path: "settings.go", Line: 18, Comments: []commentFixture{question}}}}),
+		reviewerStatus(t, requested))
+	for _, role := range []string{"author", "reviewer"} {
+		observation := h.observationForRole(watchPRNodeID, role)
+		if observation == nil || observation["author_login"] != "copilot-swe-agent" || observation["author_kind"] != "bot" {
+			t.Fatalf("%s observation did not record the bot author: %#v", role, observation)
+		}
+	}
+	result, err := workgraph.Next(workgraph.NextConfig{HomeDir: h.homeDir, DatabasePath: h.dbPath, Now: watchBase.Add(time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{}
+	for _, item := range result.Items {
+		ids[item.ID] = true
+	}
+	if len(result.Items) != 2 || len(ids) != 2 {
+		t.Fatalf("expected the reply and the review request as separate items, got %#v", result.Items)
+	}
+	lines := nextTextLines(t, h)
+	headers := linesContaining(lines, "acme/widget#42")
+	if len(headers) != 1 || !strings.HasPrefix(strings.TrimSpace(headers[0]), "acme/widget#42 Add settings helper") || !strings.Contains(headers[0], "copilot-swe-agent, on your behalf") {
+		t.Fatalf("expected one header for the PR opened on the user's behalf, got %q", lines)
+	}
+	if strings.Contains(headers[0], "[bot]") {
+		t.Fatalf("a PR opened on the user's behalf is not a bot review request: %q", headers[0])
+	}
+	text := strings.Join(lines, "\n")
+	header := strings.Index(text, headers[0])
+	for _, reason := range []string{"reply requested on settings.go:18", "review requested"} {
+		if at := strings.Index(text, reason); at < header {
+			t.Fatalf("expected %q under the PR header, got %q", reason, text)
+		}
+	}
+	for id := range ids {
+		if strings.Contains(text, id) {
+			t.Fatalf("text output leaked item id %q: %q", id, text)
+		}
+	}
+}
+
+func TestGitHubPRWatchBotReviewRequestsAreTaggedAndIgnorable(t *testing.T) {
+	dependabot := func() map[string]any {
+		node := requestedPR("PR_dependabot", "acme/platform")
+		node["author"] = watchActor("dependabot", true)
+		node["number"], node["title"] = 7, "Bump lodash"
+		node["repository"] = map[string]any{"nameWithOwner": "acme/api"}
+		node["url"] = "https://github.com/acme/api/pull/7"
+		return node
+	}
+	human := func() map[string]any {
+		node := requestedPR("PR_human", watchIdentity)
+		node["repository"] = map[string]any{"nameWithOwner": "acme/web"}
+		node["url"] = "https://github.com/acme/web/pull/42"
+		return node
+	}
+
+	h := reviewerHarness(t, reviewerParams)
+	h.mustPoll(watchBase, reviewerStatus(t, dependabot(), human()))
+	lines := nextTextLines(t, h)
+	bot := linesContaining(lines, "acme/api#7")
+	if len(bot) != 1 || !strings.Contains(bot[0], "Bump lodash") || !strings.Contains(bot[0], "[bot]") {
+		t.Fatalf("expected the bot review request tagged bot, got %q", lines)
+	}
+	person := linesContaining(lines, "acme/web#42")
+	if len(person) != 1 || strings.Contains(person[0], "[bot]") || strings.Contains(person[0], "on your behalf") {
+		t.Fatalf("expected the human review request untagged, got %q", lines)
+	}
+
+	for _, ignore := range []string{`"ignore_authors":["bots"]`, `"ignore_authors":["app/dependabot"]`, `"ignore_repositories":["acme/api"]`} {
+		t.Run(ignore, func(t *testing.T) {
+			h := reviewerHarness(t, `{"roles":["reviewer"],`+ignore+`}`)
+			h.mustPoll(watchBase, reviewerStatus(t, dependabot(), human()))
+			if h.observationCount() != 1 || h.observationForRole("PR_human", "reviewer") == nil {
+				t.Fatalf("expected only the human review request to be watched, got %d observations", h.observationCount())
+			}
+			lines := nextTextLines(t, h)
+			if len(linesContaining(lines, "acme/api#7")) != 0 || len(linesContaining(lines, "acme/web#42")) != 1 {
+				t.Fatalf("ignored review request reached next: %q", lines)
+			}
+			params := watchBridgeParams(t, h.homeDir)
+			key, _, _ := strings.Cut(strings.Trim(ignore, `"`), `"`)
+			if params[key] == nil {
+				t.Fatalf("expected %s persisted in bridge params, got %#v", key, params)
+			}
+		})
+	}
+}
+
+func TestGitHubPRWatchIgnoredRepositoriesApplyToBothRoles(t *testing.T) {
+	h := reviewerHarness(t, `{"roles":["author","reviewer"],"ignore_repositories":["acme/api"],"ignore_authors":["octo"]}`)
+	ignoredAuthored := watchPR(func(pr *prFixture) { pr.ID, pr.Repo, pr.Number = "PR_ignored_author", "acme/api", 3 })
+	kept := watchPR()
+	ignoredRequest := requestedPR("PR_ignored_review", watchIdentity)
+	ignoredRequest["repository"] = map[string]any{"nameWithOwner": "acme/api"}
+	h.mustPoll(watchBase, statusResponse(t, ignoredAuthored, kept),
+		detailResponse(t, detailFixture{ID: watchPRNodeID}),
+		reviewerStatus(t, ignoredRequest))
+	if h.observationCount() != 1 || h.observationForRole(watchPRNodeID, "author") == nil {
+		t.Fatalf("expected only the authored PR outside ignored repositories, got %d observations", h.observationCount())
+	}
+
+	for _, params := range []string{`{"ignore_repositories":["acme"]}`, `{"ignore_repositories":["acme/api/extra"]}`, `{"ignore_authors":[""]}`} {
+		h := newUnconnectedPRWatchHarness(t)
+		h.gh.Queue(t, probeResponse(t))
+		if _, err := workgraph.ConnectGitHubPRWatch(workgraph.ConnectorConnectConfig{HomeDir: h.homeDir, GitHubCommand: h.gh.Path, ParamsJSON: json.RawMessage(params)}); err == nil {
+			t.Fatalf("expected %s to be rejected", params)
+		}
+	}
+}

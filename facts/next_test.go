@@ -172,6 +172,20 @@ func TestNextListsEachReasonInDocumentedOrder(t *testing.T) {
 	if !reflect.DeepEqual(groups, []string{"waiting_on_you", "waiting_on_you", "blocked", "blocked", "blocked", "ready"}) {
 		t.Fatalf("groups: %v", groups)
 	}
+	text := f.cli(t, "next")
+	withIDs := f.cli(t, "next", "--ids")
+	for _, item := range items {
+		header := fmt.Sprintf("  %s#%d %s", item.PullRequest.Repository, item.PullRequest.Number, item.PullRequest.Title)
+		if !strings.Contains(text, "\n"+header) {
+			t.Fatalf("expected a line leading with %q: %s", header, text)
+		}
+		if strings.Contains(text, item.ID) || !strings.Contains(withIDs, item.ID) {
+			t.Fatalf("expected item ids only with --ids: %s\n%s", text, withIDs)
+		}
+	}
+	if strings.Contains(text, "[github:") {
+		t.Fatalf("text output carries item ids: %s", text)
+	}
 	if got := f.items(t, "--reason", "checks_failed", "--project", "demo"); len(got) != 1 {
 		t.Fatalf("filters: %v", got)
 	}
@@ -538,12 +552,15 @@ func TestNextResumeAndTodayShowTheSameItems(t *testing.T) {
 	if section < strings.Index(resume.Message, "Where you left off") || section < 0 {
 		t.Fatalf("section: %s", resume.Message)
 	}
+	header := func(item workgraph.NextItem) string {
+		return fmt.Sprintf("%s#%d %s", item.PullRequest.Repository, item.PullRequest.Number, item.PullRequest.Title)
+	}
 	for _, item := range f.items(t)[:5] {
-		if !strings.Contains(resume.Message, item.ID) {
-			t.Fatalf("missing %s: %s", item.ID, resume.Message)
+		if !strings.Contains(resume.Message, header(item)) || strings.Contains(resume.Message, item.ID) {
+			t.Fatalf("missing %s: %s", header(item), resume.Message)
 		}
 	}
-	if !strings.Contains(resume.Message, "1 more: workgraph next") || strings.Contains(resume.Message, f.items(t)[5].ID) {
+	if !strings.Contains(resume.Message, "1 more: workgraph next") || strings.Contains(resume.Message, header(f.items(t)[5])) {
 		t.Fatalf("limit: %s", resume.Message)
 	}
 	project, err := workgraph.Resume(workgraph.ResumeConfig{HomeDir: f.home, Project: "demo", Now: f.now})
@@ -551,8 +568,8 @@ func TestNextResumeAndTodayShowTheSameItems(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, item := range f.items(t) {
-		if !strings.Contains(project.Message, item.ID) {
-			t.Fatalf("project missing %s", item.ID)
+		if !strings.Contains(project.Message, header(item)) {
+			t.Fatalf("project missing %s", header(item))
 		}
 	}
 	if strings.Index(project.Message, "Waiting on you") < strings.Index(project.Message, "Recent activity") {

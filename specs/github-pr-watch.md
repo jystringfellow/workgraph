@@ -179,6 +179,8 @@ daemon uses. `github prs hint` requests an early poll (see Push hints).
   "review_requests": "direct_and_team",
   "ignore_actors": [],
   "ignore_teams": [],
+  "ignore_authors": [],
+  "ignore_repositories": [],
   "comment_body_max_runes": 8000,
   "agent_reply_marker": "",
   "max_open_prs": {"author": 200, "reviewer": 200}
@@ -201,6 +203,20 @@ daemon uses. `github prs hint` requests an early poll (see Push hints).
   ignored by default; every event records `actor_kind`.
 - `ignore_teams` is a list of `org/team-slug` values. A request through an
   ignored team counts as absent.
+- `ignore_authors` is a list of PR author logins whose review requests count
+  as absent. The special value `bots` matches any bot author
+  (`author.__typename` `Bot`). Logins match case-insensitively, ignoring an
+  `app/` prefix and a `[bot]` suffix, so `app/dependabot`,
+  `dependabot[bot]`, and `dependabot` are the same author. It applies only to
+  the reviewer role: the user's own PRs, including ones a bot opened on the
+  user's behalf, are never ignored by author.
+- `ignore_repositories` is a list of `owner/name` repositories whose PRs are
+  absent from both roles.
+- Ignored PRs are dropped from the search results after the completeness
+  check, so they create no observation, emit no event, and open no item.
+  `ignore_authors` and `ignore_repositories` are omitted from the stored
+  scope when empty, so adding them to an existing watch changes its scope
+  only when they are set.
 - `comment_body_max_runes` caps each stored comment or review body, in the
   range `0..65536`. `65536` is GitHub's own comment limit. `0` stores no
   comment text; events then carry only structure and links.
@@ -497,7 +513,8 @@ Only the diff engine creates events.
 
 ```text
 role                   author | reviewer
-repository, number, node_id, url, title, author_login, is_draft, state,
+repository, number, node_id, url, title, author_login, author_kind,
+is_draft, state,
 created_at, updated_at, head_ref, head_sha, base_ref, head_repository,
 is_cross_repository, baseline_at
 
@@ -593,9 +610,12 @@ Events use source `github` and type prefix `github.pull_request.`.
 The event id is
 `github.pull_request.<suffix>:<node_id>[:<discriminator>]`. The PR's GraphQL
 node id is stable across repository renames and transfers, so a rename
-cannot re-emit captured occurrences. A PR is never in both roles, because
-GitHub does not request a review from the PR's author, so `merged` and
-`closed` ids cannot collide across roles. Rows are inserted with `INSERT ...
+cannot re-emit captured occurrences. A PR is usually in only one role,
+because GitHub does not request a review from the PR's author. A PR a bot
+such as `copilot-swe-agent` opened on the user's behalf is the exception:
+`author:@me` returns it and GitHub also requests the user's review, so it is
+observed in both roles. Its `merged` and `closed` ids are the same in both
+roles and are stored once. Rows are inserted with `INSERT ...
 ON CONFLICT(id) DO NOTHING`. Transition events are immutable.
 
 Other columns:
@@ -664,7 +684,8 @@ Other columns:
 ```
 
 - `actor_kind` is `user`, `bot` (`__typename` `Bot` or a login ending in
-  `[bot]`), or `team`.
+  `[bot]`), or `team`. Observations record the PR author's kind the same way
+  as `author_kind`.
 - `actor_association` is GitHub's `authorAssociation` for comments and
   reviews. It is recorded as provider data. It means the author's relation to
   the repository's owner (for example `MEMBER` is organization membership),
@@ -856,6 +877,15 @@ never hides later feedback.
 
 ### Cadence
 
+- One poll runs its role searches, merge and checks batches, and detail
+  batches sequentially, one `gh` process each. On an account with about a
+  hundred open PRs across both roles, the first poll after connecting or a
+  scope change runs a dozen or more documents at a few seconds each, which
+  exceeds the 30-second budget other connectors use. The watch's whole-poll
+  budget is therefore 2 minutes. Roles completed before the budget runs out
+  still commit (see Completeness), and the reduced batch and page sizes
+  persist, so later polls are cheaper.
+
 - The default interval is `5m`. `workgraph connectors interval
   github.pr_watch 15m` lengthens it. The watch rejects intervals shorter
   than `1m`.
@@ -932,7 +962,7 @@ watch needs a small extension:
 | Malformed JSON or schema drift | decode failure | the role fails; nothing changes for it |
 | Completeness violated | see Completeness | the role fails; nothing changes for it |
 | Team membership unreadable | missing `read:org` or `FORBIDDEN` on the teams query | warning in status; retain cached teams and refresh time, retry next poll; unmatched requests labeled `via team (unresolved)` |
-| Whole-poll deadline (30s) | context deadline | transient |
+| Whole-poll deadline (2m) | context deadline | transient |
 | Repository renamed or transferred | `nameWithOwner` changes under the same `node_id` | observation and event ids follow `node_id`; payloads use the new name |
 
 ## Completeness
@@ -1059,7 +1089,7 @@ is in use:
 3. Author role attention items in `workgraph next` and `resume` (facts 24, 28,
    and `specs/next.md`).
 4. Reviewer role (facts 29–32).
-5. Push hints (fact 33).
+5. Push hints (fact 35).
 
 ## Related `github` Connector Fixes
 
@@ -1217,10 +1247,22 @@ serves queued GraphQL fixtures and logs every invocation, following
     draft review emits nothing. A re-request emits a new `review_requested`.
 32. **Ignored teams.** A PR requested only through an `ignore_teams` team is
     absent.
+33. **Bot authors are recorded and can be ignored.** A Copilot-style PR
+    authored by a `Bot` and returned by both searches is observed in both
+    roles with `author_login` and `author_kind: "bot"`; `next` shows it once,
+    labeled `copilot-swe-agent, on your behalf`, with the reply and the
+    review request under it. A Dependabot-style review request is tagged
+    `[bot]`, and is absent with `ignore_authors: ["bots"]` or
+    `["app/dependabot"]`. `ignore_repositories` removes PRs from both roles,
+    and `ignore_authors` does not remove the user's own PRs. Malformed
+    entries are rejected at connect. (`facts/github_pr_watch_reviewer_test.go`)
+34. **The poll budget fits the work.** With the general connector poll
+    deadline shorter than one `gh` call, a `github.pr_watch` poll still
+    completes and records no error. (`facts/github_pr_watch_author_test.go`)
 
 ### Push hints
 
-33. **A hint wakes the poller within seconds.** With a 5-minute interval, a
+35. **A hint wakes the poller within seconds.** With a 5-minute interval, a
     hint recorded 30 seconds after a poll triggers a poll at the next 2-second
     check, and a second hint during that poll triggers exactly one follow-up.
     A hint within 10 seconds of the previous poll start waits until 10 seconds
