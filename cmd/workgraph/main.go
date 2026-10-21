@@ -77,7 +77,7 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	case "azure":
 		return runAzure(args[1:], stdout, stderr)
 	case "llm":
-		return runLLM(args[1:], stdout, stderr)
+		return runLLM(args[1:], os.Stdin, stdout, stderr)
 	case "events":
 		return runEvents(args[1:], stdout, stderr)
 	case "associations":
@@ -803,7 +803,7 @@ func runEventsToday(args []string, stdout io.Writer, stderr io.Writer) int {
 	return 0
 }
 
-func runLLM(args []string, stdout io.Writer, stderr io.Writer) int {
+func runLLM(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "usage: workgraph llm <command>")
 		return 2
@@ -829,7 +829,7 @@ func runLLM(args []string, stdout io.Writer, stderr io.Writer) int {
 	case "summarize":
 		return runLLMSummarize(args[1:], stdout, stderr)
 	case "associate":
-		return runLLMAssociate(args[1:], stdout, stderr)
+		return runLLMAssociate(args[1:], stdin, stdout, stderr)
 	case "sources":
 		return runLLMSources(args[1:], stdout, stderr)
 	default:
@@ -858,6 +858,7 @@ func runLLMAdd(args []string, stdout io.Writer, stderr io.Writer) int {
 	region := flags.String("region", "", "Cloud provider region")
 	modelARN := flags.String("model-arn", "", "Bedrock model or inference profile ARN")
 	configDir := flags.String("config-dir", "", "signed-in AI client configuration directory")
+	execution := flags.String("execution", "", "ai-client execution: bridge runs scheduled tasks in the bridge worker")
 
 	if err := flags.Parse(args[1:]); err != nil {
 		return 2
@@ -875,6 +876,7 @@ func runLLMAdd(args []string, stdout io.Writer, stderr io.Writer) int {
 		Region:     *region,
 		ModelARN:   *modelARN,
 		ConfigDir:  *configDir,
+		Execution:  *execution,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph llm add: %v\n", err)
@@ -1328,6 +1330,8 @@ func runCaptureRequests(args []string, stdin io.Reader, stdout io.Writer, stderr
 	failID := flags.String("fail", "", "report failure for a claimed request id")
 	errorJSON := flags.String("error-json", "", "JSON failure details; - reads stdin")
 	connector := flags.String("connector", "", "limit claims to one connector")
+	kind := flags.String("kind", "", "request kind to claim: capture (default) or llm_task")
+	memory := flags.String("memory", "", "workgraph memory directory for llm_task claims")
 	maxClaims := flags.Int("max", 1, "maximum requests to claim")
 	worker := flags.String("worker", "", "bridge worker identity")
 	claimFile := flags.String("claim-file", "", "0600 file for the returned claim capability")
@@ -1335,7 +1339,11 @@ func runCaptureRequests(args []string, stdin io.Reader, stdout io.Writer, stderr
 		return 2
 	}
 	if flags.NArg() != 0 {
-		fmt.Fprintln(stderr, "usage: workgraph capture requests --list | --cancel <id> [--reason <text>] | --claim [--connector X] [--max N] --worker <name> --claim-file <path>")
+		fmt.Fprintln(stderr, "usage: workgraph capture requests --list | --cancel <id> [--reason <text>] | --claim [--connector X] [--kind capture|llm_task] [--max N] --worker <name> --claim-file <path>")
+		return 2
+	}
+	if (strings.TrimSpace(*kind) != "" || strings.TrimSpace(*memory) != "") && !*claim {
+		fmt.Fprintln(stderr, "workgraph capture requests: --kind and --memory require --claim")
 		return 2
 	}
 	if strings.TrimSpace(*cancelID) != "" {
@@ -1429,7 +1437,11 @@ func runCaptureRequests(args []string, stdin io.Reader, stdout io.Writer, stderr
 			if request.StatusDetail != "" {
 				status = request.StatusDetail
 			}
-			line := fmt.Sprintf("- %s: %s, connector %s, %s, %s to %s, attempts %d", request.ID, status, request.ConnectorID, request.CaptureSemantics, request.Since, request.Until, request.Attempts)
+			semantics := request.CaptureSemantics
+			if request.Kind == "llm_task" {
+				semantics = request.Kind
+			}
+			line := fmt.Sprintf("- %s: %s, connector %s, %s, %s to %s, attempts %d", request.ID, status, request.ConnectorID, semantics, request.Since, request.Until, request.Attempts)
 			if request.ClaimedBy != "" {
 				line += ", worker " + request.ClaimedBy + ", lease expires " + request.LeaseExpiresAt
 			}
@@ -1442,20 +1454,26 @@ func runCaptureRequests(args []string, stdin io.Reader, stdout io.Writer, stderr
 		return 2
 	}
 	if strings.TrimSpace(*worker) == "" || strings.TrimSpace(*claimFile) == "" {
-		fmt.Fprintln(stderr, "usage: workgraph capture requests --claim [--connector X] [--max N] --worker <name> --claim-file <path>")
+		fmt.Fprintln(stderr, "usage: workgraph capture requests --claim [--connector X] [--kind capture|llm_task] [--max N] --worker <name> --claim-file <path>")
 		return 2
 	}
 	if *maxClaims != 1 {
 		fmt.Fprintln(stderr, "workgraph capture requests: CLI claim files currently require --max 1")
 		return 2
 	}
-	claimed, err := workgraph.ClaimCaptureRequests(workgraph.CaptureRequestClaimConfig{
+	claimConfig := workgraph.CaptureRequestClaimConfig{
 		HomeDir:      *homeDir,
 		DatabasePath: *databasePath,
 		ConnectorID:  *connector,
+		Kind:         *kind,
 		Worker:       *worker,
 		Max:          *maxClaims,
-	})
+		MemoryDir:    *memory,
+	}
+	if strings.TrimSpace(*kind) == "llm_task" {
+		claimConfig.GitEmails = workgraph.LocalGitEmails(workgraph.LocalGitIdentityConfig{HomeDir: *homeDir})
+	}
+	claimed, err := workgraph.ClaimCaptureRequests(claimConfig)
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph capture requests: %v\n", err)
 		return 1
@@ -1481,6 +1499,16 @@ func runCaptureRequests(args []string, stdin io.Reader, stdout io.Writer, stderr
 		return 1
 	}
 	request := claimed[0].Request
+	if task := claimed[0].Task; task != nil {
+		encodedTask, err := json.Marshal(task)
+		if err != nil {
+			fmt.Fprintf(stderr, "workgraph capture requests: encode task: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "Capture request claimed\nRequest: %s\nKind: %s\nConnector: %s\nParams: %s\nLease expires: %s\nClaim file: %s\nSubmit: workgraph llm associate submit --request %s --claim-file %s\nTask: %s\n",
+			request.ID, request.Kind, request.ConnectorID, request.Params, request.LeaseExpiresAt, *claimFile, request.ID, *claimFile, encodedTask)
+		return 0
+	}
 	fmt.Fprintf(stdout, "Capture request claimed\nRequest: %s\nConnector: %s\nSource: %s\nCapture semantics: %s\nSince: %s\nUntil: %s\nParams: %s\nLease expires: %s\nClaim file: %s\n",
 		request.ID, request.ConnectorID, request.Source, request.CaptureSemantics, request.Since, request.Until, request.Params, request.LeaseExpiresAt, *claimFile)
 	return 0

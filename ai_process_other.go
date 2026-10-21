@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 )
 
 func inspectLocalAIProcess(int) (AIProcessInspection, error) {
@@ -26,3 +27,5 @@ func platformAIChildOutcome(state *os.ProcessState, waitErr error) (aiOutcome, i
 func openAIControllingTerminal() (*os.File, error) {
 	return os.OpenFile("CONIN$", os.O_RDWR, 0)
 }
+
+func isolateProcessGroup(*exec.Cmd) {}

@@ -15,6 +15,7 @@ import (
 
 const (
 	aiClientCallTimeout      = 5 * time.Minute
+	aiClientWaitDelay        = 5 * time.Second
 	maxAIClientResponseBytes = 1 << 20
 )
 
@@ -119,7 +120,7 @@ func resolveAIClientExecutable(client string) (string, error) {
 	return path, nil
 }
 
-func callAIClient(profile llmProfile, messages []openAICompatibleMessage) (string, error) {
+func callAIClient(parent context.Context, profile llmProfile, messages []openAICompatibleMessage) (string, error) {
 	client, err := normalizeAIClient(profile.Client)
 	if err != nil {
 		return "", err
@@ -141,10 +142,12 @@ func callAIClient(profile llmProfile, messages []openAICompatibleMessage) (strin
 		return "", err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), aiClientCallTimeout)
+	ctx, cancel := context.WithTimeout(parent, aiClientCallTimeout)
 	defer cancel()
 	args, responsePath := aiClientArguments(client, profile.Model, workingDir)
 	command := exec.CommandContext(ctx, executable, args...)
+	isolateProcessGroup(command)
+	command.WaitDelay = aiClientWaitDelay
 	command.Dir = workingDir
 	command.Env = filteredAIClientEnvironment(os.Environ(), client)
 	command.Env = applySignedInClientBinding(command.Env, client, signedInClientBinding{ConfigDir: profile.ConfigDir})

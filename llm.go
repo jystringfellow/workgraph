@@ -21,7 +21,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 )
 
-const llmTaskSummarize = "summarize"
+const (
+	llmTaskSummarize   = "summarize"
+	llmExecutionBridge = "bridge"
+)
 
 type LLMAddProfileConfig struct {
 	HomeDir    string
@@ -35,6 +38,7 @@ type LLMAddProfileConfig struct {
 	Region     string
 	ModelARN   string
 	ConfigDir  string
+	Execution  string
 }
 
 type LLMConnectClientConfig struct {
@@ -108,6 +112,7 @@ type llmProfile struct {
 	Region     string `json:"region,omitempty"`
 	ModelARN   string `json:"model_arn,omitempty"`
 	ConfigDir  string `json:"config_dir,omitempty"`
+	Execution  string `json:"execution,omitempty"`
 }
 
 type llmHostedConfig struct {
@@ -164,6 +169,7 @@ func AddLLMProfile(config LLMAddProfileConfig) (LLMResult, error) {
 		AWSProfile: strings.TrimSpace(config.AWSProfile),
 		Region:     strings.TrimSpace(config.Region),
 		ModelARN:   strings.TrimSpace(config.ModelARN),
+		Execution:  strings.TrimSpace(config.Execution),
 	}
 	if profile.Provider == "ai-client" {
 		profile.Client, err = normalizeAIClient(profile.Client)
@@ -201,6 +207,9 @@ func AddLLMProfile(config LLMAddProfileConfig) (LLMResult, error) {
 	}
 	if profile.Provider == "ai-client" {
 		lines = append(lines, "Config dir: "+llmProfileConfigDirLabel(profile))
+	}
+	if profile.Execution != "" {
+		lines = append(lines, "Execution: "+profile.Execution)
 	}
 	lines = append(lines, "Config: "+configPath)
 	return LLMResult{ConfigPath: configPath, Message: strings.Join(lines, "\n")}, nil
@@ -640,13 +649,17 @@ func SummarizeTodayWithLLM(config LLMSummarizeTodayConfig) (LLMResult, error) {
 }
 
 func callLLMProfile(client *http.Client, profile llmProfile, messages []openAICompatibleMessage) (string, error) {
+	return callLLMProfileContext(context.Background(), client, profile, messages)
+}
+
+func callLLMProfileContext(ctx context.Context, client *http.Client, profile llmProfile, messages []openAICompatibleMessage) (string, error) {
 	switch profile.Provider {
 	case "openai-compatible":
-		return callOpenAICompatible(client, profile, messages)
+		return callOpenAICompatible(ctx, client, profile, messages)
 	case "bedrock":
-		return callBedrockConverse(client, profile, messages)
+		return callBedrockConverse(ctx, client, profile, messages)
 	case "ai-client":
-		return callAIClient(profile, messages)
+		return callAIClient(ctx, profile, messages)
 	default:
 		return "", fmt.Errorf("llm calls do not support provider %q yet", profile.Provider)
 	}
@@ -786,7 +799,7 @@ func openAICompatibleModelsURL(profile llmProfile) string {
 	return strings.TrimRight(profile.BaseURL, "/") + "/models"
 }
 
-func callOpenAICompatible(client *http.Client, profile llmProfile, messages []openAICompatibleMessage) (string, error) {
+func callOpenAICompatible(ctx context.Context, client *http.Client, profile llmProfile, messages []openAICompatibleMessage) (string, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 60 * time.Second}
 	}
@@ -798,7 +811,7 @@ func callOpenAICompatible(client *http.Client, profile llmProfile, messages []op
 		return "", fmt.Errorf("encode OpenAI-compatible request: %w", err)
 	}
 	requestURL := strings.TrimRight(profile.BaseURL, "/") + "/chat/completions"
-	request, err := http.NewRequest(http.MethodPost, requestURL, bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("build OpenAI-compatible request: %w", err)
 	}
@@ -911,8 +924,8 @@ func callOpenAICompatibleStream(client *http.Client, profile llmProfile, message
 	return strings.TrimSpace(builder.String()), nil
 }
 
-func callBedrockConverse(client *http.Client, profile llmProfile, messages []openAICompatibleMessage) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+func callBedrockConverse(ctx context.Context, client *http.Client, profile llmProfile, messages []openAICompatibleMessage) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	loadOptions := []func(*awsconfig.LoadOptions) error{
@@ -1211,6 +1224,9 @@ func resolveLLMProfile(config llmConnectorConfig, requestedProfile string, task 
 func validateLLMProfile(profile llmProfile) error {
 	if profile.Provider != "ai-client" && profile.ConfigDir != "" {
 		return errors.New("config_dir is supported only for ai-client profiles")
+	}
+	if profile.Execution != "" && (profile.Provider != "ai-client" || profile.Execution != llmExecutionBridge) {
+		return errors.New(`execution "bridge" is the only execution setting, and only for ai-client profiles`)
 	}
 	switch profile.Provider {
 	case "":

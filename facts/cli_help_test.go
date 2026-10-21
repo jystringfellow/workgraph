@@ -78,6 +78,7 @@ var publicCommandPaths = []string{
 	"llm",
 	"llm add",
 	"llm associate",
+	"llm associate submit",
 	"llm connect",
 	"llm doctor",
 	"llm hosted",

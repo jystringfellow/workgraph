@@ -31,14 +31,6 @@ Priority labels used below:
 
 ## Next
 
-Projects and categorization, in order. Each slice links activity to declared
-projects more completely. [spec: `specs/projects.md`]
-
-- `P1` **D4 Scheduled categorization.** Hourly and nightly
-  `llm.associate` outbox requests with kind-aware emit, claim, and complete,
-  run directly or by the bridge worker, leaving capture-only workers
-  unchanged. [also: `specs/bridged-capture.md`]
-
 - `P1` Add optional semantic association behind explicit opt-in and confidence
   gates. [specs: `specs/event-associations.md` and
   `specs/llm-integration.md`]
@@ -74,6 +66,12 @@ projects more completely. [spec: `specs/projects.md`]
 - `P2` Desktop UI after the local CLI and data contracts are stable.
 
 ## Recently Delivered
+
+- [x] Scheduled categorization: hourly and 05:00 `llm.associate` outbox
+  requests with kind-aware emit, claim, and complete, run directly by the
+  daemon or by the routed bridge client, with a 24h no-progress cooldown and
+  capture-only workers unchanged. [spec: `specs/projects.md` D4; also
+  `specs/bridged-capture.md`]
 
 - [x] Daily loop surfaces for projects: a `categorize` group in `next`, and
   `today` and the `resume` morning overview grouped by workstream, then

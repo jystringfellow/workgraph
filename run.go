@@ -369,6 +369,11 @@ func (capture *RunCapture) Run(ctx context.Context) (runErr error) {
 			capture.watchGitHubPRWatchHints(pollContext)
 		}()
 	}
+	pollers.Add(1)
+	go func() {
+		defer pollers.Done()
+		capture.runLLMAssociateScheduler(pollContext)
+	}()
 	for id, interval := range capture.bridgedConnectors {
 		pollers.Add(1)
 		go func(id string, interval time.Duration) {
@@ -465,6 +470,25 @@ func (capture *RunCapture) runBridgedConnectorScheduler(ctx context.Context, id 
 			delay = minDuration(interval, 30*time.Second)
 		}
 		if !waitForConnectorSchedule(ctx, delay) {
+			return
+		}
+	}
+}
+
+func (capture *RunCapture) runLLMAssociateScheduler(ctx context.Context) {
+	cadence := newLLMAssociateCadence(time.Now())
+	for {
+		if now := time.Now(); cadence.due(now) && llmAssociateScheduled(capture.homeDir) {
+			result, err := ScheduleLLMAssociate(LLMAssociateScheduleConfig{
+				Context: ctx, HomeDir: capture.homeDir, DatabasePath: capture.databasePath, Now: now, Location: time.Local,
+				GitEmails: LocalGitEmails(LocalGitIdentityConfig{HomeDir: capture.homeDir}),
+			})
+			if err != nil {
+				log.Printf("workgraph llm associate schedule failed: %v", err)
+			}
+			cadence.record(now, result, err)
+		}
+		if !waitForConnectorSchedule(ctx, time.Minute) {
 			return
 		}
 	}

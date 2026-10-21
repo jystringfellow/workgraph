@@ -288,8 +288,9 @@ Persistence:
 - auto-apply pauses when measured accuracy over at least 20 decided auto
   links is below 0.95; with fewer than 20 it stays on and every undecided
   auto link is listed for review
-- D3 runs categorization directly or manually; scheduled outbox and bridge
-  execution arrive in D4
+- the daemon schedules categorization through the outbox; an `ai-client`
+  profile with `"execution": "bridge"` is run by the bridge worker instead of
+  workgraph (see Scheduling in `specs/projects.md`)
 - no mutation of events; memory changes only when the user creates a new
   project during review
 

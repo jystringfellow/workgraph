@@ -315,6 +315,7 @@ func createSchema(db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS capture_requests (
 			id TEXT PRIMARY KEY,
 			connector_id TEXT NOT NULL,
+			kind TEXT NOT NULL DEFAULT 'capture' CHECK (kind IN ('capture', 'llm_task')),
 			since TEXT NOT NULL,
 			until TEXT NOT NULL,
 			params_json TEXT NOT NULL CHECK (json_valid(params_json)),
@@ -396,6 +397,9 @@ func createSchema(db *sql.DB) error {
 		return err
 	}
 	if err := ensureColumn(db, "notion_index", "content_synced_at", "TEXT"); err != nil {
+		return err
+	}
+	if err := ensureColumn(db, "capture_requests", "kind", "TEXT NOT NULL DEFAULT 'capture' CHECK (kind IN ('capture', 'llm_task'))"); err != nil {
 		return err
 	}
 	if err := ensureColumn(db, "events", "involvement_json", "TEXT CHECK (involvement_json IS NULL OR json_valid(involvement_json))"); err != nil {

@@ -27,6 +27,7 @@ const (
 type CaptureRequest struct {
 	ID               string          `json:"id"`
 	ConnectorID      string          `json:"connector_id"`
+	Kind             string          `json:"kind"`
 	Source           string          `json:"source"`
 	CaptureSemantics string          `json:"capture_semantics"`
 	Since            string          `json:"since"`
@@ -58,10 +59,13 @@ type CaptureRequestClaimConfig struct {
 	HomeDir      string
 	DatabasePath string
 	ConnectorID  string
+	Kind         string
 	Worker       string
 	Max          int
 	Now          time.Time
 	Lease        time.Duration
+	MemoryDir    string
+	GitEmails    []string
 }
 
 type CaptureRequestListConfig struct {
@@ -92,6 +96,7 @@ type CaptureRequestCancelConfig struct {
 type ClaimedCaptureRequest struct {
 	Request    CaptureRequest `json:"request"`
 	ClaimToken string         `json:"claim_token"`
+	Task       *LLMTask       `json:"task,omitempty"`
 }
 
 func ListCaptureRequests(config CaptureRequestListConfig) ([]CaptureRequest, error) {
@@ -104,10 +109,13 @@ func ListCaptureRequests(config CaptureRequestListConfig) ([]CaptureRequest, err
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
+	if err := createSchema(db); err != nil {
+		return nil, fmt.Errorf("prepare capture outbox: %w", err)
+	}
 	query := `SELECT ` + captureRequestColumns + ` FROM capture_requests`
 	args := []any{}
 	if strings.TrimSpace(config.ConnectorID) != "" {
-		id, err := normalizeConnectorID(config.ConnectorID)
+		id, err := normalizeCaptureRequestConnectorID(config.ConnectorID)
 		if err != nil {
 			return nil, err
 		}
@@ -194,6 +202,9 @@ func RenewCaptureRequest(config CaptureRequestCapabilityConfig) (CaptureRequest,
 		return CaptureRequest{}, fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
+	if err := createSchema(db); err != nil {
+		return CaptureRequest{}, fmt.Errorf("prepare capture outbox: %w", err)
+	}
 	expires := now.Add(lease).Format(time.RFC3339Nano)
 	updated, err := db.Exec(`UPDATE capture_requests SET lease_expires_at = ?
 		WHERE id = ? AND status = 'claimed' AND claim_token = ? AND lease_expires_at > ?`,
@@ -292,12 +303,15 @@ func FailCaptureRequest(config CaptureRequestCapabilityConfig) error {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
-	var connectorID string
+	if err := createSchema(db); err != nil {
+		return fmt.Errorf("prepare capture outbox: %w", err)
+	}
+	var connectorID, kind string
 	var attempts int
 	var storedToken, requestStatus string
-	err = db.QueryRow(`SELECT connector_id, attempts, COALESCE(claim_token, ''), status
+	err = db.QueryRow(`SELECT connector_id, kind, attempts, COALESCE(claim_token, ''), status
 		FROM capture_requests WHERE id = ?`, strings.TrimSpace(config.RequestID)).Scan(
-		&connectorID, &attempts, &storedToken, &requestStatus)
+		&connectorID, &kind, &attempts, &storedToken, &requestStatus)
 	if err != nil {
 		return fmt.Errorf("read capture request: %w", err)
 	}
@@ -322,6 +336,9 @@ func FailCaptureRequest(config CaptureRequestCapabilityConfig) error {
 	if count != 1 {
 		return fmt.Errorf("capture request claim token is stale or invalid")
 	}
+	if kind != captureRequestKindCapture {
+		return nil
+	}
 	return recordConnectorPollAttempt(status.HomeDir, connectorID, now, availableAt, attempts, fmt.Errorf("%s", errorMessage))
 }
 
@@ -331,7 +348,10 @@ func releaseWorkerCaptureClaims(homeDir string, worker string, reason string, no
 		return fmt.Errorf("open capture outbox: %w", err)
 	}
 	defer db.Close()
-	rows, err := db.Query(`SELECT id, connector_id, attempts, claim_token FROM capture_requests
+	if err := createSchema(db); err != nil {
+		return fmt.Errorf("prepare capture outbox: %w", err)
+	}
+	rows, err := db.Query(`SELECT id, connector_id, kind, attempts, claim_token FROM capture_requests
 		WHERE status = 'claimed' AND claimed_by = ? AND claim_token IS NOT NULL`, worker)
 	if err != nil {
 		return fmt.Errorf("list worker capture claims: %w", err)
@@ -339,13 +359,14 @@ func releaseWorkerCaptureClaims(homeDir string, worker string, reason string, no
 	type workerClaim struct {
 		id          string
 		connectorID string
+		kind        string
 		attempts    int
 		token       string
 	}
 	claims := []workerClaim{}
 	for rows.Next() {
 		var claim workerClaim
-		if err := rows.Scan(&claim.id, &claim.connectorID, &claim.attempts, &claim.token); err != nil {
+		if err := rows.Scan(&claim.id, &claim.connectorID, &claim.kind, &claim.attempts, &claim.token); err != nil {
 			rows.Close()
 			return fmt.Errorf("read worker capture claim: %w", err)
 		}
@@ -364,7 +385,7 @@ func releaseWorkerCaptureClaims(homeDir string, worker string, reason string, no
 		if err != nil {
 			return fmt.Errorf("release capture request %s: %w", claim.id, err)
 		}
-		if count, _ := updated.RowsAffected(); count != 1 {
+		if count, _ := updated.RowsAffected(); count != 1 || claim.kind != captureRequestKindCapture {
 			continue
 		}
 		if err := recordConnectorPollAttempt(homeDir, claim.connectorID, now, availableAt, claim.attempts, fmt.Errorf("%s", reason)); err != nil {
@@ -456,6 +477,7 @@ func EmitBridgedCaptureRequest(config CaptureRequestEmitConfig) (CaptureRequestE
 		ConnectorID:      id,
 		Source:           eventSourceForConnector(id),
 		CaptureSemantics: captureSemanticsForConnector(id),
+		Kind:             captureRequestKindCapture,
 		Since:            since.Format(time.RFC3339Nano),
 		Until:            until.Format(time.RFC3339Nano),
 		Params:           params,
@@ -478,6 +500,21 @@ func EmitBridgedCaptureRequest(config CaptureRequestEmitConfig) (CaptureRequestE
 }
 
 func ClaimCaptureRequests(config CaptureRequestClaimConfig) ([]ClaimedCaptureRequest, error) {
+	kind, err := normalizeCaptureRequestKind(config.Kind)
+	if err != nil {
+		return nil, err
+	}
+	if kind == captureRequestKindLLMTask && !llmTaskClaimAllowed(config) {
+		return []ClaimedCaptureRequest{}, nil
+	}
+	claimed, err := claimCaptureRequests(config)
+	if err != nil || kind != captureRequestKindLLMTask {
+		return claimed, err
+	}
+	return attachLLMTasks(config, claimed)
+}
+
+func claimCaptureRequests(config CaptureRequestClaimConfig) ([]ClaimedCaptureRequest, error) {
 	status, err := prepareRunStatus(RunConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath})
 	if err != nil {
 		return nil, err
@@ -504,10 +541,14 @@ func ClaimCaptureRequests(config CaptureRequestClaimConfig) ([]ClaimedCaptureReq
 	}
 	connectorID := strings.TrimSpace(config.ConnectorID)
 	if connectorID != "" {
-		connectorID, err = normalizeConnectorID(connectorID)
+		connectorID, err = normalizeCaptureRequestConnectorID(connectorID)
 		if err != nil {
 			return nil, err
 		}
+	}
+	kind, err := normalizeCaptureRequestKind(config.Kind)
+	if err != nil {
+		return nil, err
 	}
 
 	db, err := sql.Open("sqlite3", status.DatabasePath)
@@ -515,6 +556,9 @@ func ClaimCaptureRequests(config CaptureRequestClaimConfig) ([]ClaimedCaptureReq
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
+	if err := createSchema(db); err != nil {
+		return nil, fmt.Errorf("prepare capture outbox: %w", err)
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return nil, fmt.Errorf("begin capture claim: %w", err)
@@ -525,8 +569,8 @@ func ClaimCaptureRequests(config CaptureRequestClaimConfig) ([]ClaimedCaptureReq
 	}
 
 	query := `SELECT id FROM capture_requests
-		WHERE status = 'pending' AND available_at <= ?`
-	args := []any{now.Format(time.RFC3339Nano)}
+		WHERE status = 'pending' AND available_at <= ? AND kind = ?`
+	args := []any{now.Format(time.RFC3339Nano), kind}
 	if connectorID != "" {
 		query += ` AND connector_id = ?`
 		args = append(args, connectorID)
@@ -640,7 +684,7 @@ func readCaptureRequestDB(db *sql.DB, id string) (CaptureRequest, bool, error) {
 	return scanCaptureRequest(row)
 }
 
-const captureRequestColumns = `id, connector_id, since, until, params_json, status, attempts,
+const captureRequestColumns = `id, connector_id, kind, since, until, params_json, status, attempts,
 	available_at, COALESCE(claimed_by, ''), COALESCE(claimed_at, ''), COALESCE(lease_expires_at, ''), created_at`
 
 type captureRequestScanner interface {
@@ -650,7 +694,7 @@ type captureRequestScanner interface {
 func scanCaptureRequest(row captureRequestScanner) (CaptureRequest, bool, error) {
 	var request CaptureRequest
 	var params string
-	err := row.Scan(&request.ID, &request.ConnectorID, &request.Since, &request.Until, &params,
+	err := row.Scan(&request.ID, &request.ConnectorID, &request.Kind, &request.Since, &request.Until, &params,
 		&request.Status, &request.Attempts, &request.AvailableAt, &request.ClaimedBy,
 		&request.ClaimedAt, &request.LeaseExpiresAt, &request.CreatedAt)
 	if err == sql.ErrNoRows {
@@ -658,6 +702,10 @@ func scanCaptureRequest(row captureRequestScanner) (CaptureRequest, bool, error)
 	}
 	if err != nil {
 		return CaptureRequest{}, false, fmt.Errorf("read capture request: %w", err)
+	}
+	if request.Kind == captureRequestKindLLMTask {
+		request.Params = llmTaskParamsSummary(params)
+		return request, true, nil
 	}
 	request.Source = eventSourceForConnector(request.ConnectorID)
 	request.CaptureSemantics = captureSemanticsForConnector(request.ConnectorID)
@@ -867,6 +915,9 @@ func IngestBridgedCapture(config BridgedIngestConfig) (BridgedIngestResult, erro
 		}
 		if !found {
 			return BridgedIngestResult{}, fmt.Errorf("capture request %s was not found", requestID)
+		}
+		if request.Kind != captureRequestKindCapture {
+			return BridgedIngestResult{}, fmt.Errorf("capture request %s is an %s request; submit it with workgraph llm associate submit", requestID, request.Kind)
 		}
 		if request.Status != "claimed" || strings.TrimSpace(config.ClaimToken) == "" {
 			return BridgedIngestResult{}, fmt.Errorf("capture request %s is not validly claimed", requestID)

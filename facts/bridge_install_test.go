@@ -66,6 +66,7 @@ func TestClaudePluginInstallMergesLeastPrivilegeDrainPermissions(t *testing.T) {
 		"mcp__plugin_workgraph_workgraph__connector_status",
 		"mcp__plugin_workgraph_workgraph__connector_required_tools",
 		"mcp__plugin_workgraph_workgraph__bridge_worker_heartbeat",
+		"mcp__plugin_workgraph_workgraph__llm_task_submit",
 	} {
 		if !strings.Contains(allowed, expected) {
 			t.Fatalf("Claude permissions omitted %q:\n%s", expected, contents)
@@ -516,6 +517,52 @@ func TestClaudeBridgeDrainLeavesRequestsPendingWithoutProviderPermissions(t *tes
 	}
 	if status != "pending" {
 		t.Fatalf("expected request to remain pending, got %q", status)
+	}
+	for _, args := range [][]string{
+		{"llm", "add", "claude-bridge", "--home", homeDir, "--provider", "ai-client", "--client", "claude-code", "--model", "haiku", "--execution", "bridge"},
+		{"llm", "use", "claude-bridge", "--home", homeDir, "--for", "associate"},
+	} {
+		if output, err := runworkgraph(t, repoRoot(t), args...); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, output)
+		}
+	}
+	future := time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano)
+	if _, err := db.Exec(`INSERT INTO capture_requests (id, connector_id, kind, since, until, params_json, status, attempts, available_at, created_at)
+		VALUES ('llm-task-fact', 'llm.associate', 'llm_task', ?, ?, '{"unit_ids":["u1"]}', 'pending', 1, ?, ?)`, future, future, future, future); err != nil {
+		t.Fatalf("insert llm_task request: %v", err)
+	}
+	if output, err := runworkgraph(t, repoRoot(t), "bridge", "drain", "--home", homeDir, "--client", "claude-code", "--client-command", clientPath); err != nil {
+		t.Fatalf("drain while the task is in backoff: %v\n%s", err, output)
+	}
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Fatalf("drain launched Claude for a task in backoff: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE capture_requests SET status = 'claimed', claimed_by = 'claude-code-drain-other', claim_token = 'other', lease_expires_at = ?, available_at = '2026-10-21T00:00:00Z' WHERE id = 'llm-task-fact'`, future); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := runworkgraph(t, repoRoot(t), "bridge", "drain", "--home", homeDir, "--client", "claude-code", "--client-command", clientPath); err != nil {
+		t.Fatalf("drain while another worker holds the task: %v\n%s", err, output)
+	}
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Fatalf("drain launched Claude for a task another worker holds: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE capture_requests SET status = 'pending', claimed_by = NULL, claim_token = NULL, lease_expires_at = NULL WHERE id = 'llm-task-fact'`); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := runworkgraph(t, repoRoot(t), "bridge", "drain", "--home", homeDir, "--client", "claude-code", "--client-command", clientPath); err != nil {
+		t.Fatalf("drain categorization work without provider tools: %v\n%s", err, output)
+	}
+	contents, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("expected Claude to run categorization work that needs no provider tools: %v", err)
+	}
+	for _, expected := range []string{"--model haiku", "kind llm_task", "llm_task_submit", "Claim at most one request"} {
+		if !strings.Contains(string(contents), expected) {
+			t.Fatalf("categorization drain omitted %q:\n%s", expected, contents)
+		}
+	}
+	if strings.Contains(string(contents), "connector_required_tools") {
+		t.Fatalf("categorization drain asked for provider preflight:\n%s", contents)
 	}
 }
 

@@ -1,7 +1,6 @@
 # Projects, Workstreams, And Categorization
 
-Status: D1, D2, and D3 implemented; the D4 daily loop surfaces are
-implemented and D4 scheduling is planned. Slices are listed in
+Status: D1 through D4 implemented. Slices are listed in
 `specs/roadmap.md`. Facts live in `facts/projects*_test.go`.
 
 ## Intent
@@ -498,6 +497,67 @@ Categorization runs through the bridged-capture outbox
 - `workgraph llm associate` runs one batch now with the routed profile. From
   D4, with a bridge profile it emits a request and prints its id.
 
+### Scheduling Details
+
+- `"execution"` is valid only on an `ai-client` profile, and its only value
+  is `bridge`. Without it a profile runs directly.
+- The daemon checks the schedule every minute. It does nothing while the
+  `associate` route resolves to no profile or no source is enabled. The hourly
+  emit runs at daemon start and then at most once an hour. The 05:00 run
+  starts at the first check at or after 05:00 local each day, not at daemon
+  start; each check during it emits the next request once the previous one
+  is no longer active, until 10 were emitted, none is eligible, or a check
+  fails.
+- Each emit first records any auto-apply pause transition and runs the
+  deterministic pass, as `llm associate` does, so `params_json` lists only
+  units still uncategorized after deterministic rules:
+  `{"unit_ids": ["<unit id>", ...]}`, at most 50, oldest first, counted after
+  the source policy. `since` and `until` both hold the emit time.
+- At claim the payload is rebuilt from the listed units that are still
+  eligible and unlinked, under the current source policy and catalog. A unit
+  sent under an opaque id is numbered by its position in `params_json`
+  (`unit-<n>`), so the rebuilt payload maps the same ids at submit. When no
+  listed unit remains, the claim completes the request with no links and does
+  not return it.
+- Only the routed client may claim an `llm_task`: the worker name must start
+  with the profile's client and a hyphen (for example `claude-code-drain-…`).
+  Any other claim returns nothing and leaves the request pending.
+  `workgraph bridge drain` launches a client only when a request is
+  claimable now, `pending` with `available_at` reached, and for an
+  `llm_task` only when this client is the routed one. A drain session runs
+  either capture or categorization; a categorization session uses the
+  profile's model and config directory, not the worker's pinned model, and
+  runs only when no capture request is claimable for the client.
+- A bridge claim carries `task`: the profile's `client` and `model` and the
+  outbound-filtered `messages`. The hosted opt-in and managed-provider checks
+  run before the task is returned; when they fail, the request returns to
+  `pending` with that error.
+- A submission is the model's response text, parsed and validated exactly as
+  a direct response, against the payload rebuilt with the same rules. Output
+  that is not JSON fails the submission and leaves the claim held; the worker
+  then reports the failure with `capture_request_fail`.
+- A direct run whose model call or parse fails returns the request to
+  `pending` with the error and the outbox backoff. Stopping the daemon
+  cancels an in-flight model call, HTTP or client process, and returns the
+  request the same way. A client runs in its own process group, which is
+  killed on cancel, and output waiting is bounded to 5 seconds.
+- A completed task records a 24-hour cooldown for each sent unit that got no
+  link, whether the model left it out or every entry for it was discarded.
+  Scheduled emits, hourly and 05:00, and `llm associate` with a bridge
+  profile skip a cooled-down unit until the cooldown ends or its permitted
+  members change. A bridge claim records the member set it sent; at submit a
+  unit whose members changed since the claim is not cooled down. A direct
+  `llm associate` run ignores cooldowns.
+- Failures, lease expiry, and drain timeouts of `llm_task` requests never
+  write connector runtime state, and `llm_task` requests are never reported
+  as bridge stalls: `llm.associate` is not a capture connector. A bridge
+  request left pending by an absent worker stays visible in `capture requests
+  --list` and coalesces later emits.
+- With a bridge profile, `llm associate` performs one emit and prints `LLM
+  associate request emitted` or `LLM associate request pending` with
+  `Request: <id>`, or that no unit is eligible. `--dry-run` still prints the
+  payload without emitting.
+
 ## Review
 
 ```text
@@ -669,7 +729,9 @@ Grouping, shared by `today` and `resume`:
 - **P9. Scheduled requests use the outbox.** The daemon emits one
   `llm.associate` request when eligible units exist and none when they do
   not; a claim without a kind never returns it to a capture worker; a
-  bridge-executed request completes only with a valid claim token.
+  bridge-executed request completes only with a valid claim token; a
+  direct-path request run by the daemon writes links; a source disabled
+  between emit and claim is left out of the claimed payload.
 - **P10. Daily surfaces group by project.** `next` shows the categorize line
   with three awaiting units and the auto-applied count, JSON items carry the
   link id and evidence, and approving, reassigning, and rejecting closes them

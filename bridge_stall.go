@@ -29,7 +29,7 @@ func bridgeStallThreshold(interval time.Duration) time.Duration {
 }
 
 func detectBridgeStall(homeDir string, state connectorRuntimeFile, id string, request CaptureRequest, now time.Time) (bridgeStall, bool) {
-	if connectorCaptureMode(state, id) != "bridged" || !connectorEnabled(state, id) || request.ID == "" {
+	if request.ID == "" || request.Kind != captureRequestKindCapture || connectorCaptureMode(state, id) != "bridged" || !connectorEnabled(state, id) {
 		return bridgeStall{}, false
 	}
 	threshold := bridgeStallThreshold(connectorInterval(state, id, defaultConnectorInterval(id)))

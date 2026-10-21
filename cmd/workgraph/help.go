@@ -97,6 +97,7 @@ var helpTopics = map[string]helpTopic{
 	"init":                    {"workgraph init [--force] [options]", "Initialize or refresh local workgraph state."},
 	"llm":                     {"workgraph llm <subcommand>", "Configure and use local, direct, or signed-in-client LLM profiles."},
 	"llm associate":           {"workgraph llm associate [--dry-run] [options]", "Link uncategorized units of work to declared projects with the associate profile."},
+	"llm associate submit":    {"workgraph llm associate submit --request <id> --claim-file <path> [options] < response", "Submit a bridge worker's reply to a claimed llm_task request."},
 	"llm add":                 {"workgraph llm add <profile> --provider <provider> [options]", "Add or replace an advanced LLM profile."},
 	"llm connect":             {"workgraph llm connect <codex|claude-code> [--name <profile>] [--for <task>] [options]", "Configure a signed-in AI client as an LLM profile without storing model credentials."},
 	"llm doctor":              {"workgraph llm doctor [--profile <name>] [options]", "Inspect an LLM profile's local readiness."},
@@ -414,7 +415,7 @@ func runCommandForOptionHelp(args []string, stdout io.Writer, stderr io.Writer) 
 	case "azure":
 		return runAzure(args[1:], stdout, stderr)
 	case "llm":
-		return runLLM(args[1:], stdout, stderr)
+		return runLLM(args[1:], os.Stdin, stdout, stderr)
 	case "events":
 		return runEvents(args[1:], stdout, stderr)
 	case "associations":
