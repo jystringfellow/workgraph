@@ -7,7 +7,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 )
+
+const localGitIdentityWorkers = 8
 
 type LocalGitIdentityConfig struct {
 	HomeDir      string
@@ -16,9 +19,7 @@ type LocalGitIdentityConfig struct {
 
 func LocalGitEmails(config LocalGitIdentityConfig) []string {
 	emails := gitConfigEmails("config", "--global", "--get-all", "user.email")
-	for _, repo := range capturedGitRepositories(config) {
-		emails = append(emails, gitConfigEmails("-C", repo, "config", "--get-all", "user.email")...)
-	}
+	emails = append(emails, repositoryGitEmails(existingDirectories(capturedGitRepositories(config)))...)
 	set := normalizedEmailSet(emails)
 	normalized := make([]string, 0, len(set))
 	for email := range set {
@@ -26,6 +27,44 @@ func LocalGitEmails(config LocalGitIdentityConfig) []string {
 	}
 	sort.Strings(normalized)
 	return normalized
+}
+
+func repositoryGitEmails(repos []string) []string {
+	jobs := make(chan string)
+	results := make(chan []string)
+	var workers sync.WaitGroup
+	for range min(localGitIdentityWorkers, len(repos)) {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for repo := range jobs {
+				results <- gitConfigEmails("-C", repo, "config", "--get-all", "user.email")
+			}
+		}()
+	}
+	go func() {
+		for _, repo := range repos {
+			jobs <- repo
+		}
+		close(jobs)
+		workers.Wait()
+		close(results)
+	}()
+	var emails []string
+	for repoEmails := range results {
+		emails = append(emails, repoEmails...)
+	}
+	return emails
+}
+
+func existingDirectories(paths []string) []string {
+	var existing []string
+	for _, path := range paths {
+		if info, err := os.Stat(path); err == nil && info.IsDir() {
+			existing = append(existing, path)
+		}
+	}
+	return existing
 }
 
 func gitConfigEmails(args ...string) []string {

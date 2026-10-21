@@ -1140,8 +1140,9 @@ func runLLMSummarize(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	summarizeConfig := workgraph.LLMSummarizeTodayConfig{
-		HomeDir: *homeDir,
-		DryRun:  *dryRun,
+		HomeDir:   *homeDir,
+		GitEmails: workgraph.LocalGitEmails(workgraph.LocalGitIdentityConfig{HomeDir: *homeDir}),
+		DryRun:    *dryRun,
 	}
 	if !*dryRun && !*noStream {
 		summarizeConfig.Stream = func(chunk string) error {

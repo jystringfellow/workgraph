@@ -605,6 +605,7 @@ func resumeRelevanceDecisions(events []ResumeEvent, gitEmails []string, githubLo
 		}
 		decisionsByProject[event.Project] = decision
 	}
+	limitResumeRelevanceDecisions(decisionsByProject, resumableRelevantProjects(events, gitEmails, githubLogins, now), now)
 	decisions := make([]resumeRelevanceDecision, 0, len(decisionsByProject))
 	for _, decision := range decisionsByProject {
 		decisions = append(decisions, decision)
@@ -616,6 +617,25 @@ func resumeRelevanceDecisions(events []ResumeEvent, gitEmails []string, githubLo
 		return decisions[i].LastActive.After(decisions[j].LastActive)
 	})
 	return decisions
+}
+
+func limitResumeRelevanceDecisions(decisions map[string]resumeRelevanceDecision, relevant []ResumeProject, now time.Time) {
+	selected := map[string]bool{}
+	for _, project := range recentResumableProjects(relevant, now) {
+		selected[project.Name] = true
+	}
+	for _, project := range relevant {
+		if selected[project.Name] {
+			continue
+		}
+		decision := decisions[project.Name]
+		decision.Shown = false
+		decision.Reason = fmt.Sprintf("beyond the %d most recent projects", resumeProjectListLimit)
+		if project.LastActive.Before(now.Add(-resumeProjectListWindow)) {
+			decision.Reason = "no user-work evidence in the last 14 days"
+		}
+		decisions[project.Name] = decision
+	}
 }
 
 func resumableProjectsFromEvents(events []ResumeEvent) []ResumeProject {

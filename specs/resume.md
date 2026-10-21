@@ -131,7 +131,9 @@ project names before exact `workgraph resume <project>` calls.
 `workgraph resume --debug-relevance` renders the default relevance decision for
 each captured project instead of the normal project list. Each line says whether
 the project would be shown or hidden, includes the reason, and preserves event
-count plus last-active timestamp. This is intended for local debugging of
+count plus last-active timestamp. Visibility matches the default list:
+projects with user-work evidence that the 14-day window or ten-project cap
+leaves out are reported hidden with that reason. This is intended for local debugging of
 unexpected resume results, not as an admin audit surface.
 
 ## Project Resume
