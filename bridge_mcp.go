@@ -283,7 +283,7 @@ func bridgeMCPTools() []bridgeMCPTool {
 	return []bridgeMCPTool{
 		{"next_items", "Read local attention items and their evidence. This tool does not change items or contact providers.", object(map[string]any{"project": str, "reason": str, "include_untrusted": map[string]any{"type": "boolean"}})},
 		{"capture_requests_list", "List non-secret bridged capture outbox metadata.", object(map[string]any{"connector": str})},
-		{"capture_requests_claim", "Atomically claim daemon-scheduled capture work. Filter with connector. Every claim must end in capture_ingest or capture_request_fail with a reason; never abandon it.", object(map[string]any{"connector": str, "worker": str, "max": integer}, "worker")},
+		{"capture_requests_claim", "Atomically claim daemon-scheduled capture work. Filter with connector. Without kind only capture requests are claimed; kind llm_task claims categorization work that returns a task to answer and submit with llm_task_submit. Every claim must end in capture_ingest, llm_task_submit, or capture_request_fail with a reason; never abandon it.", object(map[string]any{"connector": str, "kind": map[string]any{"type": "string", "enum": []string{"capture", "llm_task"}}, "worker": str, "max": integer}, "worker")},
 		{"capture_request_renew", "Renew an unexpired capture claim.", object(map[string]any{"request_id": str, "claim_token": str}, "request_id", "claim_token")},
 		{"capture_ingest", "Validate and atomically ingest one normalized event batch, or parse one claimed Slack List snapshot from raw CSV server-side.", captureIngest},
 		{"capture_request_fail", "Return claimed work for retry with bounded error details.", object(map[string]any{"request_id": str, "claim_token": str, "error": str}, "request_id", "claim_token")},
@@ -293,6 +293,7 @@ func bridgeMCPTools() []bridgeMCPTool {
 		{"connector_bridge_configure", "Configure approved non-secret bridge scope and cadence.", object(map[string]any{"connector": str, "interval": str, "bridge_params": map[string]any{"type": "object"}}, "connector", "interval", "bridge_params")},
 		{"connector_bridge_disconnect", "Switch a bridged connector back to direct mode and cancel active work.", object(map[string]any{"connector": str}, "connector")},
 		{"bridge_worker_heartbeat", "Report that an installed client bridge worker is alive.", object(map[string]any{"worker": str}, "worker")},
+		{"llm_task_submit", "Submit your JSON reply to a claimed llm_task; workgraph validates it, writes project links, and completes the request.", object(map[string]any{"request_id": str, "claim_token": str, "result": map[string]any{}}, "request_id", "claim_token", "result")},
 	}
 }
 
@@ -349,7 +350,11 @@ func callBridgeMCPTool(config BridgeMCPConfig, name string, raw json.RawMessage)
 	case "capture_requests_claim":
 		var max int
 		_ = json.Unmarshal(args["max"], &max)
-		claims, err := ClaimCaptureRequests(CaptureRequestClaimConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, ConnectorID: stringArg("connector"), Worker: stringArg("worker"), Max: max})
+		claim := CaptureRequestClaimConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, ConnectorID: stringArg("connector"), Kind: stringArg("kind"), Worker: stringArg("worker"), Max: max}
+		if claim.Kind == captureRequestKindLLMTask {
+			claim.GitEmails = LocalGitEmails(LocalGitIdentityConfig{HomeDir: config.HomeDir})
+		}
+		claims, err := ClaimCaptureRequests(claim)
 		return map[string]any{"claims": claims}, err
 	case "capture_request_renew":
 		return RenewCaptureRequest(CaptureRequestCapabilityConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, RequestID: stringArg("request_id"), ClaimToken: stringArg("claim_token")})
@@ -396,6 +401,16 @@ func callBridgeMCPTool(config BridgeMCPConfig, name string, raw json.RawMessage)
 		return ConfigureBridgedConnector(ConnectorBridgeConfig{HomeDir: config.HomeDir, ID: stringArg("connector"), Interval: interval, BridgeParams: args["bridge_params"]})
 	case "connector_bridge_disconnect":
 		return SetConnectorMode(ConnectorModeConfig{HomeDir: config.HomeDir, ID: stringArg("connector"), Mode: "direct"})
+	case "llm_task_submit":
+		response := rawStringArg("result")
+		if response == "" {
+			response = string(args["result"])
+		}
+		result, err := SubmitLLMTask(LLMTaskSubmitConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, GitEmails: LocalGitEmails(LocalGitIdentityConfig{HomeDir: config.HomeDir}), RequestID: stringArg("request_id"), ClaimToken: stringArg("claim_token"), Response: response})
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"request_completed": true, "run_id": result.RunID, "applied": result.Applied, "proposed": result.Proposed, "discarded": len(result.Discarded), "message": result.Message}, nil
 	case "bridge_worker_heartbeat":
 		worker := stringArg("worker")
 		observedAt, err := RecordBridgeWorkerHeartbeat(config.HomeDir, config.DatabasePath, worker)

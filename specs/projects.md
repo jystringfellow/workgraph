@@ -497,6 +497,48 @@ Categorization runs through the bridged-capture outbox
 - `workgraph llm associate` runs one batch now with the routed profile. From
   D4, with a bridge profile it emits a request and prints its id.
 
+### Scheduling Details
+
+- `"execution"` is valid only on an `ai-client` profile, and its only value
+  is `bridge`. Without it a profile runs directly.
+- The daemon checks the schedule every minute. It does nothing while the
+  `associate` route resolves to no profile or no source is enabled. The hourly
+  emit runs at daemon start and then at most once an hour. The 05:00 run
+  starts at the first check at or after 05:00 local each day, not at daemon
+  start; each check during it emits the next request once the previous one
+  is no longer active, until 10 were emitted, none is eligible, or a check
+  fails.
+- Each emit first records any auto-apply pause transition and runs the
+  deterministic pass, as `llm associate` does, so `params_json` lists only
+  units still uncategorized after deterministic rules:
+  `{"unit_ids": ["<unit id>", ...]}`, at most 50, oldest first, counted after
+  the source policy. `since` and `until` both hold the emit time.
+- At claim the payload is rebuilt from the listed units that are still
+  eligible and unlinked, under the current source policy and catalog. A unit
+  sent under an opaque id is numbered by its position in `params_json`
+  (`unit-<n>`), so the rebuilt payload maps the same ids at submit. When no
+  listed unit remains, the claim completes the request with no links and does
+  not return it.
+- A bridge claim carries `task`: the profile's `client` and `model` and the
+  outbound-filtered `messages`. The hosted opt-in and managed-provider checks
+  run before the task is returned; when they fail, the request returns to
+  `pending` with that error.
+- A submission is the model's response text, parsed and validated exactly as
+  a direct response, against the payload rebuilt with the same rules. Output
+  that is not JSON fails the submission and leaves the claim held; the worker
+  then reports the failure with `capture_request_fail`.
+- A direct run whose model call or parse fails returns the request to
+  `pending` with the error and the outbox backoff.
+- Failures, lease expiry, and drain timeouts of `llm_task` requests never
+  write connector runtime state, and `llm_task` requests are never reported
+  as bridge stalls: `llm.associate` is not a capture connector. A bridge
+  request left pending by an absent worker stays visible in `capture requests
+  --list` and coalesces later emits.
+- With a bridge profile, `llm associate` performs one emit and prints `LLM
+  associate request emitted` or `LLM associate request pending` with
+  `Request: <id>`, or that no unit is eligible. `--dry-run` still prints the
+  payload without emitting.
+
 ## Review
 
 ```text
@@ -639,6 +681,8 @@ workgraph projects explain <unit-id>
 - **P9. Scheduled requests use the outbox.** The daemon emits one
   `llm.associate` request when eligible units exist and none when they do
   not; a claim without a kind never returns it to a capture worker; a
-  bridge-executed request completes only with a valid claim token.
+  bridge-executed request completes only with a valid claim token; a
+  direct-path request run by the daemon writes links; a source disabled
+  between emit and claim is left out of the claimed payload.
 - **P10. Daily surfaces group by project.** `next` shows the categorize line,
   and `today` and `resume` group by workstream, then project, then container.

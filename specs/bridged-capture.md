@@ -267,10 +267,13 @@ completed_at, cancelled_at
 - Claim tokens are cryptographically random and are returned only to the
   claimant. List/status output does not expose them.
 
-Planned (`specs/projects.md`, slice D4): a `kind` column distinguishes
-`capture` requests from `llm_task` requests. Project categorization uses
-connector id `llm.associate` with the same leases, retries, and cancellation,
-and no capture cursor.
+A `kind` column distinguishes `capture` requests (the default) from
+`llm_task` requests (`specs/projects.md`, Scheduling). Project categorization
+uses connector id `llm.associate` with the same leases, retries, and
+cancellation, and no capture cursor or connector runtime state. A claim
+without a kind claims only `capture` requests; `--kind llm_task` or the MCP
+`kind` argument claims categorization work, which completes through `llm
+associate submit` or `llm_task_submit` rather than ingest.
 
 Completed-through state lives in a `capture_cursors` table:
 
@@ -384,7 +387,7 @@ validation and state transitions.
 ```sh
 workgraph capture requests --list
 workgraph capture requests --cancel <id> [--reason <text>]
-workgraph capture requests --claim [--connector X] [--max N] --worker <name> --claim-file <path>
+workgraph capture requests --claim [--connector X] [--kind capture|llm_task] [--max N] --worker <name> --claim-file <path>
 workgraph capture requests --renew <id> --claim-file <path>
 workgraph capture ingest --request <id> --claim-file <path> [--json -]
 workgraph capture requests --fail <id> --claim-file <path> [--error-json -]
@@ -426,6 +429,7 @@ connector_required_tools
 connector_bridge_configure
 connector_bridge_disconnect
 bridge_worker_heartbeat
+llm_task_submit
 ```
 
 The MCP server is local-only and requires no provider credentials. A claimed
@@ -614,7 +618,9 @@ Connector status distinguishes:
 A bridged connector is stalled when its active request has been pending or
 claimed for longer than `max(3 x interval, 30m)` with no completion, or when a
 bridge worker heartbeat exists and the freshest one is older than that
-threshold while a request is active. `workgraph connectors list`,
+threshold while a request is active. Only `capture` requests of a bridged
+connector can stall; `llm_task` requests are never reported as stalls.
+`workgraph connectors list`,
 `workgraph connectors status`, and the running `workgraph status` connector
 errors show it with its age, for example `bridge stalled 19d: no completed
 capture since 2026-10-02T09:00:00Z`. When the drain wrapper recorded a failure,

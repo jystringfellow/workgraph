@@ -42,7 +42,7 @@ func TestLocalBridgeMCPAdvertisesToolsAndConfiguresScopedConnector(t *testing.T)
 		"capture_ingest", "capture_request_fail", "capture_watermark",
 		"connector_status", "connector_bridge_configure", "connector_bridge_disconnect",
 		"connector_required_tools",
-		"bridge_worker_heartbeat", "next_items",
+		"bridge_worker_heartbeat", "next_items", "llm_task_submit",
 	} {
 		if !strings.Contains(stdout.String(), `"name":"`+tool+`"`) {
 			t.Fatalf("MCP tools/list omitted %s:\n%s", tool, stdout.String())

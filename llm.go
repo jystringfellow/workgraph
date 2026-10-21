@@ -21,7 +21,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 )
 
-const llmTaskSummarize = "summarize"
+const (
+	llmTaskSummarize   = "summarize"
+	llmExecutionBridge = "bridge"
+)
 
 type LLMAddProfileConfig struct {
 	HomeDir    string
@@ -35,6 +38,7 @@ type LLMAddProfileConfig struct {
 	Region     string
 	ModelARN   string
 	ConfigDir  string
+	Execution  string
 }
 
 type LLMConnectClientConfig struct {
@@ -108,6 +112,7 @@ type llmProfile struct {
 	Region     string `json:"region,omitempty"`
 	ModelARN   string `json:"model_arn,omitempty"`
 	ConfigDir  string `json:"config_dir,omitempty"`
+	Execution  string `json:"execution,omitempty"`
 }
 
 type llmHostedConfig struct {
@@ -164,6 +169,7 @@ func AddLLMProfile(config LLMAddProfileConfig) (LLMResult, error) {
 		AWSProfile: strings.TrimSpace(config.AWSProfile),
 		Region:     strings.TrimSpace(config.Region),
 		ModelARN:   strings.TrimSpace(config.ModelARN),
+		Execution:  strings.TrimSpace(config.Execution),
 	}
 	if profile.Provider == "ai-client" {
 		profile.Client, err = normalizeAIClient(profile.Client)
@@ -201,6 +207,9 @@ func AddLLMProfile(config LLMAddProfileConfig) (LLMResult, error) {
 	}
 	if profile.Provider == "ai-client" {
 		lines = append(lines, "Config dir: "+llmProfileConfigDirLabel(profile))
+	}
+	if profile.Execution != "" {
+		lines = append(lines, "Execution: "+profile.Execution)
 	}
 	lines = append(lines, "Config: "+configPath)
 	return LLMResult{ConfigPath: configPath, Message: strings.Join(lines, "\n")}, nil
@@ -1211,6 +1220,9 @@ func resolveLLMProfile(config llmConnectorConfig, requestedProfile string, task 
 func validateLLMProfile(profile llmProfile) error {
 	if profile.Provider != "ai-client" && profile.ConfigDir != "" {
 		return errors.New("config_dir is supported only for ai-client profiles")
+	}
+	if profile.Execution != "" && (profile.Provider != "ai-client" || profile.Execution != llmExecutionBridge) {
+		return errors.New(`execution "bridge" is the only execution setting, and only for ai-client profiles`)
 	}
 	switch profile.Provider {
 	case "":

@@ -60,6 +60,7 @@ type LLMAssociateResult struct {
 	Discarded     []AssociateDiscard
 	Accuracy      ProjectLinkAccuracyReport
 	Deterministic ProjectLinkRunResult
+	skipped       int
 }
 
 type associatePayload struct {
@@ -181,65 +182,26 @@ func ConfigureLLMSources(config LLMSourcesConfig) (LLMResult, error) {
 }
 
 func AssociateWithLLM(config LLMAssociateConfig) (LLMAssociateResult, error) {
-	homeDir, err := resolveLLMHomeDir(config.HomeDir)
+	run, err := newAssociateRun(config)
 	if err != nil {
 		return LLMAssociateResult{}, err
 	}
-	stored, err := readLLMConnectorConfig(homeDir)
-	if err != nil {
-		return LLMAssociateResult{}, err
+	if !config.DryRun && associateExecutesInBridge(run.profile) {
+		return emitAssociateRequestNow(config, run)
 	}
-	profileName, profile, err := resolveLLMProfile(stored, "", associateRoute(stored))
-	if err != nil {
-		return LLMAssociateResult{}, err
-	}
-	now := config.Now
-	if now.IsZero() {
-		now = time.Now()
-	}
-	now = now.UTC()
-	enabled := map[string]bool{}
-	for _, source := range stored.TaskSources[llmTaskAssociate] {
-		enabled[source] = true
-	}
-	catalog, err := LoadProjectCatalog(config.MemoryDir)
-	if err != nil {
-		return LLMAssociateResult{}, err
-	}
-	store := ProjectLinkStoreConfig{HomeDir: homeDir, DatabasePath: config.DatabasePath, Now: now}
 	var deterministic ProjectLinkRunResult
 	if !config.DryRun {
-		if err := withProjectLinksTx(store, func(*sql.Tx, time.Time) error { return nil }); err != nil {
-			return LLMAssociateResult{}, err
-		}
-		deterministic, err = LinkProjectUnits(ProjectLinkPassConfig{HomeDir: homeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir, Now: now, Location: config.Location, GitEmails: config.GitEmails})
-		if err != nil {
+		if deterministic, err = run.linkDeterministic(config); err != nil {
 			return LLMAssociateResult{}, err
 		}
 	}
-	payload, err := buildAssociatePayload(homeDir, config, now, catalog, enabled)
+	payload, err := buildAssociatePayload(run.homeDir, config, run.now, run.catalog, run.enabled, nil)
 	if err != nil {
 		return LLMAssociateResult{}, err
 	}
-	result := LLMAssociateResult{ConfigPath: llmConfigPath(homeDir), Deterministic: deterministic}
-	for _, unit := range payload.Units {
-		result.Sent = append(result.Sent, unit.UnitID)
-	}
-	header := []string{
-		"Profile: " + profileName,
-		"Provider: " + profile.Provider,
-		"Model: " + llmProfileModelLabel(profile),
-		"Destination: " + llmProfileDestination(profile),
-		"Enabled sources: " + associateSourcesLabel(orderedAssociateSources(enabled)),
-	}
-	if len(deterministic.Written) > 0 {
-		header = append(header, fmt.Sprintf("Deterministic links: %d (run %s)", len(deterministic.Written), deterministic.RunID))
-	}
-	messages, err := associateMessages(payload)
-	if err != nil {
-		return LLMAssociateResult{}, err
-	}
-	filtered, err := filterMessagesForProfile(profile, messages)
+	result := LLMAssociateResult{ConfigPath: llmConfigPath(run.homeDir), Deterministic: deterministic, Sent: associatePayloadUnitIDs(payload)}
+	header := run.header(deterministic)
+	filtered, err := run.filteredMessages(payload)
 	if err != nil {
 		return LLMAssociateResult{}, err
 	}
@@ -253,24 +215,113 @@ func AssociateWithLLM(config LLMAssociateConfig) (LLMAssociateResult, error) {
 		result.Message = strings.Join(append(append([]string{"LLM associate complete"}, header...), "No eligible units for the enabled sources; no model was called."), "\n")
 		return result, nil
 	}
-	if err := enforceLLMManagedSettings(profile, config.HTTPClient); err != nil {
-		return LLMAssociateResult{}, err
-	}
-	if err := enforceHostedLLMOptIn(stored, profile); err != nil {
-		return LLMAssociateResult{}, err
-	}
-	response, err := callLLMProfile(config.HTTPClient, profile, filtered.Messages)
+	response, err := run.call(config, filtered)
 	if err != nil {
 		return LLMAssociateResult{}, err
 	}
+	if err := run.apply(config, payload, response, nil, &result); err != nil {
+		return LLMAssociateResult{}, err
+	}
+	lines := append([]string{"LLM associate complete"}, header...)
+	lines = append(lines, outboundFilterMessage(filtered))
+	result.Message = strings.Join(append(lines, result.reportLines()...), "\n")
+	return result, nil
+}
+
+type associateRun struct {
+	homeDir     string
+	stored      llmConnectorConfig
+	profileName string
+	profile     llmProfile
+	enabled     map[string]bool
+	catalog     ProjectCatalog
+	now         time.Time
+}
+
+func newAssociateRun(config LLMAssociateConfig) (associateRun, error) {
+	homeDir, err := resolveLLMHomeDir(config.HomeDir)
+	if err != nil {
+		return associateRun{}, err
+	}
+	stored, err := readLLMConnectorConfig(homeDir)
+	if err != nil {
+		return associateRun{}, err
+	}
+	profileName, profile, err := resolveLLMProfile(stored, "", associateRoute(stored))
+	if err != nil {
+		return associateRun{}, err
+	}
+	now := config.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	enabled := map[string]bool{}
+	for _, source := range stored.TaskSources[llmTaskAssociate] {
+		enabled[source] = true
+	}
+	catalog, err := LoadProjectCatalog(config.MemoryDir)
+	if err != nil {
+		return associateRun{}, err
+	}
+	return associateRun{homeDir: homeDir, stored: stored, profileName: profileName, profile: profile, enabled: enabled, catalog: catalog, now: now.UTC()}, nil
+}
+
+func (run associateRun) store(config LLMAssociateConfig) ProjectLinkStoreConfig {
+	return ProjectLinkStoreConfig{HomeDir: run.homeDir, DatabasePath: config.DatabasePath, Now: run.now}
+}
+
+func (run associateRun) linkDeterministic(config LLMAssociateConfig) (ProjectLinkRunResult, error) {
+	if err := withProjectLinksTx(run.store(config), func(*sql.Tx, time.Time) error { return nil }); err != nil {
+		return ProjectLinkRunResult{}, err
+	}
+	return LinkProjectUnits(ProjectLinkPassConfig{HomeDir: run.homeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir, Now: run.now, Location: config.Location, GitEmails: config.GitEmails})
+}
+
+func (run associateRun) header(deterministic ProjectLinkRunResult) []string {
+	header := []string{
+		"Profile: " + run.profileName,
+		"Provider: " + run.profile.Provider,
+		"Model: " + llmProfileModelLabel(run.profile),
+		"Destination: " + llmProfileDestination(run.profile),
+		"Enabled sources: " + associateSourcesLabel(orderedAssociateSources(run.enabled)),
+	}
+	if len(deterministic.Written) > 0 {
+		header = append(header, fmt.Sprintf("Deterministic links: %d (run %s)", len(deterministic.Written), deterministic.RunID))
+	}
+	return header
+}
+
+func (run associateRun) filteredMessages(payload associatePayload) (llmOutboundFilterResult, error) {
+	messages, err := associateMessages(payload)
+	if err != nil {
+		return llmOutboundFilterResult{}, err
+	}
+	return filterMessagesForProfile(run.profile, messages)
+}
+
+func (run associateRun) checkOutboundPolicy(config LLMAssociateConfig) error {
+	if err := enforceLLMManagedSettings(run.profile, config.HTTPClient); err != nil {
+		return err
+	}
+	return enforceHostedLLMOptIn(run.stored, run.profile)
+}
+
+func (run associateRun) call(config LLMAssociateConfig, filtered llmOutboundFilterResult) (string, error) {
+	if err := run.checkOutboundPolicy(config); err != nil {
+		return "", err
+	}
+	return callLLMProfile(config.HTTPClient, run.profile, filtered.Messages)
+}
+
+func (run associateRun) apply(config LLMAssociateConfig, payload associatePayload, response string, complete func(*sql.Tx, time.Time) error, result *LLMAssociateResult) error {
 	entries, err := parseAssociateResponse(response)
 	if err != nil {
-		return LLMAssociateResult{}, err
+		return err
 	}
-	proposals, discarded := validateAssociateEntries(payload, entries, catalog)
+	proposals, discarded := validateAssociateEntries(payload, entries, run.catalog)
 	result.Discarded = discarded
-	var run ProjectLinkRunResult
-	err = withProjectLinksTx(store, func(tx *sql.Tx, now time.Time) error {
+	var written ProjectLinkRunResult
+	err = withProjectLinksTx(run.store(config), func(tx *sql.Tx, now time.Time) error {
 		accuracy, err := projectLinkAccuracy(tx, now)
 		if err != nil {
 			return err
@@ -285,38 +336,52 @@ func AssociateWithLLM(config LLMAssociateConfig) (LLMAssociateResult, error) {
 				return err
 			}
 		}
-		run, err = recordProjectLinkRunTx(tx, now, ProjectLinkRun{Source: "llm", Profile: profileName, Links: proposals})
-		return err
+		if written, err = recordProjectLinkRunTx(tx, now, ProjectLinkRun{Source: "llm", Profile: run.profileName, Links: proposals}); err != nil {
+			return err
+		}
+		if complete != nil {
+			return complete(tx, now)
+		}
+		return nil
 	})
 	if err != nil {
-		return LLMAssociateResult{}, err
+		return err
 	}
-	result.RunID = run.RunID
-	for _, link := range run.Written {
+	result.RunID = written.RunID
+	result.skipped = len(written.Skipped)
+	for _, link := range written.Written {
 		if link.State == "applied" {
 			result.Applied++
 		} else {
 			result.Proposed++
 		}
 	}
-	lines := append([]string{"LLM associate complete"}, header...)
-	lines = append(lines,
-		outboundFilterMessage(filtered),
-		"Run: "+run.RunID,
+	return nil
+}
+
+func (result LLMAssociateResult) reportLines() []string {
+	lines := []string{
+		"Run: " + result.RunID,
 		fmt.Sprintf("Units sent: %d", len(result.Sent)),
 		fmt.Sprintf("Applied: %d", result.Applied),
 		fmt.Sprintf("Proposed: %d", result.Proposed),
-		fmt.Sprintf("Discarded: %d", len(discarded)),
-	)
-	for _, discard := range discarded {
+		fmt.Sprintf("Discarded: %d", len(result.Discarded)),
+	}
+	for _, discard := range result.Discarded {
 		lines = append(lines, fmt.Sprintf("- %q: %s", discard.UnitID, discard.Reason))
 	}
-	if len(run.Skipped) > 0 {
-		lines = append(lines, fmt.Sprintf("Skipped: %d already linked", len(run.Skipped)))
+	if result.skipped > 0 {
+		lines = append(lines, fmt.Sprintf("Skipped: %d already linked", result.skipped))
 	}
-	lines = append(lines, result.Accuracy.Summary())
-	result.Message = strings.Join(lines, "\n")
-	return result, nil
+	return append(lines, result.Accuracy.Summary())
+}
+
+func associatePayloadUnitIDs(payload associatePayload) []string {
+	var ids []string
+	for _, unit := range payload.Units {
+		ids = append(ids, unit.UnitID)
+	}
+	return ids
 }
 
 func associateRoute(config llmConnectorConfig) string {
@@ -350,7 +415,7 @@ func associateEventSource(event associateStoredEvent) string {
 	return event.Source
 }
 
-func buildAssociatePayload(homeDir string, config LLMAssociateConfig, now time.Time, catalog ProjectCatalog, enabled map[string]bool) (associatePayload, error) {
+func buildAssociatePayload(homeDir string, config LLMAssociateConfig, now time.Time, catalog ProjectCatalog, enabled map[string]bool, requested []string) (associatePayload, error) {
 	payload := associatePayload{Schema: associateRequestSchema, Projects: []associateProject{}, Units: []associateUnit{}, Decisions: []associateDecision{}}
 	dbPath, err := resumeDatabasePath(ResumeConfig{HomeDir: homeDir, DatabasePath: config.DatabasePath})
 	if err != nil {
@@ -387,8 +452,9 @@ func buildAssociatePayload(homeDir string, config LLMAssociateConfig, now time.T
 			linked[link.UnitID] = true
 		}
 	}
+	candidates, positions := associateCandidates(units, requested)
 	included := map[string]bool{}
-	for _, unit := range units {
+	for index, unit := range candidates {
 		if len(payload.Units) == associateUnitLimit {
 			break
 		}
@@ -410,7 +476,11 @@ func buildAssociatePayload(homeDir string, config LLMAssociateConfig, now time.T
 		}
 		entry := newAssociateUnit(unit, allowed)
 		if len(allowed) < len(unit.EventIDs) {
-			entry.UnitID = fmt.Sprintf("unit-%d", len(payload.Units)+1)
+			position := len(payload.Units) + 1
+			if positions != nil {
+				position = positions[index]
+			}
+			entry.UnitID = fmt.Sprintf("unit-%d", position)
 		}
 		for _, project := range catalog.ForContainer(entry.Container, mappings) {
 			entry.Projects = append(entry.Projects, project.Slug)
@@ -428,6 +498,25 @@ func buildAssociatePayload(homeDir string, config LLMAssociateConfig, now time.T
 		return associatePayload{}, err
 	}
 	return payload, nil
+}
+
+func associateCandidates(units []ProjectUnit, requested []string) ([]ProjectUnit, []int) {
+	if requested == nil {
+		return units, nil
+	}
+	byID := map[string]ProjectUnit{}
+	for _, unit := range units {
+		byID[unit.ID] = unit
+	}
+	var candidates []ProjectUnit
+	var positions []int
+	for index, id := range requested {
+		if unit, found := byID[id]; found {
+			candidates = append(candidates, unit)
+			positions = append(positions, index+1)
+		}
+	}
+	return candidates, positions
 }
 
 func newAssociateUnit(unit ProjectUnit, members []associateStoredEvent) associateUnit {

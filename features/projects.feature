@@ -98,6 +98,31 @@ Scenario: Discard invalid categorization results
   Then the invalid entries are discarded and counted
   And the valid entry is stored
 
+Scenario: Schedule categorization only when there is work
+  Given LLM categorization is enabled for Slack
+  When the daemon checks the schedule with no uncategorized units
+  Then no categorization request is emitted
+  When uncategorized Slack units exist
+  Then one "llm.associate" request is emitted
+  And a capture worker claiming without a kind does not receive it
+
+Scenario: Categorize in the daemon with a direct profile
+  Given the associate route is a direct profile
+  When the daemon emits a categorization request
+  Then the daemon claims it as "daemon", calls the model, and writes links
+
+Scenario: Categorize in the signed-in client bridge
+  Given the associate route is an ai-client profile with bridge execution
+  When the bridge worker claims the "llm_task" request and submits a result
+  Then the result is stored only when the claim token is valid
+  And no capture cursor or connector state changes
+
+Scenario: Honor a source disabled after scheduling
+  Given a categorization request was emitted with a Slack DM unit
+  And Slack DMs were disabled before the request was claimed
+  When the bridge worker claims the request
+  Then the claimed payload omits the DM unit
+
 Scenario: Decide the uncertain items at the end of the day
   Given three units await a categorization decision
   When I run "workgraph next"

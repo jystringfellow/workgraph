@@ -66,6 +66,7 @@ func TestClaudePluginInstallMergesLeastPrivilegeDrainPermissions(t *testing.T) {
 		"mcp__plugin_workgraph_workgraph__connector_status",
 		"mcp__plugin_workgraph_workgraph__connector_required_tools",
 		"mcp__plugin_workgraph_workgraph__bridge_worker_heartbeat",
+		"mcp__plugin_workgraph_workgraph__llm_task_submit",
 	} {
 		if !strings.Contains(allowed, expected) {
 			t.Fatalf("Claude permissions omitted %q:\n%s", expected, contents)
@@ -433,7 +434,7 @@ func TestBridgeDrainLaunchesClientOnlyForActiveDaemonWork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read drain invocation: %v", err)
 	}
-	for _, expected := range []string{"exec", "--ephemeral", "workgraph-bridge", "List pending requests before claiming", "Claim with worker name codex-drain-"} {
+	for _, expected := range []string{"exec", "--ephemeral", "workgraph-bridge", "List pending requests before claiming", "Claim with worker name codex-drain-", "kind llm_task", "llm_task_submit"} {
 		if !strings.Contains(string(contents), expected) {
 			t.Fatalf("drain invocation omitted %q:\n%s", expected, contents)
 		}
@@ -516,6 +517,25 @@ func TestClaudeBridgeDrainLeavesRequestsPendingWithoutProviderPermissions(t *tes
 	}
 	if status != "pending" {
 		t.Fatalf("expected request to remain pending, got %q", status)
+	}
+	for _, args := range [][]string{
+		{"llm", "add", "claude-bridge", "--home", homeDir, "--provider", "ai-client", "--client", "claude-code", "--execution", "bridge"},
+		{"llm", "use", "claude-bridge", "--home", homeDir, "--for", "associate"},
+	} {
+		if output, err := runworkgraph(t, repoRoot(t), args...); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, output)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO capture_requests (id, connector_id, kind, since, until, params_json, status, attempts, available_at, created_at)
+		VALUES ('llm-task-fact', 'llm.associate', 'llm_task', '2026-10-21T00:00:00Z', '2026-10-21T00:00:00Z', '{"unit_ids":["u1"]}', 'pending', 0, '2026-10-21T00:00:00Z', '2026-10-21T00:00:00Z')`); err != nil {
+		t.Fatalf("insert llm_task request: %v", err)
+	}
+	if output, err := runworkgraph(t, repoRoot(t), "bridge", "drain", "--home", homeDir, "--client", "claude-code", "--client-command", clientPath); err != nil {
+		t.Fatalf("drain categorization work without provider tools: %v\n%s", err, output)
+	}
+	contents, err := os.ReadFile(logPath)
+	if err != nil || !strings.Contains(string(contents), "llm_task_submit") {
+		t.Fatalf("expected Claude to run categorization work that needs no provider tools: %v\n%s", err, contents)
 	}
 }
 
