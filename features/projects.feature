@@ -7,6 +7,12 @@ Scenario: Group projects under a workstream
   Then "mmo-gtm-segments" and "mmo-harness" are listed under "mmo"
   And "ask-kai" is listed without a workstream
 
+Scenario: Group activity into units of work
+  Given Slack, GitHub, git, Notion, and calendar events captured in any order
+  When workgraph groups units of work
+  Then the same unit ids and members are produced every time
+  And a Slack burst inside its quiet gap is not eligible for categorization
+
 Scenario: Keep a project with invalid frontmatter
   Given project memory for "broken" has frontmatter that is not closed
   When I run "workgraph projects list"

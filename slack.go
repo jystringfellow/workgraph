@@ -75,12 +75,14 @@ type SlackListCaptureConfig struct {
 }
 
 type SlackChannel struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Private bool   `json:"is_private"`
-	IsIM    bool   `json:"is_im"`
-	IsMPIM  bool   `json:"is_mpim"`
-	User    string `json:"user"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	IsChannel bool   `json:"is_channel"`
+	IsGroup   bool   `json:"is_group"`
+	Private   bool   `json:"is_private"`
+	IsIM      bool   `json:"is_im"`
+	IsMPIM    bool   `json:"is_mpim"`
+	User      string `json:"user"`
 }
 
 type SlackConnectConfig struct {
@@ -139,34 +141,36 @@ type slackConnectorConfig struct {
 }
 
 type slackExportEvent struct {
-	Kind           string         `json:"kind"`
-	ChannelID      string         `json:"channel_id"`
-	ChannelName    string         `json:"channel_name"`
-	Project        string         `json:"project,omitempty"`
-	User           string         `json:"user"`
-	UserName       string         `json:"user_name,omitempty"`
-	UserIsSelf     bool           `json:"user_is_self,omitempty"`
-	Text           string         `json:"text"`
-	NormalizedText string         `json:"normalized_text,omitempty"`
-	Mentions       []slackMention `json:"mentions,omitempty"`
-	TS             string         `json:"ts"`
-	ThreadTS       string         `json:"thread_ts,omitempty"`
-	Permalink      string         `json:"permalink"`
-	Timestamp      string         `json:"timestamp"`
+	Kind             string         `json:"kind"`
+	ChannelID        string         `json:"channel_id"`
+	ChannelName      string         `json:"channel_name"`
+	ConversationType string         `json:"conversation_type,omitempty"`
+	Project          string         `json:"project,omitempty"`
+	User             string         `json:"user"`
+	UserName         string         `json:"user_name,omitempty"`
+	UserIsSelf       bool           `json:"user_is_self,omitempty"`
+	Text             string         `json:"text"`
+	NormalizedText   string         `json:"normalized_text,omitempty"`
+	Mentions         []slackMention `json:"mentions,omitempty"`
+	TS               string         `json:"ts"`
+	ThreadTS         string         `json:"thread_ts,omitempty"`
+	Permalink        string         `json:"permalink"`
+	Timestamp        string         `json:"timestamp"`
 }
 
 type slackEventPayload struct {
-	ChannelID      string         `json:"channel_id"`
-	ChannelName    string         `json:"channel_name"`
-	User           string         `json:"user"`
-	UserName       string         `json:"user_name,omitempty"`
-	UserIsSelf     bool           `json:"user_is_self,omitempty"`
-	Text           string         `json:"text"`
-	NormalizedText string         `json:"normalized_text,omitempty"`
-	Mentions       []slackMention `json:"mentions,omitempty"`
-	TS             string         `json:"ts"`
-	ThreadTS       string         `json:"thread_ts,omitempty"`
-	Permalink      string         `json:"permalink"`
+	ChannelID        string         `json:"channel_id"`
+	ChannelName      string         `json:"channel_name"`
+	ConversationType string         `json:"conversation_type,omitempty"`
+	User             string         `json:"user"`
+	UserName         string         `json:"user_name,omitempty"`
+	UserIsSelf       bool           `json:"user_is_self,omitempty"`
+	Text             string         `json:"text"`
+	NormalizedText   string         `json:"normalized_text,omitempty"`
+	Mentions         []slackMention `json:"mentions,omitempty"`
+	TS               string         `json:"ts"`
+	ThreadTS         string         `json:"thread_ts,omitempty"`
+	Permalink        string         `json:"permalink"`
 }
 
 type slackMention struct {
@@ -949,7 +953,7 @@ func CaptureSlackFromAPI(config SlackAPICaptureConfig) (SlackAPICaptureResult, e
 		}
 		newest := cursors[channel.ID]
 		for _, message := range messages {
-			event := slackEventFromAPIMessage(channel.ID, channel.Name, message, "")
+			event := slackEventFromAPIMessage(channel, message, "")
 			event.UserName = fetchSlackUserName(config, message.User, userNames)
 			event.UserIsSelf = slackUserIsSelf(message.User, selfUserID)
 			event.NormalizedText, event.Mentions = normalizeSlackText(config, message.Text, userNames, channelNames, selfUserID)
@@ -1104,17 +1108,18 @@ func storeSlackEvent(db *sql.DB, event slackExportEvent) (bool, error) {
 	}
 
 	payload, err := json.Marshal(slackEventPayload{
-		ChannelID:      event.ChannelID,
-		ChannelName:    event.ChannelName,
-		User:           event.User,
-		UserName:       event.UserName,
-		UserIsSelf:     event.UserIsSelf,
-		Text:           event.Text,
-		NormalizedText: event.NormalizedText,
-		Mentions:       event.Mentions,
-		TS:             event.TS,
-		ThreadTS:       event.ThreadTS,
-		Permalink:      event.Permalink,
+		ChannelID:        event.ChannelID,
+		ChannelName:      event.ChannelName,
+		ConversationType: recognizedSlackConversationType(event.ConversationType),
+		User:             event.User,
+		UserName:         event.UserName,
+		UserIsSelf:       event.UserIsSelf,
+		Text:             event.Text,
+		NormalizedText:   event.NormalizedText,
+		Mentions:         event.Mentions,
+		TS:               event.TS,
+		ThreadTS:         event.ThreadTS,
+		Permalink:        event.Permalink,
 	})
 	if err != nil {
 		return false, fmt.Errorf("encode slack event: %w", err)
@@ -1485,7 +1490,7 @@ func captureSlackThreadReplies(db *sql.DB, config SlackAPICaptureConfig, channel
 		if !slackTSAfter(reply.TS, newest) {
 			continue
 		}
-		replyEvent := slackEventFromAPIMessage(channel.ID, channel.Name, reply, threadTS)
+		replyEvent := slackEventFromAPIMessage(channel, reply, threadTS)
 		replyEvent.UserName = fetchSlackUserName(config, reply.User, userNames)
 		replyEvent.UserIsSelf = slackUserIsSelf(reply.User, selfUserID)
 		replyEvent.NormalizedText, replyEvent.Mentions = normalizeSlackText(config, reply.Text, userNames, nil, selfUserID)
@@ -1869,7 +1874,7 @@ func openURLInBrowser(target string) error {
 	return nil
 }
 
-func slackEventFromAPIMessage(channelID string, channelName string, message slackAPIMessage, parentThreadTS string) slackExportEvent {
+func slackEventFromAPIMessage(channel SlackChannel, message slackAPIMessage, parentThreadTS string) slackExportEvent {
 	threadTS := message.ThreadTS
 	if threadTS == "" {
 		threadTS = parentThreadTS
@@ -1879,15 +1884,58 @@ func slackEventFromAPIMessage(channelID string, channelName string, message slac
 		kind = "thread_reply"
 	}
 	return slackExportEvent{
-		Kind:        kind,
-		ChannelID:   channelID,
-		ChannelName: channelName,
-		User:        message.User,
-		Text:        message.Text,
-		TS:          message.TS,
-		ThreadTS:    threadTS,
-		Permalink:   message.Permalink,
-		Timestamp:   slackTimestampToRFC3339(message.TS),
+		Kind:             kind,
+		ChannelID:        channel.ID,
+		ChannelName:      channel.Name,
+		ConversationType: slackChannelConversationType(channel),
+		User:             message.User,
+		Text:             message.Text,
+		TS:               message.TS,
+		ThreadTS:         threadTS,
+		Permalink:        message.Permalink,
+		Timestamp:        slackTimestampToRFC3339(message.TS),
+	}
+}
+
+func slackChannelConversationType(channel SlackChannel) string {
+	switch {
+	case channel.IsIM:
+		return "im"
+	case channel.IsMPIM:
+		return "mpim"
+	case channel.Private:
+		return "private_channel"
+	case channel.IsChannel || channel.IsGroup:
+		return "channel"
+	default:
+		return ""
+	}
+}
+
+func recognizedSlackConversationType(conversationType string) string {
+	switch conversationType {
+	case "channel", "private_channel", "im", "mpim":
+		return conversationType
+	default:
+		return ""
+	}
+}
+
+// SlackPrivacySource returns the LLM source ("slack" or "slack.dm") governing
+// a stored Slack event payload. A missing or unrecognized conversation type is
+// "slack.dm" so events of unknown privacy are never treated as channel content.
+func SlackPrivacySource(payloadJSON string) string {
+	var payload struct {
+		ConversationType string `json:"conversation_type"`
+	}
+	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+		return "slack.dm"
+	}
+	switch payload.ConversationType {
+	case "channel", "private_channel":
+		return "slack"
+	default:
+		return "slack.dm"
 	}
 }
 

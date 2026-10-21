@@ -26,6 +26,13 @@ Scenario: Daemon collects configured Slack messages
   And workgraph captures later replies added to already-seen thread parents
   And workgraph does not post or react in Slack
 
+Scenario: Record the Slack conversation type for privacy
+  Given workgraph has been initialized
+  And Slack access is configured for public channels, private channels, and opted-in DMs
+  When workgraph collects Slack messages
+  Then each event records whether it came from a channel, private channel, IM, or MPIM
+  And an event without a recognized conversation type is treated as a DM
+
 Scenario: Opt into Slack direct messages
   Given workgraph has been initialized
   When I run "workgraph slack connect --include-dms"
