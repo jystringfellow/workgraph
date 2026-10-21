@@ -123,10 +123,18 @@ user wants local context about stakeholders, collaborators, reviewers, or teams.
 
 Status: draft
 
-Represents inferred or declared bodies of work.
-Projects can come from captured activity, explicit project memory, repositories,
-work-tracking tools, or document collections. A declared project should not
-require captured events before it can hold active memory.
+Represents a body of work the user declares, backed by a project memory file.
+A declared project does not require captured events before it can hold active
+memory. Projects span many containers: the event `project` column records the
+container where activity happened, such as a repository or Slack channel, not
+the declared project.
+
+A project may name an optional workstream, a parent grouping such as `mmo`
+over the `mmo-*` projects, in its memory frontmatter. Workstreams have no
+storage of their own.
+
+Units of work, such as a Slack thread or a GitHub PR with its commits, are
+linked to projects through project links. See `specs/projects.md`.
 
 ### Artifact
 

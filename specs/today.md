@@ -62,6 +62,11 @@ When events exist, output includes:
 
 When no events exist for the local day, output includes `Today` and says no activity has been captured today. No `Associations` heading is shown in that case.
 
+Planned (`specs/projects.md`, slice D4): `Projects` groups activity by
+workstream, then declared project, using applied project links and container
+mappings. Activity with no link falls back to its container. Each project line
+lists the kinds of its linked units, such as review or coordination.
+
 ## Event Labels
 
 `today` keeps event labels compact while preserving the identifiers that make a line useful:
