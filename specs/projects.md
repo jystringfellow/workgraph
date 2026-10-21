@@ -253,7 +253,7 @@ The payload is one JSON document:
       "events": [{"id": "slack.message:C123:1760000000.000100", "timestamp": "2026-10-20T09:00:00Z", "actor": "Sam", "summary": "..."}]
     }
   ],
-  "recent_decisions": [{"container": "harness-team", "summary": "...", "decision": "chose", "target": "project", "project": "mmo-harness"}]
+  "recent_decisions": [{"container": "harness-team", "decision": "chose", "target": "project", "project": "mmo-harness", "kind": "advice"}]
 }
 ```
 
@@ -266,7 +266,14 @@ The payload is one JSON document:
   characters; events past the cap are left out.
 - A recent decision is a user link (`chose` its target) or an LLM or
   deterministic link the user corrected or undid (`rejected` its target),
-  newest first.
+  newest first. It carries only structural fields: the container of its
+  earliest evidence event, the decision, target, project, and kind. Stored
+  link summaries are never sent, because their provenance cannot be checked
+  against the source policy.
+- A unit's container, time range, participants, and identifiers come from its
+  permitted members only, and catalog narrowing uses that container. When the
+  policy removed any member, the unit is sent under an opaque per-request id
+  (`unit-<n>`) that is mapped back to the real unit id on validation.
 
 Captured text is untrusted and is placed in a delimited data section separate
 from the instructions. Outbound filtering runs before any hosted call.
@@ -300,18 +307,24 @@ counted in the run report, when:
 - `target = project` names a slug not in the catalog given to the model
 - `target = new_project` lacks a valid slug and name, or reuses an existing
   slug
-- `kind` is not in the enum, or `confidence` is not a number in [0, 1]
-- `evidence` is empty or cites an id that is not a member of the unit
+- `kind` is not in the enum, or `confidence` is missing, null, or not a
+  number in [0, 1]
+- `evidence` is empty, repeats an id, or cites an id that is not a member of
+  the unit
 - `summary` is empty
 - `target` is not `project`, `new_project`, or `none`, or the entry is not a
   JSON object of the documented shape
 
 `target = project` must name a slug from that unit's `projects`. Every entry
-that shares a duplicated `unit_id` is discarded. Units the model leaves out
-stay uncategorized.
+that shares a duplicated `unit_id` is discarded, including entries that fail
+other validation. Units the model leaves out stay uncategorized. Proposed
+project names and descriptions are stripped of control and format characters
+and bounded like summaries, and model-supplied ids in the run report are
+quoted and escaped.
 
 Non-JSON output fails the run, and the units stay uncategorized. A response
-wrapped in one Markdown code fence is read as the JSON inside it.
+wrapped in one Markdown code fence is read as the JSON inside it. A response
+larger than 1 MiB fails the run.
 
 ### Privacy
 
@@ -337,7 +350,8 @@ The policy applies to the whole payload, not only to unit selection:
 - participants, identifiers, and the time range are derived only from the
   members that remain
 - a recent user decision is included only when every evidence event of its
-  link is still stored and comes from an enabled source
+  link is still stored and comes from an enabled source, and it carries no
+  summary text
 - the catalog contains only project memory frontmatter, titles, and
   descriptions
 
@@ -417,9 +431,12 @@ accuracy = confirmed / (confirmed + corrected + undone)
   review and remain available through `projects review --auto`.
 - The pause state is the latest `projects.auto_apply_paused` or
   `projects.auto_apply_resumed` event, overridden by the measured result
-  whenever at least 20 links are decided. Reading the metric never writes;
-  `llm associate` appends the event when the state it computes differs from
-  the latest event, before it applies anything.
+  whenever at least 20 links are decided. Reading the metric never writes.
+  Every write to `project_links`, including approve, assign, reject, and undo,
+  and every `llm associate` run that is not a dry run appends the event when
+  the state it computes differs from the latest event. `llm associate` does
+  so before it selects units or applies anything, so a pause is recorded even
+  when no unit is eligible.
 
 `workgraph review` reports this metric, its 14-day window, and its sample size
 beside the suggestion metrics in `specs/effectiveness-review.md`; it does not

@@ -140,6 +140,14 @@ func latestAutoApplyPauseState(db projectLinkQueryer) (autoApplyPauseState, erro
 	return state, rows.Err()
 }
 
+func recordProjectAutoApplyState(tx *sql.Tx, now time.Time) error {
+	report, err := projectLinkAccuracy(tx, now)
+	if err != nil {
+		return err
+	}
+	return recordAutoApplyPauseTransition(tx, now, report)
+}
+
 func recordAutoApplyPauseTransition(tx *sql.Tx, now time.Time, report ProjectLinkAccuracyReport) error {
 	if report.pauseEvent == "" {
 		return nil

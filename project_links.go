@@ -364,6 +364,9 @@ func withProjectLinksTx(config ProjectLinkStoreConfig, apply func(*sql.Tx, time.
 	if err := apply(tx, now.UTC()); err != nil {
 		return err
 	}
+	if err := recordProjectAutoApplyState(tx, now.UTC()); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 

@@ -20,6 +20,7 @@ const (
 	associateEventLimit    = 20
 	associateTextLimit     = 2000
 	associateDecisionLimit = 20
+	associateResponseLimit = 1 << 20
 	associateDataOpen      = "<<<WORKGRAPH_DATA"
 	associateDataClose     = "WORKGRAPH_DATA>>>"
 )
@@ -86,6 +87,9 @@ type associateUnit struct {
 	Projects     []string         `json:"projects"`
 	Events       []associateEvent `json:"events"`
 	members      map[string]bool
+	linkUnitID   string
+	linkKind     string
+	linkSource   string
 }
 
 type associateEvent struct {
@@ -97,10 +101,10 @@ type associateEvent struct {
 
 type associateDecision struct {
 	Container string `json:"container"`
-	Summary   string `json:"summary"`
 	Decision  string `json:"decision"`
 	Target    string `json:"target"`
 	Project   string `json:"project,omitempty"`
+	Kind      string `json:"kind,omitempty"`
 }
 
 type associateStoredEvent struct {
@@ -201,6 +205,12 @@ func AssociateWithLLM(config LLMAssociateConfig) (LLMAssociateResult, error) {
 	if err != nil {
 		return LLMAssociateResult{}, err
 	}
+	store := ProjectLinkStoreConfig{HomeDir: homeDir, DatabasePath: config.DatabasePath, Now: now}
+	if !config.DryRun {
+		if err := withProjectLinksTx(store, func(*sql.Tx, time.Time) error { return nil }); err != nil {
+			return LLMAssociateResult{}, err
+		}
+	}
 	payload, err := buildAssociatePayload(homeDir, config, now, catalog, enabled)
 	if err != nil {
 		return LLMAssociateResult{}, err
@@ -250,7 +260,6 @@ func AssociateWithLLM(config LLMAssociateConfig) (LLMAssociateResult, error) {
 	}
 	proposals, discarded := validateAssociateEntries(payload, entries, catalog)
 	result.Discarded = discarded
-	store := ProjectLinkStoreConfig{HomeDir: homeDir, DatabasePath: config.DatabasePath, Now: now}
 	var run ProjectLinkRunResult
 	err = withProjectLinksTx(store, func(tx *sql.Tx, now time.Time) error {
 		accuracy, err := projectLinkAccuracy(tx, now)
@@ -291,7 +300,7 @@ func AssociateWithLLM(config LLMAssociateConfig) (LLMAssociateResult, error) {
 		fmt.Sprintf("Discarded: %d", len(discarded)),
 	)
 	for _, discard := range discarded {
-		lines = append(lines, fmt.Sprintf("- %s: %s", firstNonEmpty(discard.UnitID, "(no unit id)"), discard.Reason))
+		lines = append(lines, fmt.Sprintf("- %q: %s", discard.UnitID, discard.Reason))
 	}
 	if len(run.Skipped) > 0 {
 		lines = append(lines, fmt.Sprintf("Skipped: %d already linked", len(run.Skipped)))
@@ -391,7 +400,10 @@ func buildAssociatePayload(homeDir string, config LLMAssociateConfig, now time.T
 			continue
 		}
 		entry := newAssociateUnit(unit, allowed)
-		for _, project := range catalog.ForContainer(unit.Container, mappings) {
+		if len(allowed) < len(unit.EventIDs) {
+			entry.UnitID = fmt.Sprintf("unit-%d", len(payload.Units)+1)
+		}
+		for _, project := range catalog.ForContainer(entry.Container, mappings) {
 			entry.Projects = append(entry.Projects, project.Slug)
 			if !included[project.Slug] {
 				included[project.Slug] = true
@@ -413,7 +425,7 @@ func newAssociateUnit(unit ProjectUnit, members []associateStoredEvent) associat
 	entry := associateUnit{
 		UnitID:       unit.ID,
 		Kind:         unit.Kind,
-		Container:    unit.Container,
+		Container:    members[0].Project,
 		Start:        members[0].Timestamp.Format(time.RFC3339),
 		End:          members[len(members)-1].Timestamp.Format(time.RFC3339),
 		Participants: []string{},
@@ -421,6 +433,9 @@ func newAssociateUnit(unit ProjectUnit, members []associateStoredEvent) associat
 		Projects:     []string{},
 		Events:       []associateEvent{},
 		members:      map[string]bool{},
+		linkUnitID:   unit.ID,
+		linkKind:     unit.Kind,
+		linkSource:   unit.Container,
 	}
 	participants, identifiers := map[string]bool{}, map[string]bool{}
 	budget := associateTextLimit
@@ -516,7 +531,7 @@ func associateRecentDecisions(db *sql.DB, links []ProjectLink, enabled map[strin
 		if !passes {
 			continue
 		}
-		decisions = append(decisions, associateDecision{Container: candidate.link.Container, Summary: candidate.link.Summary, Decision: candidate.decision, Target: candidate.link.Target, Project: firstNonEmpty(candidate.link.Project, proposedProjectSlug(candidate.link.NewProject))})
+		decisions = append(decisions, associateDecision{Container: evidence[0].Project, Decision: candidate.decision, Target: candidate.link.Target, Project: firstNonEmpty(candidate.link.Project, proposedProjectSlug(candidate.link.NewProject)), Kind: candidate.link.Kind})
 	}
 	return decisions, nil
 }
@@ -526,6 +541,20 @@ func projectLinkDecisionTime(link ProjectLink) time.Time {
 		return link.DecidedAt
 	}
 	return link.CreatedAt
+}
+
+func proposedProjectName(project *ProposedProject) string {
+	if project == nil {
+		return ""
+	}
+	return project.Name
+}
+
+func controlWhitespaceToSpace(r rune) rune {
+	if r == '\n' || r == '\r' || r == '\t' {
+		return ' '
+	}
+	return r
 }
 
 func proposedProjectSlug(project *ProposedProject) string {
@@ -559,6 +588,9 @@ func associateMessages(payload associatePayload) ([]openAICompatibleMessage, err
 }
 
 func parseAssociateResponse(response string) ([]json.RawMessage, error) {
+	if len(response) > associateResponseLimit {
+		return nil, fmt.Errorf("model output is larger than %d bytes", associateResponseLimit)
+	}
 	text := strings.TrimSpace(response)
 	if strings.HasPrefix(text, "```") && strings.HasSuffix(text, "```") && len(text) > 6 {
 		text = strings.TrimSuffix(text, "```")
@@ -590,17 +622,26 @@ func validateAssociateEntries(payload associatePayload, raw []json.RawMessage, c
 	entries := make([]*associateResultEntry, len(raw))
 	seen := map[string]int{}
 	for index, message := range raw {
+		var identity struct {
+			UnitID string `json:"unit_id"`
+		}
+		if json.Unmarshal(message, &identity) == nil && identity.UnitID != "" {
+			seen[identity.UnitID]++
+		}
 		var entry associateResultEntry
 		if json.Unmarshal(message, &entry) == nil {
 			entries[index] = &entry
-			seen[entry.UnitID]++
 		}
 	}
 	var proposals []ProjectLinkProposal
 	var discarded []AssociateDiscard
-	for _, entry := range entries {
+	for index, entry := range entries {
 		if entry == nil {
-			discarded = append(discarded, AssociateDiscard{Reason: "entry is not a JSON object of the documented shape"})
+			var identity struct {
+				UnitID string `json:"unit_id"`
+			}
+			_ = json.Unmarshal(raw[index], &identity)
+			discarded = append(discarded, AssociateDiscard{UnitID: identity.UnitID, Reason: "entry is not a JSON object of the documented shape"})
 			continue
 		}
 		unit, known := units[entry.UnitID]
@@ -621,7 +662,7 @@ func validateAssociateEntry(entry associateResultEntry, unit associateUnit, know
 	if occurrences > 1 {
 		return ProjectLinkProposal{}, "unit_id appears more than once"
 	}
-	proposal := ProjectLinkProposal{UnitID: unit.UnitID, UnitKind: unit.Kind, Container: unit.Container, Target: entry.Target, Kind: entry.Kind, Evidence: entry.Evidence}
+	proposal := ProjectLinkProposal{UnitID: unit.linkUnitID, UnitKind: unit.linkKind, Container: unit.linkSource, Target: entry.Target, Kind: entry.Kind, Evidence: entry.Evidence}
 	switch entry.Target {
 	case "project":
 		if !stringAllowed(entry.Project, unit.Projects) {
@@ -630,13 +671,14 @@ func validateAssociateEntry(entry associateResultEntry, unit associateUnit, know
 		proposal.Project = entry.Project
 	case "new_project":
 		project := entry.NewProject
-		if project == nil || !validWorkstreamSlug(project.Slug) || strings.TrimSpace(project.Name) == "" || (project.Workstream != "" && !validWorkstreamSlug(project.Workstream)) {
+		name := sanitizeProjectLinkSummary(strings.Map(controlWhitespaceToSpace, proposedProjectName(project)))
+		if project == nil || !validWorkstreamSlug(project.Slug) || name == "" || (project.Workstream != "" && !validWorkstreamSlug(project.Workstream)) {
 			return ProjectLinkProposal{}, "new project needs a valid slug and name"
 		}
 		if existing[project.Slug] {
 			return ProjectLinkProposal{}, fmt.Sprintf("new project slug %q already exists", project.Slug)
 		}
-		proposal.NewProject = &ProposedProject{Slug: project.Slug, Name: strings.TrimSpace(project.Name), Description: sanitizeProjectLinkSummary(project.Description), Workstream: project.Workstream}
+		proposal.NewProject = &ProposedProject{Slug: project.Slug, Name: name, Description: sanitizeProjectLinkSummary(strings.Map(controlWhitespaceToSpace, project.Description)), Workstream: project.Workstream}
 	case "none":
 	default:
 		return ProjectLinkProposal{}, fmt.Sprintf("target %q is not project, new_project, or none", entry.Target)
@@ -644,16 +686,21 @@ func validateAssociateEntry(entry associateResultEntry, unit associateUnit, know
 	if !projectLinkKinds[entry.Kind] {
 		return ProjectLinkProposal{}, fmt.Sprintf("kind %q is not allowed", entry.Kind)
 	}
-	if json.Unmarshal(entry.Confidence, &proposal.Confidence) != nil || proposal.Confidence < 0 || proposal.Confidence > 1 {
+	if len(entry.Confidence) == 0 || string(entry.Confidence) == "null" || json.Unmarshal(entry.Confidence, &proposal.Confidence) != nil || proposal.Confidence < 0 || proposal.Confidence > 1 {
 		return ProjectLinkProposal{}, "confidence is not a number in [0, 1]"
 	}
 	if len(entry.Evidence) == 0 {
 		return ProjectLinkProposal{}, "evidence is empty"
 	}
+	cited := map[string]bool{}
 	for _, id := range entry.Evidence {
 		if !unit.members[id] {
 			return ProjectLinkProposal{}, fmt.Sprintf("evidence %q is not a member of the unit", id)
 		}
+		if cited[id] {
+			return ProjectLinkProposal{}, fmt.Sprintf("evidence repeats %q", id)
+		}
+		cited[id] = true
 	}
 	if proposal.Summary = sanitizeProjectLinkSummary(entry.Summary); proposal.Summary == "" {
 		return ProjectLinkProposal{}, "summary is empty"
