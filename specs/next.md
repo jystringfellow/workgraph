@@ -148,7 +148,10 @@ the pause line when auto-apply is paused, and at most three items.
   empty `role`, `project` set to the unit's container, `since` and
   `freshness.as_of` set to the link's creation time, `opened_by`
   `project_link:<link-id>`, and `subject` `{"kind": "unit", "id":
-  "<unit-id>"}`. Its `pull_request` is empty. The link summary is written by
+  "<unit-ref>"}`. The unit ref is the unit id, except that a `git.session`
+  unit's local repository path is replaced by the first 12 hex characters of
+  its SHA-256, as `git.session:<repo-hash>:<first-sha>`, so the item carries
+  no local path. Its `pull_request` is empty. The link summary is written by
   a model from captured text, so it appears only as `untrusted.summary` with
   `--include-untrusted`.
 

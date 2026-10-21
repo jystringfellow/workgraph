@@ -172,8 +172,11 @@ func TestResumeGroupsOvernightActivityByProject(t *testing.T) {
 	overnight := insertSurfaceThreads(t, home, checkIn.Add(2*time.Hour), "C1", "gtm-channel", 1)[0]
 	insertSurfaceEvent(t, home.DatabasePath, surfaceFileEvent("ask-kai-file", "ask-kai-repo", checkIn.Add(3*time.Hour)))
 	linkSurfaceContainer(t, home, "--source", "ask-kai-repo", "ask-kai")
-	insertSurfaceObservation(t, home.DatabasePath, "PR-agent", "acme/gtm", 7, "Draft segment tracker", "copilot-swe-agent", checkIn.Add(time.Hour))
-	insertSurfaceObservation(t, home.DatabasePath, "PR-older", "acme/gtm", 6, "Older agent work", "copilot-swe-agent", checkIn.Add(-2*time.Hour))
+	insertSurfaceObservation(t, home.DatabasePath, "PR-agent", "author", "acme/gtm", 7, "Draft segment tracker", "copilot-swe-agent", checkIn.Add(time.Hour))
+	insertSurfaceObservation(t, home.DatabasePath, "PR-agent", "reviewer", "acme/gtm", 7, "Draft segment tracker", "copilot-swe-agent", checkIn.Add(time.Hour))
+	insertSurfaceObservation(t, home.DatabasePath, "PR-older", "author", "acme/gtm", 6, "Older agent work", "copilot-swe-agent", checkIn.Add(-2*time.Hour))
+	prEvent := storedEvent{ID: "github.pull_request.observed:PR-agent", Source: "github", Type: "github.pull_request.observed", Timestamp: checkIn.Add(time.Hour), Project: "gtm", Payload: `{"node_id":"PR-agent","role":"author","repository":"acme/gtm","number":7}`}
+	insertSurfaceEvent(t, home.DatabasePath, prEvent)
 
 	store := workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now}
 	if _, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "llm", Profile: "fake", Links: []workgraph.ProjectLinkProposal{
@@ -182,8 +185,8 @@ func TestResumeGroupsOvernightActivityByProject(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	prUnit := workgraph.ProjectUnit{ID: "github.pr:acme/gtm#7", Kind: "github.pr", Container: "gtm", EventIDs: []string{"github.pull_request.observed:PR-agent"}}
-	if _, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "deterministic", Links: []workgraph.ProjectLinkProposal{surfaceProposal(prUnit, "mmo-gtm-segments", "", true)}}); err != nil {
+	prUnit := workgraph.ProjectUnit{ID: "github.pr:acme/gtm#7", Kind: "github.pr", Container: "gtm", EventIDs: []string{prEvent.ID}}
+	if _, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "llm", Profile: "fake", Links: []workgraph.ProjectLinkProposal{surfaceProposal(prUnit, "mmo-gtm-segments", "build", true)}}); err != nil {
 		t.Fatal(err)
 	}
 	config := workgraph.ResumeConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, MemoryDir: home.MemoryDir, Now: now}
@@ -203,8 +206,8 @@ func TestResumeGroupsOvernightActivityByProject(t *testing.T) {
 	section = section[:strings.Index(section, "\n\nResumable projects")]
 	expected := strings.Join([]string{
 		"Activity since last check-in by project",
-		"- mmo workstream: 1 event, 1 agent PR",
-		"  - mmo-gtm-segments project: 1 event, 1 agent PR; review; 1 auto-applied (workgraph projects review --auto)",
+		"- mmo workstream: 2 events, 1 agent PR",
+		"  - mmo-gtm-segments project: 2 events, 1 agent PR; build, review; 2 auto-applied (workgraph projects review --auto)",
 		"    - agent PR acme/gtm#7 Draft segment tracker (copilot-swe-agent, on your behalf)",
 		"- ask-kai project: 1 event",
 		"",
@@ -215,6 +218,54 @@ func TestResumeGroupsOvernightActivityByProject(t *testing.T) {
 	}
 	if !strings.Contains(resume.Message, "Resumable projects") {
 		t.Fatalf("expected the resumable list to remain:\n%s", resume.Message)
+	}
+}
+
+func TestNextCategorizeItemsCarryNoLocalPaths(t *testing.T) {
+	home := initProjectLinkingHome(t)
+	writeProjectMemory(t, home.MemoryDir, "ask-kai", "# Ask Kai\n")
+	now := time.Now().UTC().Truncate(time.Second)
+	repoPath := "/Users/alice/private/customer-repo"
+	commit := storedEvent{ID: "git.commit:abc123", Source: "git", Type: "git.commit", Timestamp: now.Add(-3 * time.Hour), Project: "customer-repo", Payload: fmt.Sprintf(`{"repo_path":%q,"commit":"abc123","subject":"Fix import"}`, repoPath)}
+	insertSurfaceEvent(t, home.DatabasePath, commit)
+	units, err := workgraph.ListProjectUnits(workgraph.ProjectUnitsConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now})
+	if err != nil || len(units) != 1 || units[0].ID != "git.session:"+repoPath+":abc123" {
+		t.Fatalf("expected one git session unit, got %+v %v", units, err)
+	}
+	store := workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now}
+	if _, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "llm", Profile: "fake", Links: []workgraph.ProjectLinkProposal{surfaceProposal(units[0], "ask-kai", "build", false)}}); err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := runworkgraph(t, repoRoot(t), "next", "--json", "--include-untrusted", "--home", home.HomeDir)
+	if err != nil {
+		t.Fatalf("next --json: %v\n%s", err, output)
+	}
+	if strings.Contains(string(output), repoPath) || strings.Contains(string(output), "/Users/") {
+		t.Fatalf("categorize items must not carry local paths:\n%s", output)
+	}
+	var items []workgraph.NextItem
+	if err := json.Unmarshal(output, &items); err != nil || len(items) != 1 {
+		t.Fatalf("expected one categorize item: %v\n%s", err, output)
+	}
+	subject := items[0].Subject.ID
+	if !strings.HasPrefix(subject, "git.session:") || !strings.HasSuffix(subject, ":abc123") || strings.Contains(subject, "/") {
+		t.Fatalf("expected a path-free git session reference, got %q", subject)
+	}
+	again := surfaceNextItems(t, home, "next", "--json")
+	if again[0].Subject.ID != subject {
+		t.Fatalf("expected a stable unit reference, got %q then %q", subject, again[0].Subject.ID)
+	}
+	config := workgraph.NextConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now}
+	explained, err := workgraph.ExplainNext(config, items[0].ID)
+	if err != nil || strings.Contains(explained, repoPath) || !strings.Contains(explained, "git.commit:abc123") {
+		t.Fatalf("explain must resolve the item without a local path: %v\n%s", err, explained)
+	}
+	if err := workgraph.DoneNext(config, items[0].ID); err != nil {
+		t.Fatalf("done on a git session item: %v", err)
+	}
+	if remaining := surfaceNextItems(t, home, "next", "--json"); len(remaining) != 0 {
+		t.Fatalf("expected done to hide the item, got %+v", remaining)
 	}
 }
 
@@ -256,10 +307,10 @@ func insertSurfaceEvent(t *testing.T, dbPath string, event storedEvent) {
 	}
 }
 
-func insertSurfaceObservation(t *testing.T, dbPath, nodeID, repository string, number int, title, author string, createdAt time.Time) {
+func insertSurfaceObservation(t *testing.T, dbPath, nodeID, role, repository string, number int, title, author string, createdAt time.Time) {
 	t.Helper()
 	observation, err := json.Marshal(map[string]any{
-		"node_id": nodeID, "repository": repository, "number": number, "role": "author", "state": "OPEN", "title": title,
+		"node_id": nodeID, "repository": repository, "number": number, "role": role, "state": "OPEN", "title": title,
 		"url": fmt.Sprintf("https://github.com/%s/pull/%d", repository, number), "author_login": author, "author_kind": "bot",
 		"created_at": createdAt.UTC().Format(time.RFC3339), "observed_at": createdAt.UTC().Format(time.RFC3339Nano),
 	})
@@ -271,8 +322,8 @@ func insertSurfaceObservation(t *testing.T, dbPath, nodeID, repository string, n
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err := db.Exec(`INSERT INTO github_pr_observations(connector_id,node_id,role,repository,number,observation_json,observed_at) VALUES ('github.pr_watch',?,'author',?,?,?,?)`,
-		nodeID, repository, number, string(observation), createdAt.UTC().Format(time.RFC3339Nano)); err != nil {
+	if _, err := db.Exec(`INSERT INTO github_pr_observations(connector_id,node_id,role,repository,number,observation_json,observed_at) VALUES ('github.pr_watch',?,?,?,?,?,?)`,
+		nodeID, role, repository, number, string(observation), createdAt.UTC().Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 }

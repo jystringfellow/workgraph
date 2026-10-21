@@ -566,8 +566,9 @@ These surfaces only read links; none runs a linking pass or writes a link.
   one line `Categorize: <n> awaiting a decision (workgraph projects review),
   <m> auto-applied today (workgraph projects review --auto)`, then
   `Auto-apply paused: <reason>` when paused, then at most three items, oldest
-  first, as `<unit-id> in <container>: <proposed|auto-applied> <target>
-  (confidence <c>)`. `<m>` counts undoable auto-applied links created since
+  first, as `<unit-ref> in <container>: <proposed|auto-applied> <target>
+  (confidence <c>)`, where `<unit-ref>` is the item's path-free unit
+  reference (`specs/next.md`). `<m>` counts undoable auto-applied links created since
   local midnight. The group is shown while a link awaits a decision or
   auto-apply is paused. JSON items use reason `categorize`, id
   `projects:categorize:<link-id>`, and evidence from the link. The item

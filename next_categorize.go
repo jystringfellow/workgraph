@@ -1,7 +1,10 @@
 package workgraph
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -55,7 +58,7 @@ func nextCategorizeItem(link ProjectLink, includeUntrusted bool) NextItem {
 		Since:    link.CreatedAt,
 		OpenedBy: fmt.Sprintf("project_link:%d", link.ID),
 		Evidence: link.Evidence,
-		Subject:  NextItemSubject{Kind: "unit", ID: link.UnitID},
+		Subject:  NextItemSubject{Kind: "unit", ID: nextUnitReference(link.UnitID)},
 		Detail: map[string]any{
 			"link_id": link.ID, "unit_kind": link.UnitKind, "state": link.State, "auto": link.Auto,
 			"source": link.Source, "target": link.Target, "project": link.Project, "proposed_project": link.NewProject,
@@ -68,6 +71,16 @@ func nextCategorizeItem(link ProjectLink, includeUntrusted bool) NextItem {
 		item.Untrusted = map[string]any{"trust": "untrusted", "summary": link.Summary}
 	}
 	return item
+}
+
+func nextUnitReference(unitID string) string {
+	session, ok := strings.CutPrefix(unitID, "git.session:")
+	separator := strings.LastIndex(session, ":")
+	if !ok || separator < 0 {
+		return unitID
+	}
+	sum := sha256.Sum256([]byte(session[:separator]))
+	return "git.session:" + hex.EncodeToString(sum[:])[:12] + session[separator:]
 }
 
 func nextCategorizeLinkID(item NextItem) int64 {
