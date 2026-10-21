@@ -3459,6 +3459,7 @@ func runToday(args []string, stdout io.Writer, stderr io.Writer) int {
 		DatabasePath: *databasePath,
 		Actor:        *actor,
 		Involvement:  *involvement,
+		GitEmails:    workgraph.LocalGitEmails(workgraph.LocalGitIdentityConfig{HomeDir: *homeDir, DatabasePath: *databasePath}),
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph today: %v\n", err)
@@ -3498,7 +3499,7 @@ func runResume(args []string, stdout io.Writer, stderr io.Writer) int {
 		MemoryDir:      *memoryDir,
 		Project:        project,
 		AllProjects:    *allProjects,
-		GitEmails:      localGitEmails(),
+		GitEmails:      workgraph.LocalGitEmails(workgraph.LocalGitIdentityConfig{HomeDir: *homeDir, DatabasePath: *databasePath}),
 		GitHubLogins:   localGitHubLogins(),
 		DebugRelevance: *debugRelevance,
 	}
@@ -3519,21 +3520,6 @@ func runResume(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 	}
 	return 0
-}
-
-func localGitEmails() []string {
-	output, err := exec.Command("git", "config", "--global", "--get-all", "user.email").Output()
-	if err != nil {
-		return nil
-	}
-	var emails []string
-	for _, line := range strings.Split(string(output), "\n") {
-		email := strings.TrimSpace(line)
-		if email != "" {
-			emails = append(emails, email)
-		}
-	}
-	return emails
 }
 
 func localGitHubLogins() []string {

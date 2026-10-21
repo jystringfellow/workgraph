@@ -22,6 +22,8 @@ const (
 	resumeHandoffEventLimit    = 3
 	resumeSinceEventLimit      = 5
 	resumeCheckInFormat        = "2006-01-02T15:04:05.000000000Z"
+	resumeProjectListWindow    = 14 * 24 * time.Hour
+	resumeProjectListLimit     = 10
 )
 
 const resumeCheckInSchema = `CREATE TABLE IF NOT EXISTS resume_checkins (
@@ -43,24 +45,25 @@ type ResumeConfig struct {
 }
 
 type ResumeResult struct {
-	NextItems   []NextItem
-	Project     string
-	Projects    []ResumeProject
-	LastWork    []ResumeEvent
-	WorkOlder   bool
-	AsOf        time.Time
-	CheckIn     time.Time
-	SinceLast   []ResumeEvent
-	SinceCount  int
-	Updates     []ResumeEvent
-	UpdateCount int
-	Events      []ResumeEvent
-	Files       []string
-	GitHub      []ResumeEvent
-	Memory      *MemoryDoc
-	MemoryPath  string
-	Omitted     int
-	Message     string
+	NextItems    []NextItem
+	Project      string
+	Projects     []ResumeProject
+	MoreProjects int
+	LastWork     []ResumeEvent
+	WorkOlder    bool
+	AsOf         time.Time
+	CheckIn      time.Time
+	SinceLast    []ResumeEvent
+	SinceCount   int
+	Updates      []ResumeEvent
+	UpdateCount  int
+	Events       []ResumeEvent
+	Files        []string
+	GitHub       []ResumeEvent
+	Memory       *MemoryDoc
+	MemoryPath   string
+	Omitted      int
+	Message      string
 }
 
 type ResumeProject struct {
@@ -124,7 +127,8 @@ func Resume(config ResumeConfig) (ResumeResult, error) {
 		if config.AllProjects {
 			result.Projects = resumableProjects(events)
 		} else {
-			result.Projects = resumableRelevantProjects(events, config.GitEmails, config.GitHubLogins, now)
+			result.Projects = recentResumableProjects(resumableRelevantProjects(events, config.GitEmails, config.GitHubLogins, now), now)
+			result.MoreProjects = len(resumableProjects(events)) - len(result.Projects)
 			result.LastWork, result.WorkOlder = resumeLastWork(events, config.GitEmails, now)
 		}
 		if config.DebugRelevance {
@@ -141,9 +145,12 @@ func Resume(config ResumeConfig) (ResumeResult, error) {
 				result.Updates, result.UpdateCount = resumeRelevantUpdatesSince(events, config.GitEmails, result.CheckIn, now)
 			}
 		}
-		result.Message = resumeProjectsMessage(result.Projects, location)
+		result.Message = resumeProjectsMessage(result.Projects, result.MoreProjects, location)
 		if !config.AllProjects {
 			prefix := resumeLastWorkMessage(result.LastWork, result.WorkOlder, location)
+			if len(normalizedEmailSet(config.GitEmails)) == 0 && hasGitCommitEvent(events) {
+				prefix += "\nGit identity unknown: counting every captured commit as yours. Set git user.email to filter other authors."
+			}
 			if waiting := nextWaitingMessage(result.NextItems, 5); waiting != "" {
 				prefix += "\n\n" + waiting
 			}
@@ -328,7 +335,7 @@ func resumePersonalWork(event ResumeEvent, gitEmails []string) bool {
 	}
 	switch {
 	case event.Type == "git.commit":
-		return normalizedEmailSet(gitEmails)[strings.ToLower(gitCommitAuthorEmail(event.Payload))]
+		return gitCommitAuthoredByLocalIdentity(event.Payload, normalizedEmailSet(gitEmails))
 	case event.Type == "file.modified" || event.Type == "file.deleted":
 		return event.Path != "" && !broadResumeProjectName(event.Project) && !personalResumeProjectName(event.Project)
 	default:
@@ -534,6 +541,29 @@ func resumableProjects(events []ResumeEvent) []ResumeProject {
 	return resumableProjectsFromEvents(events)
 }
 
+func recentResumableProjects(projects []ResumeProject, now time.Time) []ResumeProject {
+	var recent []ResumeProject
+	for _, project := range projects {
+		if project.LastActive.Before(now.Add(-resumeProjectListWindow)) {
+			continue
+		}
+		recent = append(recent, project)
+		if len(recent) == resumeProjectListLimit {
+			break
+		}
+	}
+	return recent
+}
+
+func hasGitCommitEvent(events []ResumeEvent) bool {
+	for _, event := range events {
+		if event.Type == "git.commit" {
+			return true
+		}
+	}
+	return false
+}
+
 func resumableRelevantProjects(events []ResumeEvent, gitEmails []string, githubLogins []string, now time.Time) []ResumeProject {
 	var relevant []ResumeEvent
 	for _, event := range events {
@@ -640,18 +670,17 @@ func resumeEventRelevance(event ResumeEvent, gitEmails []string, githubLogins []
 	}
 	switch event.Type {
 	case "git.commit":
-		authorEmail := gitCommitAuthorEmail(event.Payload)
-		if authorEmail == "" {
-			if len(normalizedEmailSet(gitEmails)) == 0 {
-				return true, "git commit with unknown local identity"
-			}
-			return false, "git commit missing author email"
-		}
 		emails := normalizedEmailSet(gitEmails)
-		if len(emails) == 0 || emails[strings.ToLower(strings.TrimSpace(authorEmail))] {
+		switch {
+		case len(emails) == 0:
+			return true, "git commit with unknown local identity"
+		case gitCommitAuthoredByLocalIdentity(event.Payload, emails):
 			return true, "git commit authored by local identity"
+		case gitCommitAuthorEmail(event.Payload) == "":
+			return false, "git commit missing author email"
+		default:
+			return false, "git commit authored by another identity"
 		}
-		return false, "git commit authored by another identity"
 	case "github.pull_request", "github.issue":
 		actor := githubEventActor(event.Payload)
 		logins := normalizedStringSet(githubLogins)
@@ -803,8 +832,12 @@ func resumeOpenGitHubWork(events []ResumeEvent) []ResumeEvent {
 	return work
 }
 
-func resumeProjectsMessage(projects []ResumeProject, location *time.Location) string {
+func resumeProjectsMessage(projects []ResumeProject, more int, location *time.Location) string {
 	lines := []string{"Resumable projects"}
+	if len(projects) == 0 && more > 0 {
+		lines = append(lines, "No personal project activity in the last 14 days.", fmt.Sprintf("%d more: workgraph resume --all", more))
+		return strings.Join(lines, "\n")
+	}
 	if len(projects) == 0 {
 		lines = append(lines, "No resumable projects found.", "Run workgraph start to capture activity.")
 		return strings.Join(lines, "\n")
@@ -812,6 +845,9 @@ func resumeProjectsMessage(projects []ResumeProject, location *time.Location) st
 
 	for _, project := range projects {
 		lines = append(lines, fmt.Sprintf("- %s: %s, last active %s", project.Name, pluralize(project.EventCount, "event"), project.LastActive.In(location).Format("2006-01-02 15:04")))
+	}
+	if more > 0 {
+		lines = append(lines, fmt.Sprintf("%d more: workgraph resume --all", more))
 	}
 	lines = append(lines, "", "Run: workgraph resume <project>")
 	return strings.Join(lines, "\n")

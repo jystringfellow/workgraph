@@ -40,6 +40,12 @@ Commit event contract:
 - `payload_json.author_name`: commit author name
 - `payload_json.author_email`: commit author email
 
+The local git identity used by `today` and `resume` is the union of the global
+`user.email` values and, for each repository with captured `git.commit` events,
+that repository's effective `git -C <repo> config --get-all user.email`, which
+resolves repository-local config and `includeIf` includes. Emails are compared
+trimmed and lowercased. The identity is computed once per command invocation.
+
 Commit event IDs are deterministic so repeated git capture runs do not create
 duplicates for the same commit.
 
