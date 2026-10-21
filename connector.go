@@ -1221,7 +1221,8 @@ func pollConnectorOnce(homeDir string, databasePath string, id string) error {
 	events := make(chan CapturedEvent)
 	stopDiscarding := discardCapturedEvents(events)
 	defer stopDiscarding()
-	ctx, cancel := context.WithTimeout(context.Background(), defaultConnectorPollTimeout)
+	timeout := positiveDuration(connectorPollerTimeout(id), defaultConnectorPollTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	capture := &RunCapture{
 		homeDir:      homeDir,
@@ -1282,7 +1283,7 @@ func pollConnectorOnce(homeDir string, databasePath string, id string) error {
 		return fmt.Errorf("unsupported connector %s", id)
 	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		pollErr = fmt.Errorf("poll deadline exceeded after %s: %w", defaultConnectorPollTimeout, context.DeadlineExceeded)
+		pollErr = fmt.Errorf("poll deadline exceeded after %s: %w", timeout, context.DeadlineExceeded)
 	}
 	when := time.Now()
 	if pollErr != nil {
