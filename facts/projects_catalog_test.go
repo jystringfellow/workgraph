@@ -14,6 +14,7 @@ import (
 
 func TestProjectCatalogReadsFrontmatter(t *testing.T) {
 	root := t.TempDir()
+	t.Setenv("HOME", root)
 	home, memory := filepath.Join(root, "state"), filepath.Join(root, "memory")
 	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: home, MemoryDir: memory}); err != nil {
 		t.Fatal(err)
@@ -25,6 +26,9 @@ func TestProjectCatalogReadsFrontmatter(t *testing.T) {
 		"ask-kai":          "Ask Kai keeps answers grounded.\n",
 		"broken":           "---\nworkstream: mmo\n# Broken Project\n\nNever closed.\n",
 		"bad-workstream":   "---\nworkstream: Not A Slug\n---\n# Bad Workstream\n",
+		"quoted-aliases":   "---\naliases: [\"Design, build\", ordinary, 'single, quoted']\n---\n# Quoted Aliases\n",
+		"apostrophes":      "---\nworkstream: mmo\naliases: [designer's notes, ordinary]\ndescription: Designer's notes for the launch.\n---\n# Apostrophes\n",
+		"bom-prefixed":     "\ufeff---\nworkstream: mmo\ndescription: Saved by an editor that writes a BOM.\n---\n# BOM Prefixed\n",
 	}
 	for slug, contents := range files {
 		writeProjectMemory(t, memory, slug, contents)
@@ -51,6 +55,15 @@ func TestProjectCatalogReadsFrontmatter(t *testing.T) {
 	}
 	if len([]rune(harness.Description)) != 200 || !strings.HasPrefix(harness.Description, "harness harness") {
 		t.Fatalf("paragraph description fallback: %q", harness.Description)
+	}
+	if quoted := entries["quoted-aliases"]; !reflect.DeepEqual(quoted.Aliases, []string{"Design, build", "ordinary", "single, quoted"}) {
+		t.Fatalf("quoted flow aliases: %+v", quoted)
+	}
+	if apostrophes := entries["apostrophes"]; apostrophes.Workstream != "mmo" || !reflect.DeepEqual(apostrophes.Aliases, []string{"designer's notes", "ordinary"}) || apostrophes.Description != "Designer's notes for the launch." {
+		t.Fatalf("apostrophes in unquoted values: %+v", apostrophes)
+	}
+	if bom := entries["bom-prefixed"]; bom.Workstream != "mmo" || bom.Title != "BOM Prefixed" || bom.Description != "Saved by an editor that writes a BOM." {
+		t.Fatalf("BOM-prefixed frontmatter: %+v", bom)
 	}
 	kai := entries["ask-kai"]
 	if kai.Title != "ask-kai" || kai.Workstream != "" || len(kai.Aliases) != 0 || kai.Description != "Ask Kai keeps answers grounded." {
@@ -82,7 +95,7 @@ func TestProjectCatalogReadsFrontmatter(t *testing.T) {
 		t.Fatalf("projects list sections: %s", text)
 	}
 	grouped, ungrouped := text[workstreamAt:noWorkstreamAt], text[noWorkstreamAt:]
-	for _, expected := range []string{"- mmo-gtm-segments: MMO GTM Segments", "- mmo-harness: MMO Harness"} {
+	for _, expected := range []string{"- mmo-gtm-segments: MMO GTM Segments", "- mmo-harness: MMO Harness", "- bom-prefixed: BOM Prefixed"} {
 		if !strings.Contains(grouped, expected) {
 			t.Fatalf("workstream omitted %q: %s", expected, text)
 		}
@@ -115,6 +128,7 @@ func TestProjectCatalogReadsFrontmatter(t *testing.T) {
 
 func TestWorkstreamMappingNarrowsCatalogWithoutLinks(t *testing.T) {
 	root := t.TempDir()
+	t.Setenv("HOME", root)
 	home, memory := filepath.Join(root, "state"), filepath.Join(root, "memory")
 	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: home, MemoryDir: memory})
 	if err != nil {
