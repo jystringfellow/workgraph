@@ -61,16 +61,38 @@ func nextCategorizeItem(link ProjectLink, includeUntrusted bool) NextItem {
 		Subject:  NextItemSubject{Kind: "unit", ID: nextUnitReference(link.UnitID)},
 		Detail: map[string]any{
 			"link_id": link.ID, "unit_kind": link.UnitKind, "state": link.State, "auto": link.Auto,
-			"source": link.Source, "target": link.Target, "project": link.Project, "proposed_project": link.NewProject,
+			"source": link.Source, "target": link.Target, "project": link.Project, "proposed_project": nextProposedProjectStructure(link.NewProject),
 			"kind": link.Kind, "confidence": link.Confidence, "rule": link.Rule, "profile": link.Profile, "run_id": link.RunID,
 		},
 		Triage:    map[string]any{},
 		Freshness: NextItemFreshness{AsOf: link.CreatedAt, Access: "ok"},
 	}
-	if includeUntrusted && link.Summary != "" {
-		item.Untrusted = map[string]any{"trust": "untrusted", "summary": link.Summary}
+	if includeUntrusted {
+		item.Untrusted = nextCategorizeUntrusted(link)
 	}
 	return item
+}
+
+func nextProposedProjectStructure(proposed *ProposedProject) map[string]any {
+	if proposed == nil {
+		return nil
+	}
+	return map[string]any{"slug": proposed.Slug, "workstream": proposed.Workstream}
+}
+
+func nextCategorizeUntrusted(link ProjectLink) map[string]any {
+	untrusted := map[string]any{}
+	if link.Summary != "" {
+		untrusted["summary"] = link.Summary
+	}
+	if link.NewProject != nil {
+		untrusted["proposed_project"] = map[string]any{"name": link.NewProject.Name, "description": link.NewProject.Description}
+	}
+	if len(untrusted) == 0 {
+		return nil
+	}
+	untrusted["trust"] = "untrusted"
+	return untrusted
 }
 
 func nextUnitReference(unitID string) string {
@@ -122,7 +144,9 @@ func nextCategorizeLine(item NextItem, showIDs bool) string {
 		state = "auto-applied"
 	}
 	link := ProjectLink{Target: fmt.Sprint(item.Detail["target"]), Project: fmt.Sprint(item.Detail["project"])}
-	link.NewProject, _ = item.Detail["proposed_project"].(*ProposedProject)
+	if proposed, ok := item.Detail["proposed_project"].(map[string]any); ok && proposed != nil {
+		link.NewProject = &ProposedProject{Slug: fmt.Sprint(proposed["slug"])}
+	}
 	confidence, _ := item.Detail["confidence"].(float64)
 	line := fmt.Sprintf("%s in %s: %s %s (confidence %.2f)", item.Subject.ID, item.Project, state, ProjectLinkTarget(link), confidence)
 	if showIDs {

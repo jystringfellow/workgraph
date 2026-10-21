@@ -1,9 +1,12 @@
 package facts
 
 import (
+	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -233,20 +236,57 @@ func TestNextCategorizeItemsCarryNoLocalPaths(t *testing.T) {
 		t.Fatalf("expected one git session unit, got %+v %v", units, err)
 	}
 	store := workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now}
-	if _, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "llm", Profile: "fake", Links: []workgraph.ProjectLinkProposal{surfaceProposal(units[0], "ask-kai", "build", false)}}); err != nil {
+	proposal := surfaceProposal(units[0], "", "build", false)
+	proposal.Target = "new_project"
+	proposal.NewProject = &workgraph.ProposedProject{Slug: "customer-import", Name: "Customer import in " + repoPath, Description: "Fixes imports under " + repoPath, Workstream: "mmo"}
+	proposal.Summary = "Edited " + repoPath + "/main.go"
+	if _, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "llm", Profile: "fake", Links: []workgraph.ProjectLinkProposal{proposal}}); err != nil {
 		t.Fatal(err)
 	}
 
-	output, err := runworkgraph(t, repoRoot(t), "next", "--json", "--include-untrusted", "--home", home.HomeDir)
+	output, err := runworkgraph(t, repoRoot(t), "next", "--json", "--home", home.HomeDir)
 	if err != nil {
 		t.Fatalf("next --json: %v\n%s", err, output)
 	}
-	if strings.Contains(string(output), repoPath) || strings.Contains(string(output), "/Users/") {
+	if strings.Contains(string(output), "/Users/") {
 		t.Fatalf("categorize items must not carry local paths:\n%s", output)
 	}
 	var items []workgraph.NextItem
 	if err := json.Unmarshal(output, &items); err != nil || len(items) != 1 {
 		t.Fatalf("expected one categorize item: %v\n%s", err, output)
+	}
+	if proposed, _ := items[0].Detail["proposed_project"].(map[string]any); len(proposed) != 2 || proposed["slug"] != "customer-import" || proposed["workstream"] != "mmo" {
+		t.Fatalf("expected the structural proposed project fields in detail, got %+v", items[0].Detail)
+	}
+	mcp := exec.Command(workgraphFactsBinary, "bridge", "mcp", "--home", home.HomeDir)
+	mcp.Stdin = strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"next_items","arguments":{}}}` + "\n")
+	mcpOutput, err := mcp.CombinedOutput()
+	if err != nil || !strings.Contains(string(mcpOutput), items[0].ID) || strings.Contains(string(mcpOutput), "/Users/") {
+		t.Fatalf("MCP items must match without local paths: %v\n%s", err, mcpOutput)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	var watched bytes.Buffer
+	watchDone := make(chan error, 1)
+	go func() {
+		watchDone <- workgraph.WatchNext(ctx, workgraph.NextConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now, WatchInterval: time.Hour}, &watched)
+	}()
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+	<-watchDone
+	if !strings.Contains(watched.String(), items[0].ID) || strings.Contains(watched.String(), "/Users/") {
+		t.Fatalf("watch items must match without local paths:\n%s", watched.String())
+	}
+	optIn := surfaceNextItems(t, home, "next", "--json", "--include-untrusted")
+	withoutUntrusted := optIn[0]
+	withoutUntrusted.Untrusted = nil
+	structural, _ := json.Marshal(withoutUntrusted)
+	untrusted, _ := json.Marshal(optIn[0].Untrusted)
+	if strings.Contains(string(structural), "/Users/") || !strings.Contains(string(untrusted), "Fixes imports under "+repoPath) || optIn[0].Untrusted["summary"] != proposal.Summary {
+		t.Fatalf("model-written text must appear only under untrusted:\n%s\n%s", structural, untrusted)
+	}
+	text, err := workgraph.Next(workgraph.NextConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now})
+	if err != nil || !strings.Contains(text.Message, ": proposed new project customer-import (confidence 0.80)") || strings.Contains(text.Message, "/Users/") {
+		t.Fatalf("expected the proposed slug in text without local paths: %v\n%s", err, text.Message)
 	}
 	subject := items[0].Subject.ID
 	if !strings.HasPrefix(subject, "git.session:") || !strings.HasSuffix(subject, ":abc123") || strings.Contains(subject, "/") {

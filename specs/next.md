@@ -151,9 +151,11 @@ the pause line when auto-apply is paused, and at most three items.
   "<unit-ref>"}`. The unit ref is the unit id, except that a `git.session`
   unit's local repository path is replaced by the first 12 hex characters of
   its SHA-256, as `git.session:<repo-hash>:<first-sha>`, so the item carries
-  no local path. Its `pull_request` is empty. The link summary is written by
-  a model from captured text, so it appears only as `untrusted.summary` with
-  `--include-untrusted`.
+  no local path. Its `pull_request` is empty. `detail.proposed_project`
+  holds only the proposed `slug` and `workstream`. Model-written text, the
+  link summary and the proposed project's name and description, appears only
+  with `--include-untrusted`, as `untrusted.summary` and
+  `untrusted.proposed_project`.
 
 - `freshness.as_of` is when the facts behind this item were last read from
   the provider; each source defines which timestamp that is and when it goes
@@ -163,6 +165,8 @@ the pause line when auto-apply is paused, and at most three items.
 - Local paths, tokens, and connector configuration never appear in an item,
   so items can be sent to a cloud agent without leaking the local machine's
   layout.
+  The opt-in `untrusted` object is the exception: it carries captured or
+  model-written text verbatim, which may mention anything, including a path.
 
 ## Commands
 
