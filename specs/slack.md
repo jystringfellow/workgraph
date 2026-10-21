@@ -218,7 +218,14 @@ Slack events should be stored in the existing event store:
 - `payload_json`: source-specific details such as channel id, channel name,
   user id, user display name when available, self-user marker, raw text,
   normalized text, structured mention ids/names, timestamp, thread timestamp,
-  and permalink
+  permalink, and conversation type
+
+The payload `conversation_type` is `channel`, `private_channel`, `im`, or
+`mpim`. Daemon capture derives it from the Slack conversation metadata it
+already fetches. Exported events may supply it; any other value is dropped.
+When Slack metadata does not identify the conversation, the field is omitted.
+Readers treat an event with a missing or unrecognized conversation type as a
+DM (`slack.dm`), so events captured before the field existed stay private.
 
 Slack capture keeps one stored event per channel timestamp identity. Recapturing
 the same exported message or thread reply must not create duplicates.

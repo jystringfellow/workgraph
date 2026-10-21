@@ -921,11 +921,14 @@ request id and claim token.
 
 Unedited messages use `external_id = "<channel>:<ts>"`. Edited revisions append
 `:edit:<edited-ts>`. Thread replies use `slack.thread_reply` and the reply `ts`.
+Payloads include `conversation_type` (`channel`, `private_channel`, `im`, or
+`mpim`) when the Slack tool result identifies the conversation, and omit it
+otherwise. A missing or unrecognized value is treated as a DM by readers.
 
 ```json
-{"type":"slack.message","timestamp":"2026-09-13T12:00:54.844Z","external_id":"C0DEMO123:1789300854.844369","project":"demo-production","actor":"U0DEMO001","summary":"Deployment succeeded for demo-service","payload":{"channel":"C0DEMO123","channel_name":"demo-changes","ts":"1789300854.844369","user":"U0DEMO001","is_bot":true,"bot_name":"Deployment Bot","text":"Deployment succeeded for demo-service\nhttps://deployments.example/runs/47555\ncreate: 1\nsame: 147"}}
-{"type":"slack.message","timestamp":"2026-09-13T12:00:38.180Z","external_id":"C0DEMO123:1789300838.180579","project":"demo-production","actor":"U0DEMO001","summary":"Kubernetes deployment demo-api modified","payload":{"channel":"C0DEMO123","channel_name":"demo-changes","ts":"1789300838.180579","user":"U0DEMO001","is_bot":true,"bot_name":"Deployment Bot","text":"Kubernetes deployment change\ndemo/demo-api modified"}}
-{"type":"slack.message","timestamp":"2026-09-13T12:00:37.767Z","external_id":"C0DEMO123:1789300837.767919","project":"demo-production","actor":"U0DEMO001","summary":"Kubernetes deployment demo-worker modified","payload":{"channel":"C0DEMO123","channel_name":"demo-changes","ts":"1789300837.767919","user":"U0DEMO001","is_bot":true,"bot_name":"Deployment Bot","text":"Kubernetes deployment change\ndemo/demo-worker modified"}}
+{"type":"slack.message","timestamp":"2026-09-13T12:00:54.844Z","external_id":"C0DEMO123:1789300854.844369","project":"demo-production","actor":"U0DEMO001","summary":"Deployment succeeded for demo-service","payload":{"channel":"C0DEMO123","channel_name":"demo-changes","conversation_type":"channel","ts":"1789300854.844369","user":"U0DEMO001","is_bot":true,"bot_name":"Deployment Bot","text":"Deployment succeeded for demo-service\nhttps://deployments.example/runs/47555\ncreate: 1\nsame: 147"}}
+{"type":"slack.message","timestamp":"2026-09-13T12:00:38.180Z","external_id":"C0DEMO123:1789300838.180579","project":"demo-production","actor":"U0DEMO001","summary":"Kubernetes deployment demo-api modified","payload":{"channel":"C0DEMO123","channel_name":"demo-changes","conversation_type":"channel","ts":"1789300838.180579","user":"U0DEMO001","is_bot":true,"bot_name":"Deployment Bot","text":"Kubernetes deployment change\ndemo/demo-api modified"}}
+{"type":"slack.message","timestamp":"2026-09-13T12:00:37.767Z","external_id":"C0DEMO123:1789300837.767919","project":"demo-production","actor":"U0DEMO001","summary":"Kubernetes deployment demo-worker modified","payload":{"channel":"C0DEMO123","channel_name":"demo-changes","conversation_type":"channel","ts":"1789300837.767919","user":"U0DEMO001","is_bot":true,"bot_name":"Deployment Bot","text":"Kubernetes deployment change\ndemo/demo-worker modified"}}
 ```
 
 ## A.2 — `github` (`--source github`)

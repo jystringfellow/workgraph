@@ -751,6 +751,32 @@ func TestManualBridgedIngestDeduplicatesSlackEvents(t *testing.T) {
 	}
 }
 
+func TestBridgedSlackIngestKeepsConversationTypeForPrivacy(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+	connectBridgedConnector(t, repoRoot, homeDir, "slack")
+
+	input := strings.Join([]string{
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:00Z","external_id":"C0DEMO123:1789300800.000100","payload":{"channel":"C0DEMO123","conversation_type":"channel","ts":"1789300800.000100","text":"Public channel"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:01Z","external_id":"D0DEMO123:1789300801.000100","payload":{"channel":"D0DEMO123","conversation_type":"im","ts":"1789300801.000100","text":"Direct message"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:02Z","external_id":"C0DEMO456:1789300802.000100","payload":{"channel":"C0DEMO456","ts":"1789300802.000100","text":"No type"}}`,
+	}, "\n") + "\n"
+	if output, err := runworkgraphInput(t, repoRoot, input, "capture", "ingest", "--home", homeDir, "--source", "slack", "--json", "-"); err != nil {
+		t.Fatalf("bridged ingest: %v\n%s", err, output)
+	}
+
+	db := openBridgedCaptureDatabase(t, homeDir)
+	for channel, expected := range map[string]string{"C0DEMO123": "slack", "D0DEMO123": "slack.dm", "C0DEMO456": "slack.dm"} {
+		var payloadJSON string
+		if err := db.QueryRow(`SELECT payload_json FROM events WHERE source = 'slack' AND json_extract(payload_json, '$.channel') = ?`, channel).Scan(&payloadJSON); err != nil {
+			t.Fatalf("read bridged Slack event %s: %v", channel, err)
+		}
+		if got := workgraph.SlackPrivacySource(payloadJSON); got != expected {
+			t.Fatalf("expected %s privacy source %q, got %q for %s", channel, expected, got, payloadJSON)
+		}
+	}
+}
+
 func TestHandEditedBridgedNotionCannotScheduleOrIngest(t *testing.T) {
 	homeDir := initBridgedCaptureHome(t)
 	repoRoot := repoRoot(t)

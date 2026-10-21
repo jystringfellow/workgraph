@@ -119,6 +119,32 @@ func TestSlackCaptureStoresThreadReplyWithoutDuplicateEvent(t *testing.T) {
 	}
 }
 
+func TestSlackCaptureKeepsOnlyRecognizedConversationTypes(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	eventsPath := filepath.Join(tempDir, "slack-events.json")
+	if err := os.WriteFile(eventsPath, []byte(`[
+  {"kind": "message", "channel_id": "G123", "channel_name": "exec-planning", "conversation_type": "private_channel", "user": "U456", "text": "Private plan.", "ts": "1716215400.000100", "timestamp": "2026-05-20T14:30:00Z"},
+  {"kind": "message", "channel_id": "C123", "channel_name": "cupcake-api", "conversation_type": "public", "user": "U456", "text": "Unrecognized type.", "ts": "1716215400.000200", "timestamp": "2026-05-20T14:30:01Z"},
+  {"kind": "message", "channel_id": "C456", "channel_name": "launch-plan", "user": "U456", "text": "No type.", "ts": "1716215400.000300", "timestamp": "2026-05-20T14:30:02Z"}
+]`), 0o644); err != nil {
+		t.Fatalf("write slack events: %v", err)
+	}
+
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	if output, err := runworkgraph(t, repoRoot, "slack", "capture", "--home", homeDir, "--events-file", eventsPath); err != nil {
+		t.Fatalf("workgraph slack capture failed: %v\n%s", err, output)
+	}
+
+	dbPath := filepath.Join(homeDir, "workgraph.db")
+	assertSlackConversationType(t, slackEvent(t, dbPath, "slack.message", "G123", "1716215400.000100"), "private_channel", "slack")
+	assertSlackConversationType(t, slackEvent(t, dbPath, "slack.message", "C123", "1716215400.000200"), "", "slack.dm")
+	assertSlackConversationType(t, slackEvent(t, dbPath, "slack.message", "C456", "1716215400.000300"), "", "slack.dm")
+}
+
 func TestSlackListCaptureStoresTodoItemsReadOnly(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
@@ -695,7 +721,7 @@ func TestRunDiscoversSlackChannelsWhenNoneAreConfigured(t *testing.T) {
 			if request.URL.Query().Get("types") != "public_channel,private_channel" {
 				t.Fatalf("expected public and private channel discovery, got %q", request.URL.Query().Get("types"))
 			}
-			return `{"ok":true,"channels":[{"id":"C123","name":"cupcake-api","is_private":false},{"id":"G456","name":"exec-planning","is_private":true}]}`
+			return `{"ok":true,"channels":[{"id":"C123","name":"cupcake-api","is_channel":true,"is_private":false},{"id":"G456","name":"exec-planning","is_channel":true,"is_private":true}]}`
 		case "/api/conversations.history":
 			transport.historyRequests++
 			switch request.URL.Query().Get("channel") {
@@ -762,6 +788,8 @@ func TestRunDiscoversSlackChannelsWhenNoneAreConfigured(t *testing.T) {
 	if privateEvent.Project != "exec-planning" {
 		t.Fatalf("expected discovered private channel project, got %q", privateEvent.Project)
 	}
+	assertSlackConversationType(t, publicEvent, "channel", "slack")
+	assertSlackConversationType(t, privateEvent, "private_channel", "slack")
 }
 
 func TestRunDiscoversSlackDMsOnlyWhenOptedIn(t *testing.T) {
@@ -860,6 +888,8 @@ func TestRunDiscoversSlackDMsOnlyWhenOptedIn(t *testing.T) {
 	if groupDMEvent.Project != "Group DM: ada, grace" {
 		t.Fatalf("expected resolved group DM project, got %q", groupDMEvent.Project)
 	}
+	assertSlackConversationType(t, dmEvent, "im", "slack.dm")
+	assertSlackConversationType(t, groupDMEvent, "mpim", "slack.dm")
 }
 
 func TestSlackConnectPrintsOAuthURLWithoutStoringToken(t *testing.T) {
@@ -1539,6 +1569,30 @@ func slackEvent(t *testing.T, dbPath, eventType, channelID, ts string) storedSla
 		t.Fatalf("query slack event: %v", err)
 	}
 	return event
+}
+
+func assertSlackConversationType(t *testing.T, event storedSlackEvent, expectedType string, expectedSource string) {
+	t.Helper()
+
+	var payload struct {
+		ConversationType *string `json:"conversation_type"`
+	}
+	if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+		t.Fatalf("decode slack payload: %v", err)
+	}
+	gotType := ""
+	if payload.ConversationType != nil {
+		gotType = *payload.ConversationType
+		if gotType == "" {
+			t.Fatalf("expected conversation_type to be omitted rather than empty, got %s", event.PayloadJSON)
+		}
+	}
+	if gotType != expectedType {
+		t.Fatalf("expected conversation_type %q, got %q in %s", expectedType, gotType, event.PayloadJSON)
+	}
+	if got := workgraph.SlackPrivacySource(event.PayloadJSON); got != expectedSource {
+		t.Fatalf("expected privacy source %q, got %q for %s", expectedSource, got, event.PayloadJSON)
+	}
 }
 
 func slackListEvent(t *testing.T, dbPath, listID, itemID string) storedSlackEvent {
