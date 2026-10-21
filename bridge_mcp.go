@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -282,7 +283,7 @@ func bridgeMCPTools() []bridgeMCPTool {
 	return []bridgeMCPTool{
 		{"next_items", "Read local attention items and their evidence. This tool does not change items or contact providers.", object(map[string]any{"project": str, "reason": str, "include_untrusted": map[string]any{"type": "boolean"}})},
 		{"capture_requests_list", "List non-secret bridged capture outbox metadata.", object(map[string]any{"connector": str})},
-		{"capture_requests_claim", "Atomically claim daemon-scheduled capture work.", object(map[string]any{"connector": str, "worker": str, "max": integer}, "worker")},
+		{"capture_requests_claim", "Atomically claim daemon-scheduled capture work. Filter with connector. Every claim must end in capture_ingest or capture_request_fail with a reason; never abandon it.", object(map[string]any{"connector": str, "worker": str, "max": integer}, "worker")},
 		{"capture_request_renew", "Renew an unexpired capture claim.", object(map[string]any{"request_id": str, "claim_token": str}, "request_id", "claim_token")},
 		{"capture_ingest", "Validate and atomically ingest one normalized event batch, or parse one claimed Slack List snapshot from raw CSV server-side.", captureIngest},
 		{"capture_request_fail", "Return claimed work for retry with bounded error details.", object(map[string]any{"request_id": str, "claim_token": str, "error": str}, "request_id", "claim_token")},
@@ -295,6 +296,26 @@ func bridgeMCPTools() []bridgeMCPTool {
 	}
 }
 
+func rejectUnknownBridgeMCPArguments(name string, args map[string]json.RawMessage) error {
+	for _, tool := range bridgeMCPTools() {
+		if tool.Name != name {
+			continue
+		}
+		properties, _ := tool.InputSchema["properties"].(map[string]any)
+		allowed := make([]string, 0, len(properties))
+		for key := range properties {
+			allowed = append(allowed, key)
+		}
+		sort.Strings(allowed)
+		for key := range args {
+			if _, found := properties[key]; !found {
+				return fmt.Errorf("unknown argument %q for %s; allowed arguments: %s", key, name, strings.Join(allowed, ", "))
+			}
+		}
+	}
+	return nil
+}
+
 func callBridgeMCPTool(config BridgeMCPConfig, name string, raw json.RawMessage) (any, error) {
 	var args map[string]json.RawMessage
 	if len(raw) == 0 {
@@ -302,6 +323,9 @@ func callBridgeMCPTool(config BridgeMCPConfig, name string, raw json.RawMessage)
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, fmt.Errorf("decode %s arguments: %w", name, err)
+	}
+	if err := rejectUnknownBridgeMCPArguments(name, args); err != nil {
+		return nil, err
 	}
 	rawStringArg := func(key string) string {
 		var value string

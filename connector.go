@@ -53,6 +53,7 @@ type ConnectorStatus struct {
 	CaptureWorker       string
 	CaptureLeaseExpires string
 	CaptureAvailableAt  string
+	BridgeStall         string
 }
 
 type ConnectorModeConfig struct {
@@ -909,11 +910,28 @@ func SetConnectorEnabled(config ConnectorUpdateConfig) (ConnectorUpdateResult, e
 	if enabled {
 		word = "enabled"
 	}
+	message := fmt.Sprintf("Connector %s %s", id, word)
+	if !enabled && connectorCaptureMode(state, id) == "bridged" {
+		cancelled, found, err := cancelConnectorCaptureRequest(homeDir, id, "connector disabled", time.Now())
+		if err != nil {
+			return ConnectorUpdateResult{}, err
+		}
+		if found {
+			message += "\n" + disabledCaptureRequestMessage(cancelled)
+		}
+	}
 	return ConnectorUpdateResult{
 		HomeDir: homeDir,
 		ID:      id,
-		Message: fmt.Sprintf("Connector %s %s\nConfig: %s", id, word, connectorRuntimePath(homeDir)),
+		Message: message + "\nConfig: " + connectorRuntimePath(homeDir),
 	}, nil
+}
+
+func disabledCaptureRequestMessage(request CaptureRequest) string {
+	if request.Status == "claimed" {
+		return fmt.Sprintf("Cancelled capture request %s (connector disabled; was claimed by %s)", request.ID, request.ClaimedBy)
+	}
+	return fmt.Sprintf("Cancelled capture request %s (connector disabled)", request.ID)
 }
 
 func SetConnectorInterval(config ConnectorUpdateConfig) (ConnectorUpdateResult, error) {
@@ -1287,6 +1305,7 @@ func pollConnectorOnce(homeDir string, databasePath string, id string) error {
 
 func connectorStatuses(homeDir string, state connectorRuntimeFile) []ConnectorStatus {
 	statuses := make([]ConnectorStatus, 0, len(connectorRegistry))
+	now := time.Now()
 	activeRequests := map[string]CaptureRequest{}
 	if requests, err := ListCaptureRequests(CaptureRequestListConfig{HomeDir: homeDir}); err == nil {
 		for _, request := range requests {
@@ -1309,6 +1328,7 @@ func connectorStatuses(homeDir string, state connectorRuntimeFile) []ConnectorSt
 				lastValidationError = details
 			}
 		}
+		stall, _ := detectBridgeStall(homeDir, state, id, request, now)
 		statuses = append(statuses, ConnectorStatus{
 			ID:                  id,
 			SupportedModes:      definition.supportedModes(),
@@ -1335,6 +1355,7 @@ func connectorStatuses(homeDir string, state connectorRuntimeFile) []ConnectorSt
 			CaptureWorker:       request.ClaimedBy,
 			CaptureLeaseExpires: request.LeaseExpiresAt,
 			CaptureAvailableAt:  request.AvailableAt,
+			BridgeStall:         stall.Detail,
 		})
 	}
 	return statuses
@@ -1484,7 +1505,7 @@ func recordConnectorIngest(homeDir string, id string, when time.Time) error {
 	return writeConnectorRuntimeFile(homeDir, state)
 }
 
-func recordConnectorCaptureCompletion(homeDir string, id string, when time.Time) error {
+func recordConnectorCaptureCompletion(homeDir string, id string, when time.Time, completedThrough string) error {
 	connectorPollStateMu.Lock()
 	defer connectorPollStateMu.Unlock()
 
@@ -1499,7 +1520,12 @@ func recordConnectorCaptureCompletion(homeDir string, id string, when time.Time)
 	entry.LastSuccess = completedAt
 	entry.LastError = ""
 	entry.ConsecutiveFailures = 0
-	entry.NextPoll = when.UTC().Add(connectorInterval(state, id, defaultConnectorInterval(id))).Format(time.RFC3339)
+	interval := connectorInterval(state, id, defaultConnectorInterval(id))
+	nextPoll := when.UTC().Add(interval)
+	if through, err := time.Parse(time.RFC3339Nano, completedThrough); err == nil && capturesBoundedWindow(id) && when.Sub(through) > interval {
+		nextPoll = when.UTC()
+	}
+	entry.NextPoll = nextPoll.Format(time.RFC3339)
 	state.Connectors[id] = entry
 	return writeConnectorRuntimeFile(homeDir, state)
 }
@@ -1818,6 +1844,9 @@ func connectorListMessage(result ConnectorListResult) string {
 				line += ", lease expires " + status.CaptureLeaseExpires
 			}
 		}
+		if status.BridgeStall != "" {
+			line += ", " + status.BridgeStall
+		}
 		lines = append(lines, line)
 	}
 	lines = append(lines, "Config: "+connectorRuntimePath(result.HomeDir))
@@ -1907,6 +1936,9 @@ func connectorStatusMessage(result ConnectorListResult) string {
 			if status.CaptureLeaseExpires != "" {
 				line += ", lease expires " + status.CaptureLeaseExpires
 			}
+		}
+		if status.BridgeStall != "" {
+			line += ", " + status.BridgeStall
 		}
 		lines = append(lines, line)
 	}

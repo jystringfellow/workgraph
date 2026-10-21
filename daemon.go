@@ -523,6 +523,10 @@ func activeConnectorPollErrors(homeDir string) []ConnectorHealthFinding {
 	}
 	var findings []ConnectorHealthFinding
 	for _, status := range connectorStatuses(homeDir, state) {
+		if status.BridgeStall != "" {
+			findings = append(findings, ConnectorHealthFinding{ID: status.ID, Status: "bridge stalled", Details: status.BridgeStall})
+			continue
+		}
 		if !status.Connected || !status.Enabled || strings.TrimSpace(status.LastError) == "" {
 			continue
 		}

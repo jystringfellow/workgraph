@@ -157,6 +157,7 @@ func Today(config TodayConfig) (TodayResult, error) {
 	} else if len(next.Items) > 0 {
 		result.Message += fmt.Sprintf("\n\nWaiting on you: %d items (workgraph next)", len(next.Items))
 	}
+	result.Message += bridgeStallWarning(homeDir, dbPath, now)
 
 	return result, nil
 }

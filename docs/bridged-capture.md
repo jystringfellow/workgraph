@@ -230,6 +230,8 @@ scope.
 | Request remains `pending` with `attempts 0` and the worker log reports a missing or denied tool | Capability preflight declined the request before claiming | Map every canonical required operation to an available read-only MCP tool and update exact permissions |
 | `azure.boards` intermittently reports `CONNECT_TIMEOUT` on first use | A cold `npx -y @azure-devops/mcp` startup exceeded the MCP connection timeout | Pre-resolve or install the MCP package and register its resolved executable before restarting the worker |
 | Provider tools disappear when the worker runs unattended | The worker resolved a different personal/enterprise client context | Set `--config-dir`, then confirm it with `plugin doctor` |
+| `connectors list`, `today`, or `resume` reports `bridge stalled <age>` | The worker has not completed a capture for longer than `max(3 x interval, 30m)`, often because the client login expired | Read the `last drain error`, sign the client back in, then confirm with `workgraph plugin doctor --client <client>` |
+| Request shows `claimed (lease expired <age> ago)` | The claiming session stopped without completing or failing it | The running daemon returns it to `pending` on its next emit cycle; `bridge drain` also stops a client session after `--timeout` (default 20m) |
 
 Inspect local logs and liveness files before cancelling work:
 
@@ -237,12 +239,17 @@ Inspect local logs and liveness files before cancelling work:
 ~/.workgraph/bridge/logs/claude-code.out.log
 ~/.workgraph/bridge/logs/claude-code.err.log
 ~/.workgraph/bridge/claude-code.heartbeat
+~/.workgraph/bridge/claude-code.last-error
 ~/.workgraph/daemon.log
 ```
 
 Replace `~/.workgraph` with the configured workgraph home and `claude-code`
 with the installed client id. The worker log explains preflight decisions; the
-heartbeat distinguishes an idle worker from one that is not launching.
+heartbeat distinguishes an idle worker from one that is not launching, and
+`last-error` holds the last line of the most recent failed drain.
+
+A connector that has fallen days behind backfills one day per request. Each
+completed day makes the next request due immediately until capture catches up.
 
 ## Recovery
 
