@@ -31,6 +31,26 @@ Priority labels used below:
 
 ## Next
 
+Projects and categorization, in order. Each slice links activity to declared
+projects more completely. [spec: `specs/projects.md`]
+
+- `P1` **D1 Project model and container wording.** Project memory
+  frontmatter (workstream, aliases, description), `projects list`, container
+  to workstream mappings, workstream suggestions in memory doctor, and
+  "container" in user-facing text.
+- `P1` **D2 Units of work and deterministic linking.** Deterministic Slack
+  thread and burst, GitHub PR, git session, Notion page, and calendar units;
+  the `project_links` table; shared-identifier and container-mapping rules;
+  `projects explain`, `undo`, and flag-form review.
+- `P1` **D3 LLM categorization.** `llm associate` with dry run, per-source
+  opt-in, validation, auto-apply at confidence 0.95 with an accuracy gate,
+  and interactive `projects review`. [also: `specs/llm-integration.md`]
+- `P1` **D4 Scheduled categorization and the daily loop.** Hourly and nightly
+  `llm.associate` outbox requests run directly or by the bridge worker; a
+  `categorize` group in `next`; `today` and `resume` grouped by workstream and
+  project. Depends on in-flight `today`, `resume`, and `next` changes.
+  [also: `specs/bridged-capture.md`]
+
 - `P1` Add optional semantic association behind explicit opt-in and confidence
   gates. [specs: `specs/event-associations.md` and
   `specs/llm-integration.md`]

@@ -59,6 +59,11 @@ include:
 Project memory remains readable Markdown without required frontmatter or
 LLM-generated content.
 
+Planned (`specs/projects.md`): project memory may start with optional
+frontmatter naming a `workstream`, `aliases`, and a one-line `description`.
+These feed the project catalog used for categorization. A file without
+frontmatter is still a project.
+
 ## Captured Project Mappings
 
 `memory link --source <captured-project> [--source <captured-project> ...]
@@ -81,6 +86,13 @@ that source from future queries but preserves already promoted evidence.
 `memory links` shows captured project mappings separately from promoted evidence
 links. Linking a source does not manufacture an evidence link.
 
+Planned (`specs/projects.md`): the captured project is a container, and
+user-facing text calls it a container or source. A mapped container links all
+of its units of work to the project. `memory link --workstream <slug> --source
+<container>` maps a container to a workstream instead of one project; it is
+stored under the pseudo-path `workstream:<slug>`, creates no project links, and
+narrows categorization for that container to the workstream's projects.
+
 ## Discover Project Mismatches
 
 `memory doctor [<project>]` reports stored mappings and up to five candidate
@@ -97,6 +109,10 @@ for each proposed association. Only `y` or `yes` accepts it; empty input, `no`
 and EOF leave mappings untouched. An explicit `memory link` is also approval.
 There is no automatic merge or rewrite. If names do not provide a reliable
 candidate, doctor lists captured identifiers for manual selection.
+
+Planned (`specs/projects.md`): a shared-acronym candidate is a workstream
+signal rather than evidence that two projects are the same. Doctor shows it
+with a `memory link --workstream` command alongside the project link command.
 
 Candidate hints also appear in today and resume, and after an empty memory
 suggest result. Today considers only events included in its filtered daily view.

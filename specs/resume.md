@@ -68,6 +68,12 @@ in `specs/github-pr-watch.md` and its `triage.needs_user` is true;
 first-capture rule still applies. Personal work evidence for the handoff is
 unchanged.
 
+Planned (`specs/projects.md`, slice D4): the default overview groups activity
+since the last check-in by workstream, then declared project, falling back to
+the container for unlinked activity. It includes PR units opened by agents
+overnight and ends with the number of categorization decisions remaining
+(`workgraph projects review`).
+
 ## Project List
 
 When no project is provided, `workgraph resume` lists projects with user-work
