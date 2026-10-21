@@ -478,8 +478,9 @@ workgraph projects explain <unit-id>
   `projects review --assign` and `--reject` commands that change it and, when
   the link is undoable, the `projects undo` command. User and user-approved
   links other than confirmed auto links are not undoable. Printed commands
-  carry the `--home`, `--database`, and, where used, `--memory` options the
-  command was given, shell-quoted.
+  carry the `--home`, `--database`, and `--memory` options the command was
+  given, shell-quoted, because undo leads to a review that runs a linking
+  pass against that catalog.
 - Flag forms make the same changes as the keys and never prompt.
 
 ## Daily Loop Surfaces
