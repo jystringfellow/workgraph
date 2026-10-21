@@ -1218,12 +1218,16 @@ func pollConnectorOnce(homeDir string, databasePath string, id string) error {
 	if connectorCaptureMode(state, id) == "bridged" {
 		return fmt.Errorf("connector %s is bridged; feed it via capture ingest", id)
 	}
-	ctx := context.Background()
+	events := make(chan CapturedEvent)
+	stopDiscarding := discardCapturedEvents(events)
+	defer stopDiscarding()
+	ctx, cancel := context.WithTimeout(context.Background(), defaultConnectorPollTimeout)
+	defer cancel()
 	capture := &RunCapture{
 		homeDir:      homeDir,
 		databasePath: databasePath,
 		watchDirs:    []string{},
-		events:       make(chan CapturedEvent, 128),
+		events:       events,
 	}
 	var pollErr error
 	switch id {
@@ -1277,12 +1281,28 @@ func pollConnectorOnce(homeDir string, databasePath string, id string) error {
 	default:
 		return fmt.Errorf("unsupported connector %s", id)
 	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		pollErr = fmt.Errorf("poll deadline exceeded after %s: %w", defaultConnectorPollTimeout, context.DeadlineExceeded)
+	}
 	when := time.Now()
 	if pollErr != nil {
 		_ = recordConnectorPollError(homeDir, id, when, pollErr)
 		return pollErr
 	}
 	return recordConnectorPollSuccess(homeDir, id, when)
+}
+
+func discardCapturedEvents(events chan CapturedEvent) func() {
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		for range events {
+		}
+	}()
+	return func() {
+		close(events)
+		<-drained
+	}
 }
 
 func connectorStatuses(homeDir string, state connectorRuntimeFile) []ConnectorStatus {
