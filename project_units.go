@@ -16,6 +16,7 @@ type ProjectUnitsConfig struct {
 	DatabasePath string
 	Now          time.Time
 	Location     *time.Location
+	GitEmails    []string
 }
 
 type ProjectUnit struct {
@@ -64,11 +65,11 @@ func ListProjectUnits(config ProjectUnitsConfig) ([]ProjectUnit, error) {
 	if location == nil {
 		location = time.Local
 	}
-	return projectUnits(db, now, location)
+	return projectUnits(db, now, location, normalizedEmailSet(config.GitEmails))
 }
 
-func projectUnits(db *sql.DB, now time.Time, location *time.Location) ([]ProjectUnit, error) {
-	events, err := loadProjectUnitEvents(db)
+func projectUnits(db *sql.DB, now time.Time, location *time.Location, gitEmails map[string]bool) ([]ProjectUnit, error) {
+	events, err := loadProjectUnitEvents(db, gitEmails)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +94,7 @@ func projectUnits(db *sql.DB, now time.Time, location *time.Location) ([]Project
 	return units, nil
 }
 
-func loadProjectUnitEvents(db *sql.DB) (map[string][]projectUnitEvent, error) {
+func loadProjectUnitEvents(db *sql.DB, gitEmails map[string]bool) (map[string][]projectUnitEvent, error) {
 	rows, err := db.Query(`SELECT id, source, type, timestamp, COALESCE(project, ''), payload_json FROM events
 		WHERE type IN ('slack.message', 'slack.thread_reply', 'git.commit', 'notion.page_updated', 'calendar.event')
 			OR type = 'github.pull_request' OR type GLOB 'github.pull_request.*'
@@ -115,6 +116,9 @@ func loadProjectUnitEvents(db *sql.DB) (map[string][]projectUnitEvent, error) {
 		}
 		event.Timestamp = parsed.UTC()
 		if json.Unmarshal([]byte(payload), &event.Payload) != nil || !projectUnitEventKeyed(source, event.Payload) {
+			continue
+		}
+		if source == "git" && !gitCommitAuthoredByLocalIdentity(payload, gitEmails) {
 			continue
 		}
 		events[source] = append(events[source], event)

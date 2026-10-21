@@ -290,7 +290,7 @@ func UndoProjectLinkRun(config ProjectLinkStoreConfig, runID string) ([]ProjectL
 	}
 	var replacements []ProjectLink
 	err := withProjectLinksTx(config, func(tx *sql.Tx, now time.Time) error {
-		links, err := queryProjectLinks(tx, `WHERE run_id = ? AND state = 'applied' AND auto = 1 AND decision = '' ORDER BY id`, runID)
+		links, err := queryProjectLinks(tx, `WHERE run_id = ? AND state = 'applied' AND auto = 1 AND decision IN ('', 'confirmed') ORDER BY id`, runID)
 		if err != nil {
 			return err
 		}
@@ -307,8 +307,8 @@ func UndoProjectLinkRun(config ProjectLinkStoreConfig, runID string) ([]ProjectL
 }
 
 func undoProjectLinkTx(tx *sql.Tx, now time.Time, link ProjectLink) (ProjectLink, error) {
-	if link.State != "applied" || !link.Auto || link.Decision != "" {
-		return ProjectLink{}, fmt.Errorf("project link %d is not an undecided auto-applied link", link.ID)
+	if link.State != "applied" || !link.Auto || (link.Decision != "" && link.Decision != "confirmed") {
+		return ProjectLink{}, fmt.Errorf("project link %d is not an auto-applied link", link.ID)
 	}
 	replacement := link
 	replacement.State, replacement.Auto = "proposed", false

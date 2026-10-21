@@ -105,6 +105,98 @@ func TestProjectUnitsAreDeterministic(t *testing.T) {
 	}
 }
 
+func TestProjectUnitsGroupOnlyTheUsersOwnCommitsIntoSessions(t *testing.T) {
+	home := initProjectUnitsHome(t)
+	base := time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)
+	commits := []struct {
+		sha    string
+		offset time.Duration
+		email  string
+	}{
+		{"aaa111", 0, "Me@Example.test"},
+		{"bbb222", 90 * time.Minute, "other@example.test"},
+		{"ccc333", 3 * time.Hour, "me@example.test"},
+	}
+	for _, commit := range commits {
+		insertProjectUnitEvent(t, home.DatabasePath, storedEvent{
+			ID: "git.commit:" + commit.sha, Source: "git", Type: "git.commit", Timestamp: base.Add(commit.offset), Project: "harness",
+			Payload: fmt.Sprintf(`{"repo_path":"/work/harness","commit":%q,"author_email":%q}`, commit.sha, commit.email),
+		})
+	}
+	config := workgraph.ProjectUnitsConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: base.Add(10 * time.Hour), Location: time.UTC}
+
+	config.GitEmails = []string{"me@example.test"}
+	own, err := workgraph.ListProjectUnits(config)
+	if err != nil {
+		t.Fatalf("list units: %v", err)
+	}
+	if len(own) != 2 || own[0].ID != "git.session:/work/harness:aaa111" || !reflect.DeepEqual(own[0].EventIDs, []string{"git.commit:aaa111"}) ||
+		own[1].ID != "git.session:/work/harness:ccc333" || !reflect.DeepEqual(own[1].EventIDs, []string{"git.commit:ccc333"}) {
+		t.Fatalf("expected another author's commit not to bridge the user's sessions, got %+v", own)
+	}
+
+	config.GitEmails = nil
+	unknown, err := workgraph.ListProjectUnits(config)
+	if err != nil {
+		t.Fatalf("list units without identity: %v", err)
+	}
+	if len(unknown) != 1 || len(unknown[0].EventIDs) != 3 {
+		t.Fatalf("expected every commit to be included when no identity resolves, got %+v", unknown)
+	}
+}
+
+func TestProjectLinkUndoReachesConfirmedAutoLinks(t *testing.T) {
+	home := initProjectUnitsHome(t)
+	config := workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: time.Date(2026, 10, 21, 18, 0, 0, 0, time.UTC)}
+
+	single, err := workgraph.RecordProjectLinkRun(config, workgraph.ProjectLinkRun{
+		Source: "deterministic",
+		Links:  []workgraph.ProjectLinkProposal{projectLinkProposal("unit-single", "mmo-harness", "container_mapping", true)},
+	})
+	if err != nil {
+		t.Fatalf("record deterministic run: %v", err)
+	}
+	if _, err := workgraph.ApproveProjectLink(config, single.Written[0].ID); err != nil {
+		t.Fatalf("confirm link: %v", err)
+	}
+	replacement, err := workgraph.UndoProjectLink(config, single.Written[0].ID)
+	if err != nil {
+		t.Fatalf("undo confirmed link: %v", err)
+	}
+	if replacement.State != "proposed" || replacement.Auto || replacement.Decision != "" || replacement.Project != "mmo-harness" {
+		t.Fatalf("expected a proposed replacement for the confirmed link, got %+v", replacement)
+	}
+	assertProjectLinkRow(t, config, single.Written[0].ID, "rejected", "undone")
+
+	run, err := workgraph.RecordProjectLinkRun(config, workgraph.ProjectLinkRun{
+		Source:  "llm",
+		Profile: "hosted-mini",
+		Links: []workgraph.ProjectLinkProposal{
+			{UnitID: "unit-run-confirmed", UnitKind: "slack.burst", Container: "harness-team", Target: "project", Project: "ask-kai", Kind: "build", Summary: "Built", Confidence: 0.97, Evidence: []string{"slack.message:C123:1"}, Apply: true},
+			{UnitID: "unit-run-open", UnitKind: "slack.burst", Container: "harness-team", Target: "none", Kind: "fyi", Summary: "Lunch", Confidence: 0.99, Evidence: []string{"slack.message:C123:2"}, Apply: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("record llm run: %v", err)
+	}
+	if _, err := workgraph.ApproveProjectLink(config, run.Written[0].ID); err != nil {
+		t.Fatalf("confirm run link: %v", err)
+	}
+	undone, err := workgraph.UndoProjectLinkRun(config, run.RunID)
+	if err != nil {
+		t.Fatalf("undo run: %v", err)
+	}
+	if len(undone) != 2 {
+		t.Fatalf("expected run undo to include the confirmed link, got %+v", undone)
+	}
+	for _, link := range run.Written {
+		assertProjectLinkRow(t, config, link.ID, "rejected", "undone")
+		if current := currentProjectLink(t, config, link.UnitID); current.State != "proposed" || current.Source != "llm" {
+			t.Fatalf("expected a proposed llm replacement for %s, got %+v", link.UnitID, current)
+		}
+	}
+}
+
 func TestProjectLinkDecisionsRecordStateWithoutEditingEvents(t *testing.T) {
 	home := initProjectUnitsHome(t)
 	insertProjectUnitEvent(t, home.DatabasePath, slackUnitEvent("C123", "1760950800.000100", "", time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC), "harness-team"))
