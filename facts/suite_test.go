@@ -69,8 +69,32 @@ func isolateUserHome(tempDir string) error {
 	if err := os.MkdirAll(userHome, 0o700); err != nil {
 		return err
 	}
-	if err := os.Setenv("HOME", userHome); err != nil {
+	gitConfigGlobal := filepath.Join(userHome, ".gitconfig")
+	if err := os.WriteFile(gitConfigGlobal, nil, 0o600); err != nil {
 		return err
 	}
-	return os.Setenv("USERPROFILE", userHome)
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		if name == "GIT_CONFIG_COUNT" || strings.HasPrefix(name, "GIT_CONFIG_KEY_") || strings.HasPrefix(name, "GIT_CONFIG_VALUE_") {
+			if err := os.Unsetenv(name); err != nil {
+				return err
+			}
+		}
+	}
+	for name, value := range map[string]string{
+		"HOME":                userHome,
+		"USERPROFILE":         userHome,
+		"XDG_CONFIG_HOME":     filepath.Join(userHome, ".config"),
+		"XDG_DATA_HOME":       filepath.Join(userHome, ".local", "share"),
+		"XDG_STATE_HOME":      filepath.Join(userHome, ".local", "state"),
+		"XDG_CACHE_HOME":      filepath.Join(userHome, ".cache"),
+		"GIT_CONFIG_GLOBAL":   gitConfigGlobal,
+		"GIT_CONFIG_NOSYSTEM": "1",
+		"GH_CONFIG_DIR":       filepath.Join(userHome, ".config", "gh"),
+	} {
+		if err := os.Setenv(name, value); err != nil {
+			return err
+		}
+	}
+	return nil
 }
