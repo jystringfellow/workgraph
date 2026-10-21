@@ -267,6 +267,11 @@ completed_at, cancelled_at
 - Claim tokens are cryptographically random and are returned only to the
   claimant. List/status output does not expose them.
 
+Planned (`specs/projects.md`, slice D4): a `kind` column distinguishes
+`capture` requests from `llm_task` requests. Project categorization uses
+connector id `llm.associate` with the same leases, retries, and cancellation,
+and no capture cursor.
+
 Completed-through state lives in a `capture_cursors` table:
 
 ```text

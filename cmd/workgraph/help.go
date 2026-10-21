@@ -27,7 +27,7 @@ var helpDetails = map[string]string{
 }
 
 var helpTopics = map[string]helpTopic{
-	"next":                    {"workgraph next [--project <p>] [--reason <r>] [--json [--include-untrusted]] [--watch]", "List local attention items and their evidence."},
+	"next":                    {"workgraph next [--project <p>] [--reason <r>] [--ids | --json [--include-untrusted]] [--watch]", "List local attention items and their evidence."},
 	"next explain":            {"workgraph next explain <item-id> [options]", "Explain the rule and evidence for an open item."},
 	"next done":               {"workgraph next done <item-id> [options]", "Hide one item with a local bookkeeping event."},
 	"next snooze":             {"workgraph next snooze <item-id> --for <duration> [options]", "Hide one item locally until the duration expires."},

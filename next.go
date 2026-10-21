@@ -22,6 +22,7 @@ type NextConfig struct {
 	Project          string
 	Reason           string
 	IncludeUntrusted bool
+	ShowIDs          bool
 	Now              time.Time
 	Clock            func() time.Time
 	WatchInterval    time.Duration
@@ -150,6 +151,12 @@ func readNextSnapshot(config NextConfig) (nextSnapshot, error) {
 	if err = tx.Commit(); err != nil {
 		return snapshot, err
 	}
+	onBehalf := map[string]bool{}
+	for _, observation := range snapshot.observations {
+		if observation.Role == githubPRRoleAuthor && observation.AuthorKind == "bot" {
+			onBehalf[observation.NodeID] = true
+		}
+	}
 	for _, observation := range snapshot.observations {
 		for _, item := range projectNextObservation(observation, snapshot.events, config, snapshot.result.AsOf, interval, entry.SetupState == "error") {
 			if (config.Project != "" && item.Project != config.Project) || (config.Reason != "" && item.Reason != config.Reason) {
@@ -157,6 +164,9 @@ func readNextSnapshot(config NextConfig) (nextSnapshot, error) {
 			}
 			if nextHidden(item.ID, snapshot.events, snapshot.result.AsOf) != "" {
 				continue
+			}
+			if item.PullRequest.Author != nil {
+				item.PullRequest.Author.OnBehalf = onBehalf[item.PullRequest.NodeID]
 			}
 			snapshot.result.Items = append(snapshot.result.Items, item)
 		}
@@ -178,7 +188,7 @@ func readNextSnapshot(config NextConfig) (nextSnapshot, error) {
 			capturedAt = verifiedAt
 		}
 	}
-	snapshot.result.Message = nextMessage(snapshot.result, entry.SetupState == "error", capturedAt, interval)
+	snapshot.result.Message = nextMessage(snapshot.result, entry.SetupState == "error", capturedAt, interval, config.ShowIDs)
 	return snapshot, nil
 }
 
@@ -259,6 +269,13 @@ func projectNextObservation(o githubPRObservation, events []nextStoredEvent, con
 			value := o.HeadRepository
 			headRepository = &value
 		}
+		var author *NextItemAuthor
+		if o.AuthorLogin != "" {
+			author = &NextItemAuthor{Login: o.AuthorLogin, Kind: o.AuthorKind}
+			if author.Kind == "" {
+				author.Kind = "user"
+			}
+		}
 		since := event.At
 		if event.Type == githubPREventObserved {
 			if at := parseNextTime(event.Payload.BaselineAt); !at.IsZero() {
@@ -286,7 +303,7 @@ func projectNextObservation(o githubPRObservation, events []nextStoredEvent, con
 				Repository: o.Repository, Number: o.Number, NodeID: o.NodeID,
 				URL: o.URL, Title: o.Title, Branch: o.HeadRef, BaseRef: o.BaseRef,
 				HeadSHA: o.HeadSHA, HeadRepository: headRepository,
-				IsDraft: o.IsDraft, IsCrossRepository: o.IsCrossRepository,
+				IsDraft: o.IsDraft, IsCrossRepository: o.IsCrossRepository, Author: author,
 			},
 		}
 		if event.Actor != "" && !(reason == nextReasonReply && event.Type == githubPREventObserved) {
@@ -540,7 +557,7 @@ func nextHidden(id string, events []nextStoredEvent, now time.Time) string {
 	return ""
 }
 
-func nextMessage(result NextResult, setupError bool, capturedAt time.Time, interval time.Duration) string {
+func nextMessage(result NextResult, setupError bool, capturedAt time.Time, interval time.Duration, showIDs bool) string {
 	if !result.Enabled {
 		return "No enabled next sources. Connect GitHub pull requests: workgraph github prs connect"
 	}
@@ -560,13 +577,13 @@ func nextMessage(result NextResult, setupError bool, capturedAt time.Time, inter
 	if stale {
 		lines = append(lines, "Warning: github.pr_watch data is stale or unreachable; run workgraph github prs capture")
 	}
-	group := ""
-	for _, item := range result.Items {
-		if item.Group != group {
-			group = item.Group
-			lines = append(lines, map[string]string{"waiting_on_you": "Waiting on you", "blocked": "Blocked", "ready": "Ready"}[group])
+	section := ""
+	for _, group := range nextPullRequestGroups(result.Items) {
+		if group[0].Group != section {
+			section = group[0].Group
+			lines = append(lines, map[string]string{"waiting_on_you": "Waiting on you", "blocked": "Blocked", "ready": "Ready"}[section])
 		}
-		lines = append(lines, "  "+nextItemLine(item))
+		lines = append(lines, nextPullRequestLines(group, showIDs)...)
 	}
 	if len(result.Items) == 0 {
 		lines = append(lines, "Nothing is waiting on you.")
@@ -574,7 +591,43 @@ func nextMessage(result NextResult, setupError bool, capturedAt time.Time, inter
 	return strings.Join(lines, "\n")
 }
 
-func nextItemLine(item NextItem) string {
+func nextPullRequestGroups(items []NextItem) [][]NextItem {
+	groups := [][]NextItem{}
+	index := map[string]int{}
+	for _, item := range items {
+		key := item.Source + ":" + item.PullRequest.NodeID
+		position, ok := index[key]
+		if !ok {
+			position = len(groups)
+			index[key] = position
+			groups = append(groups, nil)
+		}
+		groups[position] = append(groups[position], item)
+	}
+	return groups
+}
+
+func nextPullRequestLines(group []NextItem, showIDs bool) []string {
+	pr := group[0].PullRequest
+	header := fmt.Sprintf("%s#%d %s", nextDisplayText(pr.Repository), pr.Number, nextDisplayText(pr.Title))
+	if pr.IsDraft {
+		header += " [draft]"
+	}
+	if author := pr.Author; author != nil && author.Kind == "bot" {
+		if author.OnBehalf {
+			header += " (" + nextDisplayText(author.Login) + ", on your behalf)"
+		} else {
+			header += " [bot]"
+		}
+	}
+	lines := []string{"  " + header + " — " + nextDisplayText(pr.URL)}
+	for _, item := range group {
+		lines = append(lines, "    "+nextItemLine(item, showIDs))
+	}
+	return lines
+}
+
+func nextItemLine(item NextItem, showIDs bool) string {
 	reason := strings.ReplaceAll(item.Reason, "_", " ")
 	switch item.Reason {
 	case nextReasonReply:
@@ -609,15 +662,17 @@ func nextItemLine(item NextItem) string {
 			reason += " (" + strings.Join(names, ", ") + ")"
 		}
 	}
-	if item.PullRequest.IsDraft {
-		reason += " [draft]"
-	}
 	if unknown, ok := item.Triage["unknown"].([]string); ok && len(unknown) > 0 {
 		reason += " [unknown: " + strings.Join(unknown, ", ") + "]"
 	}
-	return fmt.Sprintf("#%d %s (%s): %s — %s [%s]", item.PullRequest.Number,
-		nextDisplayText(item.PullRequest.Title), nextDisplayText(item.PullRequest.Repository),
-		nextDisplayText(reason), nextDisplayText(item.Subject.URL), nextDisplayText(item.ID))
+	line := nextDisplayText(reason)
+	if item.Subject.URL != item.PullRequest.URL {
+		line += " — " + nextDisplayText(item.Subject.URL)
+	}
+	if showIDs {
+		line += " [" + nextDisplayText(item.ID) + "]"
+	}
+	return line
 }
 
 var nextANSISequence = regexp.MustCompile(
@@ -649,15 +704,16 @@ func nextWaitingMessage(items []NextItem, limit int) string {
 		return ""
 	}
 	lines := []string{"Waiting on you"}
-	count := len(items)
+	groups := nextPullRequestGroups(items)
+	count := len(groups)
 	if limit > 0 && count > limit {
 		count = limit
 	}
-	for _, item := range items[:count] {
-		lines = append(lines, "  "+nextItemLine(item))
+	for _, group := range groups[:count] {
+		lines = append(lines, nextPullRequestLines(group, false)...)
 	}
-	if count < len(items) {
-		lines = append(lines, fmt.Sprintf("%d more: workgraph next", len(items)-count))
+	if count < len(groups) {
+		lines = append(lines, fmt.Sprintf("%d more: workgraph next", len(groups)-count))
 	}
 	return strings.Join(lines, "\n")
 }

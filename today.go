@@ -31,6 +31,7 @@ type TodayConfig struct {
 	Actor              string
 	Involvement        string
 	IncludeAllEvidence bool
+	GitEmails          []string
 }
 
 type TodayResult struct {
@@ -128,6 +129,9 @@ func Today(config TodayConfig) (TodayResult, error) {
 	events, err := loadTodayEvents(db, now, config.Actor, config.Involvement, config.IncludeAllEvidence)
 	if err != nil {
 		return TodayResult{}, err
+	}
+	if strings.TrimSpace(config.Actor) == "" && !config.IncludeAllEvidence {
+		events = excludeForeignGitCommits(events, normalizedEmailSet(config.GitEmails))
 	}
 
 	result := TodayResult{
@@ -235,6 +239,17 @@ func loadTodayEvents(db *sql.DB, now time.Time, actor string, involvement string
 	}
 
 	return events, nil
+}
+
+func excludeForeignGitCommits(events []TodayEvent, gitEmails map[string]bool) []TodayEvent {
+	var personal []TodayEvent
+	for _, event := range events {
+		if event.Type == "git.commit" && !gitCommitAuthoredByLocalIdentity(event.Payload, gitEmails) {
+			continue
+		}
+		personal = append(personal, event)
+	}
+	return personal
 }
 
 func eventPath(payloadJSON string) string {
