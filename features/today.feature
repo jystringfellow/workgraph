@@ -149,3 +149,12 @@ Scenario: Never mutate raw events while computing association context
   Given workgraph has captured events today with a qualifying association
   When I run "workgraph today"
   Then the stored event rows remain unchanged
+
+Scenario: Group today's activity by workstream and project
+  Given project memory for "mmo-gtm-segments" declares workstream "mmo"
+  And a Slack thread today was linked to "mmo-gtm-segments" automatically as review work
+  And a container is mapped to workstream "mmo" without a project link
+  When I run "workgraph today"
+  Then "mmo-gtm-segments" is listed under the "mmo" workstream with its link kind and auto-applied count
+  And the unlinked container is listed under "mmo"
+  And I see how to check automatic links with "workgraph projects review --auto"

@@ -144,7 +144,14 @@ func Today(config TodayConfig) (TodayResult, error) {
 		return TodayResult{}, err
 	}
 	result.Associations = associations
-	result.Message = todayMessage(result, location)
+	activity, err := loadProjectActivity(db, config.MemoryDir, now, config.GitEmails)
+	if err != nil {
+		return TodayResult{}, err
+	}
+	for _, event := range events {
+		activity.addEvent(event.ID, event.Project)
+	}
+	result.Message = todayMessage(result, activity.lines(), location)
 	var evidence []ResumeEvent
 	for _, event := range events {
 		evidence = append(evidence, ResumeEvent{ID: event.ID, Project: event.Project, Timestamp: event.Timestamp, Path: event.Path})
@@ -422,7 +429,7 @@ func todayAssociationStatusHidden(status string) bool {
 	}
 }
 
-func todayMessage(result TodayResult, location *time.Location) string {
+func todayMessage(result TodayResult, projectLines []string, location *time.Location) string {
 	lines := []string{
 		"Today",
 		fmt.Sprintf("%s: %s", result.Date, pluralize(len(result.Events), "event")),
@@ -433,12 +440,9 @@ func todayMessage(result TodayResult, location *time.Location) string {
 		return strings.Join(lines, "\n")
 	}
 
-	projects := todayProjectCounts(result.Events)
-	if len(projects) > 0 {
+	if len(projectLines) > 0 {
 		lines = append(lines, "", "Projects")
-		for _, project := range projects {
-			lines = append(lines, fmt.Sprintf("- %s: %s", project.Name, pluralize(project.Count, "event")))
-		}
+		lines = append(lines, projectLines...)
 	}
 
 	lines = append(lines, "", "Sessions")
