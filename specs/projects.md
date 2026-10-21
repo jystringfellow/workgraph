@@ -219,11 +219,13 @@ link; the unit goes to the LLM with those projects listed as hints.
 - Memory files contribute PR and issue URLs, `owner/repo#number` references,
   commit URLs, Notion page URLs, and Azure Boards ids found in their text.
 - URL identifiers are GitHub PR, issue, and commit URLs, compared as
-  `owner/repo#number` or commit SHA, and Notion page URLs. Other URLs are not
-  identifiers.
+  `owner/repo#number` or commit SHA, and Notion page URLs, compared by the page
+  id at the end of the URL; a Notion page event's own id matches them. Other
+  URLs, including Notion URLs without a page id, are not identifiers.
 - Branch identifiers are `<repository>@<branch>`, where the repository is the
-  GitHub `owner/repo` or the git `repo_path`. `main`, `master`, `develop`, and
-  `trunk` are not identifiers.
+  head repository, GitHub `owner/repo`, or git `repo_path` recorded in the
+  same payload object as the branch. `main`, `master`, `develop`, and `trunk`
+  are not identifiers.
 - A container mapping applies only when the container maps to exactly one
   catalog project.
 - Open Slack bursts are not linked until they close.
@@ -367,7 +369,8 @@ proposed replacement that waits for the user (see Project Links).
 ### Accuracy Gate
 
 Auto-apply accuracy uses links with `auto = true` and `source = llm` whose
-`decided_at` falls in the last 14 days:
+`decided_at` falls in the last 14 days, up to now; later timestamps are not
+counted:
 
 ```text
 accuracy = confirmed / (confirmed + corrected + undone)
@@ -454,7 +457,10 @@ workgraph projects explain <unit-id>
 - `r`, `--project`, and `n`/`--new` take a catalog project slug; `--new`
   refuses a slug that already has project memory.
 - Approving a proposed `new_project` link creates its project memory, as
-  `--new` does, before applying it.
+  `--new` does, and applies the link with `target = project` and the new slug;
+  `proposed_project_json` is kept.
+- Link writes use immediate transactions with a busy timeout, so concurrent
+  passes and decisions wait for each other instead of failing.
 - `projects review --auto [--since <duration>]` lists auto-applied links,
   deterministic and LLM, from the last 24 hours by default, newest first, with
   link id, run id, rule or profile, target, and summary. The same keys apply,
@@ -471,7 +477,9 @@ workgraph projects explain <unit-id>
   source, rule or run, and decision, and for the current link the exact
   `projects review --assign` and `--reject` commands that change it and, when
   the link is undoable, the `projects undo` command. User and user-approved
-  links other than confirmed auto links are not undoable.
+  links other than confirmed auto links are not undoable. Printed commands
+  carry the `--home`, `--database`, and, where used, `--memory` options the
+  command was given, shell-quoted.
 - Flag forms make the same changes as the keys and never prompt.
 
 ## Daily Loop Surfaces

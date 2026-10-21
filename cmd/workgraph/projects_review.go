@@ -247,7 +247,7 @@ func runProjectsUndo(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("projects undo", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	home := flags.String("home", "", "workgraph home directory")
-	flags.String("memory", "", "workgraph memory directory")
+	memory := flags.String("memory", "", "workgraph memory directory")
 	database := flags.String("database", "", "workgraph SQLite database path")
 	runID := flags.String("run", "", "Undo every auto-applied link written by this run")
 	if err := flags.Parse(args); err != nil {
@@ -283,7 +283,7 @@ func runProjectsUndo(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "No auto-applied links to undo.")
 		return 0
 	}
-	fmt.Fprintf(stdout, "Undid %d auto-applied %s; each unit waits in workgraph projects review.\n", len(replacements), pluralWord(len(replacements), "link", "links"))
+	fmt.Fprintf(stdout, "Undid %d auto-applied %s; each unit waits in workgraph projects review%s\n", len(replacements), pluralWord(len(replacements), "link", "links"), workgraph.ProjectCommandOptions(*home, *memory, *database))
 	for _, link := range replacements {
 		fmt.Fprintf(stdout, "- %s: %s\n", link.UnitID, workgraph.ProjectLinkLine(link))
 	}
@@ -300,7 +300,7 @@ func runProjectsExplain(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("projects explain", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	home := flags.String("home", "", "workgraph home directory")
-	flags.String("memory", "", "workgraph memory directory")
+	memory := flags.String("memory", "", "workgraph memory directory")
 	database := flags.String("database", "", "workgraph SQLite database path")
 	if err := flags.Parse(args[1:]); err != nil {
 		return 2
@@ -312,6 +312,7 @@ func runProjectsExplain(args []string, stdout, stderr io.Writer) int {
 	result, err := workgraph.ExplainProjectUnit(workgraph.ProjectReviewConfig{
 		HomeDir:      *home,
 		DatabasePath: *database,
+		MemoryDir:    *memory,
 		Location:     time.Local,
 		GitEmails:    workgraph.LocalGitEmails(workgraph.LocalGitIdentityConfig{HomeDir: *home, DatabasePath: *database}),
 	}, unitID)

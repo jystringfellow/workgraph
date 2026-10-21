@@ -1,6 +1,7 @@
 package workgraph
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -81,7 +82,7 @@ func ListProjectReview(config ProjectReviewConfig) ([]ProjectLink, error) {
 func projectAutoApplyDecidedSample(links []ProjectLink, now time.Time) int {
 	count := 0
 	for _, link := range links {
-		if !link.Auto || link.Source != "llm" || link.DecidedAt.Before(now.Add(-projectAutoApplySampleWindow)) {
+		if !link.Auto || link.Source != "llm" || link.DecidedAt.Before(now.Add(-projectAutoApplySampleWindow)) || link.DecidedAt.After(now) {
 			continue
 		}
 		switch link.Decision {
@@ -115,7 +116,13 @@ func ApproveProjectReviewLink(config ProjectReviewConfig, linkID int64) (Project
 			}
 		}
 	}
-	return ApproveProjectLink(config.store(), linkID)
+	var approved ProjectLink
+	err = withProjectLinksTx(config.store(), func(tx *sql.Tx, now time.Time) error {
+		var err error
+		approved, err = approveNewProjectLinkTx(tx, now, linkID)
+		return err
+	})
+	return approved, err
 }
 
 func AssignProjectUnit(config ProjectReviewConfig, assignment ProjectUnitAssignment) (ProjectLink, error) {
@@ -152,22 +159,34 @@ func createProjectMemory(config ProjectReviewConfig, slug, workstream string) er
 	if workstream != "" && !validWorkstreamSlug(workstream) {
 		return fmt.Errorf("workstream %q must be lowercase kebab-case", workstream)
 	}
-	result, err := InitProjectMemory(ProjectMemoryInitConfig{HomeDir: config.HomeDir, MemoryDir: config.MemoryDir, Project: slug})
+	homeDir, err := resolveHomeDir(config.HomeDir)
 	if err != nil {
 		return err
 	}
-	if !result.Created {
+	if err := requireMemoryInitHome(homeDir); err != nil {
+		return err
+	}
+	memoryDir, err := resolveMemoryDir(config.MemoryDir)
+	if err != nil {
+		return err
+	}
+	path, _ := projectMemoryPath(memoryDir, slug)
+	if err := os.MkdirAll(projectMemoryDir(memoryDir), 0o755); err != nil {
+		return fmt.Errorf("create project memory directory: %w", err)
+	}
+	content := projectMemoryTemplate(slug)
+	if workstream != "" {
+		content = frontmatterDelimiter + "\nworkstream: " + workstream + "\n" + frontmatterDelimiter + "\n" + content
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if errors.Is(err, os.ErrExist) {
 		return fmt.Errorf("project %q already exists; use --project %s", slug, slug)
 	}
-	if workstream == "" {
-		return nil
-	}
-	content, err := os.ReadFile(result.Path)
 	if err != nil {
-		return fmt.Errorf("read project memory: %w", err)
+		return fmt.Errorf("create project memory: %w", err)
 	}
-	frontmatter := frontmatterDelimiter + "\nworkstream: " + workstream + "\n" + frontmatterDelimiter + "\n"
-	if err := os.WriteFile(result.Path, []byte(frontmatter+string(content)), 0o644); err != nil {
+	defer file.Close()
+	if _, err := file.WriteString(content); err != nil {
 		return fmt.Errorf("write project memory: %w", err)
 	}
 	return nil
@@ -199,11 +218,11 @@ func ExplainProjectUnit(config ProjectReviewConfig, unitID string) (ProjectExpla
 		return ProjectExplainResult{}, err
 	}
 	result := ProjectExplainResult{Unit: unit, Links: links}
-	result.Message = projectExplainMessage(unitID, unit, links, config.location())
+	result.Message = projectExplainMessage(unitID, unit, links, config)
 	return result, nil
 }
 
-func projectExplainMessage(unitID string, unit *ProjectUnit, links []ProjectLink, location *time.Location) string {
+func projectExplainMessage(unitID string, unit *ProjectUnit, links []ProjectLink, config ProjectReviewConfig) string {
 	lines := []string{"Unit " + unitID}
 	if unit == nil {
 		lines = append(lines, "This unit no longer exists; the links below belong to an earlier grouping.")
@@ -211,7 +230,7 @@ func projectExplainMessage(unitID string, unit *ProjectUnit, links []ProjectLink
 		lines = append(lines,
 			"Kind: "+unit.Kind,
 			"Container: "+unit.Container,
-			"Time: "+ProjectUnitTimeRange(*unit, location),
+			"Time: "+ProjectUnitTimeRange(*unit, config.location()),
 			"Members:")
 		for _, id := range unit.EventIDs {
 			lines = append(lines, "- "+id)
@@ -229,13 +248,15 @@ func projectExplainMessage(unitID string, unit *ProjectUnit, links []ProjectLink
 		}
 	}
 	unitArg := projectShellArg(unitID)
+	withMemory := ProjectCommandOptions(config.HomeDir, config.MemoryDir, config.DatabasePath)
+	storeOnly := ProjectCommandOptions(config.HomeDir, "", config.DatabasePath)
 	lines = append(lines, "", "Change it:",
-		"  workgraph projects review --assign "+unitArg+" --project <slug>",
-		"  workgraph projects review --assign "+unitArg+" --new <slug> [--workstream <slug>]")
+		"  workgraph projects review --assign "+unitArg+" --project <slug>"+withMemory,
+		"  workgraph projects review --assign "+unitArg+" --new <slug> [--workstream <slug>]"+withMemory)
 	if current != nil {
-		lines = append(lines, fmt.Sprintf("  workgraph projects review --reject %d", current.ID))
+		lines = append(lines, fmt.Sprintf("  workgraph projects review --reject %d%s", current.ID, storeOnly))
 		if projectLinkUndoable(*current) {
-			lines = append(lines, fmt.Sprintf("  workgraph projects undo %d", current.ID))
+			lines = append(lines, fmt.Sprintf("  workgraph projects undo %d%s", current.ID, storeOnly))
 		}
 	}
 	return strings.Join(lines, "\n")
@@ -304,6 +325,16 @@ func ProjectAppliedUnitCounts(config ProjectReviewConfig) (map[string]int, error
 		}
 	}
 	return counts, nil
+}
+
+func ProjectCommandOptions(homeDir, memoryDir, databasePath string) string {
+	var options strings.Builder
+	for _, option := range [][2]string{{"--home", homeDir}, {"--memory", memoryDir}, {"--database", databasePath}} {
+		if option[1] != "" {
+			options.WriteString(" " + option[0] + " " + projectShellArg(option[1]))
+		}
+	}
+	return options.String()
 }
 
 func projectShellArg(value string) string {

@@ -14,10 +14,11 @@ import (
 )
 
 var (
-	projectWorkItemPattern  = regexp.MustCompile(`(?i)\bAB#(\d+)\b`)
-	projectIssueRefPattern  = regexp.MustCompile(`\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)\b`)
-	projectDefaultBranches  = map[string]bool{"main": true, "master": true, "develop": true, "trunk": true}
-	projectNotionURLDomains = []string{"notion.so", "notion.site"}
+	projectWorkItemPattern     = regexp.MustCompile(`(?i)\bAB#(\d+)\b`)
+	projectIssueRefPattern     = regexp.MustCompile(`\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)\b`)
+	projectDefaultBranches     = map[string]bool{"main": true, "master": true, "develop": true, "trunk": true}
+	projectNotionURLDomains    = []string{"notion.so", "notion.site"}
+	projectNotionPageIDPattern = regexp.MustCompile(`(?i)(?:^|-)([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
 )
 
 type ProjectLinkPassConfig struct {
@@ -247,33 +248,60 @@ func projectEventIdentifierKeys(event AssociationEvent) []string {
 		}
 	}
 	var payload any
-	var repoPath string
 	if json.Unmarshal([]byte(event.Payload), &payload) == nil {
 		texts := []string{event.Summary}
 		collectProjectTrustedStrings(payload, &texts)
 		for _, key := range projectTextIdentifiers(strings.Join(texts, "\n")) {
 			keys[key] = true
 		}
-		if fields, ok := payload.(map[string]any); ok {
-			repoPath, _ = fields["repo_path"].(string)
-		}
-	}
-	repositories := map[string]bool{}
-	for repository := range signals.Repositories {
-		repositories[repository] = true
-	}
-	if repoPath != "" {
-		repositories[repoPath] = true
-	}
-	for branch := range signals.Branches {
-		if branch == "" || projectDefaultBranches[branch] {
-			continue
-		}
-		for repository := range repositories {
-			keys["branch:"+repository+"@"+branch] = true
+		collectProjectBranchKeys(payload, keys)
+		if fields, ok := payload.(map[string]any); ok && event.Source == "notion" {
+			if id, _ := fields["id"].(string); id != "" {
+				if pageID := projectNotionPageID(id); pageID != "" {
+					keys["notion:"+pageID] = true
+				}
+			}
 		}
 	}
 	return sortedKeys(keys)
+}
+
+func collectProjectBranchKeys(value any, keys map[string]bool) {
+	switch typed := value.(type) {
+	case map[string]any:
+		branch, repository := "", ""
+		for key, child := range typed {
+			text, _ := child.(string)
+			switch associationFieldKey(key) {
+			case "branch", "headref", "headrefname":
+				branch = normalizeAssociationBranch(text)
+			case "headrepository":
+				if headRepository := normalizeAssociationRepository(text); headRepository != "" {
+					repository = headRepository
+				}
+			case "repository":
+				if repository == "" {
+					repository = normalizeAssociationRepository(text)
+				}
+			case "repopath":
+				if repository == "" {
+					repository = text
+				}
+			}
+		}
+		if branch != "" && repository != "" && !projectDefaultBranches[branch] {
+			keys["branch:"+repository+"@"+branch] = true
+		}
+		for key, child := range typed {
+			if key != "untrusted" {
+				collectProjectBranchKeys(child, keys)
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			collectProjectBranchKeys(child, keys)
+		}
+	}
 }
 
 func projectTextIdentifiers(text string) []string {
@@ -312,11 +340,26 @@ func projectNotionURLKey(raw string) string {
 	}
 	host := parsed.Hostname()
 	for _, domain := range projectNotionURLDomains {
-		if host == domain || strings.HasSuffix(host, "."+domain) {
-			return "url:" + raw
+		if host != domain && !strings.HasSuffix(host, "."+domain) {
+			continue
+		}
+		parts := splitAssociationURLPath(parsed.Path)
+		if len(parts) == 0 {
+			return ""
+		}
+		if pageID := projectNotionPageID(parts[len(parts)-1]); pageID != "" {
+			return "notion:" + pageID
 		}
 	}
 	return ""
+}
+
+func projectNotionPageID(value string) string {
+	match := projectNotionPageIDPattern.FindStringSubmatch(value)
+	if match == nil {
+		return ""
+	}
+	return strings.ToLower(strings.ReplaceAll(match[1], "-", ""))
 }
 
 func collectProjectTrustedStrings(value any, texts *[]string) {
