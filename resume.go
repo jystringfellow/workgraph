@@ -62,6 +62,9 @@ type ResumeResult struct {
 	GitHub       []ResumeEvent
 	Memory       *MemoryDoc
 	MemoryPath   string
+	Workstream   string
+	Members      []string
+	EventGroups  map[string]string
 	Omitted      int
 	Message      string
 }
@@ -182,17 +185,20 @@ func Resume(config ResumeConfig) (ResumeResult, error) {
 	if err != nil {
 		return ResumeResult{}, err
 	}
-	memoryPath, _ := projectMemoryPath(memoryDir, config.Project)
-	projectEvents, err := mappedMemoryEvents(db, events, project, memoryPath)
+	selection, err := selectResumeProjectEvents(db, config, events, project, memoryDir, now)
 	if err != nil {
 		return ResumeResult{}, err
 	}
+	projectEvents := selection.Events
+	result.Workstream, result.Members, result.EventGroups = selection.Workstream, selection.Projects, selection.Groups
 	result.GitHub = resumeOpenGitHubWork(projectEvents)
 	result.Events, result.Omitted = limitResumeEvents(projectEvents, resumeActivityLimit(config.MaxEvents))
 	result.Files = resumeRelevantFiles(result.Events)
-	result.Memory, result.MemoryPath, err = loadProjectMemory(memoryDir, config.Project)
-	if err != nil {
-		return ResumeResult{}, err
+	if result.Workstream == "" {
+		result.Memory, result.MemoryPath, err = loadProjectMemory(memoryDir, config.Project)
+		if err != nil {
+			return ResumeResult{}, err
+		}
 	}
 	result.Message = resumeProjectMessage(result, location)
 	result.Message += memoryDiscoveryHints(db, events, MemoryDoctorConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir, Project: config.Project})
@@ -941,8 +947,106 @@ func resumeRelevanceMessage(decisions []resumeRelevanceDecision, location *time.
 	return strings.Join(lines, "\n")
 }
 
+type resumeProjectSelection struct {
+	Events     []ResumeEvent
+	Workstream string
+	Projects   []string
+	Groups     map[string]string
+}
+
+func selectResumeProjectEvents(db *sql.DB, config ResumeConfig, events []ResumeEvent, project, memoryDir string, now time.Time) (resumeProjectSelection, error) {
+	activity, err := loadProjectActivity(db, config.MemoryDir, now, config.GitEmails)
+	if err != nil {
+		return resumeProjectSelection{}, err
+	}
+	selection := resumeProjectSelection{Groups: map[string]string{}}
+	slugs := []string{projectSlug(config.Project)}
+	if members := resumeWorkstreamProjects(activity.catalog, project); len(members) > 0 {
+		selection.Workstream, selection.Projects, slugs = project, members, members
+	}
+	selected := map[string]bool{}
+	mapped := map[string]string{}
+	for _, slug := range slugs {
+		selected[slug] = true
+		path, _ := projectMemoryPath(memoryDir, slug)
+		sources, err := memoryProjectSources(db, path)
+		if err != nil {
+			return resumeProjectSelection{}, err
+		}
+		for _, source := range sources {
+			if mapped[source] == "" {
+				mapped[source] = slug
+			}
+		}
+	}
+	for _, event := range events {
+		if isTransientResumePath(event.Path) {
+			continue
+		}
+		group := ""
+		link, linked := activity.links[activity.eventUnits[event.ID]]
+		switch {
+		case event.Project == project:
+			group = event.Project
+		case linked:
+			if link.Target == "project" && selected[link.Project] {
+				group = link.Project
+			}
+		default:
+			group = mapped[event.Project]
+		}
+		if group == "" {
+			continue
+		}
+		selection.Groups[event.ID] = group
+		selection.Events = append(selection.Events, event)
+	}
+	return selection, nil
+}
+
+func resumeWorkstreamProjects(catalog ProjectCatalog, name string) []string {
+	if catalogHasProject(catalog, projectSlug(name)) {
+		return nil
+	}
+	var members []string
+	for _, entry := range catalog.Projects {
+		if entry.Workstream == name {
+			members = append(members, entry.Slug)
+		}
+	}
+	sort.Strings(members)
+	return members
+}
+
+func resumeWorkstreamActivityLines(result ResumeResult, location *time.Location) []string {
+	var order []string
+	byGroup := map[string][]ResumeEvent{}
+	for _, event := range result.Events {
+		group := result.EventGroups[event.ID]
+		if _, ok := byGroup[group]; !ok {
+			order = append(order, group)
+		}
+		byGroup[group] = append(byGroup[group], event)
+	}
+	var lines []string
+	for _, group := range order {
+		label := group
+		if group != result.Project && group != result.Workstream {
+			label += " project"
+		}
+		lines = append(lines, fmt.Sprintf("- %s: %s", label, pluralize(len(byGroup[group]), "event")))
+		for _, event := range byGroup[group] {
+			lines = append(lines, fmt.Sprintf("  - %s %s %s", event.Timestamp.In(location).Format("2006-01-02 15:04"), event.Type, resumeEventLabel(event)))
+		}
+	}
+	return lines
+}
+
 func resumeProjectMessage(result ResumeResult, location *time.Location) string {
 	lines := []string{"Resume " + result.Project}
+	if result.Workstream != "" {
+		lines = []string{"Resume " + result.Workstream + " workstream", "Projects: " + strings.Join(result.Members, ", ")}
+	}
 	if len(result.Events) == 0 {
 		lines = append(lines,
 			fmt.Sprintf("No recent activity found for %s.", result.Project),
@@ -958,8 +1062,12 @@ func resumeProjectMessage(result ResumeResult, location *time.Location) string {
 	}
 
 	lines = append(lines, "", "Recent activity")
-	for _, event := range result.Events {
-		lines = append(lines, fmt.Sprintf("- %s %s %s", event.Timestamp.In(location).Format("2006-01-02 15:04"), event.Type, resumeEventLabel(event)))
+	if result.Workstream != "" {
+		lines = append(lines, resumeWorkstreamActivityLines(result, location)...)
+	} else {
+		for _, event := range result.Events {
+			lines = append(lines, fmt.Sprintf("- %s %s %s", event.Timestamp.In(location).Format("2006-01-02 15:04"), event.Type, resumeEventLabel(event)))
+		}
 	}
 	if result.Omitted > 0 {
 		lines = append(lines, fmt.Sprintf("... and %s", pluralizeOlderEvents(result.Omitted)))

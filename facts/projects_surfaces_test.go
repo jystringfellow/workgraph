@@ -402,3 +402,81 @@ func surfaceSlackEvents(t *testing.T, dbPath string) string {
 	}
 	return snapshot.String
 }
+
+func TestResumeProjectDrillDownSelectsLinkedActivity(t *testing.T) {
+	home := initProjectLinkingHome(t)
+	writeProjectMemory(t, home.MemoryDir, "demo", "---\nworkstream: ws\n---\n# Demo\n")
+	writeProjectMemory(t, home.MemoryDir, "ws-two", "---\nworkstream: ws\n---\n# WS Two\n")
+	writeProjectMemory(t, home.MemoryDir, "other", "# Other\n")
+	now := time.Now().Truncate(time.Second)
+	checkIn := now.Add(-10 * time.Hour)
+	linked := insertSurfaceThreads(t, home, checkIn.Add(time.Hour), "C1", "general", 1)[0]
+	mappedNone := insertSurfaceThreads(t, home, checkIn.Add(2*time.Hour), "C2", "demo-repo", 1)[0]
+	mappedOther := insertSurfaceThreads(t, home, checkIn.Add(3*time.Hour), "C3", "demo-repo", 1)[0]
+	sibling := insertSurfaceThreads(t, home, checkIn.Add(4*time.Hour), "C4", "sibling-channel", 1)[0]
+	insertSurfaceEvent(t, home.DatabasePath, surfaceFileEvent("mapped-file", "demo-repo", checkIn.Add(5*time.Hour)))
+	insertSurfaceEvent(t, home.DatabasePath, surfaceFileEvent("named-file", "demo", checkIn.Add(6*time.Hour)))
+	linkSurfaceContainer(t, home, "--source", "demo-repo", "demo")
+
+	store := workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now}
+	run, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "llm", Profile: "fake", Links: []workgraph.ProjectLinkProposal{
+		surfaceProposal(linked, "demo", "review", true),
+		surfaceProposal(mappedNone, "demo", "fyi", true),
+		surfaceProposal(mappedOther, "other", "build", true),
+		surfaceProposal(sibling, "ws-two", "coordination", true),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workgraph.RejectProjectLink(store, run.Written[1].ID); err != nil {
+		t.Fatal(err)
+	}
+	config := workgraph.ResumeConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, MemoryDir: home.MemoryDir, Now: now}
+	if err := workgraph.RecordResumeCheckIn(config, checkIn); err != nil {
+		t.Fatal(err)
+	}
+	overview, err := workgraph.Resume(config)
+	if err != nil || !strings.Contains(overview.Message, "  - demo project: 2 events; review; 1 auto-applied") {
+		t.Fatalf("expected the overview to show linked work under demo: %v\n%s", err, overview.Message)
+	}
+
+	config.Project = "demo"
+	drill, err := workgraph.Resume(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := surfaceEventIDs(drill.Events); got != strings.Join([]string{"named-file", "mapped-file", linked.EventIDs[0]}, ",") {
+		t.Fatalf("expected the linked thread, the mapped container, and the named container, got %s:\n%s", got, drill.Message)
+	}
+	if !strings.Contains(drill.Message, "Recent activity") || strings.Contains(drill.Message, "No recent activity found") {
+		t.Fatalf("expected recent activity for demo:\n%s", drill.Message)
+	}
+
+	config.Project = "ws"
+	workstream, err := workgraph.Resume(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := surfaceEventIDs(workstream.Events); got != strings.Join([]string{"mapped-file", sibling.EventIDs[0], linked.EventIDs[0]}, ",") {
+		t.Fatalf("expected the workstream's projects' activity, got %s:\n%s", got, workstream.Message)
+	}
+	for _, expected := range []string{"Resume ws workstream", "Projects: demo, ws-two", "- demo project: 2 events", "- ws-two project: 1 event"} {
+		if !strings.Contains(workstream.Message, expected) {
+			t.Fatalf("expected %q in the workstream drill-down:\n%s", expected, workstream.Message)
+		}
+	}
+	if strings.Index(workstream.Message, "- demo project") > strings.Index(workstream.Message, "- ws-two project") {
+		t.Fatalf("expected the most recently active project first:\n%s", workstream.Message)
+	}
+	if strings.Contains(workstream.Message, "Add project memory") {
+		t.Fatalf("a workstream has no memory file to suggest:\n%s", workstream.Message)
+	}
+}
+
+func surfaceEventIDs(events []workgraph.ResumeEvent) string {
+	var ids []string
+	for _, event := range events {
+		ids = append(ids, event.ID)
+	}
+	return strings.Join(ids, ",")
+}

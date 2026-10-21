@@ -162,6 +162,23 @@ When a project is provided, `workgraph resume <project>` shows recent evidence f
 Project-specific resume is exact. It does not apply the project-list relevance
 gate because the user has already named the project they want to inspect.
 
+It selects activity the way the morning overview groups it
+(`specs/projects.md`, Daily Loop Surfaces):
+
+- events in the container whose name is exactly `<project>`, as before
+- events in units with an applied link to the project
+- events with no applied link in containers mapped to the project with
+  `memory link --source`
+- never an event whose unit has an applied link to `none` or to another
+  project, unless its container name is exactly `<project>`
+
+When `<project>` names a workstream and no project memory has that slug, the
+output starts with `Resume <workstream> workstream` and `Projects: <slugs>`,
+selects the activity of every project in the workstream the same way, and
+groups `Recent activity` by project, most recently active first, as `- <slug>
+project: <n> events` with the event lines beneath. A workstream has no memory
+file, so no project memory is shown or suggested.
+
 The output includes:
 
 - `Resume <project>`
