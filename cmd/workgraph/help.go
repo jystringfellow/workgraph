@@ -31,9 +31,9 @@ var helpTopics = map[string]helpTopic{
 	"next explain":            {"workgraph next explain <item-id> [options]", "Explain the rule and evidence for an open item."},
 	"next done":               {"workgraph next done <item-id> [options]", "Hide one item with a local bookkeeping event."},
 	"next snooze":             {"workgraph next snooze <item-id> --for <duration> [options]", "Hide one item locally until the duration expires."},
-	"memory doctor":           {"workgraph memory doctor [--interactive] [project] [options]", "Inspect project mappings and review possible captured project matches."},
-	"memory link":             {"workgraph memory link --source <captured-project> <memory-project> [options]", "Associate captured project evidence with an existing memory project."},
-	"memory unlink":           {"workgraph memory unlink --source <captured-project> <memory-project> [options]", "Remove a captured project mapping, preserving promoted evidence."},
+	"memory doctor":           {"workgraph memory doctor [--interactive] [project] [options]", "Inspect container mappings, project frontmatter, and possible container matches."},
+	"memory link":             {"workgraph memory link (--source <container> <memory-project> | --workstream <slug> --source <container>) [options]", "Map containers to an existing memory project or to a workstream."},
+	"memory unlink":           {"workgraph memory unlink (--source <container> <memory-project> | --workstream <slug> --source <container>) [options]", "Remove a container mapping, preserving promoted evidence."},
 	"service":                 {"workgraph service <install|status|uninstall>", "Manage opt-in supervised capture on macOS and Linux."},
 	"service install":         {"workgraph service install [--home path]", "Enable login startup and automatic capture restart."},
 	"service status":          {"workgraph service status [--home path]", "Inspect supervisor state and capture health."},
@@ -127,6 +127,8 @@ var helpTopics = map[string]helpTopic{
 	"notion index":            {"workgraph notion index <subcommand>", "Inspect the locally captured Notion object index."},
 	"notion index list":       {"workgraph notion index list [--limit <count>] [options]", "List locally indexed Notion objects."},
 	"notion index show":       {"workgraph notion index show <notion-id> [options]", "Show one locally indexed Notion object."},
+	"projects":                {"workgraph projects <subcommand>", "Inspect declared projects, workstreams, and their containers."},
+	"projects list":           {"workgraph projects list [options]", "List workstreams, their projects and mapped containers, and projects with no workstream."},
 	"plugin":                  {"workgraph plugin <subcommand>", "Install and diagnose the workgraph agent plugin for supported AI clients."},
 	"plugin doctor":           {"workgraph plugin doctor --client <codex|claude-code> [options]", "Verify the workgraph plugin, bundled skills, local MCP, worker, and heartbeat."},
 	"plugin install":          {"workgraph plugin install --client <codex|claude-code> [--model <model> | --clear-model] [options]", "Install or update the workgraph plugin, bundled skills, local MCP, and macOS bridge worker."},
@@ -416,6 +418,8 @@ func runCommandForOptionHelp(args []string, stdout io.Writer, stderr io.Writer) 
 		return runNotion(args[1:], stdout, stderr)
 	case "memory":
 		return runMemory(args[1:], stdout, stderr)
+	case "projects":
+		return runProjects(args[1:], stdout, stderr)
 	case "start":
 		return runCaptureStart(args[1:], stdout, stderr)
 	case "status":

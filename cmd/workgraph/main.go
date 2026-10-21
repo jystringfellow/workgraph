@@ -90,6 +90,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runNotion(args[1:], stdout, stderr)
 	case "memory":
 		return runMemory(args[1:], stdout, stderr)
+	case "projects":
+		return runProjects(args[1:], stdout, stderr)
 	case "start":
 		return runCaptureStart(args[1:], stdout, stderr)
 	case "service":

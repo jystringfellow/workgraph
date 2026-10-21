@@ -34,14 +34,11 @@ Priority labels used below:
 Projects and categorization, in order. Each slice links activity to declared
 projects more completely. [spec: `specs/projects.md`]
 
-- `P1` **D1 Project model and container wording.** Project memory
-  frontmatter (workstream, aliases, description), `projects list`, container
-  to workstream mappings, workstream suggestions in memory doctor, and
-  "container" in user-facing text.
 - `P1` **D2 Units of work and deterministic linking.** Deterministic Slack
   thread and burst, GitHub PR, git session, Notion page, and calendar units;
   the `project_links` table; shared-identifier and container-mapping rules;
-  `projects explain`, `undo`, and flag-form review.
+  `projects explain`, `undo`, flag-form review, and applied unit counts in
+  `projects list`.
 - `P1` **D3 LLM categorization.** `llm associate` with dry run, per-source
   opt-in over the whole payload (including persisted Slack conversation
   type), validation, auto-apply at confidence 0.95 with an accuracy gate, and
@@ -90,6 +87,11 @@ projects more completely. [spec: `specs/projects.md`]
 - `P2` Desktop UI after the local CLI and data contracts are stable.
 
 ## Recently Delivered
+
+- [x] Project catalog from memory frontmatter (workstream, aliases,
+  description), `projects list`, container to workstream mappings, workstream
+  suggestions in memory doctor, and "container" in user-facing text. [spec:
+  `specs/projects.md` D1]
 
 - [x] `workgraph next`: one local list of what is waiting on the user, with
   stable item ids, `explain`, `done`, `snooze`, a `--watch --json` feed, and a

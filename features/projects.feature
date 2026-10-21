@@ -13,6 +13,25 @@ Scenario: Group activity into units of work
   Then the same unit ids and members are produced every time
   And a Slack burst inside its quiet gap is not eligible for categorization
 
+Scenario: Keep a project with invalid frontmatter
+  Given project memory for "broken" has frontmatter that is not closed
+  When I run "workgraph projects list"
+  Then "broken" is listed without a workstream
+  And "workgraph memory doctor" reports the invalid frontmatter
+
+Scenario: Map a container to a workstream
+  Given captured events in "Mindbody.Modernization.Orchestration"
+  When I run "workgraph memory link --workstream mmo --source Mindbody.Modernization.Orchestration"
+  Then the container's catalog is narrowed to "mmo" projects
+  And no project link is created
+  And "workgraph projects list" shows the container under "mmo"
+
+Scenario: Suggest a workstream for a shared acronym
+  Given memory exists for "mmo-harness"
+  And captured events belong to "Mindbody.Modernization.Orchestration"
+  When I run "workgraph memory doctor"
+  Then the shared acronym is offered with a "memory link --workstream mmo" command
+
 Scenario: Link a Slack thread by a shared identifier
   Given a Slack channel is mapped to project "mmo-harness"
   And a thread in that channel cites a pull request recorded in "ask-kai" memory

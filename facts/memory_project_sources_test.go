@@ -72,7 +72,7 @@ func TestMemoryProjectSourcesFlowThroughEvidence(t *testing.T) {
 		}
 	}
 	links, err := workgraph.ListMemoryLinks(workgraph.MemoryLinksConfig{HomeDir: home, MemoryDir: memory, Project: "MMO Harness"})
-	if err != nil || len(links.Links) != 0 || !strings.Contains(links.Message, "mmo-ui") {
+	if err != nil || len(links.Links) != 0 || !strings.Contains(links.Message, "Container mappings\n- Mindbody.Modernization.Orchestration\n- mmo-ui") {
 		t.Fatalf("mapping visibility: %+v %v", links, err)
 	}
 	_, err = workgraph.PromoteMemory(workgraph.MemoryPromoteConfig{HomeDir: home, MemoryDir: memory, Project: "MMO Harness", EvidenceID: "mmo-ui", Text: "UI supports this workstream."})
