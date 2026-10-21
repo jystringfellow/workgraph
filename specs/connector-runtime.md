@@ -210,6 +210,9 @@ Enabled, ready connectors poll once immediately when capture starts. Each
 connector runs independently. A poll has a 30-second default whole-poll
 deadline, including pagination and provider commands. Tests may configure a
 shorter deadline.
+`workgraph connectors poll --once` applies the same per-connector deadline as
+the run loop, including the 2-minute `github.pr_watch` budget, and finishes
+however many events a connector captures.
 
 Transient failures retry with exponential backoff starting at 5 seconds and
 capped at 5 minutes. A successful poll resets the failure count and returns to

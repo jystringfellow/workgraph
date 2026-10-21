@@ -1219,6 +1219,7 @@ func TestManagedSettingsControlConnectorEnablementAndSetup(t *testing.T) {
 
 func TestManagedSettingsControlConnectorPolling(t *testing.T) {
 	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
 	homeDir := filepath.Join(tempDir, ".workgraph")
 	managedPath := filepath.Join(tempDir, "managed-settings.json")
 	if err := os.WriteFile(managedPath, []byte(`{
