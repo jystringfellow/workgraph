@@ -129,6 +129,9 @@ var helpTopics = map[string]helpTopic{
 	"notion index show":       {"workgraph notion index show <notion-id> [options]", "Show one locally indexed Notion object."},
 	"projects":                {"workgraph projects <subcommand>", "Inspect declared projects, workstreams, and their containers."},
 	"projects list":           {"workgraph projects list [options]", "List workstreams, their projects and mapped containers, and projects with no workstream."},
+	"projects review":         {"workgraph projects review [--auto [--since <duration>]] [--json] | --approve <id> | --reject <id> | --assign <unit-id> (--project <slug> | --new <slug>) [options]", "Decide proposed and auto-applied project links."},
+	"projects undo":           {"workgraph projects undo <link-id> | --run <run-id> [options]", "Return auto-applied project links to review."},
+	"projects explain":        {"workgraph projects explain <unit-id> [options]", "Show a unit's members, every link row, and the commands that change it."},
 	"plugin":                  {"workgraph plugin <subcommand>", "Install and diagnose the workgraph agent plugin for supported AI clients."},
 	"plugin doctor":           {"workgraph plugin doctor --client <codex|claude-code> [options]", "Verify the workgraph plugin, bundled skills, local MCP, worker, and heartbeat."},
 	"plugin install":          {"workgraph plugin install --client <codex|claude-code> [--model <model> | --clear-model] [options]", "Install or update the workgraph plugin, bundled skills, local MCP, and macOS bridge worker."},
@@ -351,6 +354,10 @@ func helpOptionArgs(key string) []string {
 		placeholder = "item-id"
 	case "associations explain":
 		placeholder = "event-id"
+	case "projects explain":
+		placeholder = "unit-id"
+	case "projects undo":
+		placeholder = "1"
 	case "calendar connect", "calendar disconnect", "mail connect", "mail disconnect":
 		placeholder = "google"
 	case "llm connect":

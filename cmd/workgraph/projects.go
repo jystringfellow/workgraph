@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"os"
 
 	workgraph "github.com/jystringfellow/workgraph"
 )
@@ -15,6 +16,12 @@ func runProjects(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "list":
 		return runProjectsList(args[1:], stdout, stderr)
+	case "review":
+		return runProjectsReview(args[1:], os.Stdin, stdout, stderr)
+	case "undo":
+		return runProjectsUndo(args[1:], stdout, stderr)
+	case "explain":
+		return runProjectsExplain(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown projects command: %s\n", args[0])
 		return 2

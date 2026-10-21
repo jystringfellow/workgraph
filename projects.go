@@ -15,9 +15,10 @@ type ProjectsListConfig struct {
 }
 
 type ProjectsListResult struct {
-	Catalog  ProjectCatalog
-	Mappings ContainerMappings
-	Message  string
+	Catalog      ProjectCatalog
+	Mappings     ContainerMappings
+	AppliedUnits map[string]int
+	Message      string
 }
 
 func ListProjects(config ProjectsListConfig) (ProjectsListResult, error) {
@@ -29,8 +30,12 @@ func ListProjects(config ProjectsListConfig) (ProjectsListResult, error) {
 	if err != nil {
 		return ProjectsListResult{}, err
 	}
-	result := ProjectsListResult{Catalog: catalog, Mappings: mappings}
-	result.Message = projectsListMessage(catalog, mappings)
+	counts, err := ProjectAppliedUnitCounts(ProjectReviewConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath})
+	if err != nil {
+		return ProjectsListResult{}, err
+	}
+	result := ProjectsListResult{Catalog: catalog, Mappings: mappings, AppliedUnits: counts}
+	result.Message = projectsListMessage(catalog, mappings, counts)
 	return result, nil
 }
 
@@ -50,7 +55,7 @@ func loadContainerMappingsIfInitialized(homeDir, databasePath string) (Container
 	return LoadContainerMappings(db)
 }
 
-func projectsListMessage(catalog ProjectCatalog, mappings ContainerMappings) string {
+func projectsListMessage(catalog ProjectCatalog, mappings ContainerMappings, counts map[string]int) string {
 	lines := []string{"Projects"}
 	if len(catalog.Projects) == 0 {
 		lines = append(lines, "No project memory documents found.", "Create one with: workgraph memory init <project>")
@@ -70,7 +75,7 @@ func projectsListMessage(catalog ProjectCatalog, mappings ContainerMappings) str
 		count := 0
 		for _, project := range catalog.Projects {
 			if project.Workstream == workstream {
-				lines = append(lines, projectsListLine(project))
+				lines = append(lines, projectsListLine(project, counts[project.Slug]))
 				count++
 			}
 		}
@@ -81,7 +86,7 @@ func projectsListMessage(catalog ProjectCatalog, mappings ContainerMappings) str
 	var ungrouped []string
 	for _, project := range catalog.Projects {
 		if project.Workstream == "" {
-			ungrouped = append(ungrouped, projectsListLine(project))
+			ungrouped = append(ungrouped, projectsListLine(project, counts[project.Slug]))
 		}
 	}
 	if len(ungrouped) > 0 {
@@ -94,12 +99,16 @@ func projectsListMessage(catalog ProjectCatalog, mappings ContainerMappings) str
 	return strings.Join(lines, "\n")
 }
 
-func projectsListLine(project ProjectCatalogEntry) string {
+func projectsListLine(project ProjectCatalogEntry, appliedUnits int) string {
 	line := fmt.Sprintf("- %s: %s", project.Slug, project.Title)
 	if project.Description != "" {
 		line += " — " + project.Description
 	}
-	return line
+	units := "units"
+	if appliedUnits == 1 {
+		units = "unit"
+	}
+	return line + fmt.Sprintf(" (%d %s linked in the last 7 days)", appliedUnits, units)
 }
 
 func pluralizeProjectFiles(count int) string {
