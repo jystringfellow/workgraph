@@ -579,6 +579,13 @@ These surfaces only read links; none runs a linking pass or writes a link.
 - **`resume`** uses the same grouping. The morning overview shows activity
   since the last check-in per project, including PR units opened by agents
   overnight, and the count of remaining decisions. See `specs/resume.md`.
+- **`resume <project>`** selects the same activity the overview places under
+  that project, and `resume <workstream>` shows its projects' activity grouped
+  by project. Two exceptions to that parity are deliberate: a container whose
+  name is exactly the project is always included, and a container mapped to
+  several projects appears in each of their drill-downs, while the overview
+  places a container under a project only when it maps to exactly one. See
+  `specs/resume.md`, Project Resume.
 
 Grouping, shared by `today` and `resume`:
 
@@ -670,4 +677,6 @@ Grouping, shared by `today` and `resume`:
   container, listing link kinds and the auto-applied count with the
   `projects review --auto` hint. `resume` groups activity since the check-in
   the same way, lists an agent-opened PR under its project, and counts the
-  remaining decisions.
+  remaining decisions. `resume <project>` lists linked and mapped activity
+  without units linked to `none` or another project, and `resume <workstream>`
+  groups its projects' activity by project.
