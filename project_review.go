@@ -236,15 +236,14 @@ func projectExplainMessage(unitID string, unit *ProjectUnit, links []ProjectLink
 		}
 	}
 	unitArg := projectShellArg(unitID)
-	withMemory := ProjectCommandOptions(config.HomeDir, config.MemoryDir, config.DatabasePath)
-	storeOnly := ProjectCommandOptions(config.HomeDir, "", config.DatabasePath)
+	options := ProjectCommandOptions(config.HomeDir, config.MemoryDir, config.DatabasePath)
 	lines = append(lines, "", "Change it:",
-		"  workgraph projects review --assign "+unitArg+" --project <slug>"+withMemory,
-		"  workgraph projects review --assign "+unitArg+" --new <slug> [--workstream <slug>]"+withMemory)
+		"  workgraph projects review --assign "+unitArg+" --project <slug>"+options,
+		"  workgraph projects review --assign "+unitArg+" --new <slug> [--workstream <slug>]"+options)
 	if current != nil {
-		lines = append(lines, fmt.Sprintf("  workgraph projects review --reject %d%s", current.ID, storeOnly))
+		lines = append(lines, fmt.Sprintf("  workgraph projects review --reject %d%s", current.ID, options))
 		if projectLinkUndoable(*current) {
-			lines = append(lines, fmt.Sprintf("  workgraph projects undo %d%s", current.ID, storeOnly))
+			lines = append(lines, fmt.Sprintf("  workgraph projects undo %d%s", current.ID, options))
 		}
 	}
 	return strings.Join(lines, "\n")

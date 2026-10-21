@@ -370,7 +370,7 @@ func TestProjectsReviewCommandsRecordDecisions(t *testing.T) {
 	explained := projects("", "explain", mapped.UnitID)
 	for _, expected := range []string{"slack.thread:C123:3000.000100", "slack.message:C123:3000.000100", fmt.Sprintf("Link %d", mapped.ID), "source deterministic", "rule container_mapping", "run " + mapped.RunID,
 		"workgraph projects review --assign slack.thread:C123:3000.000100 --project <slug> --home " + home.HomeDir + " --memory " + home.MemoryDir,
-		fmt.Sprintf("workgraph projects review --reject %d --home %s\n", mapped.ID, home.HomeDir), fmt.Sprintf("workgraph projects undo %d --home %s", mapped.ID, home.HomeDir)} {
+		fmt.Sprintf("workgraph projects review --reject %d --home %s --memory %s\n", mapped.ID, home.HomeDir, home.MemoryDir), fmt.Sprintf("workgraph projects undo %d --home %s --memory %s", mapped.ID, home.HomeDir, home.MemoryDir)} {
 		if !strings.Contains(explained, expected) {
 			t.Fatalf("explain omitted %q:\n%s", expected, explained)
 		}
@@ -508,5 +508,54 @@ func TestConcurrentDeterministicPassesBothSucceed(t *testing.T) {
 		if len(current) != 31 {
 			t.Fatalf("trial %d: expected one link per unit, got %d", trial, len(current))
 		}
+	}
+}
+
+func TestPrintedFixCommandsKeepTheRequestedCatalog(t *testing.T) {
+	now := time.Now().UTC()
+	home := initProjectLinkingHome(t)
+	writeProjectMemory(t, home.MemoryDir, "mmo-harness", "# MMO Harness\n")
+	defaultMemory := filepath.Join(os.Getenv("HOME"), "workgraph-memory")
+	writeProjectMemory(t, defaultMemory, "decoy", "# Decoy\n\nShips https://github.com/acme/kai/pull/7.\n")
+	insertProjectUnitEvent(t, home.DatabasePath, slackLinkEvent("C123", "1000.000100", "1000.000100", "harness flake", now.Add(-3*time.Hour), "harness-team"))
+	insertProjectUnitEvent(t, home.DatabasePath, slackLinkEvent("C999", "2000.000100", "2000.000100", "see acme/kai#7", now.Add(-3*time.Hour), "random"))
+	if output, err := runworkgraph(t, repoRoot(t), "memory", "link", "--home", home.HomeDir, "--memory", home.MemoryDir, "--source", "harness-team", "mmo-harness"); err != nil {
+		t.Fatalf("map container: %v %s", err, output)
+	}
+	runPrinted := func(command string) string {
+		t.Helper()
+		fields := strings.Fields(command)
+		if len(fields) < 2 || fields[0] != "workgraph" {
+			t.Fatalf("unexpected printed command %q", command)
+		}
+		output, err := runworkgraph(t, repoRoot(t), fields[1:]...)
+		if err != nil {
+			t.Fatalf("%s: %v %s", command, err, output)
+		}
+		return string(output)
+	}
+
+	runPrinted("workgraph projects review --home " + home.HomeDir + " --memory " + home.MemoryDir)
+	unitID := "slack.thread:C123:1000.000100"
+	explained := runPrinted("workgraph projects explain " + unitID + " --home " + home.HomeDir + " --memory " + home.MemoryDir)
+	undo := ""
+	for _, line := range strings.Split(explained, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "workgraph projects undo ") {
+			undo = strings.TrimSpace(line)
+		}
+	}
+	if undo == "" || !strings.Contains(undo, "--memory "+home.MemoryDir) {
+		t.Fatalf("expected explain to print an undo command with the memory option:\n%s", explained)
+	}
+	undone := runPrinted(undo)
+	_, review, found := strings.Cut(undone, "waits in ")
+	if !found || !strings.Contains(review, "--memory "+home.MemoryDir) {
+		t.Fatalf("expected undo to print a review command with the memory option:\n%s", undone)
+	}
+	runPrinted(strings.TrimSpace(strings.SplitN(review, "\n", 2)[0]))
+
+	links, err := workgraph.ReadProjectLinks(workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath}, workgraph.ProjectLinksQuery{UnitID: "slack.thread:C999:2000.000100"})
+	if err != nil || len(links) != 0 {
+		t.Fatalf("expected the printed commands to keep the requested catalog, got %+v %v", links, err)
 	}
 }
