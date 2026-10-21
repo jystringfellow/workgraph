@@ -234,6 +234,40 @@ This is the `associate_events` task in `specs/llm-integration.md`.
 
 Every part of the payload passes the source policy in Privacy below.
 
+The payload is one JSON document:
+
+```json
+{
+  "schema": "workgraph.associate_request.v1",
+  "projects": [{"slug": "mmo-harness", "title": "MMO Harness", "workstream": "mmo", "aliases": [], "description": "..."}],
+  "units": [
+    {
+      "unit_id": "slack.thread:C123:1760000000.000100",
+      "kind": "slack.thread",
+      "container": "harness-team",
+      "start": "2026-10-20T09:00:00Z",
+      "end": "2026-10-20T09:20:00Z",
+      "participants": ["Sam"],
+      "identifiers": ["https://github.com/acme/harness/pull/42"],
+      "projects": ["mmo-harness"],
+      "events": [{"id": "slack.message:C123:1760000000.000100", "timestamp": "2026-10-20T09:00:00Z", "actor": "Sam", "summary": "..."}]
+    }
+  ],
+  "recent_decisions": [{"container": "harness-team", "summary": "...", "decision": "chose", "target": "project", "project": "mmo-harness"}]
+}
+```
+
+- `projects` is the union of the catalogs of the units in the request. Each
+  unit's `projects` lists the slugs it may be linked to: its container's
+  catalog after any workstream narrowing.
+- The 50-unit limit counts units after the source policy, so units with no
+  remaining members do not use up the batch.
+- Event summaries are capped so a unit's summaries total at most 2,000
+  characters; events past the cap are left out.
+- A recent decision is a user link (`chose` its target) or an LLM or
+  deterministic link the user corrected or undid (`rejected` its target),
+  newest first.
+
 Captured text is untrusted and is placed in a delimited data section separate
 from the instructions. Outbound filtering runs before any hosted call.
 
@@ -269,8 +303,15 @@ counted in the run report, when:
 - `kind` is not in the enum, or `confidence` is not a number in [0, 1]
 - `evidence` is empty or cites an id that is not a member of the unit
 - `summary` is empty
+- `target` is not `project`, `new_project`, or `none`, or the entry is not a
+  JSON object of the documented shape
 
-Non-JSON output fails the run, and the units stay uncategorized.
+`target = project` must name a slug from that unit's `projects`. Every entry
+that shares a duplicated `unit_id` is discarded. Units the model leaves out
+stay uncategorized.
+
+Non-JSON output fails the run, and the units stay uncategorized. A response
+wrapped in one Markdown code fence is read as the JSON inside it.
 
 ### Privacy
 
@@ -295,8 +336,8 @@ The policy applies to the whole payload, not only to unit selection:
   sources are omitted, and a unit with no remaining members is not sent
 - participants, identifiers, and the time range are derived only from the
   members that remain
-- a recent user decision is included only when its unit passes the same
-  policy
+- a recent user decision is included only when every evidence event of its
+  link is still stored and comes from an enabled source
 - the catalog contains only project memory frontmatter, titles, and
   descriptions
 
@@ -306,7 +347,11 @@ event whose type is missing or unknown, including events captured before
 that change, is treated as `slack.dm`.
 
 `workgraph llm associate --dry-run` prints the profile, destination, enabled
-sources, and the exact filtered payload, and sends nothing.
+sources, and the exact filtered payload, and sends nothing. For a hosted
+profile the printed request has already passed the outbound filter.
+`workgraph llm sources --for associate` with no flag prints the enabled
+sources. `associate` is the only task with sources. When no unit passes the
+policy, `llm associate` reports that and calls no model.
 
 ### Model
 
@@ -338,7 +383,9 @@ these hold:
   the last 30 days
 - auto-apply is not paused
 
-Every other valid result is stored as `proposed`.
+Every other valid result is stored as `proposed`. A rejection is a link
+from the same container with the same target and project that the user
+corrected or undid; for `target = none` the pair is the container and none.
 
 `workgraph projects undo <link-id>` and `workgraph projects undo --run
 <run-id>` undo auto-applied links, deterministic or LLM. Each unit gets a
@@ -368,6 +415,11 @@ accuracy = confirmed / (confirmed + corrected + undone)
   sample that falls below 20 does not lift a pause.
 - After the sample reaches 20, undecided auto-applied links leave the default
   review and remain available through `projects review --auto`.
+- The pause state is the latest `projects.auto_apply_paused` or
+  `projects.auto_apply_resumed` event, overridden by the measured result
+  whenever at least 20 links are decided. Reading the metric never writes;
+  `llm associate` appends the event when the state it computes differs from
+  the latest event, before it applies anything.
 
 `workgraph review` reports this metric, its 14-day window, and its sample size
 beside the suggestion metrics in `specs/effectiveness-review.md`; it does not
