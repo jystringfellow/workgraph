@@ -443,6 +443,18 @@ workgraph projects explain <unit-id>
   `resume` surfaces. Existing capture-only workers are unchanged. D4 depends
   on in-flight changes to those commands.
 
+## Open Decisions
+
+These are proposed defaults, written into this spec so the slices can start,
+and awaiting the user's confirmation:
+
+- deterministic shared-identifier and container-mapping links are applied
+  automatically, marked auto and undoable, rather than proposed
+- LLM auto-apply stays on while the accuracy sample is `insufficient_data`
+- while the sample has fewer than 20 decided links, every undecided
+  auto-applied link appears in `projects review` and the `next` Categorize
+  count
+
 ## Deferred
 
 - linking one unit to several projects
