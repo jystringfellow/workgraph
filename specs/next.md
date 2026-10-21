@@ -60,7 +60,8 @@ documented, not a priority score.
 Planned (`specs/projects.md`, slice D4): a fourth group, `categorize`, follows
 `ready`. Its items use reason `categorize` and id
 `projects:categorize:<link-id>`, one per unit whose project link awaits a
-decision. Text output shows at most three of them and one line
+decision, including undecided auto-applied links while the auto-apply
+accuracy sample has fewer than 20 decided links. Text output shows at most three of them and one line
 `Categorize: <n> awaiting a decision, <m> auto-applied today (workgraph
 projects review)`, and says when auto-apply is paused. An item closes when its
 link is decided.

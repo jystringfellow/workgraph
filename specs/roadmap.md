@@ -43,10 +43,14 @@ projects more completely. [spec: `specs/projects.md`]
   the `project_links` table; shared-identifier and container-mapping rules;
   `projects explain`, `undo`, and flag-form review.
 - `P1` **D3 LLM categorization.** `llm associate` with dry run, per-source
-  opt-in, validation, auto-apply at confidence 0.95 with an accuracy gate,
-  and interactive `projects review`. [also: `specs/llm-integration.md`]
+  opt-in over the whole payload (including persisted Slack conversation
+  type), validation, auto-apply at confidence 0.95 with an accuracy gate, and
+  interactive `projects review`. Direct and manual runs only. [also:
+  `specs/llm-integration.md`]
 - `P1` **D4 Scheduled categorization and the daily loop.** Hourly and nightly
-  `llm.associate` outbox requests run directly or by the bridge worker; a
+  `llm.associate` outbox requests with kind-aware emit, claim, and complete,
+  run directly or by the bridge worker, leaving capture-only workers
+  unchanged; a
   `categorize` group in `next`; `today` and `resume` grouped by workstream and
   project. Depends on in-flight `today`, `resume`, and `next` changes.
   [also: `specs/bridged-capture.md`]

@@ -86,10 +86,10 @@ deterministic: the same events always produce the same units and ids.
 | --- | --- | --- |
 | `slack.thread` | a root message and its replies | `slack.thread:<channel_id>:<thread_ts>` |
 | `slack.burst` | non-thread messages in one channel or DM, split at a quiet gap of 2 hours | `slack.burst:<channel_id>:<first_ts>` |
-| `github.pr` | events for one PR, plus git commits whose SHA or branch matches it in the same repository | `github.pr:<owner/repo>#<number>` |
-| `git.session` | the user's commits in one repository not claimed by a PR, split at a 2 hour gap | `git.session:<container>:<first_sha>` |
+| `github.pr` | GitHub events for one PR | `github.pr:<owner/repo>#<number>` |
+| `git.session` | the user's commits in one local repository, split at a 2 hour gap | `git.session:<repo_path>:<first_sha>` |
 | `notion.page` | the user's activity on one page on one local day | `notion.page:<page_id>:<date>` |
-| `calendar.event` | one calendar occurrence | `calendar.event:<provider_event_id>` |
+| `calendar.event` | one calendar event | the existing event identity `calendar.event:<provider>:<calendar_id>:<event_id>` |
 
 - A Slack burst is closed, and eligible for categorization, only after its
   quiet gap has passed. An open burst is shown as activity but not
@@ -97,6 +97,10 @@ deterministic: the same events always produce the same units and ids.
 - A late-captured message that bridges two closed bursts merges them under the
   earlier id. Links on the later id are kept and shown by `projects explain`
   as belonging to a unit that no longer exists; they are not moved silently.
+- Git commits are not absorbed into PR units. Git capture stores only the
+  local `repo_path` and the branch checked out at capture time, which does
+  not establish a canonical repository or PR membership. A commit session and
+  a PR can still reach the same project through a shared identifier.
 - Events that belong to no unit kind above, such as file events, are covered
   only by container mappings in the first slices.
 - An event belongs to at most one unit.
@@ -125,19 +129,32 @@ profile, run_id, created_at, decided_at, decision
 - `auto` is true when the link was applied without the user deciding it.
 - `rule` names the deterministic rule; `profile` and `run_id` identify the LLM
   run.
-- `decision` is `confirmed`, `corrected`, or `undone`, recorded with
-  `decided_at` when the user acts on an existing link.
+- `decision` is recorded with `decided_at` when the user acts on an existing
+  link:
+  - `approved`: the user applied a proposed link
+  - `confirmed`: the user kept an auto-applied link
+  - `corrected`: the user replaced the link with another target
+  - `undone`: the user undid an auto-applied link
+- A link is **user-approved** when its `source` is `user` or its `decision` is
+  `approved` or `confirmed`.
 
 Contracts:
 
 - at most one link per unit is `proposed` or `applied` (partial unique index)
 - rows are never deleted; a decision changes `state` once and records
   `decision`
-- reassigning rejects the old row with `decision = corrected` and inserts an
-  applied `user` row in the same transaction
+- reassigning, including choosing no project, rejects the old row with
+  `decision = corrected` and inserts an applied `user` row in the same
+  transaction
+- undo rejects the auto-applied row with `decision = undone` and, in the same
+  transaction, inserts a `proposed` replacement with the same target, source,
+  and evidence, so review shows what was undone
 - links never rewrite or delete events, and never edit memory files except
   when the user explicitly creates a new project
-- user links are final: deterministic or LLM runs never replace them
+- deterministic and LLM runs consider only units with no `proposed` or
+  `applied` link, so they never replace an existing link; a unit returned to
+  review by undo cannot be reapplied automatically until the user decides it
+- only the user changes a user-approved link
 - the table is created on the first command that writes a link; read-only
   queries do not migrate the database
 
@@ -157,7 +174,10 @@ A workstream mapping creates no link. It narrows the LLM catalog for that
 container's units to the workstream's projects (plus `none` and
 `new_project`), and today and resume group its unlinked units under the
 workstream. Workstream mappings are stored in `memory_project_sources` keyed by
-the pseudo-path `workstream:<slug>`.
+the reserved pseudo-path `workstream:<slug>`. The `workstream:` prefix is
+parsed before any path handling: it is never passed to `filepath.Abs` or the
+memory-document helpers, and memory document paths, which are absolute, cannot
+take that form.
 
 ## Deterministic Linking
 
@@ -166,8 +186,9 @@ that resolves to exactly one project wins:
 
 1. **User link**: an existing user decision for the unit.
 2. **Shared identifier**: the unit cites an identifier that appears in exactly
-   one project's memory file or in units already applied to exactly one
-   project. Identifiers are Azure Boards ids (`AB#1563394`), normalized URLs
+   one project's memory file or in units whose user-approved links name
+   exactly one project. Auto-applied and proposed links never seed this rule,
+   so an unconfirmed classification cannot spread. Identifiers are Azure Boards ids (`AB#1563394`), normalized URLs
    (PR, issue, Notion page), `owner/repo#number`, commit SHAs (prefix match as
    in `specs/event-associations.md`), and branch names within the same
    repository. Extraction reuses the association signal extractor and skips
@@ -186,8 +207,7 @@ This is the `associate_events` task in `specs/llm-integration.md`.
 
 ### Input
 
-- units with no applied or proposed link, from enabled sources only, at most
-  50 per run, oldest first
+- units with no applied or proposed link, at most 50 per run, oldest first
 - per unit: id, kind, container display name, time range, participants'
   display names, cited identifiers, and member events (id, timestamp, actor
   name, summary or title) capped at 20 events and 2,000 characters
@@ -195,6 +215,8 @@ This is the `associate_events` task in `specs/llm-integration.md`.
   workstream mapping when one applies
 - up to 20 recent user decisions: container, unit summary, chosen project or
   rejection
+
+Every part of the payload passes the source policy in Privacy below.
 
 Captured text is untrusted and is placed in a delimited data section separate
 from the instructions. Outbound filtering runs before any hosted call.
@@ -251,6 +273,22 @@ enabled separately from `slack`. The setting is stored in `llm.json` as
 `task_sources.associate`. Units from disabled sources still get deterministic
 links.
 
+The policy applies to the whole payload, not only to unit selection:
+
+- each member event is checked against its own source; events from disabled
+  sources are omitted, and a unit with no remaining members is not sent
+- participants, identifiers, and the time range are derived only from the
+  members that remain
+- a recent user decision is included only when its unit passes the same
+  policy
+- the catalog contains only project memory frontmatter, titles, and
+  descriptions
+
+Slack capture must persist the conversation type (`channel`,
+`private_channel`, `im`, or `mpim`) in the event payload before D3. A Slack
+event whose type is missing or unknown, including events captured before
+that change, is treated as `slack.dm`.
+
 `workgraph llm associate --dry-run` prints the profile, destination, enabled
 sources, and the exact filtered payload, and sends nothing.
 
@@ -282,8 +320,8 @@ these hold:
 Every other valid result is stored as `proposed`.
 
 `workgraph projects undo <link-id>` and `workgraph projects undo --run
-<run-id>` reject auto-applied links with `decision = undone` and return the
-units to review.
+<run-id>` undo auto-applied links, deterministic or LLM. Each unit gets a
+proposed replacement that waits for the user (see Project Links).
 
 ### Accuracy Gate
 
@@ -295,15 +333,23 @@ accuracy = confirmed / (confirmed + corrected + undone)
 ```
 
 - Fewer than 20 decided links is `insufficient_data`; auto-apply stays on.
-- When measured accuracy is below 0.95, auto-apply pauses. New results are
-  stored as `proposed`, and `projects review`, `next`, and `workgraph review`
-  say auto-apply is paused and why.
-- The pause lifts when accuracy over the window is back at or above 0.95.
-- `projects review --auto` lists recent auto-applied links so the user can
-  spot-check them, which is how confirmations accumulate.
+- While the sample is `insufficient_data`, every undecided auto-applied link,
+  deterministic or LLM, appears in `projects review` and in the `next`
+  Categorize count beside proposed links, so the evening review builds the
+  sample.
+- When measured accuracy over at least 20 decided links is below 0.95,
+  auto-apply pauses and workgraph appends a `projects.auto_apply_paused`
+  event. New results are stored as `proposed`, and `projects review`, `next`,
+  and `workgraph review` say auto-apply is paused and why.
+- A pause lifts only when measured accuracy over at least 20 decided links is
+  back at or above 0.95, recorded as a `projects.auto_apply_resumed` event. A
+  sample that falls below 20 does not lift a pause.
+- After the sample reaches 20, `projects review --auto` lists recent
+  auto-applied links for spot-checks.
 
-`workgraph review` reports this metric beside suggestion metrics, using the
-windows and `insufficient_data` rule from `specs/effectiveness-review.md`.
+`workgraph review` reports this metric, its 14-day window, and its sample size
+beside the suggestion metrics in `specs/effectiveness-review.md`; it does not
+use that spec's windows.
 
 ## Scheduling
 
@@ -325,10 +371,16 @@ Categorization runs through the bridged-capture outbox
   submits through `workgraph llm associate submit --request <id> --claim-file
   <path>` or the MCP tool `llm_task_submit`.
 - Completion validates the result, writes links, and completes the request in
-  one transaction.
+  one transaction. It does not advance a capture cursor or connector runtime
+  state.
+- Emit, claim, and complete are kind-aware. `llm.associate` is accepted
+  without registering a capture connector. A claim without an explicit kind
+  claims only `capture` requests, so existing capture-only workers behave
+  exactly as before; bridge workers claim `llm_task` requests only when they
+  ask for that kind.
 - The 05:00 run repeats, up to 10 requests, until no eligible units remain.
-- `workgraph llm associate` runs one batch now; with a bridge profile it emits
-  a request and prints its id.
+- `workgraph llm associate` runs one batch now with the routed profile. From
+  D4, with a bridge profile it emits a request and prints its id.
 
 ## Review
 
@@ -350,7 +402,10 @@ workgraph projects explain <unit-id>
   evidence ids. Keys: `a` approve, `r` reassign (prompts for a slug), `n` new
   project, `x` no project, `s` skip, `q` quit. EOF or empty input skips.
 - Approving an applied auto link records `decision = confirmed`. Approving a
-  proposed link applies it with `source` unchanged and `auto = false`.
+  proposed link applies it with `source` unchanged, `auto = false`, and
+  `decision = approved`.
+- `--reject` and `x` assign no project: the link is corrected to a user link
+  with `target = none`.
 - `--new` creates project memory with the existing `memory init` starter,
   adds the workstream frontmatter when given, and applies a user link.
 - `projects explain` prints the unit's members, every link row with its
@@ -379,16 +434,19 @@ workgraph projects explain <unit-id>
   in memory and resume output.
 - **D2 Units and deterministic linking**: unit grouping, `project_links`,
   deterministic rules, `projects explain`, `undo`, and flag-form review.
-- **D3 LLM categorization**: `llm associate` with dry run, source opt-in,
-  validation, auto-apply, accuracy gate, interactive review, and review
-  metrics.
-- **D4 Scheduling and daily loop**: `llm.associate` outbox requests, direct
-  and bridge execution, and the `next`, `today`, and `resume` surfaces. D4
-  depends on in-flight changes to those commands.
+- **D3 LLM categorization**: Slack conversation type capture, `llm
+  associate` with dry run, source opt-in, validation, auto-apply, accuracy
+  gate, interactive review, and review metrics. D3 runs only directly or
+  manually with the routed profile; there is no outbox or bridge execution.
+- **D4 Scheduling and daily loop**: kind-aware `llm.associate` outbox
+  requests, direct and bridge execution, and the `next`, `today`, and
+  `resume` surfaces. Existing capture-only workers are unchanged. D4 depends
+  on in-flight changes to those commands.
 
 ## Deferred
 
 - linking one unit to several projects
+- absorbing git commits into PR units
 - file, mail, and Azure Boards units
 - LLM-chosen unit boundaries
 - workstream memory files and workstream-level descriptions
@@ -401,26 +459,33 @@ workgraph projects explain <unit-id>
   frontmatter is reported by doctor and the project is still listed.
 - **P2. Units are deterministic.** The same Slack, GitHub, git, Notion, and
   calendar fixtures produce the same unit ids and members in any capture
-  order; a PR claims its branch commits; an open burst is not eligible.
+  order; calendar unit ids match stored calendar event ids; an open burst is
+  not eligible.
 - **P3. Deterministic rules resolve in order.** A thread citing a PR URL in
   one project's memory links to that project even though its channel is
-  mapped to another; an identifier in two projects produces no link.
+  mapped to another; an identifier in two projects produces no link; an
+  identifier seen only in an auto-applied or proposed link seeds nothing.
 - **P4. Workstream mappings narrow the catalog.** A container mapped to `mmo`
   sends only `mmo` projects in the dry-run payload and creates no link.
 - **P5. Dry run sends nothing and respects opt-in.** With only `slack`
-  enabled, the payload contains channel units but no DM or GitHub units, and
-  the fake provider receives no request.
+  enabled, the payload contains channel units but no DM, unknown-type Slack,
+  or GitHub units, and no decision context from those sources; the fake
+  provider receives no request.
 - **P6. Invalid results are discarded.** Unknown units, unknown projects,
   foreign evidence ids, bad kinds, and out-of-range confidence are discarded
   and counted; valid entries in the same response are stored.
 - **P7. Auto-apply gates hold.** Confidence 0.95 applies, 0.94 proposes, a new
   project proposes, a recent rejection for the pair proposes, and measured
-  accuracy below 0.95 over 20 decided links pauses auto-apply and says so.
+  accuracy below 0.95 over 20 decided links pauses auto-apply and says so;
+  the pause survives the sample dropping below 20; with fewer than 20
+  decided links, undecided auto links are listed in review.
 - **P8. Review and undo record decisions.** Approve, reassign, reject, new
   project, and undo record the documented state and decision without editing
-  events; user links survive later runs.
+  events; undo leaves a proposed replacement that no later deterministic or
+  LLM run reapplies; user-approved links survive later runs.
 - **P9. Scheduled requests use the outbox.** The daemon emits one
   `llm.associate` request when eligible units exist and none when they do
-  not; a bridge-executed request completes only with a valid claim token.
+  not; a claim without a kind never returns it to a capture worker; a
+  bridge-executed request completes only with a valid claim token.
 - **P10. Daily surfaces group by project.** `next` shows the categorize line,
   and `today` and `resume` group by workstream, then project, then container.

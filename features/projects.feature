@@ -31,6 +31,17 @@ Scenario: Never auto-apply a new project
   When workgraph stores the result
   Then the proposal waits for review
 
+Scenario: Undo an automatic link
+  Given a unit was linked to "mmo-harness" automatically
+  When I run "workgraph projects undo <link-id>"
+  Then the unit waits for review with "mmo-harness" proposed
+  And later categorization runs do not link it automatically
+
+Scenario: Review every automatic link until there is enough history
+  Given fewer than 20 automatic links have been decided
+  When I run "workgraph projects review"
+  Then undecided automatic links are listed beside proposed ones
+
 Scenario: Pause auto-apply when accuracy drops
   Given I corrected more than 5 percent of recent auto-applied links
   When the next categorization runs

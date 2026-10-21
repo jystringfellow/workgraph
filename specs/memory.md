@@ -90,8 +90,10 @@ Planned (`specs/projects.md`): the captured project is a container, and
 user-facing text calls it a container or source. A mapped container links all
 of its units of work to the project. `memory link --workstream <slug> --source
 <container>` maps a container to a workstream instead of one project; it is
-stored under the pseudo-path `workstream:<slug>`, creates no project links, and
-narrows categorization for that container to the workstream's projects.
+stored under the reserved pseudo-path `workstream:<slug>`, creates no project
+links, and narrows categorization for that container to the workstream's
+projects. The prefix is parsed before any path handling and never reaches
+absolute-path resolution or memory-document helpers.
 
 ## Discover Project Mismatches
 

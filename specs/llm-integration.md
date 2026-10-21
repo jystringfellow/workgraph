@@ -281,8 +281,13 @@ Persistence:
   and counted
 - an entry is applied automatically only at confidence 0.95 or higher, for an
   existing project or none, with no recent user rejection for that container
-  and project, and while measured accuracy is at least 0.95; everything else
-  is proposed for review
+  and project, and while auto-apply is not paused; everything else is
+  proposed for review
+- auto-apply pauses when measured accuracy over at least 20 decided auto
+  links is below 0.95; with fewer than 20 it stays on and every undecided
+  auto link is listed for review
+- D3 runs categorization directly or manually; scheduled outbox and bridge
+  execution arrive in D4
 - no mutation of events; memory changes only when the user creates a new
   project during review
 
