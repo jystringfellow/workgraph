@@ -174,7 +174,9 @@ It selects activity the way the morning overview groups it
 
 When `<project>` names a workstream and no project memory has that slug, the
 output starts with `Resume <workstream> workstream` and `Projects: <slugs>`,
-selects the activity of every project in the workstream the same way, and
+selects the activity of every project in the workstream the same way,
+including containers named exactly like a member project but not a container
+named like the workstream, and
 groups `Recent activity` by project, most recently active first, as `- <slug>
 project: <n> events` with the event lines beneath. A workstream has no memory
 file, so no project memory is shown or suggested.

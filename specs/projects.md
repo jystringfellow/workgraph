@@ -581,7 +581,11 @@ These surfaces only read links; none runs a linking pass or writes a link.
   overnight, and the count of remaining decisions. See `specs/resume.md`.
 - **`resume <project>`** selects the same activity the overview places under
   that project, and `resume <workstream>` shows its projects' activity grouped
-  by project. See `specs/resume.md`, Project Resume.
+  by project. Two exceptions to that parity are deliberate: a container whose
+  name is exactly the project is always included, and a container mapped to
+  several projects appears in each of their drill-downs, while the overview
+  places a container under a project only when it maps to exactly one. See
+  `specs/resume.md`, Project Resume.
 
 Grouping, shared by `today` and `resume`:
 

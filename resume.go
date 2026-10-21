@@ -965,9 +965,16 @@ func selectResumeProjectEvents(db *sql.DB, config ResumeConfig, events []ResumeE
 		selection.Workstream, selection.Projects, slugs = project, members, members
 	}
 	selected := map[string]bool{}
+	named := map[string]string{project: project}
+	if selection.Workstream != "" {
+		named = map[string]string{}
+	}
 	mapped := map[string]string{}
 	for _, slug := range slugs {
 		selected[slug] = true
+		if selection.Workstream != "" {
+			named[slug] = slug
+		}
 		path, _ := projectMemoryPath(memoryDir, slug)
 		sources, err := memoryProjectSources(db, path)
 		if err != nil {
@@ -986,8 +993,8 @@ func selectResumeProjectEvents(db *sql.DB, config ResumeConfig, events []ResumeE
 		group := ""
 		link, linked := activity.links[activity.eventUnits[event.ID]]
 		switch {
-		case event.Project == project:
-			group = event.Project
+		case named[event.Project] != "":
+			group = named[event.Project]
 		case linked:
 			if link.Target == "project" && selected[link.Project] {
 				group = link.Project

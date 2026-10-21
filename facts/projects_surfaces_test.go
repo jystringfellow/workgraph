@@ -416,7 +416,11 @@ func TestResumeProjectDrillDownSelectsLinkedActivity(t *testing.T) {
 	sibling := insertSurfaceThreads(t, home, checkIn.Add(4*time.Hour), "C4", "sibling-channel", 1)[0]
 	insertSurfaceEvent(t, home.DatabasePath, surfaceFileEvent("mapped-file", "demo-repo", checkIn.Add(5*time.Hour)))
 	insertSurfaceEvent(t, home.DatabasePath, surfaceFileEvent("named-file", "demo", checkIn.Add(6*time.Hour)))
+	insertSurfaceEvent(t, home.DatabasePath, surfaceFileEvent("shared-file", "shared-repo", checkIn.Add(7*time.Hour)))
+	insertSurfaceEvent(t, home.DatabasePath, surfaceFileEvent("workstream-named-file", "ws", checkIn.Add(8*time.Hour)))
 	linkSurfaceContainer(t, home, "--source", "demo-repo", "demo")
+	linkSurfaceContainer(t, home, "--source", "shared-repo", "demo")
+	linkSurfaceContainer(t, home, "--source", "shared-repo", "other")
 
 	store := workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now}
 	run, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "llm", Profile: "fake", Links: []workgraph.ProjectLinkProposal{
@@ -445,11 +449,20 @@ func TestResumeProjectDrillDownSelectsLinkedActivity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := surfaceEventIDs(drill.Events); got != strings.Join([]string{"named-file", "mapped-file", linked.EventIDs[0]}, ",") {
-		t.Fatalf("expected the linked thread, the mapped container, and the named container, got %s:\n%s", got, drill.Message)
+	if got := surfaceEventIDs(drill.Events); got != strings.Join([]string{"shared-file", "named-file", "mapped-file", linked.EventIDs[0]}, ",") {
+		t.Fatalf("expected the linked thread, the mapped containers, and the named container, got %s:\n%s", got, drill.Message)
 	}
 	if !strings.Contains(drill.Message, "Recent activity") || strings.Contains(drill.Message, "No recent activity found") {
 		t.Fatalf("expected recent activity for demo:\n%s", drill.Message)
+	}
+
+	config.Project = "other"
+	other, err := workgraph.Resume(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := surfaceEventIDs(other.Events); got != strings.Join([]string{"shared-file", mappedOther.EventIDs[0]}, ",") {
+		t.Fatalf("expected a container mapped to two projects in either drill-down, got %s:\n%s", got, other.Message)
 	}
 
 	config.Project = "ws"
@@ -457,10 +470,10 @@ func TestResumeProjectDrillDownSelectsLinkedActivity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := surfaceEventIDs(workstream.Events); got != strings.Join([]string{"mapped-file", sibling.EventIDs[0], linked.EventIDs[0]}, ",") {
+	if got := surfaceEventIDs(workstream.Events); got != strings.Join([]string{"shared-file", "named-file", "mapped-file", sibling.EventIDs[0], linked.EventIDs[0]}, ",") {
 		t.Fatalf("expected the workstream's projects' activity, got %s:\n%s", got, workstream.Message)
 	}
-	for _, expected := range []string{"Resume ws workstream", "Projects: demo, ws-two", "- demo project: 2 events", "- ws-two project: 1 event"} {
+	for _, expected := range []string{"Resume ws workstream", "Projects: demo, ws-two", "- demo project: 4 events", "- ws-two project: 1 event"} {
 		if !strings.Contains(workstream.Message, expected) {
 			t.Fatalf("expected %q in the workstream drill-down:\n%s", expected, workstream.Message)
 		}
