@@ -10,6 +10,19 @@ Scenario: Show where personal work last stopped
   And the new clone does not move the handoff forward
   And I see how to inspect that project
 
+Scenario: Find personal work through per-repository git identity
+  Given my global git user.email is empty and each repository sets its own identity
+  And workgraph captured my commits and commits from other authors
+  When I run "workgraph resume"
+  Then I see my latest commit session
+  And commits from other authors do not move the handoff forward
+
+Scenario: Say when git identity is unknown
+  Given no git user.email can be found globally or in captured repositories
+  When I run "workgraph resume"
+  Then captured commits count as personal work
+  And I see that the git identity is unknown
+
 Scenario: Preserve context after a longer absence
   Given the latest personal work was more than a week ago
   When I run "workgraph resume"
@@ -36,6 +49,15 @@ Scenario: List resumable projects
   Then I see projects ordered by recent activity
   And I see how many events each project has
   And I see how to resume a specific project
+
+Scenario: Cap the default resumable project list
+  Given workgraph has personal activity in more than ten projects in the last 14 days
+  And older projects with captured events
+  When I run "workgraph resume"
+  Then I see the ten most recently active projects from the last 14 days
+  And I see how many more projects "workgraph resume --all" would show
+  When I run "workgraph resume --all"
+  Then I see every project with captured events
 
 Scenario: Resume a project from recent activity
   Given workgraph has captured file events for a project

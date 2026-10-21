@@ -79,6 +79,7 @@ type LLMDoctorConfig struct {
 
 type LLMSummarizeTodayConfig struct {
 	HomeDir    string
+	GitEmails  []string
 	DryRun     bool
 	HTTPClient *http.Client
 	Stream     func(string) error
@@ -554,7 +555,7 @@ func SummarizeTodayWithLLM(config LLMSummarizeTodayConfig) (LLMResult, error) {
 			return LLMResult{}, err
 		}
 	}
-	context, prompt, err := llmTodayContextAndPrompt(homeDir)
+	context, prompt, err := llmTodayContextAndPrompt(homeDir, config.GitEmails)
 	if err != nil {
 		return LLMResult{}, err
 	}
@@ -1047,8 +1048,8 @@ func bedrockPromptText(messages []openAICompatibleMessage) string {
 	return strings.Join(parts, "\n\n")
 }
 
-func llmTodayContextAndPrompt(homeDir string) (string, string, error) {
-	today, err := Today(TodayConfig{HomeDir: homeDir})
+func llmTodayContextAndPrompt(homeDir string, gitEmails []string) (string, string, error) {
+	today, err := Today(TodayConfig{HomeDir: homeDir, GitEmails: gitEmails})
 	if err != nil {
 		return "", "", err
 	}

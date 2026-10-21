@@ -23,8 +23,11 @@ to inspect the project. If no supported personal work evidence exists, it says
 so without guessing what the user worked on.
 
 Personal work evidence for this first handoff is a non-transient file
-modification or deletion in a specific project, or a git commit whose author
-email matches a configured local git identity. File creation alone does not
+modification or deletion in a specific project, or a git commit authored by the
+local git identity described in `specs/git.md`. When an identity is known,
+commits without an author email do not qualify. When no identity can be found
+at all, commits qualify and the overview says the git identity is unknown
+instead of claiming there is no personal work. File creation alone does not
 qualify because a new clone can create an entire tree without personal work.
 Broad folder and home-folder projects do not qualify.
 GitHub issue and pull request snapshots do not qualify, even when the connected
@@ -90,6 +93,11 @@ The output includes:
 
 Events without a project are omitted from the project list.
 
+The default list shows at most ten projects with user-work evidence in the last
+14 days, most recent first. When `workgraph resume --all` would show more
+projects, the list ends with `<n> more: workgraph resume --all`, where `<n>` is
+the number of additional projects that list would show.
+
 By default, weak evidence is omitted from the project list. Examples of weak
 evidence include git commits authored by someone else in a cloned repository and
 repository activity inferred only because a local clone exists.
@@ -129,7 +137,9 @@ project names before exact `workgraph resume <project>` calls.
 `workgraph resume --debug-relevance` renders the default relevance decision for
 each captured project instead of the normal project list. Each line says whether
 the project would be shown or hidden, includes the reason, and preserves event
-count plus last-active timestamp. This is intended for local debugging of
+count plus last-active timestamp. Visibility matches the default list:
+projects with user-work evidence that the 14-day window or ten-project cap
+leaves out are reported hidden with that reason. This is intended for local debugging of
 unexpected resume results, not as an admin audit surface.
 
 ## Project Resume

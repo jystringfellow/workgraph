@@ -67,6 +67,14 @@ Scenario: Keep Notion workspace inventory out of personal activity
   When I run "workgraph events today"
   Then I can inspect the raw Notion inventory
 
+Scenario: Keep commits by other authors out of personal activity
+  Given my global git user.email is empty and each repository sets its own identity
+  And workgraph captured my commits and commits pulled in from other authors today
+  When I run "workgraph today"
+  Then I see only my commits in counts, projects, and sessions
+  When I run "workgraph events today"
+  Then I can inspect every captured commit
+
 Scenario: Filter today's activity by exact actor
   Given workgraph has captured events attributed to multiple actors today
   When I run "workgraph today --actor user-me"

@@ -214,7 +214,8 @@ Purpose: summarize today's captured local work context.
 
 Input:
 
-- selected `today` events from SQLite
+- selected `today` events from SQLite, using the same local git identity
+  filter as `workgraph today`
 - relevant local memory excerpts when available
 - event ids or source ids needed for traceability
 - provider-specific previews when available, such as Notion page
