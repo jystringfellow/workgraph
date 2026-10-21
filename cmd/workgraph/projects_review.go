@@ -94,6 +94,11 @@ func runProjectsReview(args []string, stdin io.Reader, stdout, stderr io.Writer)
 		fmt.Fprintf(stderr, "workgraph projects review: %v\n", err)
 		return 1
 	}
+	accuracy, err := workgraph.ProjectLinkAccuracy(workgraph.ProjectLinkStoreConfig{HomeDir: *home, DatabasePath: *database})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph projects review: %v\n", err)
+		return 1
+	}
 	units, err := workgraph.ListProjectUnits(workgraph.ProjectUnitsConfig{HomeDir: *home, DatabasePath: *database, Location: time.Local, GitEmails: config.GitEmails})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph projects review: %v\n", err)
@@ -104,8 +109,9 @@ func runProjectsReview(args []string, stdin io.Reader, stdout, stderr io.Writer)
 		unitsByID[unit.ID] = unit
 	}
 	if *jsonOutput {
-		return writeProjectsReviewJSON(links, unitsByID, stdout, stderr)
+		return writeProjectsReviewJSON(links, unitsByID, accuracy, stdout, stderr)
 	}
+	fmt.Fprintln(stdout, accuracy.Summary())
 	if len(pass.Written) > 0 {
 		fmt.Fprintf(stdout, "Linked %d %s by deterministic rules (run %s).\n", len(pass.Written), pluralWord(len(pass.Written), "unit", "units"), pass.RunID)
 	}
@@ -215,7 +221,7 @@ func projectsReviewItemText(link workgraph.ProjectLink, units map[string]workgra
 	return strings.Join(lines, "\n")
 }
 
-func writeProjectsReviewJSON(links []workgraph.ProjectLink, units map[string]workgraph.ProjectUnit, stdout, stderr io.Writer) int {
+func writeProjectsReviewJSON(links []workgraph.ProjectLink, units map[string]workgraph.ProjectUnit, accuracy workgraph.ProjectLinkAccuracyReport, stdout, stderr io.Writer) int {
 	items := make([]projectsReviewItem, 0, len(links))
 	for _, link := range links {
 		item := projectsReviewItem{
@@ -231,7 +237,7 @@ func writeProjectsReviewJSON(links []workgraph.ProjectLink, units map[string]wor
 	}
 	encoder := json.NewEncoder(stdout)
 	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(map[string]any{"items": items}); err != nil {
+	if err := encoder.Encode(map[string]any{"items": items, "auto_apply": accuracy.Metric()}); err != nil {
 		fmt.Fprintf(stderr, "workgraph projects review: %v\n", err)
 		return 1
 	}

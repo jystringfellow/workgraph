@@ -178,7 +178,7 @@ affects capture.
 
 Task routing is intentionally broader than the currently implemented task set.
 The `categorize` route may be configured now. Project categorization is the
-planned `associate_events` task below: it never rewrites captured events and
+`associate_events` task below: it never rewrites captured events and
 applies links automatically only under the gates in `specs/projects.md`.
 
 Future provider commands may add provider-specific flags for OpenAI, Anthropic,
@@ -247,7 +247,7 @@ Streaming behavior:
 - `--no-stream` keeps deterministic full-response output for debugging,
   tests, and terminals where streaming is undesirable
 
-### `associate_events` (planned)
+### `associate_events`
 
 Purpose: link units of work, such as a Slack thread, GitHub PR, git commit
 session, Notion page activity, or calendar event, to the user's declared
@@ -261,8 +261,9 @@ are read as `associate`.
 Input:
 
 - units that no deterministic rule linked, from sources the user enabled with
-  `workgraph llm sources --for associate --enable <source>`; none is enabled by
-  default and Slack DMs are a separate source
+  `workgraph llm sources --for associate --enable <source>` (or `--disable`;
+  with no flag it prints the enabled sources); none is enabled by default and
+  Slack DMs are a separate source
 - the project catalog from memory frontmatter: slug, title, workstream,
   aliases, and description
 - recent user decisions

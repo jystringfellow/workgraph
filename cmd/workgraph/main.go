@@ -827,6 +827,10 @@ func runLLM(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runLLMDoctor(args[1:], stdout, stderr)
 	case "summarize":
 		return runLLMSummarize(args[1:], stdout, stderr)
+	case "associate":
+		return runLLMAssociate(args[1:], stdout, stderr)
+	case "sources":
+		return runLLMSources(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown llm command: %s\n", args[0])
 		return 2

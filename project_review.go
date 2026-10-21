@@ -12,10 +12,8 @@ import (
 )
 
 const (
-	projectAutoApplySampleMinimum = 20
-	projectAutoApplySampleWindow  = 14 * 24 * time.Hour
-	projectReviewAutoWindow       = 24 * time.Hour
-	projectListCountWindow        = 7 * 24 * time.Hour
+	projectReviewAutoWindow = 24 * time.Hour
+	projectListCountWindow  = 7 * 24 * time.Hour
 )
 
 var projectShellSafePattern = regexp.MustCompile(`^[A-Za-z0-9_.:/#@=+-]+$`)
@@ -73,24 +71,14 @@ func ListProjectReview(config ProjectReviewConfig) ([]ProjectLink, error) {
 			undecided = append(undecided, link)
 		}
 	}
-	if projectAutoApplyDecidedSample(links, now) < projectAutoApplySampleMinimum {
+	accuracy, err := ProjectLinkAccuracy(ProjectLinkStoreConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, Now: now})
+	if err != nil {
+		return nil, err
+	}
+	if accuracy.Status == "insufficient_data" {
 		proposed = append(proposed, undecided...)
 	}
 	return proposed, nil
-}
-
-func projectAutoApplyDecidedSample(links []ProjectLink, now time.Time) int {
-	count := 0
-	for _, link := range links {
-		if !link.Auto || link.Source != "llm" || link.DecidedAt.Before(now.Add(-projectAutoApplySampleWindow)) || link.DecidedAt.After(now) {
-			continue
-		}
-		switch link.Decision {
-		case "confirmed", "corrected", "undone":
-			count++
-		}
-	}
-	return count
 }
 
 func projectLinkUndoable(link ProjectLink) bool {

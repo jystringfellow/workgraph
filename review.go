@@ -64,6 +64,7 @@ type EffectivenessReviewResult struct {
 	DismissalReasons []ReviewDismissalReason
 	TimeToUseful     ReviewDurationMetric
 	Connectors       []ReviewConnectorState
+	ProjectAutoApply ProjectLinkAccuracyReport
 	Message          string
 }
 
@@ -75,6 +76,19 @@ type effectivenessReviewPayload struct {
 	DismissalReasons []ReviewDismissalReason `json:"dismissal_reasons"`
 	TimeToUseful     ReviewDurationMetric    `json:"time_to_useful_suggestion"`
 	Connectors       []ReviewConnectorState  `json:"connectors"`
+	ProjectAutoApply ProjectAutoApplyMetric  `json:"project_auto_apply"`
+}
+
+type ProjectAutoApplyMetric struct {
+	Status      string   `json:"status"`
+	WindowDays  int      `json:"window_days"`
+	SampleSize  int      `json:"sample_size"`
+	Confirmed   int      `json:"confirmed"`
+	Corrected   int      `json:"corrected"`
+	Undone      int      `json:"undone"`
+	Accuracy    *float64 `json:"accuracy"`
+	Paused      bool     `json:"paused"`
+	PauseReason string   `json:"pause_reason,omitempty"`
 }
 
 func EffectivenessReview(config EffectivenessReviewConfig) (EffectivenessReviewResult, error) {
@@ -108,6 +122,9 @@ func EffectivenessReview(config EffectivenessReviewConfig) (EffectivenessReviewR
 		return EffectivenessReviewResult{}, err
 	}
 	result.Connectors = collectReviewConnectorStates(connectorStatuses(runStatus.HomeDir, connectorRuntime), window.End)
+	if result.ProjectAutoApply, err = projectLinkAccuracy(db, window.End.UTC()); err != nil {
+		return EffectivenessReviewResult{}, err
+	}
 	if result.DismissalReasons == nil {
 		result.DismissalReasons = []ReviewDismissalReason{}
 	}
@@ -326,7 +343,21 @@ func reviewPayload(result EffectivenessReviewResult) effectivenessReviewPayload 
 		Window: result.Window, Acceptance: result.Acceptance, Dismissal: result.Dismissal,
 		Snooze: result.Snooze, DismissalReasons: result.DismissalReasons,
 		TimeToUseful: result.TimeToUseful, Connectors: result.Connectors,
+		ProjectAutoApply: result.ProjectAutoApply.Metric(),
 	}
+}
+
+func (report ProjectLinkAccuracyReport) Metric() ProjectAutoApplyMetric {
+	payload := ProjectAutoApplyMetric{
+		Status: report.Status, WindowDays: int(report.Window / (24 * time.Hour)), SampleSize: report.Decided,
+		Confirmed: report.Confirmed, Corrected: report.Corrected, Undone: report.Undone,
+		Paused: report.Paused, PauseReason: report.PauseReason,
+	}
+	if report.Status == "measured" {
+		accuracy := report.Accuracy
+		payload.Accuracy = &accuracy
+	}
+	return payload
 }
 
 func formatEffectivenessReviewText(result EffectivenessReviewResult) string {
@@ -369,6 +400,7 @@ func formatEffectivenessReviewText(result EffectivenessReviewResult) string {
 			lines = append(lines, line)
 		}
 	}
+	lines = append(lines, result.ProjectAutoApply.Summary())
 	lines = append(lines, "Local only: no metrics were transmitted.")
 	return strings.Join(lines, "\n")
 }

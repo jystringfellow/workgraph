@@ -93,6 +93,7 @@ type LLMResult struct {
 type llmConnectorConfig struct {
 	DefaultProfile string                `json:"default_profile,omitempty"`
 	TaskProfiles   map[string]string     `json:"task_profiles,omitempty"`
+	TaskSources    map[string][]string   `json:"task_sources,omitempty"`
 	Profiles       map[string]llmProfile `json:"profiles"`
 	HostedLLM      *llmHostedConfig      `json:"hosted_llm,omitempty"`
 }

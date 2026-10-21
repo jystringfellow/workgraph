@@ -86,6 +86,18 @@ Scenario: Pause auto-apply when accuracy drops
   Then every result is proposed for review
   And "workgraph projects review" says auto-apply is paused and why
 
+Scenario: Keep auto-apply paused while the sample is small
+  Given auto-apply was paused for low accuracy
+  And fewer than 20 automatic links were decided in the last 14 days
+  When the next categorization runs
+  Then auto-apply stays paused and every result is proposed
+
+Scenario: Discard invalid categorization results
+  Given the model returns an unknown unit, an unknown project, foreign evidence, a bad kind, and an out-of-range confidence beside one valid entry
+  When workgraph stores the results
+  Then the invalid entries are discarded and counted
+  And the valid entry is stored
+
 Scenario: Decide the uncertain items at the end of the day
   Given three units await a categorization decision
   When I run "workgraph next"
