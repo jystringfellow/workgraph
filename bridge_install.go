@@ -2,6 +2,7 @@ package workgraph
 
 import (
 	"bytes"
+	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -606,7 +607,7 @@ func verifyBridgeLaunchEnvironment(plistPath string, userHome string, clientPath
 	return nil
 }
 
-func DrainBridge(homeDir string, client string, clientCommand string) (string, error) {
+func DrainBridge(homeDir string, client string, clientCommand string, timeout time.Duration) (string, error) {
 	homeDir, err := connectorHomeDir(homeDir)
 	if err != nil {
 		return "", err
@@ -622,12 +623,16 @@ func DrainBridge(homeDir string, client string, clientCommand string) (string, e
 			break
 		}
 	}
-	if !active {
-		return "No active bridged capture requests.", nil
-	}
 	client = strings.ToLower(strings.TrimSpace(client))
 	if client != "codex" && client != "claude-code" {
 		return "", fmt.Errorf("bridge client must be codex or claude-code")
+	}
+	if !active {
+		recordBridgeDrainHeartbeat(homeDir, client)
+		return "No active bridged capture requests.", nil
+	}
+	if timeout <= 0 {
+		timeout = DefaultBridgeDrainTimeout
 	}
 	workerSettings, err := bridgeWorkerSettingsFor(homeDir, client)
 	if err != nil {
@@ -640,7 +645,7 @@ func DrainBridge(homeDir string, client string, clientCommand string) (string, e
 			commandName = "claude"
 		}
 	}
-	prompt := "Use the workgraph-bridge skill and local workgraph MCP tools. List pending requests before claiming. For each candidate connector, call connector_required_tools and prove that every operation in the fetch and identity requirements returned by the registry is present and authorized with a harmless read-only discovery call. Claim at most one request, filtered to a connector whose complete registry preflight succeeded. Follow the request capture_semantics: fetch only the bounded approved scope for bounded_events, or the exhaustive configured current state for complete_snapshot. If provider capability is absent or denied, leave the request pending and do not report a connector failure. Never fall back to the CLI. Report failures that occur after a successful capability preflight through capture_request_fail."
+	prompt := "Use the workgraph-bridge skill and local workgraph MCP tools. List pending requests before claiming. For each candidate connector, call connector_required_tools and prove that every operation in the fetch and identity requirements returned by the registry is present and authorized with a harmless read-only discovery call. Claim at most one request, filtered to a connector whose complete registry preflight succeeded. Follow the request capture_semantics: fetch only the bounded approved scope for bounded_events, or the exhaustive configured current state for complete_snapshot. If provider capability is absent or denied, leave the request pending and do not report a connector failure. Never fall back to the CLI. Report failures that occur after a successful capability preflight through capture_request_fail. Never end the session holding a claim: if you cannot complete it, including because the window looks too large, call capture_request_fail with the reason."
 	var args []string
 	switch client {
 	case "codex":
@@ -671,7 +676,10 @@ func DrainBridge(homeDir string, client string, clientCommand string) (string, e
 		}
 		args = append(args, prompt)
 	}
-	command := exec.Command(commandName, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, commandName, args...)
+	command.WaitDelay = 5 * time.Second
 	command.Dir = homeDir
 	executable, err := os.Executable()
 	if err != nil {
@@ -679,17 +687,28 @@ func DrainBridge(homeDir string, client string, clientCommand string) (string, e
 	}
 	command.Env = applySignedInClientBinding(os.Environ(), client, signedInClientBinding{ConfigDir: workerSettings.ConfigDir})
 	command.Env = append(command.Env, "WORKGRAPH_HOME="+homeDir, "WORKGRAPH_EXECUTABLE="+executable)
+	startedAt := time.Now().UTC()
 	output, err := command.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		timeoutError := fmt.Sprintf("bridge drain timed out after %s", timeout)
+		recordBridgeDrainError(homeDir, client, timeoutError)
+		if releaseErr := releaseCaptureClaimsSince(homeDir, startedAt, timeoutError, time.Now()); releaseErr != nil {
+			return "", fmt.Errorf("%s; release claimed requests: %w", timeoutError, releaseErr)
+		}
+		return "", fmt.Errorf("drain bridge with %s: %s: %s", client, timeoutError, strings.TrimSpace(string(output)))
+	}
 	if err != nil {
+		recordBridgeDrainError(homeDir, client, string(output))
 		return "", fmt.Errorf("drain bridge with %s: %s", client, strings.TrimSpace(string(output)))
 	}
+	clearBridgeDrainError(homeDir, client)
 	recordBridgeDrainHeartbeat(homeDir, client)
 	return strings.TrimSpace(string(output)), nil
 }
 
 func recordBridgeDrainHeartbeat(homeDir string, client string) {
 	_, _ = RecordBridgeWorkerHeartbeat(homeDir, "", client)
-	stamp := filepath.Join(homeDir, "bridge", client+".heartbeat")
+	stamp := bridgeHeartbeatPath(homeDir, client)
 	if err := os.MkdirAll(filepath.Dir(stamp), 0o700); err == nil {
 		_ = os.WriteFile(stamp, []byte(time.Now().UTC().Format(time.RFC3339Nano)+"\n"), 0o600)
 	}
@@ -792,8 +811,12 @@ func DoctorPlugin(config PluginDoctorConfig) (string, error) {
 		workerEnvironment = "ready"
 	}
 	heartbeat := "never"
-	if contents, err := os.ReadFile(filepath.Join(homeDir, "bridge", client+".heartbeat")); err == nil {
+	roundTrip := "ready"
+	if contents, err := os.ReadFile(bridgeHeartbeatPath(homeDir, client)); err == nil {
 		heartbeat = strings.TrimSpace(string(contents))
+	}
+	if observed, found := readBridgeHeartbeat(homeDir, client); found && time.Since(observed) > bridgeStallFloor {
+		roundTrip = fmt.Sprintf("stale (last heartbeat %s ago)", formatBridgeAge(time.Since(observed)))
 	}
 	lines := []string{
 		"workgraph plugin doctor",
@@ -811,11 +834,14 @@ func DoctorPlugin(config PluginDoctorConfig) (string, error) {
 		lines = append(lines, fmt.Sprintf("Provider tools: %d explicitly allowed", providerToolCount))
 	}
 	lines = append(lines,
-		"Round trip: ready",
+		"Round trip: "+roundTrip,
 		"Worker: "+worker,
 		"Worker environment: "+workerEnvironment,
 		"Last heartbeat: "+heartbeat,
 	)
+	if drainError := readBridgeDrainError(homeDir, client); drainError != "" {
+		lines = append(lines, "Last drain error: "+drainError)
+	}
 	return strings.Join(lines, "\n"), nil
 }
 

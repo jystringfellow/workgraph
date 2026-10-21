@@ -364,3 +364,38 @@ func TestBridgeMCPIngestsRawSlackListCSVServerSide(t *testing.T) {
 		t.Fatalf("quoted CSV field was not preserved: %#v", fields)
 	}
 }
+
+func TestBridgeMCPClaimRejectsUnknownArgumentsInsteadOfWideningTheFilter(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	connectBridgedConnector(t, repoRoot(t), homeDir, "slack")
+	connectBridgedConnector(t, repoRoot(t), homeDir, "calendar.microsoft")
+	if _, err := workgraph.EmitBridgedCaptureRequest(workgraph.CaptureRequestEmitConfig{HomeDir: homeDir, ConnectorID: "slack"}); err != nil {
+		t.Fatalf("emit slack request: %v", err)
+	}
+	requests := []string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"capture_requests_claim","arguments":{"connector_id":"calendar.microsoft","worker":"facts"}}}`,
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"capture_requests_claim","arguments":{"connector":"calendar.microsoft","worker":"facts"}}}`,
+	}
+	command := exec.Command(workgraphFactsBinary, "bridge", "mcp", "--home", homeDir)
+	command.Dir = repoRoot(t)
+	command.Stdin = strings.NewReader(strings.Join(requests, "\n") + "\n")
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("run local bridge MCP: %v\n%s", err, output)
+	}
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected three MCP responses, got:\n%s", output)
+	}
+	if !strings.Contains(lines[1], `"isError":true`) || !strings.Contains(lines[1], `unknown argument \"connector_id\"`) {
+		t.Fatalf("expected misspelled connector filter to be rejected, got:\n%s", lines[1])
+	}
+	if !strings.Contains(lines[2], `"claims":[]`) {
+		t.Fatalf("expected calendar-filtered claim to skip the slack request, got:\n%s", lines[2])
+	}
+	pending, err := workgraph.ListCaptureRequests(workgraph.CaptureRequestListConfig{HomeDir: homeDir, ConnectorID: "slack"})
+	if err != nil || len(pending) != 1 || pending[0].Status != "pending" {
+		t.Fatalf("expected slack request to stay pending, got %#v error=%v", pending, err)
+	}
+}

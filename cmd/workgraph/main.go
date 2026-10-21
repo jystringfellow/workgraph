@@ -288,14 +288,15 @@ func runBridgeDrain(args []string, stdout io.Writer, stderr io.Writer) int {
 	homeDir := flags.String("home", "", "workgraph home directory")
 	client := flags.String("client", "", "reference client: codex or claude-code")
 	clientCommand := flags.String("client-command", "", "client executable override")
+	timeout := flags.Duration("timeout", workgraph.DefaultBridgeDrainTimeout, "maximum client session runtime")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 || strings.TrimSpace(*client) == "" {
-		fmt.Fprintln(stderr, "usage: workgraph bridge drain --client <codex|claude-code>")
+	if flags.NArg() != 0 || strings.TrimSpace(*client) == "" || *timeout <= 0 {
+		fmt.Fprintln(stderr, "usage: workgraph bridge drain --client <codex|claude-code> [--timeout <duration>]")
 		return 2
 	}
-	message, err := workgraph.DrainBridge(*homeDir, *client, *clientCommand)
+	message, err := workgraph.DrainBridge(*homeDir, *client, *clientCommand, *timeout)
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph bridge drain: %v\n", err)
 		return 1
@@ -1417,7 +1418,11 @@ func runCaptureRequests(args []string, stdin io.Reader, stdout io.Writer, stderr
 			fmt.Fprintln(stdout, "No capture requests.")
 		}
 		for _, request := range requests {
-			line := fmt.Sprintf("- %s: %s, connector %s, %s, %s to %s, attempts %d", request.ID, request.Status, request.ConnectorID, request.CaptureSemantics, request.Since, request.Until, request.Attempts)
+			status := request.Status
+			if request.StatusDetail != "" {
+				status = request.StatusDetail
+			}
+			line := fmt.Sprintf("- %s: %s, connector %s, %s, %s to %s, attempts %d", request.ID, status, request.ConnectorID, request.CaptureSemantics, request.Since, request.Until, request.Attempts)
 			if request.ClaimedBy != "" {
 				line += ", worker " + request.ClaimedBy + ", lease expires " + request.LeaseExpiresAt
 			}
