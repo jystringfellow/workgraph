@@ -517,6 +517,13 @@ type connectorPoller struct {
 	timeout    time.Duration
 }
 
+func connectorPollerTimeout(id string) time.Duration {
+	if id == githubPRWatchConnectorID {
+		return githubPRWatchPollTimeout
+	}
+	return 0
+}
+
 func (capture *RunCapture) connectorPollers() []connectorPoller {
 	pollers := []connectorPoller{}
 	if capture.gitEnabled {
@@ -528,7 +535,7 @@ func (capture *RunCapture) connectorPollers() []connectorPoller {
 	if capture.githubPRWatchEnabled {
 		pollers = append(pollers, connectorPoller{
 			id: githubPRWatchConnectorID, interval: capture.githubPRWatchInterval, poll: capture.captureGitHubPRWatch,
-			wake: capture.githubPRWatchWake, minSpacing: capture.connectorWakeSpacing, timeout: githubPRWatchPollTimeout,
+			wake: capture.githubPRWatchWake, minSpacing: capture.connectorWakeSpacing, timeout: connectorPollerTimeout(githubPRWatchConnectorID),
 		})
 	}
 	if capture.slackEnabled && capture.slackToken != "" {

@@ -3,6 +3,7 @@ package facts
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -123,6 +124,61 @@ func TestGitCaptureDoesNotDuplicateCommitEvents(t *testing.T) {
 	count := gitCommitEventCount(t, filepath.Join(homeDir, "workgraph.db"), commitSHA)
 	if count != 1 {
 		t.Fatalf("expected one git commit event for %s, got %d", commitSHA, count)
+	}
+}
+
+func TestOneShotGitPollStoresMoreCommitsThanTheEventBuffer(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	codeDir := filepath.Join(tempDir, "Code")
+	var commitSHAs []string
+	for repo := 0; repo < 7; repo++ {
+		repoDir := filepath.Join(codeDir, fmt.Sprintf("Repo%d", repo))
+		if err := os.MkdirAll(repoDir, 0o755); err != nil {
+			t.Fatalf("create repo dir: %v", err)
+		}
+		initGitRepo(t, repoDir)
+		for commit := 0; commit < 20; commit++ {
+			runGit(t, repoDir, "commit", "--allow-empty", "-qm", fmt.Sprintf("Repo%d change %d", repo, commit))
+		}
+		commitSHAs = append(commitSHAs, strings.Fields(string(runGit(t, repoDir, "log", "--format=%H")))...)
+	}
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	type pollOutcome struct {
+		result workgraph.ConnectorPollResult
+		err    error
+	}
+	done := make(chan pollOutcome, 1)
+	go func() {
+		result, err := workgraph.PollConnectors(workgraph.ConnectorPollConfig{
+			HomeDir:      homeDir,
+			DatabasePath: initResult.DatabasePath,
+			ID:           "git",
+			Once:         true,
+		})
+		done <- pollOutcome{result: result, err: err}
+	}()
+	select {
+	case outcome := <-done:
+		if outcome.err != nil {
+			t.Fatalf("one-shot git poll failed: %v\n%s", outcome.err, outcome.result.Message)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("one-shot git poll did not finish with more commits than the event buffer holds")
+	}
+
+	if len(commitSHAs) != 140 {
+		t.Fatalf("expected 140 fixture commits, got %d", len(commitSHAs))
+	}
+	for _, commitSHA := range commitSHAs {
+		if count := gitCommitEventCount(t, initResult.DatabasePath, commitSHA); count != 1 {
+			t.Fatalf("expected one stored event for commit %s, got %d", commitSHA, count)
+		}
 	}
 }
 
