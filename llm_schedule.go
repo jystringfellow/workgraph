@@ -71,7 +71,8 @@ type LLMTaskSubmitConfig struct {
 }
 
 type llmTaskParams struct {
-	UnitIDs []string `json:"unit_ids"`
+	UnitIDs []string          `json:"unit_ids"`
+	Sent    map[string]string `json:"sent,omitempty"`
 }
 
 func ScheduleLLMAssociate(config LLMAssociateScheduleConfig) (LLMAssociateScheduleResult, error) {
@@ -285,6 +286,9 @@ func verifyLLMTaskClaim(config LLMAssociateConfig, requestID string, claimToken 
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
+	if err := createSchema(db); err != nil {
+		return fmt.Errorf("prepare capture outbox: %w", err)
+	}
 	var kind, status, token, leaseExpires string
 	err = db.QueryRow(`SELECT kind, status, COALESCE(claim_token, ''), COALESCE(lease_expires_at, '')
 		FROM capture_requests WHERE id = ?`, requestID).Scan(&kind, &status, &token, &leaseExpires)
@@ -328,11 +332,15 @@ func llmTaskCompletion(requestID string, claimToken string, payload associatePay
 		if err := completeLLMTaskTx(requestID, claimToken)(tx, now); err != nil {
 			return err
 		}
-		return recordAssociateCooldowns(tx, now, payload, written)
+		sent, err := sentLLMTaskMembers(tx, requestID)
+		if err != nil {
+			return err
+		}
+		return recordAssociateCooldowns(tx, now, payload, written, sent)
 	}
 }
 
-func recordAssociateCooldowns(tx *sql.Tx, now time.Time, payload associatePayload, written ProjectLinkRunResult) error {
+func recordAssociateCooldowns(tx *sql.Tx, now time.Time, payload associatePayload, written ProjectLinkRunResult, sent map[string]string) error {
 	progressed := map[string]bool{}
 	for _, link := range written.Written {
 		progressed[link.UnitID] = true
@@ -345,14 +353,59 @@ func recordAssociateCooldowns(tx *sql.Tx, now time.Time, payload associatePayloa
 	}
 	until := now.Add(llmAssociateCooldown).UTC().Format(time.RFC3339Nano)
 	for _, unit := range payload.Units {
-		if progressed[unit.linkUnitID] {
+		hash := associateMembersHash(unit)
+		if progressed[unit.linkUnitID] || (sent != nil && sent[unit.linkUnitID] != hash) {
 			continue
 		}
 		if _, err := tx.Exec(`INSERT INTO associate_cooldowns (unit_id, members_hash, until) VALUES (?, ?, ?)
 			ON CONFLICT(unit_id) DO UPDATE SET members_hash = excluded.members_hash, until = excluded.until`,
-			unit.linkUnitID, associateMembersHash(unit), until); err != nil {
+			unit.linkUnitID, hash, until); err != nil {
 			return fmt.Errorf("record associate cooldown for %s: %w", unit.linkUnitID, err)
 		}
+	}
+	return nil
+}
+
+func sentLLMTaskMembers(tx *sql.Tx, requestID string) (map[string]string, error) {
+	var raw string
+	if err := tx.QueryRow(`SELECT params_json FROM capture_requests WHERE id = ?`, requestID).Scan(&raw); err != nil {
+		return nil, fmt.Errorf("read llm task request %s: %w", requestID, err)
+	}
+	var params llmTaskParams
+	if err := json.Unmarshal([]byte(raw), &params); err != nil {
+		return nil, fmt.Errorf("parse llm task params: %w", err)
+	}
+	return params.Sent, nil
+}
+
+func recordSentLLMTaskMembers(config LLMAssociateConfig, claim ClaimedCaptureRequest, payload associatePayload) error {
+	unitIDs, err := storedLLMTaskUnitIDs(config, claim.Request.ID)
+	if err != nil {
+		return err
+	}
+	params := llmTaskParams{UnitIDs: unitIDs, Sent: map[string]string{}}
+	for _, unit := range payload.Units {
+		params.Sent[unit.linkUnitID] = associateMembersHash(unit)
+	}
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		return fmt.Errorf("encode llm task params: %w", err)
+	}
+	dbPath, err := resumeDatabasePath(ResumeConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath})
+	if err != nil {
+		return err
+	}
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+	updated, err := db.Exec(`UPDATE capture_requests SET params_json = ? WHERE id = ? AND status = 'claimed' AND claim_token = ?`, string(encoded), claim.Request.ID, claim.ClaimToken)
+	if err != nil {
+		return fmt.Errorf("record llm task members: %w", err)
+	}
+	if count, _ := updated.RowsAffected(); count != 1 {
+		return errStaleLLMTaskClaim
 	}
 	return nil
 }
@@ -475,6 +528,9 @@ func prepareLLMTask(config LLMAssociateConfig, run associateRun, claim ClaimedCa
 	}
 	filtered, err := run.filteredMessages(payload)
 	if err != nil {
+		return nil, err
+	}
+	if err := recordSentLLMTaskMembers(config, claim, payload); err != nil {
 		return nil, err
 	}
 	return &LLMTask{Task: llmTaskAssociate, Profile: run.profileName, Client: run.profile.Client, Model: run.profile.Model, Messages: filtered.Messages}, nil

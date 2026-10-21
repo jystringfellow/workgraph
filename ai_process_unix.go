@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"syscall"
 )
@@ -63,4 +64,11 @@ func aiSignalName(signal syscall.Signal) string {
 
 func openAIControllingTerminal() (*os.File, error) {
 	return os.OpenFile("/dev/tty", os.O_RDWR, 0)
+}
+
+func isolateProcessGroup(command *exec.Cmd) {
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.Cancel = func() error {
+		return syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+	}
 }

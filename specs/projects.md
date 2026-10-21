@@ -539,12 +539,15 @@ Categorization runs through the bridged-capture outbox
 - A direct run whose model call or parse fails returns the request to
   `pending` with the error and the outbox backoff. Stopping the daemon
   cancels an in-flight model call, HTTP or client process, and returns the
-  request the same way.
+  request the same way. A client runs in its own process group, which is
+  killed on cancel, and output waiting is bounded to 5 seconds.
 - A completed task records a 24-hour cooldown for each sent unit that got no
   link, whether the model left it out or every entry for it was discarded.
   Scheduled emits, hourly and 05:00, and `llm associate` with a bridge
   profile skip a cooled-down unit until the cooldown ends or its permitted
-  members change. A direct `llm associate` run ignores cooldowns.
+  members change. A bridge claim records the member set it sent; at submit a
+  unit whose members changed since the claim is not cooled down. A direct
+  `llm associate` run ignores cooldowns.
 - Failures, lease expiry, and drain timeouts of `llm_task` requests never
   write connector runtime state, and `llm_task` requests are never reported
   as bridge stalls: `llm.associate` is not a capture connector. A bridge

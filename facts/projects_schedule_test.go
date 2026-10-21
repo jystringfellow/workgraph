@@ -11,7 +11,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -466,7 +468,15 @@ func TestCaptureOutboxUpgradesAnExistingDatabase(t *testing.T) {
 	}
 	db.Close()
 
-	output, err := runworkgraph(t, repoRoot(t), "capture", "requests", "--list", "--home", home.HomeDir)
+	claimFile := filepath.Join(t.TempDir(), "legacy-claim.json")
+	if err := os.WriteFile(claimFile, []byte(`{"request_id":"legacy-request","claim_token":"legacy"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output, err := runScheduleSubmit(t, home, "legacy-request", claimFile, `{"units":[]}`)
+	if err == nil || strings.Contains(string(output), "no such column") || !strings.Contains(string(output), "not an llm_task request") {
+		t.Fatalf("expected submit on an existing outbox to migrate and reject the capture request: %v\n%s", err, output)
+	}
+	output, err = runworkgraph(t, repoRoot(t), "capture", "requests", "--list", "--home", home.HomeDir)
 	if err != nil || !strings.Contains(string(output), "legacy-request: pending") {
 		t.Fatalf("list an existing outbox: %v\n%s", err, output)
 	}
@@ -507,11 +517,7 @@ func TestScheduledAssociateDoesNotResendUnitsWithoutProgress(t *testing.T) {
 		t.Fatalf("re-sent a unit whose every entry was discarded: %+v %v", again, err)
 	}
 
-	reply := associateSlackEvent("C1", fmt.Sprintf("%d.000200", start.Unix()), "channel", "harness-team", "Sam", "follow-up in the same thread", start.Add(2*time.Minute))
-	reply.ID = strings.Replace(reply.ID, "slack.message:", "slack.thread_reply:", 1)
-	reply.Type = "slack.thread_reply"
-	reply.Payload = strings.Replace(reply.Payload, fmt.Sprintf(`"thread_ts":"%d.000200"`, start.Unix()), fmt.Sprintf(`"thread_ts":"%d.000100"`, start.Unix()), 1)
-	insertEvent(t, home.DatabasePath, reply)
+	insertEvent(t, home.DatabasePath, associateThreadReply(start, "C1", "follow-up in the same thread"))
 	fake.Respond(associateResponse(withEvidence(associateEntry(units[0], "project", "ask-kai", 0.8), units[0].EventIDs[0])))
 	if ran, err := workgraph.ScheduleLLMAssociate(later); err != nil || !ran.Executed || fake.Calls() != 3 {
 		t.Fatalf("expected a changed unit to be sent again, got %+v calls=%d %v", ran, fake.Calls(), err)
@@ -554,4 +560,118 @@ func TestScheduledAssociateStopsTheModelCallWhenTheDaemonStops(t *testing.T) {
 	if len(requests) != 1 || requests[0].Status != "pending" || requests[0].ClaimedBy != "" {
 		t.Fatalf("expected the cancelled request released for retry, got %+v", requests)
 	}
+}
+
+func TestBridgeSubmitDoesNotCoolMembersTheModelNeverSaw(t *testing.T) {
+	home := initScheduleHome(t)
+	configureBridgeAssociateProfile(t, home, "slack")
+	start := time.Now().UTC().Add(-6 * time.Hour)
+	insertAssociateThreads(t, home, start, "C1", "harness-team", 1)
+	emitted, err := workgraph.ScheduleLLMAssociate(workgraph.LLMAssociateScheduleConfig{HomeDir: home.HomeDir})
+	if err != nil || !emitted.Created {
+		t.Fatalf("emit: %+v %v", emitted, err)
+	}
+	content, failure := callScheduleMCP(t, home, "capture_requests_claim", map[string]any{"worker": "claude-code-drain-fact", "kind": "llm_task"})
+	if failure != "" || len(content["claims"].([]any)) != 1 {
+		t.Fatalf("claim: %v %s", content, failure)
+	}
+	claim := content["claims"].([]any)[0].(map[string]any)
+	insertEvent(t, home.DatabasePath, associateThreadReply(start, "C1", "a reply after the claim"))
+
+	submitted, failure := callScheduleMCP(t, home, "llm_task_submit", map[string]any{"request_id": emitted.Request.ID, "claim_token": claim["claim_token"], "result": `{"units":[]}`})
+	if failure != "" || submitted["request_completed"] != true {
+		t.Fatalf("submit: %v %s", submitted, failure)
+	}
+	again, err := workgraph.ScheduleLLMAssociate(workgraph.LLMAssociateScheduleConfig{HomeDir: home.HomeDir})
+	if err != nil || !again.Created {
+		t.Fatalf("expected the unit with an unseen reply to be scheduled again, got %+v %v", again, err)
+	}
+
+	content, failure = callScheduleMCP(t, home, "capture_requests_claim", map[string]any{"worker": "claude-code-drain-fact", "kind": "llm_task"})
+	if failure != "" || len(content["claims"].([]any)) != 1 {
+		t.Fatalf("claim second request: %v %s", content, failure)
+	}
+	claim = content["claims"].([]any)[0].(map[string]any)
+	if _, failure := callScheduleMCP(t, home, "llm_task_submit", map[string]any{"request_id": again.Request.ID, "claim_token": claim["claim_token"], "result": `{"units":[]}`}); failure != "" {
+		t.Fatalf("submit second request: %s", failure)
+	}
+	if idle, err := workgraph.ScheduleLLMAssociate(workgraph.LLMAssociateScheduleConfig{HomeDir: home.HomeDir}); err != nil || idle.Eligible {
+		t.Fatalf("expected the unit the model saw in full to cool down, got %+v %v", idle, err)
+	}
+}
+
+func TestScheduledAssociateStopsAClientThatLeavesChildrenRunning(t *testing.T) {
+	home := initScheduleHome(t)
+	binDir := t.TempDir()
+	childPIDPath := filepath.Join(t.TempDir(), "child.pid")
+	startedPath := filepath.Join(t.TempDir(), "started")
+	script := "#!/bin/sh\nsleep 60 &\necho $! > \"" + childPIDPath + "\"\ntouch \"" + startedPath + "\"\nwait\n"
+	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if _, err := workgraph.AddLLMProfile(workgraph.LLMAddProfileConfig{HomeDir: home.HomeDir, Name: "claude-direct", Provider: "ai-client", Client: "claude-code"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workgraph.UseLLMProfile(workgraph.LLMUseProfileConfig{HomeDir: home.HomeDir, Name: "claude-direct", Task: "associate"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workgraph.EnableHostedLLM(workgraph.LLMHostedConfig{HomeDir: home.HomeDir}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workgraph.ConfigureLLMSources(workgraph.LLMSourcesConfig{HomeDir: home.HomeDir, Task: "associate", Enable: []string{"slack"}}); err != nil {
+		t.Fatal(err)
+	}
+	insertAssociateThreads(t, home, time.Now().UTC().Add(-6*time.Hour), "C1", "harness-team", 1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	finished := make(chan error, 1)
+	go func() {
+		_, err := workgraph.ScheduleLLMAssociate(workgraph.LLMAssociateScheduleConfig{Context: ctx, HomeDir: home.HomeDir})
+		finished <- err
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := os.Stat(startedPath); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the client was never started")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-finished:
+		if err == nil {
+			t.Fatalf("expected a cancelled run to fail")
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("cancelling the daemon left the client run blocked on its child")
+	}
+	requests := llmAssociateRequests(t, home)
+	if len(requests) != 1 || requests[0].Status != "pending" || requests[0].ClaimedBy != "" {
+		t.Fatalf("expected the cancelled request released for retry, got %+v", requests)
+	}
+	contents, err := os.ReadFile(childPIDPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(contents)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if process, err := os.FindProcess(pid); err == nil && process.Signal(syscall.Signal(0)) == nil {
+		_ = process.Kill()
+		t.Fatalf("the client's child process %d outlived the cancelled run", pid)
+	}
+}
+
+func associateThreadReply(start time.Time, channelID string, summary string) storedEvent {
+	reply := associateSlackEvent(channelID, fmt.Sprintf("%d.000200", start.Unix()), "channel", "harness-team", "Sam", summary, start.Add(2*time.Minute))
+	reply.ID = strings.Replace(reply.ID, "slack.message:", "slack.thread_reply:", 1)
+	reply.Type = "slack.thread_reply"
+	reply.Payload = strings.Replace(reply.Payload, fmt.Sprintf(`"thread_ts":"%d.000200"`, start.Unix()), fmt.Sprintf(`"thread_ts":"%d.000100"`, start.Unix()), 1)
+	return reply
 }
