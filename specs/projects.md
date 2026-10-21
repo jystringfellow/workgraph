@@ -1,6 +1,6 @@
 # Projects, Workstreams, And Categorization
 
-Status: D1 and D2 implemented; D3 and D4 planned. Slices are listed in
+Status: D1, D2, and D3 implemented; D4 planned. Slices are listed in
 `specs/roadmap.md`. Facts live in `facts/projects*_test.go`.
 
 ## Intent
@@ -231,7 +231,8 @@ link; the unit goes to the LLM with those projects listed as hints.
 - Open Slack bursts are not linked until they close.
 
 A deterministic pass runs at the start of every `projects review` that lists
-links (not the flag forms), and before `llm associate` selects units. Each
+links (not the flag forms), and before `llm associate` selects units, except
+in a dry run, which writes nothing. Each
 pass that writes links records them under one new `run_id`; a pass with
 nothing to link writes nothing.
 
@@ -514,6 +515,9 @@ workgraph projects explain <unit-id>
   many project files have invalid frontmatter and points to `memory doctor`.
   From D2 each project shows its applied unit count for the last 7 days: its
   current applied links created, or approved, in that window.
+- Listing forms of `projects review` (default, `--auto`, and `--json`) start
+  with the auto-apply accuracy line from the Accuracy Gate and, when paused,
+  `Auto-apply paused: <reason>`; `--json` carries it as `auto_apply`.
 - Interactive `projects review` shows each proposed unit, oldest first:
   container, time range, kind, summary, proposed target, confidence, and
   evidence ids. Keys: `a` approve, `r` reassign (prompts for a slug), `n` new
@@ -580,7 +584,7 @@ workgraph projects explain <unit-id>
 - **D3 LLM categorization**: Slack conversation type capture, `llm
   associate` with dry run, source opt-in, validation, auto-apply, accuracy
   gate, and review metrics. D3 runs only directly or manually with the
-  routed profile; there is no outbox or bridge execution.
+  routed profile; scheduled outbox and bridge execution are D4.
 - **D4 Scheduling and daily loop**: kind-aware `llm.associate` outbox
   requests, direct and bridge execution, and the `next`, `today`, and
   `resume` surfaces. Existing capture-only workers are unchanged. D4 depends

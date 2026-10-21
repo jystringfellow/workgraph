@@ -76,10 +76,10 @@ type effectivenessReviewPayload struct {
 	DismissalReasons []ReviewDismissalReason `json:"dismissal_reasons"`
 	TimeToUseful     ReviewDurationMetric    `json:"time_to_useful_suggestion"`
 	Connectors       []ReviewConnectorState  `json:"connectors"`
-	ProjectAutoApply reviewProjectAutoApply  `json:"project_auto_apply"`
+	ProjectAutoApply ProjectAutoApplyMetric  `json:"project_auto_apply"`
 }
 
-type reviewProjectAutoApply struct {
+type ProjectAutoApplyMetric struct {
 	Status      string   `json:"status"`
 	WindowDays  int      `json:"window_days"`
 	SampleSize  int      `json:"sample_size"`
@@ -343,12 +343,12 @@ func reviewPayload(result EffectivenessReviewResult) effectivenessReviewPayload 
 		Window: result.Window, Acceptance: result.Acceptance, Dismissal: result.Dismissal,
 		Snooze: result.Snooze, DismissalReasons: result.DismissalReasons,
 		TimeToUseful: result.TimeToUseful, Connectors: result.Connectors,
-		ProjectAutoApply: reviewProjectAutoApplyPayload(result.ProjectAutoApply),
+		ProjectAutoApply: result.ProjectAutoApply.Metric(),
 	}
 }
 
-func reviewProjectAutoApplyPayload(report ProjectLinkAccuracyReport) reviewProjectAutoApply {
-	payload := reviewProjectAutoApply{
+func (report ProjectLinkAccuracyReport) Metric() ProjectAutoApplyMetric {
+	payload := ProjectAutoApplyMetric{
 		Status: report.Status, WindowDays: int(report.Window / (24 * time.Hour)), SampleSize: report.Decided,
 		Confirmed: report.Confirmed, Corrected: report.Corrected, Undone: report.Undone,
 		Paused: report.Paused, PauseReason: report.PauseReason,

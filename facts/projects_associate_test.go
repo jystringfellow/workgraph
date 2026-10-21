@@ -323,6 +323,57 @@ func TestAssociateRecordsAMeasuredPauseWithoutAModelCall(t *testing.T) {
 	if err != nil || accuracy.Status != "insufficient_data" || !accuracy.Paused || !strings.Contains(accuracy.PauseReason, "accuracy 0.90 over 20 decided") {
 		t.Fatalf("expected the recorded pause to outlive its sample, got %+v %v", accuracy, err)
 	}
+
+	args := []string{"--home", home.HomeDir, "--memory", home.MemoryDir}
+	for _, mode := range [][]string{{"projects", "review"}, {"projects", "review", "--auto"}} {
+		output, err := runworkgraph(t, repoRoot(t), append(mode, args...)...)
+		if err != nil || !strings.Contains(string(output), "Auto-apply paused: accuracy 0.90 over 20 decided") {
+			t.Fatalf("expected %v to say auto-apply is paused and why: %v\n%s", mode, err, output)
+		}
+	}
+	output, err := runworkgraph(t, repoRoot(t), append([]string{"projects", "review", "--json"}, args...)...)
+	if err != nil {
+		t.Fatalf("projects review --json: %v\n%s", err, output)
+	}
+	var reviewed struct {
+		AutoApply struct {
+			Paused      bool   `json:"paused"`
+			PauseReason string `json:"pause_reason"`
+		} `json:"auto_apply"`
+	}
+	if err := json.Unmarshal(output, &reviewed); err != nil || !reviewed.AutoApply.Paused || !strings.Contains(reviewed.AutoApply.PauseReason, "accuracy 0.90") {
+		t.Fatalf("expected the review JSON to report the pause: %v\n%s", err, output)
+	}
+}
+
+func TestAssociateAppliesDeterministicLinksBeforeTheModel(t *testing.T) {
+	home := initAssociateHome(t)
+	fake := newAssociateFakeModel(t)
+	configureAssociateProfile(t, home, fake.URL, "slack")
+	now := time.Date(2026, 10, 21, 18, 0, 0, 0, time.UTC)
+	mapped := insertAssociateThreads(t, home, now.Add(-6*time.Hour), "C1", "mapped-team", 1)
+	open := insertAssociateThreads(t, home, now.Add(-5*time.Hour), "C2", "open-team", 1)
+	if output, err := runworkgraph(t, repoRoot(t), "memory", "link", "--home", home.HomeDir, "--memory", home.MemoryDir, "--source", "mapped-team", "ask-kai"); err != nil {
+		t.Fatalf("memory link: %v\n%s", err, output)
+	}
+
+	dryRun, err := workgraph.AssociateWithLLM(workgraph.LLMAssociateConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, HTTPClient: fake.Client, Now: now, DryRun: true})
+	if err != nil || len(dryRun.Sent) != 2 || len(dryRun.Deterministic.Written) != 0 {
+		t.Fatalf("expected a dry run to write no deterministic links, got %+v %v", dryRun, err)
+	}
+	fake.Respond(associateResponse(associateEntry(open[0], "project", "mmo-harness", 0.8)))
+	result, err := workgraph.AssociateWithLLM(workgraph.LLMAssociateConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, HTTPClient: fake.Client, Now: now})
+	if err != nil {
+		t.Fatalf("associate: %v", err)
+	}
+	if !reflect.DeepEqual(result.Sent, []string{open[0].ID}) || len(result.Deterministic.Written) != 1 || !strings.Contains(result.Message, "Deterministic links: 1") {
+		t.Fatalf("expected the mapped unit to be linked deterministically and left out of the payload, got %+v", result)
+	}
+	link := currentProjectLink(t, workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir}, mapped[0].ID)
+	if link.Source != "deterministic" || link.Rule != "container_mapping" || link.Project != "ask-kai" || link.State != "applied" || !link.Auto || link.RunID == result.RunID {
+		t.Fatalf("expected an applied deterministic link from its own run, got %+v", link)
+	}
+	assertAssociateLink(t, workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir}, open[0].ID, "proposed", false)
 }
 
 type associateHome struct {

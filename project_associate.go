@@ -51,14 +51,15 @@ type AssociateDiscard struct {
 }
 
 type LLMAssociateResult struct {
-	ConfigPath string
-	Message    string
-	RunID      string
-	Sent       []string
-	Applied    int
-	Proposed   int
-	Discarded  []AssociateDiscard
-	Accuracy   ProjectLinkAccuracyReport
+	ConfigPath    string
+	Message       string
+	RunID         string
+	Sent          []string
+	Applied       int
+	Proposed      int
+	Discarded     []AssociateDiscard
+	Accuracy      ProjectLinkAccuracyReport
+	Deterministic ProjectLinkRunResult
 }
 
 type associatePayload struct {
@@ -206,8 +207,13 @@ func AssociateWithLLM(config LLMAssociateConfig) (LLMAssociateResult, error) {
 		return LLMAssociateResult{}, err
 	}
 	store := ProjectLinkStoreConfig{HomeDir: homeDir, DatabasePath: config.DatabasePath, Now: now}
+	var deterministic ProjectLinkRunResult
 	if !config.DryRun {
 		if err := withProjectLinksTx(store, func(*sql.Tx, time.Time) error { return nil }); err != nil {
+			return LLMAssociateResult{}, err
+		}
+		deterministic, err = LinkProjectUnits(ProjectLinkPassConfig{HomeDir: homeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir, Now: now, Location: config.Location, GitEmails: config.GitEmails})
+		if err != nil {
 			return LLMAssociateResult{}, err
 		}
 	}
@@ -215,7 +221,7 @@ func AssociateWithLLM(config LLMAssociateConfig) (LLMAssociateResult, error) {
 	if err != nil {
 		return LLMAssociateResult{}, err
 	}
-	result := LLMAssociateResult{ConfigPath: llmConfigPath(homeDir)}
+	result := LLMAssociateResult{ConfigPath: llmConfigPath(homeDir), Deterministic: deterministic}
 	for _, unit := range payload.Units {
 		result.Sent = append(result.Sent, unit.UnitID)
 	}
@@ -225,6 +231,9 @@ func AssociateWithLLM(config LLMAssociateConfig) (LLMAssociateResult, error) {
 		"Model: " + llmProfileModelLabel(profile),
 		"Destination: " + llmProfileDestination(profile),
 		"Enabled sources: " + associateSourcesLabel(orderedAssociateSources(enabled)),
+	}
+	if len(deterministic.Written) > 0 {
+		header = append(header, fmt.Sprintf("Deterministic links: %d (run %s)", len(deterministic.Written), deterministic.RunID))
 	}
 	messages, err := associateMessages(payload)
 	if err != nil {

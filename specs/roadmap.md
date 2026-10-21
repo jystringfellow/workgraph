@@ -34,11 +34,6 @@ Priority labels used below:
 Projects and categorization, in order. Each slice links activity to declared
 projects more completely. [spec: `specs/projects.md`]
 
-- `P1` **D3 LLM categorization.** `llm associate` with dry run, per-source
-  opt-in over the whole payload (including persisted Slack conversation
-  type), validation, and auto-apply at confidence 0.95 with an accuracy gate.
-  Direct and manual runs only. [also:
-  `specs/llm-integration.md`]
 - `P1` **D4 Scheduled categorization and the daily loop.** Hourly and nightly
   `llm.associate` outbox requests with kind-aware emit, claim, and complete,
   run directly or by the bridge worker, leaving capture-only workers
@@ -82,6 +77,13 @@ projects more completely. [spec: `specs/projects.md`]
 - `P2` Desktop UI after the local CLI and data contracts are stable.
 
 ## Recently Delivered
+
+- [x] LLM categorization: `llm associate` with dry run, per-source opt-in
+  over the whole payload (including persisted Slack conversation type),
+  validation, auto-apply at confidence 0.95 with an accuracy gate and pause,
+  and the accuracy metric in `projects review` and `workgraph review`. Direct
+  and manual runs only; scheduling and bridge execution are D4. [spec:
+  `specs/projects.md` D3; also `specs/llm-integration.md`]
 
 - [x] Units of work and deterministic linking: Slack thread and burst, GitHub
   PR, git session, Notion page, and calendar units; the `project_links`
