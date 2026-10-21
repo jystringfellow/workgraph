@@ -91,9 +91,16 @@ deterministic: the same events always produce the same units and ids.
 | `notion.page` | the user's activity on one page on one local day | `notion.page:<page_id>:<date>` |
 | `calendar.event` | one calendar event | the existing event identity `calendar.event:<provider>:<calendar_id>:<event_id>` |
 
+- A Slack message is a thread member when it has a `thread_ts` or its `ts`
+  is the `thread_ts` of another stored message in the same channel, so a
+  root captured before its replies joins the thread.
 - A Slack burst is closed, and eligible for categorization, only after its
   quiet gap has passed. An open burst is shown as activity but not
   categorized yet.
+- GitHub repositories in unit ids are lowercased. Notion page units use the
+  user's page edit events (`notion.page_updated`), and the local day is the
+  day of the event timestamp in local time.
+- A unit's container is the container of its earliest member.
 - A late-captured message that bridges two closed bursts merges them under the
   earlier id. Links on the later id are kept and shown by `projects explain`
   as belonging to a unit that no longer exists; they are not moved silently.
@@ -127,8 +134,9 @@ profile, run_id, created_at, decided_at, decision
 - `evidence_json` is a non-empty array of member event ids.
 - `state` is `proposed`, `applied`, or `rejected`.
 - `auto` is true when the link was applied without the user deciding it.
-- `rule` names the deterministic rule; `profile` and `run_id` identify the LLM
-  run.
+- `rule` names the deterministic rule and `profile` names the LLM profile.
+  `run_id` identifies the deterministic linking pass or LLM run that wrote
+  the link; user links have none.
 - `decision` is recorded with `decided_at` when the user acts on an existing
   link:
   - `approved`: the user applied a proposed link

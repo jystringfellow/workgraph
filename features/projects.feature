@@ -7,6 +7,12 @@ Scenario: Group projects under a workstream
   Then "mmo-gtm-segments" and "mmo-harness" are listed under "mmo"
   And "ask-kai" is listed without a workstream
 
+Scenario: Group activity into units of work
+  Given Slack, GitHub, git, Notion, and calendar events captured in any order
+  When workgraph groups units of work
+  Then the same unit ids and members are produced every time
+  And a Slack burst inside its quiet gap is not eligible for categorization
+
 Scenario: Link a Slack thread by a shared identifier
   Given a Slack channel is mapped to project "mmo-harness"
   And a thread in that channel cites a pull request recorded in "ask-kai" memory
