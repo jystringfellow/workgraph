@@ -645,7 +645,11 @@ func DrainBridge(homeDir string, client string, clientCommand string, timeout ti
 			commandName = "claude"
 		}
 	}
-	prompt := "Use the workgraph-bridge skill and local workgraph MCP tools. List pending requests before claiming. For each candidate connector, call connector_required_tools and prove that every operation in the fetch and identity requirements returned by the registry is present and authorized with a harmless read-only discovery call. Claim at most one request, filtered to a connector whose complete registry preflight succeeded. Follow the request capture_semantics: fetch only the bounded approved scope for bounded_events, or the exhaustive configured current state for complete_snapshot. If provider capability is absent or denied, leave the request pending and do not report a connector failure. Never fall back to the CLI. Report failures that occur after a successful capability preflight through capture_request_fail. Never end the session holding a claim: if you cannot complete it, including because the window looks too large, call capture_request_fail with the reason."
+	drainWorker, err := newBridgeDrainWorker(client)
+	if err != nil {
+		return "", err
+	}
+	prompt := "Use the workgraph-bridge skill and local workgraph MCP tools. List pending requests before claiming. For each candidate connector, call connector_required_tools and prove that every operation in the fetch and identity requirements returned by the registry is present and authorized with a harmless read-only discovery call. Claim at most one request, filtered to a connector whose complete registry preflight succeeded. Follow the request capture_semantics: fetch only the bounded approved scope for bounded_events, or the exhaustive configured current state for complete_snapshot. If provider capability is absent or denied, leave the request pending and do not report a connector failure. Never fall back to the CLI. Report failures that occur after a successful capability preflight through capture_request_fail. Never end the session holding a claim: if you cannot complete it, including because the window looks too large, call capture_request_fail with the reason. Claim with worker name " + drainWorker + "."
 	var args []string
 	switch client {
 	case "codex":
@@ -686,13 +690,12 @@ func DrainBridge(homeDir string, client string, clientCommand string, timeout ti
 		return "", fmt.Errorf("resolve workgraph executable: %w", err)
 	}
 	command.Env = applySignedInClientBinding(os.Environ(), client, signedInClientBinding{ConfigDir: workerSettings.ConfigDir})
-	command.Env = append(command.Env, "WORKGRAPH_HOME="+homeDir, "WORKGRAPH_EXECUTABLE="+executable)
-	startedAt := time.Now().UTC()
+	command.Env = append(command.Env, "WORKGRAPH_HOME="+homeDir, "WORKGRAPH_EXECUTABLE="+executable, "WORKGRAPH_BRIDGE_WORKER="+drainWorker)
 	output, err := command.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
 		timeoutError := fmt.Sprintf("bridge drain timed out after %s", timeout)
 		recordBridgeDrainError(homeDir, client, timeoutError)
-		if releaseErr := releaseCaptureClaimsSince(homeDir, startedAt, timeoutError, time.Now()); releaseErr != nil {
+		if releaseErr := releaseWorkerCaptureClaims(homeDir, drainWorker, timeoutError, time.Now()); releaseErr != nil {
 			return "", fmt.Errorf("%s; release claimed requests: %w", timeoutError, releaseErr)
 		}
 		return "", fmt.Errorf("drain bridge with %s: %s: %s", client, timeoutError, strings.TrimSpace(string(output)))
@@ -704,6 +707,14 @@ func DrainBridge(homeDir string, client string, clientCommand string, timeout ti
 	clearBridgeDrainError(homeDir, client)
 	recordBridgeDrainHeartbeat(homeDir, client)
 	return strings.TrimSpace(string(output)), nil
+}
+
+func newBridgeDrainWorker(client string) (string, error) {
+	suffix, err := newEventID()
+	if err != nil {
+		return "", fmt.Errorf("create bridge drain worker name: %w", err)
+	}
+	return client + "-drain-" + suffix[:12], nil
 }
 
 func recordBridgeDrainHeartbeat(homeDir string, client string) {

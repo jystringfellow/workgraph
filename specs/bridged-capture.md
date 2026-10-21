@@ -786,9 +786,12 @@ the last recorded drain error when one exists.
 `workgraph bridge drain` bounds the whole client session with `--timeout`
 (default 20 minutes). A failed or timed-out session records the last line of
 its output as the client's last drain error; a successful run clears it. On
-timeout workgraph terminates the client and returns every request claimed
-since the drain started to `pending` with the same backoff as a reported
-failure and the error `bridge drain timed out after <timeout>`. A provider call
+timeout workgraph terminates the client. Each drain run gives its client a
+unique worker name, `<client>-drain-<random>`, in the prompt and in
+`WORKGRAPH_BRIDGE_WORKER`. On timeout, only requests still claimed by that worker
+with their original claim token return to `pending`, with the same backoff as a
+reported failure and the error `bridge drain timed out after <timeout>`. Claims
+held by other workers are never touched. A provider call
 that hangs inside a client session is therefore bounded by the drain timeout;
 when a worker outside workgraph's control hangs, its claim is recovered by
 lease expiry in the daemon's emit cycle.

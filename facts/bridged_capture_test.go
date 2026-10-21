@@ -1251,6 +1251,61 @@ func TestBridgedBackfillEmitsOneDayAtATimeAndStaysDue(t *testing.T) {
 	}
 }
 
+func TestBridgedNineteenDayGapDrainsDayByDayWithoutGaps(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	connectBridgedConnector(t, repoRoot(t), homeDir, "slack")
+	cursor := time.Now().UTC().Add(-19 * 24 * time.Hour)
+	completeBridgedRequestAt(t, homeDir, "slack", cursor)
+
+	cycles := 0
+	for {
+		cycles++
+		if cycles > 25 {
+			t.Fatal("expected the 19-day gap to drain within 25 one-day cycles")
+		}
+		now := time.Now().UTC()
+		emitted, err := workgraph.EmitBridgedCaptureRequest(workgraph.CaptureRequestEmitConfig{HomeDir: homeDir, ConnectorID: "slack", Now: now})
+		if err != nil || emitted.Coalesced {
+			t.Fatalf("cycle %d emit: coalesced=%v error=%v", cycles, emitted.Coalesced, err)
+		}
+		since, until := parseRequestWindow(t, emitted.Request)
+		if overlap := cursor.Sub(since); overlap != 5*time.Minute {
+			t.Fatalf("cycle %d expected exact 5m overlap with cursor %s, got since %s", cycles, cursor.Format(time.RFC3339Nano), emitted.Request.Since)
+		}
+		caughtUp := until.Equal(now)
+		if !caughtUp && until.Sub(since) != 24*time.Hour {
+			t.Fatalf("cycle %d expected a 24h window while behind, got %s to %s", cycles, emitted.Request.Since, emitted.Request.Until)
+		}
+		claims, err := workgraph.ClaimCaptureRequests(workgraph.CaptureRequestClaimConfig{HomeDir: homeDir, ConnectorID: "slack", Worker: "facts", Max: 1, Now: now})
+		if err != nil || len(claims) != 1 || claims[0].Request.ID != emitted.Request.ID {
+			t.Fatalf("cycle %d claim: claims=%d error=%v", cycles, len(claims), err)
+		}
+		if _, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{
+			HomeDir: homeDir, RequestID: emitted.Request.ID, ClaimToken: claims[0].ClaimToken,
+			Input: strings.NewReader(`{"events":[],"empty_proof":{"exhaustive_query":true}}`),
+		}); err != nil {
+			t.Fatalf("cycle %d complete: %v", cycles, err)
+		}
+		watermark, err := workgraph.CaptureWatermark(workgraph.CaptureRequestListConfig{HomeDir: homeDir, ConnectorID: "slack"})
+		if err != nil || watermark != emitted.Request.Until {
+			t.Fatalf("cycle %d expected cursor at %s, got %q error=%v", cycles, emitted.Request.Until, watermark, err)
+		}
+		if caughtUp {
+			break
+		}
+		if !connectorNextPollDue(t, homeDir, "slack", time.Now().UTC()) {
+			t.Fatalf("cycle %d expected the next request to be due immediately while behind", cycles)
+		}
+		cursor = until
+	}
+	if cycles != 20 {
+		t.Fatalf("expected 19 days to drain in 20 overlapping one-day cycles, got %d", cycles)
+	}
+	if connectorNextPollDue(t, homeDir, "slack", time.Now().UTC()) {
+		t.Fatal("expected a caught-up connector to wait for its interval")
+	}
+}
+
 func TestStalledBridgeIsVisibleInConnectorsTodayAndResume(t *testing.T) {
 	homeDir := initBridgedCaptureHome(t)
 	repoRoot := repoRoot(t)

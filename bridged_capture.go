@@ -325,44 +325,47 @@ func FailCaptureRequest(config CaptureRequestCapabilityConfig) error {
 	return recordConnectorPollAttempt(status.HomeDir, connectorID, now, availableAt, attempts, fmt.Errorf("%s", errorMessage))
 }
 
-func releaseCaptureClaimsSince(homeDir string, since time.Time, reason string, now time.Time) error {
+func releaseWorkerCaptureClaims(homeDir string, worker string, reason string, now time.Time) error {
 	db, err := sql.Open("sqlite3", bridgedDefaultDatabasePath(homeDir))
 	if err != nil {
 		return fmt.Errorf("open capture outbox: %w", err)
 	}
 	defer db.Close()
-	rows, err := db.Query(`SELECT id, connector_id, attempts, claimed_at FROM capture_requests WHERE status = 'claimed'`)
+	rows, err := db.Query(`SELECT id, connector_id, attempts, claim_token FROM capture_requests
+		WHERE status = 'claimed' AND claimed_by = ? AND claim_token IS NOT NULL`, worker)
 	if err != nil {
-		return fmt.Errorf("list claimed capture requests: %w", err)
+		return fmt.Errorf("list worker capture claims: %w", err)
 	}
-	type releasedClaim struct {
+	type workerClaim struct {
 		id          string
 		connectorID string
 		attempts    int
+		token       string
 	}
-	released := []releasedClaim{}
+	claims := []workerClaim{}
 	for rows.Next() {
-		var claim releasedClaim
-		var claimedAt string
-		if err := rows.Scan(&claim.id, &claim.connectorID, &claim.attempts, &claimedAt); err != nil {
+		var claim workerClaim
+		if err := rows.Scan(&claim.id, &claim.connectorID, &claim.attempts, &claim.token); err != nil {
 			rows.Close()
-			return fmt.Errorf("read claimed capture request: %w", err)
+			return fmt.Errorf("read worker capture claim: %w", err)
 		}
-		if parsed, err := time.Parse(time.RFC3339Nano, claimedAt); err == nil && !parsed.Before(since) {
-			released = append(released, claim)
-		}
+		claims = append(claims, claim)
 	}
 	if err := rows.Close(); err != nil {
-		return fmt.Errorf("close claimed capture requests: %w", err)
+		return fmt.Errorf("close worker capture claims: %w", err)
 	}
-	for _, claim := range released {
+	for _, claim := range claims {
 		availableAt := now.Add(connectorRetryDelay(defaultConnectorRetryInitial, defaultConnectorRetryMax, claim.attempts))
-		_, err := db.Exec(`UPDATE capture_requests SET
+		updated, err := db.Exec(`UPDATE capture_requests SET
 			status = 'pending', available_at = ?, last_error = ?, claim_token = NULL,
 			claimed_by = NULL, claimed_at = NULL, lease_expires_at = NULL
-			WHERE id = ? AND status = 'claimed'`, availableAt.UTC().Format(time.RFC3339Nano), reason, claim.id)
+			WHERE id = ? AND status = 'claimed' AND claimed_by = ? AND claim_token = ?`,
+			availableAt.UTC().Format(time.RFC3339Nano), reason, claim.id, worker, claim.token)
 		if err != nil {
 			return fmt.Errorf("release capture request %s: %w", claim.id, err)
+		}
+		if count, _ := updated.RowsAffected(); count != 1 {
+			continue
 		}
 		if err := recordConnectorPollAttempt(homeDir, claim.connectorID, now, availableAt, claim.attempts, fmt.Errorf("%s", reason)); err != nil {
 			return err

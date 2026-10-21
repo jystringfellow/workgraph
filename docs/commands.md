@@ -690,7 +690,7 @@ workgraph capture requests --fail <request-id> \
 ```
 
 `bridge drain` stops the client session after `--timeout` (default `20m`),
-returns any request it claimed to `pending`, and records the failure for
+returns only the requests that drain's worker claimed to `pending`, and records the failure for
 `connectors status`. `workgraph connectors disable <id>` cancels that
 connector's pending or claimed request.
 

@@ -433,7 +433,7 @@ func TestBridgeDrainLaunchesClientOnlyForActiveDaemonWork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read drain invocation: %v", err)
 	}
-	for _, expected := range []string{"exec", "--ephemeral", "workgraph-bridge", "List pending requests before claiming"} {
+	for _, expected := range []string{"exec", "--ephemeral", "workgraph-bridge", "List pending requests before claiming", "Claim with worker name codex-drain-"} {
 		if !strings.Contains(string(contents), expected) {
 			t.Fatalf("drain invocation omitted %q:\n%s", expected, contents)
 		}
@@ -702,18 +702,22 @@ func TestBridgeDrainTimeoutReturnsClaimedRequestForRetry(t *testing.T) {
 	homeDir := initBridgedCaptureHome(t)
 	fixtureDir := t.TempDir()
 	clientPath := filepath.Join(fixtureDir, "codex")
+	otherClaimFile := filepath.Join(fixtureDir, "other-claim.json")
 	script := "#!/bin/sh\n" +
-		"\"$WORKGRAPH_EXECUTABLE\" capture requests --home \"$WORKGRAPH_HOME\" --claim --max 1 --worker hung-codex --claim-file \"" + filepath.Join(fixtureDir, "claim.json") + "\" >/dev/null || exit 3\n" +
+		"\"$WORKGRAPH_EXECUTABLE\" capture requests --home \"$WORKGRAPH_HOME\" --claim --connector github --max 1 --worker other-worker --claim-file \"" + otherClaimFile + "\" >/dev/null || exit 4\n" +
+		"\"$WORKGRAPH_EXECUTABLE\" capture requests --home \"$WORKGRAPH_HOME\" --claim --connector slack --max 1 --worker \"$WORKGRAPH_BRIDGE_WORKER\" --claim-file \"" + filepath.Join(fixtureDir, "claim.json") + "\" >/dev/null || exit 3\n" +
 		"echo 'calling provider tool'\n" +
 		"exec sleep 30\n"
 	if err := os.WriteFile(clientPath, []byte(script), 0o700); err != nil {
 		t.Fatalf("write hanging fake Codex: %v", err)
 	}
 	connectBridgedConnector(t, repoRoot(t), homeDir, "slack")
-	if output, err := runworkgraph(t, repoRoot(t), "connectors", "poll", "--home", homeDir, "--once", "--connector", "slack"); err != nil {
-		t.Fatalf("emit request: %v\n%s", err, output)
+	connectBridgedConnector(t, repoRoot(t), homeDir, "github")
+	for _, connector := range []string{"slack", "github"} {
+		if output, err := runworkgraph(t, repoRoot(t), "connectors", "poll", "--home", homeDir, "--once", "--connector", connector); err != nil {
+			t.Fatalf("emit %s request: %v\n%s", connector, err, output)
+		}
 	}
-
 	started := time.Now()
 	output, err := runworkgraph(t, repoRoot(t), "bridge", "drain", "--home", homeDir, "--client", "codex", "--client-command", clientPath, "--timeout", "2s")
 	if err == nil || !strings.Contains(string(output), "timed out after 2s") {
@@ -731,6 +735,20 @@ func TestBridgeDrainTimeoutReturnsClaimedRequestForRetry(t *testing.T) {
 	}
 	if status != "pending" || claimedBy.Valid || attempts != 1 || lastError != "bridge drain timed out after 2s" {
 		t.Fatalf("expected timed out claim back to pending, got status=%q claimed_by=%v attempts=%d error=%q", status, claimedBy, attempts, lastError)
+	}
+	var otherClaim struct {
+		Token string `json:"claim_token"`
+	}
+	contents, err := os.ReadFile(otherClaimFile)
+	if err != nil || json.Unmarshal(contents, &otherClaim) != nil || otherClaim.Token == "" {
+		t.Fatalf("read other worker's claim file: %v\n%s", err, contents)
+	}
+	var otherStatus, otherWorker, otherToken string
+	if err := db.QueryRow(`SELECT status, claimed_by, claim_token FROM capture_requests WHERE connector_id = 'github'`).Scan(&otherStatus, &otherWorker, &otherToken); err != nil {
+		t.Fatalf("read other worker's request: %v", err)
+	}
+	if otherStatus != "claimed" || otherWorker != "other-worker" || otherToken != otherClaim.Token {
+		t.Fatalf("expected drain timeout to leave another worker's claim intact, got status=%q worker=%q", otherStatus, otherWorker)
 	}
 	statusOutput, err := runworkgraph(t, repoRoot(t), "connectors", "status", "--home", homeDir)
 	if err != nil {
