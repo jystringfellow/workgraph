@@ -285,11 +285,16 @@ that can be reconciled from completed requests after an interrupted write.
 
 ### Request lifecycle
 
-1. **Emit.** The daemon creates a `pending` request with `until = now` and a
-   declared `capture_semantics`. For
-   incremental recipes, `since` is the stored cursor minus the connector's
-   overlap. With no cursor, the default first window begins 24 hours before
-   `until`. Connector-specific query bounds are placed in `params_json`.
+1. **Emit.** The daemon creates a `pending` request with a declared
+   `capture_semantics`. For incremental recipes, `since` is the stored cursor
+   minus the connector's overlap and `until = min(now, since + 24h)`, so one
+   request never asks a single headless session for more than a day of
+   activity. With no cursor, the default first window begins 24 hours before
+   `until = now`. Calendar requests (whose provider bounds are rolling
+   occurrence parameters) and `complete_snapshot` requests always use
+   `until = now`. Connector-specific query bounds are placed in `params_json`.
+   Each emit cycle first returns expired claims to `pending`, so an abandoned
+   lease recovers without a worker calling claim.
 2. **Claim.** A bridge atomically claims the oldest available request. The
    transition requires `status=pending` and `available_at <= now`, sets the
    worker identity and lease, and returns a claim token.
@@ -317,7 +322,16 @@ that can be reconciled from completed requests after an interrupted write.
 
 The daemon coalesces while a request is pending or claimed, so an unavailable
 bridge cannot create an unbounded backlog. After a retried request succeeds, the
-next request covers activity through the newer emission time.
+next request covers activity through the newer emission time, at most one day
+at a time. While a completed request ended more than one interval before its
+completion time, the connector is behind: completion makes the next request due
+immediately instead of after a full interval, so backfill proceeds day by day.
+A request that was already pending with a larger window is left as is.
+
+Disabling a connector with `workgraph connectors disable <id>` cancels its
+pending and claimed requests with reason `connector disabled` and reports the
+cancelled request id and, when it was claimed, the claiming worker. A claimed request is cancelled too: its claim token and
+lease are cleared, so the worker can no longer renew, ingest, or complete it.
 
 An operator may cancel one exact request with `capture requests --cancel
 <request-id>`. Cancellation is terminal and idempotent: a pending or claimed
@@ -422,6 +436,13 @@ are never returned. Every successful MCP tool call returns object-shaped
 named envelopes: `capture_requests_list` returns `requests`,
 `capture_requests_claim` returns `claims`, and both `connector_status` and
 `connector_required_tools` return `connectors`.
+
+Every tool rejects arguments its advertised input schema does not declare, so a
+misspelled filter such as `connector_id` on `capture_requests_claim` fails
+instead of silently claiming work for any connector. A worker that claims a
+request must end the claim through `capture_ingest` or `capture_request_fail`
+with a reason, including when the window is too large to finish; the claim
+tool description, drain prompt, and bridge skill say so.
 
 Every successful `capture_*`, `connector_status`, and
 `connector_required_tools` result also includes a `runtime` object containing
@@ -587,7 +608,23 @@ Connector status distinguishes:
 - last ingest time;
 - last completed capture (`last_success_at`);
 - last bridge error and retry time;
-- bridge heartbeat/last drain when the installed client integration can report it.
+- bridge heartbeat/last drain when the installed client integration can report it;
+- bridge stall, described below.
+
+A bridged connector is stalled when its active request has been pending or
+claimed for longer than `max(3 x interval, 30m)` with no completion, or when a
+bridge worker heartbeat exists and the freshest one is older than that
+threshold while a request is active. `workgraph connectors list`,
+`workgraph connectors status`, and the running `workgraph status` connector
+errors show it with its age, for example `bridge stalled 19d: no completed
+capture since 2026-10-02T09:00:00Z`. When the drain wrapper recorded a failure,
+the last line of the client's output is appended as `last drain error`.
+`workgraph today` and `workgraph resume` print one warning line naming the
+stalled connectors and the hint `workgraph plugin doctor --client <client>`.
+
+`workgraph capture requests --list` and the `capture_requests_list` MCP tool
+show a claim whose lease has expired as `claimed (lease expired <age> ago)`;
+the MCP result carries it in `status_detail` and leaves `status` unchanged.
 
 For bridged connectors, `last_poll_at` means the time a request completed or a
 failure was recognized, matching the completion-time semantics of direct polls.
@@ -740,7 +777,24 @@ the current durable setting immediately before launching the client.
 
 `workgraph plugin doctor` verifies package version, every bundled
 skill, MCP reachability, worker heartbeat, permission readiness, and a
-claim/empty-ingest round trip without contacting a provider.
+claim/empty-ingest round trip without contacting a provider. Every completed
+drain run records the heartbeat, including runs that find no active request.
+When a heartbeat exists and is older than 30 minutes, doctor reports
+`Round trip: stale (last heartbeat <age> ago)` rather than ready, and it shows
+the last recorded drain error when one exists.
+
+`workgraph bridge drain` bounds the whole client session with `--timeout`
+(default 20 minutes). A failed or timed-out session records the last line of
+its output as the client's last drain error; a successful run clears it. On
+timeout workgraph terminates the client. Each drain run gives its client a
+unique worker name, `<client>-drain-<random>`, in the prompt and in
+`WORKGRAPH_BRIDGE_WORKER`. On timeout, only requests still claimed by that worker
+with their original claim token return to `pending`, with the same backoff as a
+reported failure and the error `bridge drain timed out after <timeout>`. Claims
+held by other workers are never touched. A provider call
+that hangs inside a client session is therefore bounded by the drain timeout;
+when a worker outside workgraph's control hangs, its claim is recovered by
+lease expiry in the daemon's emit cycle.
 
 Cowork and unknown clients are secondary compatibility targets. They can use the
 same MCP tools and shared skill manually or provide their own scheduled worker;

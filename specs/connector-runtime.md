@@ -73,7 +73,9 @@ the same declarations over local MCP before claiming a request.
 
 The first runtime control slice stores polling preferences in
 `connectors.json`. Disabling a connector stops polling without removing OAuth
-credentials from the provider-specific config file.
+credentials from the provider-specific config file. Disabling a bridged
+connector also cancels its pending and claimed capture requests with reason
+`connector disabled` (see `specs/bridged-capture.md`).
 
 Next runtime commands should include:
 
@@ -210,6 +212,9 @@ Enabled, ready connectors poll once immediately when capture starts. Each
 connector runs independently. A poll has a 30-second default whole-poll
 deadline, including pagination and provider commands. Tests may configure a
 shorter deadline.
+`workgraph connectors poll --once` applies the same per-connector deadline as
+the run loop, including the 2-minute `github.pr_watch` budget, and finishes
+however many events a connector captures.
 
 Transient failures retry with exponential backoff starting at 5 seconds and
 capped at 5 minutes. A successful poll resets the failure count and returns to

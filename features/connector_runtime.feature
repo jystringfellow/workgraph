@@ -51,6 +51,12 @@ Scenario: Bound a stalled connector independently
   Then filesystem events and other connectors continue while it is stalled
   And workgraph records a timeout and a capped retry time for that connector
 
+Scenario: Finish a one-shot poll that captures many events
+  Given the git connector can capture more commits than the runtime event buffer holds
+  When I run "workgraph connectors poll --once --connector git"
+  Then the poll finishes within the connector poll deadline
+  And every captured commit is stored once
+
 Scenario: Poll ready connectors at startup
   Given workgraph has enabled capture-ready connectors
   When I run "workgraph start"
