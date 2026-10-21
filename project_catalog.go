@@ -260,7 +260,7 @@ func parseFrontmatterFlowList(value string) ([]string, error) {
 		switch {
 		case quote != 0 && r == quote:
 			quote = 0
-		case quote == 0 && (r == '"' || r == '\''):
+		case quote == 0 && (r == '"' || r == '\'') && strings.TrimSpace(current.String()) == "":
 			quote = r
 		case quote == 0 && r == ',':
 			add()

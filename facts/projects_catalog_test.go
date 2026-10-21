@@ -27,6 +27,7 @@ func TestProjectCatalogReadsFrontmatter(t *testing.T) {
 		"broken":           "---\nworkstream: mmo\n# Broken Project\n\nNever closed.\n",
 		"bad-workstream":   "---\nworkstream: Not A Slug\n---\n# Bad Workstream\n",
 		"quoted-aliases":   "---\naliases: [\"Design, build\", ordinary, 'single, quoted']\n---\n# Quoted Aliases\n",
+		"apostrophes":      "---\nworkstream: mmo\naliases: [designer's notes, ordinary]\ndescription: Designer's notes for the launch.\n---\n# Apostrophes\n",
 		"bom-prefixed":     "\ufeff---\nworkstream: mmo\ndescription: Saved by an editor that writes a BOM.\n---\n# BOM Prefixed\n",
 	}
 	for slug, contents := range files {
@@ -57,6 +58,9 @@ func TestProjectCatalogReadsFrontmatter(t *testing.T) {
 	}
 	if quoted := entries["quoted-aliases"]; !reflect.DeepEqual(quoted.Aliases, []string{"Design, build", "ordinary", "single, quoted"}) {
 		t.Fatalf("quoted flow aliases: %+v", quoted)
+	}
+	if apostrophes := entries["apostrophes"]; apostrophes.Workstream != "mmo" || !reflect.DeepEqual(apostrophes.Aliases, []string{"designer's notes", "ordinary"}) || apostrophes.Description != "Designer's notes for the launch." {
+		t.Fatalf("apostrophes in unquoted values: %+v", apostrophes)
 	}
 	if bom := entries["bom-prefixed"]; bom.Workstream != "mmo" || bom.Title != "BOM Prefixed" || bom.Description != "Saved by an editor that writes a BOM." {
 		t.Fatalf("BOM-prefixed frontmatter: %+v", bom)
