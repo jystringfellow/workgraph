@@ -1,6 +1,6 @@
 # Projects, Workstreams, And Categorization
 
-Status: D1 implemented; D2 through D4 planned. Slices are listed in
+Status: D1 and D2 implemented; D3 and D4 planned. Slices are listed in
 `specs/roadmap.md`. Facts live in `facts/projects*_test.go`.
 
 ## Intent
@@ -213,6 +213,28 @@ that resolves to exactly one project wins:
 An identifier that matches more than one project produces no deterministic
 link; the unit goes to the LLM with those projects listed as hints.
 
+- A unit's identifiers come from its member events. When they name more than
+  one project in total, the unit gets no deterministic link at all, including
+  from a container mapping.
+- Memory files contribute PR and issue URLs, `owner/repo#number` references,
+  commit URLs, Notion page URLs, and Azure Boards ids found in their text.
+- URL identifiers are GitHub PR, issue, and commit URLs, compared as
+  `owner/repo#number` or commit SHA, and Notion page URLs, compared by the page
+  id at the end of the URL; a Notion page event's own id matches them. Other
+  URLs, including Notion URLs without a page id, are not identifiers.
+- Branch identifiers are `<repository>@<branch>`, where the repository is the
+  head repository, GitHub `owner/repo`, or git `repo_path` recorded in the
+  same payload object as the branch. `main`, `master`, `develop`, and `trunk`
+  are not identifiers.
+- A container mapping applies only when the container maps to exactly one
+  catalog project.
+- Open Slack bursts are not linked until they close.
+
+A deterministic pass runs at the start of every `projects review` that lists
+links (not the flag forms), and before `llm associate` selects units. Each
+pass that writes links records them under one new `run_id`; a pass with
+nothing to link writes nothing.
+
 Deterministic links are applied immediately, not proposed, with `auto =
 true`, `confidence = 1`, the rule, and the `run_id` of the linking pass, so
 they are visible and undoable like any auto-applied link.
@@ -347,7 +369,8 @@ proposed replacement that waits for the user (see Project Links).
 ### Accuracy Gate
 
 Auto-apply accuracy uses links with `auto = true` and `source = llm` whose
-`decided_at` falls in the last 14 days:
+`decided_at` falls in the last 14 days, up to now; later timestamps are not
+counted:
 
 ```text
 accuracy = confirmed / (confirmed + corrected + undone)
@@ -420,11 +443,24 @@ workgraph projects explain <unit-id>
 - `projects list` prints workstreams, their projects, and the containers
   mapped to each workstream, then projects with no workstream. It names how
   many project files have invalid frontmatter and points to `memory doctor`.
-  From D2 each project shows its applied unit count for the last 7 days.
+  From D2 each project shows its applied unit count for the last 7 days: its
+  current applied links created, or approved, in that window.
 - Interactive `projects review` shows each proposed unit, oldest first:
   container, time range, kind, summary, proposed target, confidence, and
   evidence ids. Keys: `a` approve, `r` reassign (prompts for a slug), `n` new
-  project, `x` no project, `s` skip, `q` quit. EOF or empty input skips.
+  project (prompts for a slug and optional workstream), `x` no project, `s`
+  skip, `q` quit. EOF or empty input skips, so with no input the command
+  prints every item once and changes nothing, which is the default list.
+- While the auto-apply sample is `insufficient_data`, the default review
+  also lists undecided auto-applied links, oldest first, after the proposed
+  ones (see Accuracy Gate).
+- `r`, `--project`, and `n`/`--new` take a catalog project slug; `--new`
+  refuses a slug that already has project memory.
+- Approving a proposed `new_project` link creates its project memory, as
+  `--new` does, and applies the link with `target = project` and the new slug;
+  `proposed_project_json` is kept.
+- Link writes use immediate transactions with a busy timeout, so concurrent
+  passes and decisions wait for each other instead of failing.
 - `projects review --auto [--since <duration>]` lists auto-applied links,
   deterministic and LLM, from the last 24 hours by default, newest first, with
   link id, run id, rule or profile, target, and summary. The same keys apply,
@@ -439,8 +475,12 @@ workgraph projects explain <unit-id>
   adds the workstream frontmatter when given, and applies a user link.
 - `projects explain` prints the unit's members, every link row with its
   source, rule or run, and decision, and for the current link the exact
-  `projects review --assign`, `--reject`, and `projects undo` commands that
-  change it.
+  `projects review --assign` and `--reject` commands that change it and, when
+  the link is undoable, the `projects undo` command. User and user-approved
+  links other than confirmed auto links are not undoable. Printed commands
+  carry the `--home`, `--database`, and `--memory` options the command was
+  given, shell-quoted, because undo leads to a review that runs a linking
+  pass against that catalog.
 - Flag forms make the same changes as the keys and never prompt.
 
 ## Daily Loop Surfaces
@@ -467,12 +507,12 @@ workgraph projects explain <unit-id>
   workstream mappings, doctor workstream suggestions, and "container" wording
   in memory and resume output.
 - **D2 Units and deterministic linking**: unit grouping, `project_links`,
-  deterministic rules, `projects explain`, `undo`, flag-form review, and
-  applied unit counts in `projects list`.
+  deterministic rules, `projects explain`, `undo`, flag-form and interactive
+  review, and applied unit counts in `projects list`.
 - **D3 LLM categorization**: Slack conversation type capture, `llm
   associate` with dry run, source opt-in, validation, auto-apply, accuracy
-  gate, interactive review, and review metrics. D3 runs only directly or
-  manually with the routed profile; there is no outbox or bridge execution.
+  gate, and review metrics. D3 runs only directly or manually with the
+  routed profile; there is no outbox or bridge execution.
 - **D4 Scheduling and daily loop**: kind-aware `llm.associate` outbox
   requests, direct and bridge execution, and the `next`, `today`, and
   `resume` surfaces. Existing capture-only workers are unchanged. D4 depends

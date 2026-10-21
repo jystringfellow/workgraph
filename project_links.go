@@ -10,7 +10,10 @@ import (
 	"unicode"
 )
 
-const projectLinkSummaryMaxRunes = 120
+const (
+	projectLinkSummaryMaxRunes    = 120
+	projectLinksBusyTimeoutMillis = "10000"
+)
 
 const projectLinksSchema = `CREATE TABLE IF NOT EXISTS project_links (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -192,23 +195,43 @@ func recordProjectLinkRunTx(tx *sql.Tx, now time.Time, run ProjectLinkRun) (Proj
 func ApproveProjectLink(config ProjectLinkStoreConfig, linkID int64) (ProjectLink, error) {
 	var approved ProjectLink
 	err := withProjectLinksTx(config, func(tx *sql.Tx, now time.Time) error {
-		link, err := readProjectLinkTx(tx, linkID)
-		if err != nil {
-			return err
-		}
-		switch {
-		case link.State == "proposed":
-			link.State, link.Auto, link.Decision = "applied", false, "approved"
-		case link.State == "applied" && link.Auto && link.Decision == "":
-			link.Decision = "confirmed"
-		default:
-			return fmt.Errorf("project link %d is already decided", linkID)
-		}
-		link.DecidedAt = now
-		approved = link
-		return decideProjectLink(tx, link)
+		var err error
+		approved, err = approveProjectLinkTx(tx, now, linkID)
+		return err
 	})
 	return approved, err
+}
+
+func approveProjectLinkTx(tx *sql.Tx, now time.Time, linkID int64) (ProjectLink, error) {
+	link, err := readProjectLinkTx(tx, linkID)
+	if err != nil {
+		return ProjectLink{}, err
+	}
+	switch {
+	case link.State == "proposed":
+		link.State, link.Auto, link.Decision = "applied", false, "approved"
+	case link.State == "applied" && link.Auto && link.Decision == "":
+		link.Decision = "confirmed"
+	default:
+		return ProjectLink{}, fmt.Errorf("project link %d is already decided", linkID)
+	}
+	link.DecidedAt = now
+	return link, decideProjectLink(tx, link)
+}
+
+func approveNewProjectLinkTx(tx *sql.Tx, now time.Time, linkID int64) (ProjectLink, error) {
+	link, err := approveProjectLinkTx(tx, now, linkID)
+	if err != nil {
+		return ProjectLink{}, err
+	}
+	if link.Target != "new_project" || link.NewProject == nil {
+		return link, nil
+	}
+	link.Target, link.Project = "project", link.NewProject.Slug
+	if _, err := tx.Exec(`UPDATE project_links SET target = ?, project = ? WHERE id = ?`, link.Target, link.Project, link.ID); err != nil {
+		return ProjectLink{}, fmt.Errorf("record project link %d project: %w", link.ID, err)
+	}
+	return link, nil
 }
 
 func AssignProjectLink(config ProjectLinkStoreConfig, assignment ProjectLinkAssignment) (ProjectLink, error) {
@@ -344,7 +367,7 @@ func withProjectLinksTx(config ProjectLinkStoreConfig, apply func(*sql.Tx, time.
 	if err != nil {
 		return err
 	}
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite3", projectLinksWriteDSN(dbPath))
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
@@ -365,6 +388,10 @@ func withProjectLinksTx(config ProjectLinkStoreConfig, apply func(*sql.Tx, time.
 		return err
 	}
 	return tx.Commit()
+}
+
+func projectLinksWriteDSN(dbPath string) string {
+	return dbPath + "?_txlock=immediate&_busy_timeout=" + projectLinksBusyTimeoutMillis
 }
 
 func ensureProjectLinksSchema(tx *sql.Tx) error {
