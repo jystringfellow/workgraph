@@ -519,6 +519,15 @@ Categorization runs through the bridged-capture outbox
   (`unit-<n>`), so the rebuilt payload maps the same ids at submit. When no
   listed unit remains, the claim completes the request with no links and does
   not return it.
+- Only the routed client may claim an `llm_task`: the worker name must start
+  with the profile's client and a hyphen (for example `claude-code-drain-…`).
+  Any other claim returns nothing and leaves the request pending.
+  `workgraph bridge drain` launches a client only when a request is
+  claimable now, `pending` with `available_at` reached, and for an
+  `llm_task` only when this client is the routed one. A drain session runs
+  either capture or categorization; a categorization session uses the
+  profile's model and config directory, not the worker's pinned model, and
+  runs only when no capture request is claimable for the client.
 - A bridge claim carries `task`: the profile's `client` and `model` and the
   outbound-filtered `messages`. The hosted opt-in and managed-provider checks
   run before the task is returned; when they fail, the request returns to
@@ -528,7 +537,14 @@ Categorization runs through the bridged-capture outbox
   that is not JSON fails the submission and leaves the claim held; the worker
   then reports the failure with `capture_request_fail`.
 - A direct run whose model call or parse fails returns the request to
-  `pending` with the error and the outbox backoff.
+  `pending` with the error and the outbox backoff. Stopping the daemon
+  cancels an in-flight model call, HTTP or client process, and returns the
+  request the same way.
+- A completed task records a 24-hour cooldown for each sent unit that got no
+  link, whether the model left it out or every entry for it was discarded.
+  Scheduled emits, hourly and 05:00, and `llm associate` with a bridge
+  profile skip a cooled-down unit until the cooldown ends or its permitted
+  members change. A direct `llm associate` run ignores cooldowns.
 - Failures, lease expiry, and drain timeouts of `llm_task` requests never
   write connector runtime state, and `llm_task` requests are never reported
   as bridge stalls: `llm.associate` is not a capture connector. A bridge

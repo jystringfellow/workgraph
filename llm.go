@@ -649,13 +649,17 @@ func SummarizeTodayWithLLM(config LLMSummarizeTodayConfig) (LLMResult, error) {
 }
 
 func callLLMProfile(client *http.Client, profile llmProfile, messages []openAICompatibleMessage) (string, error) {
+	return callLLMProfileContext(context.Background(), client, profile, messages)
+}
+
+func callLLMProfileContext(ctx context.Context, client *http.Client, profile llmProfile, messages []openAICompatibleMessage) (string, error) {
 	switch profile.Provider {
 	case "openai-compatible":
-		return callOpenAICompatible(client, profile, messages)
+		return callOpenAICompatible(ctx, client, profile, messages)
 	case "bedrock":
-		return callBedrockConverse(client, profile, messages)
+		return callBedrockConverse(ctx, client, profile, messages)
 	case "ai-client":
-		return callAIClient(profile, messages)
+		return callAIClient(ctx, profile, messages)
 	default:
 		return "", fmt.Errorf("llm calls do not support provider %q yet", profile.Provider)
 	}
@@ -795,7 +799,7 @@ func openAICompatibleModelsURL(profile llmProfile) string {
 	return strings.TrimRight(profile.BaseURL, "/") + "/models"
 }
 
-func callOpenAICompatible(client *http.Client, profile llmProfile, messages []openAICompatibleMessage) (string, error) {
+func callOpenAICompatible(ctx context.Context, client *http.Client, profile llmProfile, messages []openAICompatibleMessage) (string, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 60 * time.Second}
 	}
@@ -807,7 +811,7 @@ func callOpenAICompatible(client *http.Client, profile llmProfile, messages []op
 		return "", fmt.Errorf("encode OpenAI-compatible request: %w", err)
 	}
 	requestURL := strings.TrimRight(profile.BaseURL, "/") + "/chat/completions"
-	request, err := http.NewRequest(http.MethodPost, requestURL, bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("build OpenAI-compatible request: %w", err)
 	}
@@ -920,8 +924,8 @@ func callOpenAICompatibleStream(client *http.Client, profile llmProfile, message
 	return strings.TrimSpace(builder.String()), nil
 }
 
-func callBedrockConverse(client *http.Client, profile llmProfile, messages []openAICompatibleMessage) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+func callBedrockConverse(ctx context.Context, client *http.Client, profile llmProfile, messages []openAICompatibleMessage) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	loadOptions := []func(*awsconfig.LoadOptions) error{

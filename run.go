@@ -480,7 +480,7 @@ func (capture *RunCapture) runLLMAssociateScheduler(ctx context.Context) {
 	for {
 		if now := time.Now(); cadence.due(now) && llmAssociateScheduled(capture.homeDir) {
 			result, err := ScheduleLLMAssociate(LLMAssociateScheduleConfig{
-				HomeDir: capture.homeDir, DatabasePath: capture.databasePath, Now: now, Location: time.Local,
+				Context: ctx, HomeDir: capture.homeDir, DatabasePath: capture.databasePath, Now: now, Location: time.Local,
 				GitEmails: LocalGitEmails(LocalGitIdentityConfig{HomeDir: capture.homeDir}),
 			})
 			if err != nil {

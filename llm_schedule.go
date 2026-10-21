@@ -1,11 +1,15 @@
 package workgraph
 
 import (
+	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -19,9 +23,16 @@ const (
 	llmAssociateHourly        = time.Hour
 	llmAssociateDailyHour     = 5
 	llmAssociateDailyRequests = 10
+	llmAssociateCooldown      = 24 * time.Hour
+	associateCooldownsSchema  = `CREATE TABLE IF NOT EXISTS associate_cooldowns (
+		unit_id TEXT PRIMARY KEY,
+		members_hash TEXT NOT NULL,
+		until TEXT NOT NULL
+	)`
 )
 
 type LLMAssociateScheduleConfig struct {
+	Context      context.Context
 	HomeDir      string
 	DatabasePath string
 	MemoryDir    string
@@ -94,7 +105,7 @@ func ScheduleLLMAssociate(config LLMAssociateScheduleConfig) (LLMAssociateSchedu
 }
 
 func (config LLMAssociateScheduleConfig) associateConfig() LLMAssociateConfig {
-	return LLMAssociateConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir, GitEmails: config.GitEmails, Now: config.Now, Location: config.Location, HTTPClient: config.HTTPClient}
+	return LLMAssociateConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir, GitEmails: config.GitEmails, Now: config.Now, Location: config.Location, HTTPClient: config.HTTPClient, ctx: config.Context}
 }
 
 func llmAssociateScheduled(homeDir string) bool {
@@ -118,7 +129,11 @@ func emitLLMAssociateRequest(config LLMAssociateConfig, run associateRun) (LLMAs
 	if _, err := run.linkDeterministic(config); err != nil {
 		return LLMAssociateScheduleResult{}, err
 	}
-	payload, err := buildAssociatePayload(run.homeDir, config, run.now, run.catalog, run.enabled, nil)
+	cooled, err := activeAssociateCooldowns(config, run.now)
+	if err != nil {
+		return LLMAssociateScheduleResult{}, err
+	}
+	payload, err := buildAssociatePayload(run.homeDir, config, run.now, run.catalog, run.enabled, nil, cooled)
 	if err != nil {
 		return LLMAssociateScheduleResult{}, err
 	}
@@ -225,7 +240,7 @@ func executeLLMTask(config LLMAssociateConfig, run associateRun, claim ClaimedCa
 	if err != nil {
 		return LLMAssociateResult{}, err
 	}
-	if err := run.apply(config, payload, response, completeLLMTaskTx(claim.Request.ID, claim.ClaimToken), &result); err != nil {
+	if err := run.apply(config, payload, response, llmTaskCompletion(claim.Request.ID, claim.ClaimToken, payload), &result); err != nil {
 		return LLMAssociateResult{}, err
 	}
 	result.Message = llmTaskMessage(run, claim.Request.ID, result)
@@ -247,7 +262,7 @@ func SubmitLLMTask(config LLMTaskSubmitConfig) (LLMAssociateResult, error) {
 		return LLMAssociateResult{}, err
 	}
 	result := LLMAssociateResult{ConfigPath: llmConfigPath(run.homeDir), Sent: associatePayloadUnitIDs(payload)}
-	if err := run.apply(associate, payload, config.Response, completeLLMTaskTx(requestID, config.ClaimToken), &result); err != nil {
+	if err := run.apply(associate, payload, config.Response, llmTaskCompletion(requestID, config.ClaimToken, payload), &result); err != nil {
 		return LLMAssociateResult{}, err
 	}
 	result.Message = llmTaskMessage(run, requestID, result)
@@ -308,6 +323,79 @@ func completeLLMTaskTx(requestID string, claimToken string) func(*sql.Tx, time.T
 	}
 }
 
+func llmTaskCompletion(requestID string, claimToken string, payload associatePayload) func(*sql.Tx, time.Time, ProjectLinkRunResult) error {
+	return func(tx *sql.Tx, now time.Time, written ProjectLinkRunResult) error {
+		if err := completeLLMTaskTx(requestID, claimToken)(tx, now); err != nil {
+			return err
+		}
+		return recordAssociateCooldowns(tx, now, payload, written)
+	}
+}
+
+func recordAssociateCooldowns(tx *sql.Tx, now time.Time, payload associatePayload, written ProjectLinkRunResult) error {
+	progressed := map[string]bool{}
+	for _, link := range written.Written {
+		progressed[link.UnitID] = true
+	}
+	for _, unitID := range written.Skipped {
+		progressed[unitID] = true
+	}
+	if _, err := tx.Exec(associateCooldownsSchema); err != nil {
+		return fmt.Errorf("ensure associate cooldowns: %w", err)
+	}
+	until := now.Add(llmAssociateCooldown).UTC().Format(time.RFC3339Nano)
+	for _, unit := range payload.Units {
+		if progressed[unit.linkUnitID] {
+			continue
+		}
+		if _, err := tx.Exec(`INSERT INTO associate_cooldowns (unit_id, members_hash, until) VALUES (?, ?, ?)
+			ON CONFLICT(unit_id) DO UPDATE SET members_hash = excluded.members_hash, until = excluded.until`,
+			unit.linkUnitID, associateMembersHash(unit), until); err != nil {
+			return fmt.Errorf("record associate cooldown for %s: %w", unit.linkUnitID, err)
+		}
+	}
+	return nil
+}
+
+func activeAssociateCooldowns(config LLMAssociateConfig, now time.Time) (map[string]string, error) {
+	dbPath, err := resumeDatabasePath(ResumeConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath})
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(associateCooldownsSchema); err != nil {
+		return nil, fmt.Errorf("ensure associate cooldowns: %w", err)
+	}
+	rows, err := db.Query(`SELECT unit_id, members_hash FROM associate_cooldowns WHERE until > ?`, now.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return nil, fmt.Errorf("read associate cooldowns: %w", err)
+	}
+	defer rows.Close()
+	cooled := map[string]string{}
+	for rows.Next() {
+		var unitID, hash string
+		if err := rows.Scan(&unitID, &hash); err != nil {
+			return nil, fmt.Errorf("read associate cooldown: %w", err)
+		}
+		cooled[unitID] = hash
+	}
+	return cooled, rows.Err()
+}
+
+func associateMembersHash(unit associateUnit) string {
+	members := make([]string, 0, len(unit.members))
+	for id := range unit.members {
+		members = append(members, id)
+	}
+	sort.Strings(members)
+	digest := sha256.Sum256([]byte(strings.Join(members, "\n")))
+	return hex.EncodeToString(digest[:])
+}
+
 func completeEmptyLLMTask(config LLMAssociateConfig, run associateRun, claim ClaimedCaptureRequest) error {
 	return withProjectLinksTx(run.store(config), completeLLMTaskTx(claim.Request.ID, claim.ClaimToken))
 }
@@ -317,7 +405,7 @@ func llmTaskPayload(config LLMAssociateConfig, run associateRun, requestID strin
 	if err != nil {
 		return associatePayload{}, err
 	}
-	return buildAssociatePayload(run.homeDir, config, run.now, run.catalog, run.enabled, unitIDs)
+	return buildAssociatePayload(run.homeDir, config, run.now, run.catalog, run.enabled, unitIDs, nil)
 }
 
 func storedLLMTaskUnitIDs(config LLMAssociateConfig, requestID string) ([]string, error) {
@@ -392,9 +480,22 @@ func prepareLLMTask(config LLMAssociateConfig, run associateRun, claim ClaimedCa
 	return &LLMTask{Task: llmTaskAssociate, Profile: run.profileName, Client: run.profile.Client, Model: run.profile.Model, Messages: filtered.Messages}, nil
 }
 
-func llmAssociateBridgeRouted(config CaptureRequestClaimConfig) bool {
+func bridgeLLMTaskProfile(homeDir string, client string) (llmProfile, bool) {
+	run, err := newAssociateRun(LLMAssociateConfig{HomeDir: homeDir})
+	if err != nil || !associateExecutesInBridge(run.profile) || run.profile.Client != client {
+		return llmProfile{}, false
+	}
+	return run.profile, true
+}
+
+func llmTaskClaimAllowed(config CaptureRequestClaimConfig) bool {
 	run, err := newAssociateRun(LLMAssociateConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir})
-	return err == nil && associateExecutesInBridge(run.profile)
+	return err == nil && associateExecutesInBridge(run.profile) && strings.HasPrefix(strings.TrimSpace(config.Worker), run.profile.Client+"-")
+}
+
+func captureRequestClaimableAt(request CaptureRequest, now time.Time) bool {
+	available, err := time.Parse(time.RFC3339Nano, request.AvailableAt)
+	return request.Status == "pending" && err == nil && !available.After(now)
 }
 
 func normalizeCaptureRequestKind(kind string) (string, error) {

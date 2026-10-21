@@ -109,6 +109,9 @@ func ListCaptureRequests(config CaptureRequestListConfig) ([]CaptureRequest, err
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
+	if err := createSchema(db); err != nil {
+		return nil, fmt.Errorf("prepare capture outbox: %w", err)
+	}
 	query := `SELECT ` + captureRequestColumns + ` FROM capture_requests`
 	args := []any{}
 	if strings.TrimSpace(config.ConnectorID) != "" {
@@ -199,6 +202,9 @@ func RenewCaptureRequest(config CaptureRequestCapabilityConfig) (CaptureRequest,
 		return CaptureRequest{}, fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
+	if err := createSchema(db); err != nil {
+		return CaptureRequest{}, fmt.Errorf("prepare capture outbox: %w", err)
+	}
 	expires := now.Add(lease).Format(time.RFC3339Nano)
 	updated, err := db.Exec(`UPDATE capture_requests SET lease_expires_at = ?
 		WHERE id = ? AND status = 'claimed' AND claim_token = ? AND lease_expires_at > ?`,
@@ -297,6 +303,9 @@ func FailCaptureRequest(config CaptureRequestCapabilityConfig) error {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
+	if err := createSchema(db); err != nil {
+		return fmt.Errorf("prepare capture outbox: %w", err)
+	}
 	var connectorID, kind string
 	var attempts int
 	var storedToken, requestStatus string
@@ -339,6 +348,9 @@ func releaseWorkerCaptureClaims(homeDir string, worker string, reason string, no
 		return fmt.Errorf("open capture outbox: %w", err)
 	}
 	defer db.Close()
+	if err := createSchema(db); err != nil {
+		return fmt.Errorf("prepare capture outbox: %w", err)
+	}
 	rows, err := db.Query(`SELECT id, connector_id, kind, attempts, claim_token FROM capture_requests
 		WHERE status = 'claimed' AND claimed_by = ? AND claim_token IS NOT NULL`, worker)
 	if err != nil {
@@ -492,7 +504,7 @@ func ClaimCaptureRequests(config CaptureRequestClaimConfig) ([]ClaimedCaptureReq
 	if err != nil {
 		return nil, err
 	}
-	if kind == captureRequestKindLLMTask && !llmAssociateBridgeRouted(config) {
+	if kind == captureRequestKindLLMTask && !llmTaskClaimAllowed(config) {
 		return []ClaimedCaptureRequest{}, nil
 	}
 	claimed, err := claimCaptureRequests(config)
@@ -544,6 +556,9 @@ func claimCaptureRequests(config CaptureRequestClaimConfig) ([]ClaimedCaptureReq
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
+	if err := createSchema(db); err != nil {
+		return nil, fmt.Errorf("prepare capture outbox: %w", err)
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return nil, fmt.Errorf("begin capture claim: %w", err)

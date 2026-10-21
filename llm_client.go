@@ -119,7 +119,7 @@ func resolveAIClientExecutable(client string) (string, error) {
 	return path, nil
 }
 
-func callAIClient(profile llmProfile, messages []openAICompatibleMessage) (string, error) {
+func callAIClient(parent context.Context, profile llmProfile, messages []openAICompatibleMessage) (string, error) {
 	client, err := normalizeAIClient(profile.Client)
 	if err != nil {
 		return "", err
@@ -141,7 +141,7 @@ func callAIClient(profile llmProfile, messages []openAICompatibleMessage) (strin
 		return "", err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), aiClientCallTimeout)
+	ctx, cancel := context.WithTimeout(parent, aiClientCallTimeout)
 	defer cancel()
 	args, responsePath := aiClientArguments(client, profile.Model, workingDir)
 	command := exec.CommandContext(ctx, executable, args...)

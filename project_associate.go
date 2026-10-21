@@ -1,6 +1,7 @@
 package workgraph
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -43,6 +44,7 @@ type LLMAssociateConfig struct {
 	Now          time.Time
 	Location     *time.Location
 	HTTPClient   *http.Client
+	ctx          context.Context
 }
 
 type AssociateDiscard struct {
@@ -195,7 +197,7 @@ func AssociateWithLLM(config LLMAssociateConfig) (LLMAssociateResult, error) {
 			return LLMAssociateResult{}, err
 		}
 	}
-	payload, err := buildAssociatePayload(run.homeDir, config, run.now, run.catalog, run.enabled, nil)
+	payload, err := buildAssociatePayload(run.homeDir, config, run.now, run.catalog, run.enabled, nil, nil)
 	if err != nil {
 		return LLMAssociateResult{}, err
 	}
@@ -310,10 +312,14 @@ func (run associateRun) call(config LLMAssociateConfig, filtered llmOutboundFilt
 	if err := run.checkOutboundPolicy(config); err != nil {
 		return "", err
 	}
-	return callLLMProfile(config.HTTPClient, run.profile, filtered.Messages)
+	ctx := config.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return callLLMProfileContext(ctx, config.HTTPClient, run.profile, filtered.Messages)
 }
 
-func (run associateRun) apply(config LLMAssociateConfig, payload associatePayload, response string, complete func(*sql.Tx, time.Time) error, result *LLMAssociateResult) error {
+func (run associateRun) apply(config LLMAssociateConfig, payload associatePayload, response string, complete func(*sql.Tx, time.Time, ProjectLinkRunResult) error, result *LLMAssociateResult) error {
 	entries, err := parseAssociateResponse(response)
 	if err != nil {
 		return err
@@ -340,7 +346,7 @@ func (run associateRun) apply(config LLMAssociateConfig, payload associatePayloa
 			return err
 		}
 		if complete != nil {
-			return complete(tx, now)
+			return complete(tx, now, written)
 		}
 		return nil
 	})
@@ -415,7 +421,7 @@ func associateEventSource(event associateStoredEvent) string {
 	return event.Source
 }
 
-func buildAssociatePayload(homeDir string, config LLMAssociateConfig, now time.Time, catalog ProjectCatalog, enabled map[string]bool, requested []string) (associatePayload, error) {
+func buildAssociatePayload(homeDir string, config LLMAssociateConfig, now time.Time, catalog ProjectCatalog, enabled map[string]bool, requested []string, cooled map[string]string) (associatePayload, error) {
 	payload := associatePayload{Schema: associateRequestSchema, Projects: []associateProject{}, Units: []associateUnit{}, Decisions: []associateDecision{}}
 	dbPath, err := resumeDatabasePath(ResumeConfig{HomeDir: homeDir, DatabasePath: config.DatabasePath})
 	if err != nil {
@@ -475,6 +481,9 @@ func buildAssociatePayload(homeDir string, config LLMAssociateConfig, now time.T
 			continue
 		}
 		entry := newAssociateUnit(unit, allowed)
+		if hash, found := cooled[entry.linkUnitID]; found && hash == associateMembersHash(entry) {
+			continue
+		}
 		if len(allowed) < len(unit.EventIDs) {
 			position := len(payload.Units) + 1
 			if positions != nil {
