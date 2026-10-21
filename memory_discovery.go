@@ -22,6 +22,7 @@ type MemoryProjectCandidate struct {
 	Title      string
 	Source     string
 	Reason     string
+	Workstream string
 	EventCount int
 	Latest     time.Time
 	score      int
@@ -68,6 +69,14 @@ func inspectMemoryProjects(db *sql.DB, events []ResumeEvent, config MemoryDoctor
 			}
 		}
 	}
+	catalog, err := LoadProjectCatalog(memoryDir)
+	if err != nil {
+		return MemoryDoctorResult{}, err
+	}
+	mappings, err := LoadContainerMappings(db)
+	if err != nil {
+		return MemoryDoctorResult{}, err
+	}
 	counts := map[string]int{}
 	latest := map[string]time.Time{}
 	for _, event := range events {
@@ -91,6 +100,7 @@ func inspectMemoryProjects(db *sql.DB, events []ResumeEvent, config MemoryDoctor
 	})
 	result := MemoryDoctorResult{}
 	lines := []string{"Memory project diagnostics"}
+	lines = append(lines, frontmatterProblemLines(catalog, config.Project)...)
 	for _, project := range projects {
 		doc, path, err := loadProjectMemory(memoryDir, project)
 		if err != nil {
@@ -100,7 +110,7 @@ func inspectMemoryProjects(db *sql.DB, events []ResumeEvent, config MemoryDoctor
 			lines = append(lines, fmt.Sprintf("Memory project %q has no document; initialize it before linking sources.", project))
 			continue
 		}
-		title := memoryProjectTitle(doc.Content, project)
+		title := memoryProjectTitle(projectMemoryBody(doc.Content), project)
 		mapped, err := memoryProjectSources(db, path)
 		if err != nil {
 			return MemoryDoctorResult{}, err
@@ -110,6 +120,9 @@ func inspectMemoryProjects(db *sql.DB, events []ResumeEvent, config MemoryDoctor
 		for _, source := range mapped {
 			linked[source] = true
 			lines = append(lines, fmt.Sprintf("Linked: %s (%d events)", source, counts[source]))
+		}
+		for source := range mappings.Workstreams {
+			linked[source] = true
 		}
 		var candidates []MemoryProjectCandidate
 		for _, source := range sources {
@@ -123,7 +136,14 @@ func inspectMemoryProjects(db *sql.DB, events []ResumeEvent, config MemoryDoctor
 			if score == 0 {
 				continue
 			}
-			candidates = append(candidates, MemoryProjectCandidate{Project: project, Title: title, Source: source, Reason: reason, EventCount: counts[source], Latest: latest[source], score: score})
+			candidate := MemoryProjectCandidate{Project: project, Title: title, Source: source, Reason: reason, EventCount: counts[source], Latest: latest[source], score: score}
+			if acronym, ok := strings.CutPrefix(reason, sharedAcronymReasonPrefix); ok {
+				candidate.Workstream = catalog.workstreamOf(projectSlug(project))
+				if candidate.Workstream == "" {
+					candidate.Workstream = strings.ToLower(acronym)
+				}
+			}
+			candidates = append(candidates, candidate)
 		}
 		sort.Slice(candidates, func(i, j int) bool {
 			if candidates[i].score != candidates[j].score {
@@ -142,14 +162,14 @@ func inspectMemoryProjects(db *sql.DB, events []ResumeEvent, config MemoryDoctor
 			lines = append(lines, memoryCandidateMessage(config, candidate))
 		}
 		if len(candidates) == 0 && len(mapped) == 0 && counts[project] == 0 {
-			lines = append(lines, "No exact mapping or reliable name match. Select a captured identifier manually with memory link --source <captured-project> <memory-project>.")
+			lines = append(lines, "No exact mapping or reliable name match. Select a container manually with memory link --source <container> <memory-project>.")
 		}
 	}
 	if len(projects) == 0 {
 		lines = append(lines, "No project memory documents found.")
 	}
 	if len(result.Candidates) == 0 {
-		lines = append(lines, "", "Captured projects available for manual linking:")
+		lines = append(lines, "", "Containers available for manual linking:")
 		for i, source := range sources {
 			if i >= 5 {
 				break
@@ -157,10 +177,10 @@ func inspectMemoryProjects(db *sql.DB, events []ResumeEvent, config MemoryDoctor
 			lines = append(lines, fmt.Sprintf("- %s (%d events)", source, counts[source]))
 		}
 		if len(sources) == 0 {
-			lines = append(lines, "No captured project evidence found. Check workgraph status.")
+			lines = append(lines, "No captured container activity found. Check workgraph status.")
 		}
 		if len(sources) > 5 {
-			lines = append(lines, "Use workgraph resume --all to inspect additional captured projects.")
+			lines = append(lines, "Use workgraph resume --all to inspect additional containers.")
 		}
 	}
 	lines = append(lines, "", "No mappings or memory files are changed by this report. Use memory doctor --interactive to review candidates.")
@@ -225,7 +245,7 @@ func memoryNameSimilarity(name, source string) (int, string) {
 		}
 		for _, word := range pair.words {
 			if word == pair.acronym {
-				return 2, "shared acronym " + strings.ToUpper(word)
+				return 2, sharedAcronymReasonPrefix + strings.ToUpper(word)
 			}
 		}
 	}
@@ -243,14 +263,37 @@ func memoryNameSimilarity(name, source string) (int, string) {
 }
 
 func memoryCandidateMessage(config MemoryDoctorConfig, candidate MemoryProjectCandidate) string {
+	link := append(memoryLinkCommand(config), "--source", memoryShellQuote(candidate.Source), memoryShellQuote(candidate.Project))
+	message := fmt.Sprintf("Possible mapping: %s → %s (%s; %d events; latest %s)\n  To link: %s", candidate.Title, candidate.Source, candidate.Reason, candidate.EventCount, candidate.Latest.Format(time.RFC3339), strings.Join(link, " "))
+	if candidate.Workstream == "" {
+		return message
+	}
+	workstream := append(memoryLinkCommand(config), "--workstream", memoryShellQuote(candidate.Workstream), "--source", memoryShellQuote(candidate.Source))
+	return message + fmt.Sprintf("\n  Workstream suggestion: %s (a shared acronym often names a workstream rather than one project)\n  To map the container to the workstream: %s", candidate.Workstream, strings.Join(workstream, " "))
+}
+
+func memoryLinkCommand(config MemoryDoctorConfig) []string {
 	args := []string{"workgraph", "memory", "link"}
 	for _, option := range []struct{ name, value string }{{"--home", config.HomeDir}, {"--memory", config.MemoryDir}, {"--database", config.DatabasePath}} {
 		if option.value != "" {
 			args = append(args, option.name, memoryShellQuote(option.value))
 		}
 	}
-	args = append(args, "--source", memoryShellQuote(candidate.Source), memoryShellQuote(candidate.Project))
-	return fmt.Sprintf("Possible mapping: %s → %s (%s; %d events; latest %s)\n  To link: %s", candidate.Title, candidate.Source, candidate.Reason, candidate.EventCount, candidate.Latest.Format(time.RFC3339), strings.Join(args, " "))
+	return args
+}
+
+func frontmatterProblemLines(catalog ProjectCatalog, project string) []string {
+	var lines []string
+	for _, problem := range catalog.Problems {
+		if project != "" && problem.Slug != projectSlug(project) {
+			continue
+		}
+		lines = append(lines, "", fmt.Sprintf("Invalid frontmatter in %s: %s", problem.Path, problem.Problem))
+	}
+	if len(lines) > 0 {
+		lines = append(lines, invalidFrontmatterDoctorNote)
+	}
+	return lines
 }
 
 func memoryShellQuote(value string) string {

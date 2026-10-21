@@ -290,8 +290,8 @@ func TestResumeProjectListShowsTenRecentPersonalProjectsUnlessAllIsRequested(t *
 	}
 	for _, expected := range []string{
 		"- shown recent-10: file activity",
-		"- hidden recent-11: beyond the 10 most recent projects",
-		"- hidden recent-12: beyond the 10 most recent projects",
+		"- hidden recent-11: beyond the 10 most recent containers",
+		"- hidden recent-12: beyond the 10 most recent containers",
 		"- hidden dormant: no user-work evidence in the last 14 days",
 	} {
 		if !strings.Contains(debug.Message, expected) {

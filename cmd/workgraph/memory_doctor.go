@@ -15,7 +15,7 @@ func runMemoryDoctor(args []string, stdin io.Reader, stdout, stderr io.Writer) i
 	home := flags.String("home", "", "workgraph home directory")
 	memory := flags.String("memory", "", "workgraph memory directory")
 	database := flags.String("database", "", "workgraph SQLite database path")
-	interactive := flags.Bool("interactive", false, "Ask before linking each suggested captured project")
+	interactive := flags.Bool("interactive", false, "Ask before linking each suggested container")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -35,7 +35,7 @@ func runMemoryDoctor(args []string, stdin io.Reader, stdout, stderr io.Writer) i
 	}
 	scanner := bufio.NewScanner(stdin)
 	for _, candidate := range result.Candidates {
-		fmt.Fprintf(stdout, "Link %q to captured project %q? [y/N] ", candidate.Title, candidate.Source)
+		fmt.Fprintf(stdout, "Link %q to container %q? [y/N] ", candidate.Title, candidate.Source)
 		if !scanner.Scan() {
 			break
 		}
