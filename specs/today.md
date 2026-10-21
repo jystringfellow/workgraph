@@ -44,8 +44,8 @@ With the GitHub pull request watch (`specs/github-pr-watch.md`) and
 `workgraph next` (`specs/next.md`): of the `github.pull_request.*` transition events, only
 `author_replied` with `responder: author` and `review_submitted` count as
 personal activity; the rest are excluded like snapshots. When `workgraph next`
-has a source enabled and open items, `today` ends with one `Waiting on you:
-<n> items (workgraph next)` line.
+has open items, `today` ends with one `Waiting on you: <n> items (workgraph
+next)` line.
 
 Both `workgraph today --actor <actor>` and `workgraph events today --actor
 <actor>` apply an exact actor filter to stored event metadata. This is a
@@ -71,10 +71,14 @@ When events exist, output includes:
 
 When no events exist for the local day, output includes `Today` and says no activity has been captured today. No `Associations` heading is shown in that case.
 
-Planned (`specs/projects.md`, slice D4): `Projects` groups activity by
-workstream, then declared project, using applied project links and container
-mappings. Activity with no link falls back to its container. Each project line
-lists the kinds of its linked units, such as review or coordination.
+`Projects` groups activity by workstream, then declared project, using
+applied project links and container mappings, as described in
+`specs/projects.md` (Daily Loop Surfaces). Activity with no link falls back to
+its container, so with no project memory or links the section lists
+containers as before. Each project line lists the kinds of its linked units,
+such as review or coordination, and how many were auto-applied; when any
+were, it points to `workgraph projects review --auto`. Sessions stay grouped
+by container.
 
 ## Event Labels
 

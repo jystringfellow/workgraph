@@ -53,19 +53,17 @@ Items are ordered by reason group, then oldest `since` first:
 2. the user's own work is blocked: `changes_requested`, `checks_failed`,
    `conflicts`
 3. the user's own work can finish: `ready_to_merge`
+4. links awaiting a categorization decision: `categorize`
 
 Sources map their reasons into these groups. The order is deterministic and
 documented, not a priority score.
 
-Planned (`specs/projects.md`, slice D4): a fourth group, `categorize`, follows
-`ready`. Its items use reason `categorize` and id
-`projects:categorize:<link-id>`, one per unit whose project link awaits a
-decision, including undecided auto-applied links while the auto-apply
-accuracy sample has fewer than 20 decided links. Text output shows at most
-three of them and one line `Categorize: <n> awaiting a decision (workgraph
-projects review), <m> auto-applied today (workgraph projects review --auto)`,
-and says when auto-apply is paused. An item closes when its
-link is decided.
+The `categorize` group comes from project links (`specs/projects.md`, Daily
+Loop Surfaces). It has one item per link that the default `workgraph projects
+review` lists: every proposed link and, while the auto-apply accuracy sample
+has fewer than 20 decided links, every undecided auto-applied link. An item
+closes when its link is decided. Text output shows the `Categorize:` line,
+the pause line when auto-apply is paused, and at most three items.
 
 ### JSON shape
 
@@ -144,6 +142,20 @@ link is decided.
   | `reply` | `{}` (the thread or comment is in `subject`) |
   | `conflicts` | `{"base_ref"}` |
   | `ready_to_merge` | `{"merge_state_status"}` |
+  | `categorize` | `{"link_id", "unit_kind", "state", "auto", "source", "target", "project", "proposed_project", "kind", "confidence", "rule", "profile", "run_id"}` |
+
+- A `categorize` item has `source: "projects"`, `group: "categorize"`, an
+  empty `role`, `project` set to the unit's container, `since` and
+  `freshness.as_of` set to the link's creation time, `opened_by`
+  `project_link:<link-id>`, and `subject` `{"kind": "unit", "id":
+  "<unit-ref>"}`. The unit ref is the unit id, except that a `git.session`
+  unit's local repository path is replaced by the first 12 hex characters of
+  its SHA-256, as `git.session:<repo-hash>:<first-sha>`, so the item carries
+  no local path. Its `pull_request` is empty. `detail.proposed_project`
+  holds only the proposed `slug` and `workstream`. Model-written text, the
+  link summary and the proposed project's name and description, appears only
+  with `--include-untrusted`, as `untrusted.summary` and
+  `untrusted.proposed_project`.
 
 - `freshness.as_of` is when the facts behind this item were last read from
   the provider; each source defines which timestamp that is and when it goes
@@ -153,6 +165,8 @@ link is decided.
 - Local paths, tokens, and connector configuration never appear in an item,
   so items can be sent to a cloud agent without leaking the local machine's
   layout.
+  The opt-in `untrusted` object is the exception: it carries captured or
+  model-written text verbatim, which may mention anything, including a path.
 
 ## Commands
 
@@ -205,7 +219,8 @@ Ready
   and the command to fix it, before the items.
 - With no enabled sources, `next` says which connectors provide items and how
   to connect them. With sources but no items, it says nothing is waiting and
-  shows the freshness line.
+  shows the freshness line. The `categorize` group follows either case and
+  needs no connector.
 - `--project` and `--reason` are exact filters.
 
 ### `workgraph next explain <item-id>`
@@ -223,7 +238,9 @@ deterministic answer to "why is this here?".
   hides the item until then.
 - Because a new comment, head, or run set produces a new item id, done and
   snooze never hide later activity.
-- Both are local bookkeeping. Neither writes to a provider.
+- Both are local bookkeeping. Neither writes to a provider or a project
+  link; a `categorize` item hidden this way still awaits its decision in
+  `workgraph projects review`.
 
 ### `workgraph next --watch --json`
 
@@ -249,7 +266,8 @@ dispatcher. It writes JSON Lines to stdout:
   `freshness.stale` or `triage.unknown`. The projection is a local SQLite
   read, so the one-second cadence costs no provider requests.
 - `closed.reason` says what is known, not more:
-  - `resolved`: the condition stopped holding on a successful poll
+  - `resolved`: the condition stopped holding on a successful poll, or a
+    `categorize` item's link was decided
   - `done` or `snoozed`: the user hid it
   - `merged` or `closed`: the PR was merged or closed
   - `out_of_scope`: the subject left what the source watches, for example a
@@ -276,11 +294,12 @@ into tool descriptions or instructions (`specs/llm-integration.md`).
 - **`resume`**: the default overview shows `Waiting on you` after `Where you
   left off`, listing at most five pull requests in `next` order in the same
   grouped format as `next`, then `<n> more: workgraph next` with the number
-  of remaining pull requests when more exist. `resume <project>` shows that project's
+  of remaining pull requests when more exist. `categorize` items are counted
+  as remaining decisions instead (see `specs/resume.md`). `resume <project>` shows that project's
   items after `Recent activity`. Showing items does not advance the resume
   check-in beyond the existing rules.
-- **`today`**: stays a personal activity view. When at least one source is
-  enabled and items are open, it ends with `Waiting on you: <n> items
+- **`today`**: stays a personal activity view. When items are open,
+  including `categorize` items, it ends with `Waiting on you: <n> items
   (workgraph next)`.
 - A failed next projection does not fail `today` or `resume`. They omit the
   waiting items and show one short `Waiting on you unavailable: <error class>`
@@ -299,8 +318,8 @@ own choices.
 
 - Ranking by priority, effort, or LLM judgment.
 - Any provider write, including from `done` or `snooze`.
-- Sources other than the GitHub pull request watch. Azure Boards assigned
-  items and Slack mentions are natural next sources.
+- Sources other than the GitHub pull request watch and project links. Azure
+  Boards assigned items and Slack mentions are natural next sources.
 
 ## Facts
 
@@ -338,6 +357,8 @@ only. No fact invokes `gh`.
   `opened` for the same id, past three intervals emits `changed` with
   `freshness.stale: true`, and disconnecting the source emits `closed` with
   `reason: "out_of_scope"`.
+- **N11. Categorize items follow project links.** See P10 in
+  `specs/projects.md` (`facts/projects_surfaces_test.go`).
 - **N9. Close reasons do not overclaim.** A PR dropped after 6 missing polls
   closes its items with `left_search`, an unreachable one with
   `unreachable`, and a withdrawn review request with `out_of_scope`; none

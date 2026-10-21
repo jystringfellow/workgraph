@@ -62,6 +62,14 @@ func ListProjectReview(config ProjectReviewConfig) ([]ProjectLink, error) {
 		sort.SliceStable(auto, func(i, j int) bool { return auto[i].ID > auto[j].ID })
 		return auto, nil
 	}
+	accuracy, err := ProjectLinkAccuracy(ProjectLinkStoreConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, Now: now})
+	if err != nil {
+		return nil, err
+	}
+	return projectReviewDefaultLinks(links, accuracy), nil
+}
+
+func projectReviewDefaultLinks(links []ProjectLink, accuracy ProjectLinkAccuracyReport) []ProjectLink {
 	var proposed, undecided []ProjectLink
 	for _, link := range links {
 		switch {
@@ -71,14 +79,10 @@ func ListProjectReview(config ProjectReviewConfig) ([]ProjectLink, error) {
 			undecided = append(undecided, link)
 		}
 	}
-	accuracy, err := ProjectLinkAccuracy(ProjectLinkStoreConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, Now: now})
-	if err != nil {
-		return nil, err
-	}
 	if accuracy.Status == "insufficient_data" {
 		proposed = append(proposed, undecided...)
 	}
-	return proposed, nil
+	return proposed
 }
 
 func projectLinkUndoable(link ProjectLink) bool {
