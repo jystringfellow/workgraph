@@ -488,7 +488,7 @@ func (poll *githubPRWatchPoll) search(role string) ([]githubPRStatusNode, error)
 	}
 	pullRequests := nodes[:0]
 	for _, node := range nodes {
-		if node.ID != "" {
+		if node.ID != "" && !poll.params.ignoresPullRequest(role, node) {
 			pullRequests = append(pullRequests, node)
 		}
 	}
@@ -876,6 +876,7 @@ func githubPRObservationFromStatus(node githubPRStatusNode) githubPRObservation 
 		URL:               node.URL,
 		Title:             node.Title,
 		AuthorLogin:       node.Author.login(),
+		AuthorKind:        node.Author.kind(),
 		IsDraft:           node.IsDraft,
 		State:             node.State,
 		CreatedAt:         node.CreatedAt,

@@ -177,9 +177,9 @@ malformed client invocation fails only the requested LLM command and never
 affects capture.
 
 Task routing is intentionally broader than the currently implemented task set.
-The `categorize` route may be configured now, but project categorization remains
-a future suggestion-producing task: it must not rewrite captured events without
-review and approval.
+The `categorize` route may be configured now. Project categorization is the
+planned `associate_events` task below: it never rewrites captured events and
+applies links automatically only under the gates in `specs/projects.md`.
 
 Future provider commands may add provider-specific flags for OpenAI, Anthropic,
 Google, Bedrock, and Azure without changing the task command surface.
@@ -214,7 +214,8 @@ Purpose: summarize today's captured local work context.
 
 Input:
 
-- selected `today` events from SQLite
+- selected `today` events from SQLite, using the same local git identity
+  filter as `workgraph today`
 - relevant local memory excerpts when available
 - event ids or source ids needed for traceability
 - provider-specific previews when available, such as Notion page
@@ -246,27 +247,55 @@ Streaming behavior:
 - `--no-stream` keeps deterministic full-response output for debugging,
   tests, and terminals where streaming is undesirable
 
-### `associate_events` (future)
+### `associate_events` (planned)
 
-Purpose: propose cross-platform work associations, such as linking a Slack
-thread, calendar event, GitHub PR, Notion page, and local file activity to the
-same project or work item.
+Purpose: link units of work, such as a Slack thread, GitHub PR, git commit
+session, Notion page activity, or calendar event, to the user's declared
+projects, and give each unit a kind and one-line summary. The full contract is
+in `specs/projects.md`.
+
+Route: `associate`, configured with `workgraph llm use <profile> --for
+associate` or `llm connect ... --for associate`. Existing `categorize` routes
+are read as `associate`.
 
 Input:
 
-- candidate events and artifacts selected by deterministic heuristics
-- existing memory project aliases or known associations
+- units that no deterministic rule linked, from sources the user enabled with
+  `workgraph llm sources --for associate --enable <source>`; none is enabled by
+  default and Slack DMs are a separate source
+- the project catalog from memory frontmatter: slug, title, workstream,
+  aliases, and description
+- recent user decisions
 
-Output:
+Output (`workgraph.associate_result.v1`), per unit:
 
-- proposed links
-- confidence or strength of evidence
-- reasons grounded in event ids, source ids, timestamps, names, and titles
+- target: an existing project, a new-project proposal, or none
+- kind: `review`, `build`, `coordination`, `advice`, `unblock`, `decision`, or
+  `fyi`
+- one-line summary
+- confidence from 0 to 1
+- cited evidence event ids, all members of the unit
 
 Persistence:
 
-- pending association suggestions only
-- no automatic mutation of events or memory
+- validated entries become `project_links` rows; invalid entries are discarded
+  and counted
+- an entry is applied automatically only at confidence 0.95 or higher, for an
+  existing project or none, with no recent user rejection for that container
+  and project, and while auto-apply is not paused; everything else is
+  proposed for review
+- auto-apply pauses when measured accuracy over at least 20 decided auto
+  links is below 0.95; with fewer than 20 it stays on and every undecided
+  auto link is listed for review
+- D3 runs categorization directly or manually; scheduled outbox and bridge
+  execution arrive in D4
+- no mutation of events; memory changes only when the user creates a new
+  project during review
+
+Dry-run behavior:
+
+- `workgraph llm associate --dry-run` prints the profile, destination, enabled
+  sources, and exact filtered payload, and does not call the provider
 
 ### `memory_suggestions` (future)
 
@@ -375,8 +404,8 @@ Dry-run behavior remains provider-independent and does not call Bedrock.
 - [x] Signed-in Codex and Claude Code profiles with guided `llm connect` setup.
 - [x] Client-backed `test`, `doctor`, and `summarize today` execution.
 - [ ] Hosted provider support for OpenAI, Anthropic, Google, and similar APIs.
-- [ ] Association suggestions across Slack, calendar, GitHub, Notion, mail, and
-  local file events.
+- [ ] Project categorization of units across Slack, GitHub, git, Notion, and
+  calendar (`associate_events`, `specs/projects.md`).
 - [ ] Memory suggestion drafts with explicit approval before memory changes.
 - [ ] Embeddings or search only if deterministic context selection becomes too
   slow or weak.

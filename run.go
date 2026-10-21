@@ -37,6 +37,7 @@ var ignoreSuggestionWindow = 10 * time.Minute
 
 const (
 	defaultConnectorPollTimeout  = 30 * time.Second
+	githubPRWatchPollTimeout     = 2 * time.Minute
 	defaultConnectorRetryInitial = 5 * time.Second
 	defaultConnectorRetryMax     = 5 * time.Minute
 	connectorShutdownTimeout     = 5 * time.Second
@@ -489,6 +490,7 @@ type connectorPoller struct {
 	poll       func(context.Context) error
 	wake       <-chan struct{}
 	minSpacing time.Duration
+	timeout    time.Duration
 }
 
 func (capture *RunCapture) connectorPollers() []connectorPoller {
@@ -502,7 +504,7 @@ func (capture *RunCapture) connectorPollers() []connectorPoller {
 	if capture.githubPRWatchEnabled {
 		pollers = append(pollers, connectorPoller{
 			id: githubPRWatchConnectorID, interval: capture.githubPRWatchInterval, poll: capture.captureGitHubPRWatch,
-			wake: capture.githubPRWatchWake, minSpacing: capture.connectorWakeSpacing,
+			wake: capture.githubPRWatchWake, minSpacing: capture.connectorWakeSpacing, timeout: githubPRWatchPollTimeout,
 		})
 	}
 	if capture.slackEnabled && capture.slackToken != "" {
@@ -547,7 +549,8 @@ func (capture *RunCapture) runConnectorPoller(ctx context.Context, poller connec
 		}
 
 		lastStart = time.Now()
-		pollCtx, cancel := context.WithTimeout(ctx, capture.connectorPollTimeout)
+		timeout := positiveDuration(poller.timeout, capture.connectorPollTimeout)
+		pollCtx, cancel := context.WithTimeout(ctx, timeout)
 		err := poller.poll(pollCtx)
 		timedOut := errors.Is(pollCtx.Err(), context.DeadlineExceeded)
 		cancel()
@@ -555,7 +558,7 @@ func (capture *RunCapture) runConnectorPoller(ctx context.Context, poller connec
 			return
 		}
 		if timedOut {
-			err = fmt.Errorf("poll deadline exceeded after %s: %w", capture.connectorPollTimeout, context.DeadlineExceeded)
+			err = fmt.Errorf("poll deadline exceeded after %s: %w", timeout, context.DeadlineExceeded)
 		}
 
 		completedAt := time.Now()

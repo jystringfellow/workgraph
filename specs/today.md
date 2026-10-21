@@ -31,6 +31,15 @@ qualifying personal event is the association target. The existing association
 window is symmetric around the target timestamp and includes candidate events
 from before or after the target; this change does not narrow that window.
 
+Git commits count as personal activity only when authored by the local git
+identity (see `specs/git.md`). The default `today` view excludes `git.commit`
+events whose `author_email` does not match it, including commits pulled into a
+local clone from other people, from its event count, project counts, sessions,
+and association targets. When an identity is known, commits without
+`author_email` are excluded too. When no identity can be found at all, commits
+are included. `workgraph events today` still shows every commit, and an
+explicit `--actor` filter selects exactly that actor without this rule.
+
 With the GitHub pull request watch (`specs/github-pr-watch.md`) and
 `workgraph next` (`specs/next.md`): of the `github.pull_request.*` transition events, only
 `author_replied` with `responder: author` and `review_submitted` count as
@@ -61,6 +70,11 @@ When events exist, output includes:
 - a `Details: workgraph events today` hint for inspecting complete event labels
 
 When no events exist for the local day, output includes `Today` and says no activity has been captured today. No `Associations` heading is shown in that case.
+
+Planned (`specs/projects.md`, slice D4): `Projects` groups activity by
+workstream, then declared project, using applied project links and container
+mappings. Activity with no link falls back to its container. Each project line
+lists the kinds of its linked units, such as review or coordination.
 
 ## Event Labels
 

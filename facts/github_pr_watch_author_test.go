@@ -1775,3 +1775,41 @@ func TestGitHubPRWatchMinimumSearchPageStaysAfterAnotherRoleTimesOut(t *testing.
 		}
 	}
 }
+
+func TestGitHubPRWatchPollOutlastsTheGeneralConnectorDeadline(t *testing.T) {
+	harness := newPRWatchHarness(t, authorParams)
+	harness.gh.Queue(t, statusResponse(t, watchPR()))
+	harness.gh.HookLastQueued(t, "sleep 1")
+	harness.gh.Queue(t, detailResponse(t, detailFixture{ID: watchPRNodeID}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:              harness.homeDir,
+		DatabasePath:         harness.dbPath,
+		WatchDirs:            []string{harness.watchDir},
+		GitHubCommand:        harness.gh.Path,
+		ConnectorPollTimeout: 300 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- capture.Run(ctx) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for watchConnectorStatus(t, harness.homeDir).LastPoll == "" {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for the github.pr_watch poll: %#v", watchConnectorStatus(t, harness.homeDir))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	status := watchConnectorStatus(t, harness.homeDir)
+	if status.LastError != "" || status.LastSuccess == "" || harness.observationCount() != 1 {
+		t.Fatalf("expected a slow github.pr_watch poll to finish within its own budget, got %#v", status)
+	}
+}
