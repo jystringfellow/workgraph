@@ -33,7 +33,7 @@ output omits per-message timestamps. Treat its `oldest` and `latest` arguments
 as advisory: filter every returned reply against the exact UTC request bounds
 during normalization. Set payload `conversation_type` to `channel`,
 `private_channel`, `im`, or `mpim` when the Slack tool result identifies the
-conversation; omit it otherwise, and workgraph treats the message as a DM.
+conversation type; omit it otherwise, and workgraph treats the message as a DM.
 
 For Microsoft mail, express the provider date filter in the mailbox-local time
 zone over a two-day pad on each side of the requested window. Filter the

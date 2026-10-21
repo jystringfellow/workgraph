@@ -752,8 +752,12 @@ func TestManualBridgedIngestDeduplicatesSlackEvents(t *testing.T) {
 }
 
 func TestBridgedSlackIngestKeepsConversationTypeForPrivacy(t *testing.T) {
-	homeDir := initBridgedCaptureHome(t)
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	t.Setenv("HOME", filepath.Dir(homeDir))
 	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
 	connectBridgedConnector(t, repoRoot, homeDir, "slack")
 
 	input := strings.Join([]string{

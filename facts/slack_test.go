@@ -122,6 +122,7 @@ func TestSlackCaptureStoresThreadReplyWithoutDuplicateEvent(t *testing.T) {
 func TestSlackCaptureKeepsOnlyRecognizedConversationTypes(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
+	t.Setenv("HOME", tempDir)
 	eventsPath := filepath.Join(tempDir, "slack-events.json")
 	if err := os.WriteFile(eventsPath, []byte(`[
   {"kind": "message", "channel_id": "G123", "channel_name": "exec-planning", "conversation_type": "private_channel", "user": "U456", "text": "Private plan.", "ts": "1716215400.000100", "timestamp": "2026-05-20T14:30:00Z"},
