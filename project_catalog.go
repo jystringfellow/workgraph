@@ -14,6 +14,7 @@ const (
 	workstreamSourcePrefix       = "workstream:"
 	projectDescriptionLimit      = 200
 	frontmatterDelimiter         = "---"
+	utf8BOM                      = "\ufeff"
 	sharedAcronymReasonPrefix    = "shared acronym "
 	invalidFrontmatterDoctorNote = "Invalid frontmatter is treated as absent; the project is still listed."
 )
@@ -138,6 +139,7 @@ func validWorkstreamSlug(slug string) bool {
 
 func parseProjectCatalogEntry(slug, path, content string) (ProjectCatalogEntry, string) {
 	entry := ProjectCatalogEntry{Slug: slug, Path: path}
+	content = strings.TrimPrefix(content, utf8BOM)
 	body := content
 	frontmatter, rest, hasFrontmatter := splitFrontmatter(content)
 	problem := ""
@@ -160,6 +162,7 @@ func parseProjectCatalogEntry(slug, path, content string) (ProjectCatalogEntry, 
 }
 
 func projectMemoryBody(content string) string {
+	content = strings.TrimPrefix(content, utf8BOM)
 	if _, rest, ok := splitFrontmatter(content); ok {
 		return rest
 	}
@@ -245,11 +248,30 @@ func parseFrontmatterFlowList(value string) ([]string, error) {
 		return nil, fmt.Errorf("aliases must be a [a, b] list or a block list")
 	}
 	var items []string
-	for _, item := range strings.Split(strings.TrimSuffix(strings.TrimPrefix(value, "["), "]"), ",") {
-		if item = unquoteFrontmatter(strings.TrimSpace(item)); item != "" {
+	var current strings.Builder
+	quote := rune(0)
+	add := func() {
+		if item := unquoteFrontmatter(current.String()); item != "" {
 			items = append(items, item)
 		}
+		current.Reset()
 	}
+	for _, r := range strings.TrimSuffix(strings.TrimPrefix(value, "["), "]") {
+		switch {
+		case quote != 0 && r == quote:
+			quote = 0
+		case quote == 0 && (r == '"' || r == '\'') && strings.TrimSpace(current.String()) == "":
+			quote = r
+		case quote == 0 && r == ',':
+			add()
+			continue
+		}
+		current.WriteRune(r)
+	}
+	if quote != 0 {
+		return nil, fmt.Errorf("aliases list has an unclosed quote")
+	}
+	add()
 	return items, nil
 }
 
