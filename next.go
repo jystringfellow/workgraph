@@ -63,6 +63,8 @@ type nextSnapshot struct {
 	result       NextResult
 	events       []nextStoredEvent
 	observations []githubPRObservation
+	categorize   []NextItem
+	categorized  nextCategorizeState
 }
 
 func nextNow(config NextConfig) time.Time {
@@ -148,6 +150,10 @@ func readNextSnapshot(config NextConfig) (nextSnapshot, error) {
 	if err != nil {
 		return snapshot, err
 	}
+	snapshot.categorize, snapshot.categorized, err = loadNextCategorizeItems(tx, snapshot.result.AsOf, config.IncludeUntrusted)
+	if err != nil {
+		return snapshot, err
+	}
 	if err = tx.Commit(); err != nil {
 		return snapshot, err
 	}
@@ -157,28 +163,33 @@ func readNextSnapshot(config NextConfig) (nextSnapshot, error) {
 			onBehalf[observation.NodeID] = true
 		}
 	}
+	candidates := append([]NextItem{}, snapshot.categorize...)
 	for _, observation := range snapshot.observations {
-		for _, item := range projectNextObservation(observation, snapshot.events, config, snapshot.result.AsOf, interval, entry.SetupState == "error") {
-			if (config.Project != "" && item.Project != config.Project) || (config.Reason != "" && item.Reason != config.Reason) {
-				continue
-			}
-			if nextHidden(item.ID, snapshot.events, snapshot.result.AsOf) != "" {
-				continue
-			}
-			if item.PullRequest.Author != nil {
-				item.PullRequest.Author.OnBehalf = onBehalf[item.PullRequest.NodeID]
-			}
-			snapshot.result.Items = append(snapshot.result.Items, item)
+		candidates = append(candidates, projectNextObservation(observation, snapshot.events, config, snapshot.result.AsOf, interval, entry.SetupState == "error")...)
+	}
+	for _, item := range candidates {
+		if (config.Project != "" && item.Project != config.Project) || (config.Reason != "" && item.Reason != config.Reason) {
+			continue
 		}
+		if nextHidden(item.ID, snapshot.events, snapshot.result.AsOf) != "" {
+			continue
+		}
+		if item.PullRequest.Author != nil {
+			item.PullRequest.Author.OnBehalf = onBehalf[item.PullRequest.NodeID]
+		}
+		snapshot.result.Items = append(snapshot.result.Items, item)
 	}
 	sort.Slice(snapshot.result.Items, func(i, j int) bool {
 		a, b := snapshot.result.Items[i], snapshot.result.Items[j]
-		rank := map[string]int{"waiting_on_you": 0, "blocked": 1, "ready": 2}
+		rank := map[string]int{"waiting_on_you": 0, "blocked": 1, "ready": 2, nextGroupCategorize: 3}
 		if rank[a.Group] != rank[b.Group] {
 			return rank[a.Group] < rank[b.Group]
 		}
 		if !a.Since.Equal(b.Since) {
 			return a.Since.Before(b.Since)
+		}
+		if a.Group == nextGroupCategorize {
+			return nextCategorizeLinkID(a) < nextCategorizeLinkID(b)
 		}
 		return a.ID < b.ID
 	})
@@ -189,6 +200,9 @@ func readNextSnapshot(config NextConfig) (nextSnapshot, error) {
 		}
 	}
 	snapshot.result.Message = nextMessage(snapshot.result, entry.SetupState == "error", capturedAt, interval, config.ShowIDs)
+	if categorize := nextCategorizeLines(snapshot.result.Items, snapshot.categorized, config.ShowIDs); len(categorize) > 0 {
+		snapshot.result.Message += "\n" + strings.Join(categorize, "\n")
+	}
 	return snapshot, nil
 }
 
@@ -578,7 +592,7 @@ func nextMessage(result NextResult, setupError bool, capturedAt time.Time, inter
 		lines = append(lines, "Warning: github.pr_watch data is stale or unreachable; run workgraph github prs capture")
 	}
 	section := ""
-	for _, group := range nextPullRequestGroups(result.Items) {
+	for _, group := range nextPullRequestGroups(nextNonCategorizeItems(result.Items)) {
 		if group[0].Group != section {
 			section = group[0].Group
 			lines = append(lines, map[string]string{"waiting_on_you": "Waiting on you", "blocked": "Blocked", "ready": "Ready"}[section])
@@ -700,6 +714,7 @@ func nextUnavailableMessage(err error) string {
 }
 
 func nextWaitingMessage(items []NextItem, limit int) string {
+	items = nextNonCategorizeItems(items)
 	if len(items) == 0 {
 		return ""
 	}
@@ -725,7 +740,7 @@ func ExplainNext(config NextConfig, id string) (string, error) {
 	}
 	for _, item := range result.Items {
 		if item.ID == id {
-			conditions := map[string]string{nextReasonReply: "The thread or conversation is awaiting the user.", nextReasonReviewRequested: "A review request for the user is open.", nextReasonChangesRequested: "The reviewer's latest opinionated review requests changes.", nextReasonChecksFailed: "Checks failed on the current head.", nextReasonConflicts: "The pull request has merge conflicts.", nextReasonReadyToMerge: "The pull request is ready to merge."}
+			conditions := map[string]string{nextReasonReply: "The thread or conversation is awaiting the user.", nextReasonReviewRequested: "A review request for the user is open.", nextReasonChangesRequested: "The reviewer's latest opinionated review requests changes.", nextReasonChecksFailed: "Checks failed on the current head.", nextReasonConflicts: "The pull request has merge conflicts.", nextReasonReadyToMerge: "The pull request is ready to merge.", nextReasonCategorize: "The unit's project link awaits a decision in workgraph projects review."}
 			return fmt.Sprintf("Rule: %s\nCondition: %s\nOpened by: %s\nEvidence: %s\nObserved at: %s", item.Reason, conditions[item.Reason], item.OpenedBy, strings.Join(item.Evidence, ", "), item.Freshness.AsOf.Format(time.RFC3339Nano)), nil
 		}
 	}
@@ -858,6 +873,9 @@ func WatchNext(ctx context.Context, config NextConfig, output io.Writer) error {
 func nextClosedReason(item NextItem, current nextSnapshot) string {
 	if reason := nextHidden(item.ID, current.events, current.result.AsOf); reason != "" {
 		return reason
+	}
+	if item.Reason == nextReasonCategorize {
+		return nextCloseResolved
 	}
 	if !current.result.Enabled {
 		return nextCloseOutOfScope

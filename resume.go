@@ -160,6 +160,14 @@ func Resume(config ResumeConfig) (ResumeResult, error) {
 			}
 			if !result.CheckIn.IsZero() {
 				prefix += "\n\n" + resumeSinceMessage(result, location)
+				activity, err := resumeProjectActivityMessage(db, config, events, result.CheckIn, now)
+				if err != nil {
+					return ResumeResult{}, err
+				}
+				prefix += "\n\n" + activity
+			}
+			if decisions := resumeDecisionsMessage(result.NextItems); decisions != "" {
+				prefix += "\n\n" + decisions
 			}
 			result.Message = prefix + "\n\n" + result.Message
 		}
@@ -243,10 +251,7 @@ func resumePersonalWorkSince(events []ResumeEvent, gitEmails []string, previous 
 	var recent []ResumeEvent
 	count := 0
 	for _, event := range events {
-		if event.Timestamp.After(now) || event.CapturedAt.After(now) || !resumePersonalWork(event, gitEmails) {
-			continue
-		}
-		if !event.Timestamp.After(previous) && !event.CapturedAt.After(previous) {
+		if !resumePersonalWork(event, gitEmails) || !resumeEventSince(event, previous, now) {
 			continue
 		}
 		count++
@@ -261,13 +266,7 @@ func resumeRelevantUpdatesSince(events []ResumeEvent, gitEmails []string, previo
 	var recent []ResumeEvent
 	count := 0
 	for _, event := range events {
-		if strings.HasPrefix(event.Type, "github.pull_request.") && !nextNeedsUserTransition(event.Type, event.Payload) {
-			continue
-		}
-		if event.Timestamp.After(now) || event.CapturedAt.After(now) || isTransientResumePath(event.Path) || len(event.Involvement) == 0 || resumePersonalWork(event, gitEmails) {
-			continue
-		}
-		if !event.Timestamp.After(previous) && !event.CapturedAt.After(previous) {
+		if !resumeRelevantUpdate(event, gitEmails) || !resumeEventSince(event, previous, now) {
 			continue
 		}
 		count++
@@ -276,6 +275,55 @@ func resumeRelevantUpdatesSince(events []ResumeEvent, gitEmails []string, previo
 		}
 	}
 	return recent, count
+}
+
+func resumeRelevantUpdate(event ResumeEvent, gitEmails []string) bool {
+	if strings.HasPrefix(event.Type, "github.pull_request.") && !nextNeedsUserTransition(event.Type, event.Payload) {
+		return false
+	}
+	return !isTransientResumePath(event.Path) && len(event.Involvement) > 0 && !resumePersonalWork(event, gitEmails)
+}
+
+func resumeEventSince(event ResumeEvent, previous, now time.Time) bool {
+	if event.Timestamp.After(now) || event.CapturedAt.After(now) {
+		return false
+	}
+	return event.Timestamp.After(previous) || event.CapturedAt.After(previous)
+}
+
+func resumeProjectActivityMessage(db *sql.DB, config ResumeConfig, events []ResumeEvent, previous, now time.Time) (string, error) {
+	activity, err := loadProjectActivity(db, config.MemoryDir, now, config.GitEmails)
+	if err != nil {
+		return "", err
+	}
+	for _, event := range events {
+		if !resumeEventSince(event, previous, now) {
+			continue
+		}
+		if resumePersonalWork(event, config.GitEmails) || resumeRelevantUpdate(event, config.GitEmails) || activity.linkedToProject(event.ID) {
+			activity.addEvent(event.ID, event.Project)
+		}
+	}
+	prs, err := agentPullRequestsSince(db, previous, now)
+	if err != nil {
+		return "", err
+	}
+	for _, pr := range prs {
+		activity.addAgentPullRequest(pr)
+	}
+	lines := append([]string{"Activity since last check-in by project"}, activity.lines()...)
+	if len(lines) == 1 {
+		lines = append(lines, "No new activity captured.")
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+func resumeDecisionsMessage(items []NextItem) string {
+	decisions := len(nextCategorizeItems(items))
+	if decisions == 0 {
+		return ""
+	}
+	return fmt.Sprintf("Categorize: %d decisions remaining (workgraph projects review)", decisions)
 }
 
 func resumeSinceMessage(result ResumeResult, location *time.Location) string {

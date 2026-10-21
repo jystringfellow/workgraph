@@ -71,11 +71,24 @@ in `specs/github-pr-watch.md` and its `triage.needs_user` is true;
 first-capture rule still applies. Personal work evidence for the handoff is
 unchanged.
 
-Planned (`specs/projects.md`, slice D4): the default overview groups activity
-since the last check-in by workstream, then declared project, falling back to
-the container for unlinked activity. It includes PR units opened by agents
-overnight and ends with the number of categorization decisions remaining
-(`workgraph projects review`).
+After the check-in sections, the default overview shows `Activity since last
+check-in by project`, grouped by workstream, then declared project, falling
+back to the container for unlinked activity, as described in
+`specs/projects.md` (Daily Loop Surfaces). Its activity is every event that
+qualifies for either check-in section plus every event in a unit with an
+applied project link, under the same timestamp or first-capture rule. It also
+lists pull requests opened by agents since the check-in: watched pull
+requests (`specs/github-pr-watch.md`) whose author kind is `bot` and whose
+`created_at` is after the check-in, each as `agent PR <owner/repo>#<number>
+<title>` with the bot login, and `on your behalf` when the user is watched as
+the author. A pull request is placed by the link on its `github.pr` unit, or
+by its repository name as the container. With nothing to show, the section
+says `No new activity captured.`
+
+When categorization decisions remain, the default overview then shows
+`Categorize: <n> decisions remaining (workgraph projects review)`, where `<n>`
+is the number of `workgraph next` `categorize` items. This line does not need
+a previous check-in.
 
 ## Project List
 

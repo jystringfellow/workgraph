@@ -1,6 +1,7 @@
 # Projects, Workstreams, And Categorization
 
-Status: D1, D2, and D3 implemented; D4 planned. Slices are listed in
+Status: D1, D2, and D3 implemented; the D4 daily loop surfaces are
+implemented and D4 scheduling is planned. Slices are listed in
 `specs/roadmap.md`. Facts live in `facts/projects*_test.go`.
 
 ## Intent
@@ -558,21 +559,43 @@ workgraph projects explain <unit-id>
 
 ## Daily Loop Surfaces
 
-- **`next`** gains a `categorize` group after `ready`. Text output shows at
-  most three proposed units and one line `Categorize: <n> awaiting a
-  decision (workgraph projects review), <m> auto-applied today (workgraph
-  projects review --auto)`. JSON items
-  use reason `categorize`, id `projects:categorize:<link-id>`, and evidence
-  from the link. The item closes when the link is decided. See
-  `specs/next.md`.
+These surfaces only read links; none runs a linking pass or writes a link.
+
+- **`next`** gains a `categorize` group after `ready`, with one item per link
+  that the default `projects review` lists. Text output starts the group with
+  one line `Categorize: <n> awaiting a decision (workgraph projects review),
+  <m> auto-applied today (workgraph projects review --auto)`, then
+  `Auto-apply paused: <reason>` when paused, then at most three items, oldest
+  first, as `<unit-ref> in <container>: <proposed|auto-applied> <target>
+  (confidence <c>)`, where `<unit-ref>` is the item's path-free unit
+  reference (`specs/next.md`). `<m>` counts undoable auto-applied links created since
+  local midnight. The group is shown while a link awaits a decision or
+  auto-apply is paused. JSON items use reason `categorize`, id
+  `projects:categorize:<link-id>`, and evidence from the link. The item
+  closes when the link is decided. See `specs/next.md`.
 - **`today`** groups activity by workstream, then project, using applied
-  links; unlinked activity falls back to its container. Each project line
-  lists the kinds of its units and how many were auto-applied, and when any
-  were it points to `workgraph projects review --auto`. See
+  links; unlinked activity falls back to its container. See
   `specs/today.md`.
 - **`resume`** uses the same grouping. The morning overview shows activity
   since the last check-in per project, including PR units opened by agents
   overnight, and the count of remaining decisions. See `specs/resume.md`.
+
+Grouping, shared by `today` and `resume`:
+
+- An event in a unit with an applied `project` link belongs to that project,
+  under the project's workstream when its memory declares one.
+- An event with no applied link belongs to the project its container maps to
+  when the container maps to exactly one catalog project. An applied `none`
+  link keeps the event out of every project.
+- Any other event stays under its container, nested under a workstream when
+  the container maps to exactly one workstream.
+- Lines are `- <workstream> workstream: <counts>`, `- <slug> project:
+  <counts>[; <kinds>][; <k> auto-applied (workgraph projects review
+  --auto)]`, and `- <container>: <counts>`, with projects and containers in a
+  workstream indented beneath it. `<kinds>` are the distinct link kinds, such
+  as `review, coordination`, of the project's units in view, and `<k>` counts
+  those units whose applied link is auto-applied. Entries are ordered by
+  count, most first, then name.
 
 ## Slices
 
@@ -640,5 +663,11 @@ workgraph projects explain <unit-id>
   `llm.associate` request when eligible units exist and none when they do
   not; a claim without a kind never returns it to a capture worker; a
   bridge-executed request completes only with a valid claim token.
-- **P10. Daily surfaces group by project.** `next` shows the categorize line,
-  and `today` and `resume` group by workstream, then project, then container.
+- **P10. Daily surfaces group by project.** `next` shows the categorize line
+  with three awaiting units and the auto-applied count, JSON items carry the
+  link id and evidence, and approving, reassigning, and rejecting closes them
+  without editing events. `today` groups by workstream, then project, then
+  container, listing link kinds and the auto-applied count with the
+  `projects review --auto` hint. `resume` groups activity since the check-in
+  the same way, lists an agent-opened PR under its project, and counts the
+  remaining decisions.
