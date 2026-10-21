@@ -198,8 +198,9 @@ that resolves to exactly one project wins:
 An identifier that matches more than one project produces no deterministic
 link; the unit goes to the LLM with those projects listed as hints.
 
-Deterministic links are applied with `auto = true`, `confidence = 1`, and the
-rule recorded, so they are visible and undoable like any auto-applied link.
+Deterministic links are applied immediately, not proposed, with `auto =
+true`, `confidence = 1`, the rule, and the `run_id` of the linking pass, so
+they are visible and undoable like any auto-applied link.
 
 ## LLM Categorization
 
@@ -294,15 +295,20 @@ sources, and the exact filtered payload, and sends nothing.
 
 ### Model
 
-The task route is `associate`:
+The task route is `associate`. It accepts any profile configured with
+`workgraph llm`, local or hosted, and the task contract is the same for every
+provider:
 
 ```text
 workgraph llm use local-gemma --for associate
+workgraph llm add hosted-mini --provider openai-compatible --base-url <url> --model <model> --api-key-env <VAR>
+workgraph llm use hosted-mini --for associate
 workgraph llm connect claude-code --name haiku --model claude-haiku-5-5 --for associate
 ```
 
-A small, fast model is the intended default. Existing `categorize` routes are
-read as `associate`.
+Both execution modes in Scheduling are supported: a direct API call from
+workgraph, or a signed-in client through the bridge. A small, fast model is
+the intended default. Existing `categorize` routes are read as `associate`.
 
 ## Auto-Apply
 
@@ -332,7 +338,8 @@ Auto-apply accuracy uses links with `auto = true` and `source = llm` whose
 accuracy = confirmed / (confirmed + corrected + undone)
 ```
 
-- Fewer than 20 decided links is `insufficient_data`; auto-apply stays on.
+- Fewer than 20 decided links is `insufficient_data`; LLM auto-apply stays
+  on.
 - While the sample is `insufficient_data`, every undecided auto-applied link,
   deterministic or LLM, appears in `projects review` and in the `next`
   Categorize count beside proposed links, so the evening review builds the
@@ -344,8 +351,8 @@ accuracy = confirmed / (confirmed + corrected + undone)
 - A pause lifts only when measured accuracy over at least 20 decided links is
   back at or above 0.95, recorded as a `projects.auto_apply_resumed` event. A
   sample that falls below 20 does not lift a pause.
-- After the sample reaches 20, `projects review --auto` lists recent
-  auto-applied links for spot-checks.
+- After the sample reaches 20, undecided auto-applied links leave the default
+  review and remain available through `projects review --auto`.
 
 `workgraph review` reports this metric, its 14-day window, and its sample size
 beside the suggestion metrics in `specs/effectiveness-review.md`; it does not
@@ -401,28 +408,38 @@ workgraph projects explain <unit-id>
   container, time range, kind, summary, proposed target, confidence, and
   evidence ids. Keys: `a` approve, `r` reassign (prompts for a slug), `n` new
   project, `x` no project, `s` skip, `q` quit. EOF or empty input skips.
+- `projects review --auto [--since <duration>]` lists auto-applied links,
+  deterministic and LLM, from the last 24 hours by default, newest first, with
+  link id, run id, rule or profile, target, and summary. The same keys apply,
+  so a wrong link is fixed with one key: `r` reassign, `x` no project.
 - Approving an applied auto link records `decision = confirmed`. Approving a
   proposed link applies it with `source` unchanged, `auto = false`, and
   `decision = approved`.
 - `--reject` and `x` assign no project: the link is corrected to a user link
-  with `target = none`.
+  with `target = none`. `--reject <link-id>` and `--assign <unit-id>` accept
+  applied links as well as proposed ones.
 - `--new` creates project memory with the existing `memory init` starter,
   adds the workstream frontmatter when given, and applies a user link.
 - `projects explain` prints the unit's members, every link row with its
-  source, rule or run, and decision.
+  source, rule or run, and decision, and for the current link the exact
+  `projects review --assign`, `--reject`, and `projects undo` commands that
+  change it.
 - Flag forms make the same changes as the keys and never prompt.
 
 ## Daily Loop Surfaces
 
 - **`next`** gains a `categorize` group after `ready`. Text output shows at
   most three proposed units and one line `Categorize: <n> awaiting a
-  decision, <m> auto-applied today (workgraph projects review)`. JSON items
+  decision (workgraph projects review), <m> auto-applied today (workgraph
+  projects review --auto)`. JSON items
   use reason `categorize`, id `projects:categorize:<link-id>`, and evidence
   from the link. The item closes when the link is decided. See
   `specs/next.md`.
 - **`today`** groups activity by workstream, then project, using applied
   links; unlinked activity falls back to its container. Each project line
-  lists the kinds of its units. See `specs/today.md`.
+  lists the kinds of its units and how many were auto-applied, and when any
+  were it points to `workgraph projects review --auto`. See
+  `specs/today.md`.
 - **`resume`** uses the same grouping. The morning overview shows activity
   since the last check-in per project, including PR units opened by agents
   overnight, and the count of remaining decisions. See `specs/resume.md`.
@@ -442,18 +459,6 @@ workgraph projects explain <unit-id>
   requests, direct and bridge execution, and the `next`, `today`, and
   `resume` surfaces. Existing capture-only workers are unchanged. D4 depends
   on in-flight changes to those commands.
-
-## Open Decisions
-
-These are proposed defaults, written into this spec so the slices can start,
-and awaiting the user's confirmation:
-
-- deterministic shared-identifier and container-mapping links are applied
-  automatically, marked auto and undoable, rather than proposed
-- LLM auto-apply stays on while the accuracy sample is `insufficient_data`
-- while the sample has fewer than 20 decided links, every undecided
-  auto-applied link appears in `projects review` and the `next` Categorize
-  count
 
 ## Deferred
 
@@ -475,8 +480,9 @@ and awaiting the user's confirmation:
   not eligible.
 - **P3. Deterministic rules resolve in order.** A thread citing a PR URL in
   one project's memory links to that project even though its channel is
-  mapped to another; an identifier in two projects produces no link; an
-  identifier seen only in an auto-applied or proposed link seeds nothing.
+  mapped to another, and the link is applied immediately with `auto = true`
+  and a run id; an identifier in two projects produces no link; an identifier
+  seen only in an auto-applied or proposed link seeds nothing.
 - **P4. Workstream mappings narrow the catalog.** A container mapped to `mmo`
   sends only `mmo` projects in the dry-run payload and creates no link.
 - **P5. Dry run sends nothing and respects opt-in.** With only `slack`
@@ -490,10 +496,14 @@ and awaiting the user's confirmation:
   project proposes, a recent rejection for the pair proposes, and measured
   accuracy below 0.95 over 20 decided links pauses auto-apply and says so;
   the pause survives the sample dropping below 20; with fewer than 20
-  decided links, undecided auto links are listed in review.
+  decided links, auto-apply stays on and undecided auto links, deterministic
+  and LLM, are listed in the default review and the `next` count.
 - **P8. Review and undo record decisions.** Approve, reassign, reject, new
   project, and undo record the documented state and decision without editing
-  events; undo leaves a proposed replacement that no later deterministic or
+  events; `review --auto` lists a deterministic and an LLM auto link with
+  their run ids, `r` corrects one, and `undo --run` undoes a whole run;
+  `explain` prints the commands that change the current link; undo leaves a
+  proposed replacement that no later deterministic or
   LLM run reapplies; user-approved links survive later runs.
 - **P9. Scheduled requests use the outbox.** The daemon emits one
   `llm.associate` request when eligible units exist and none when they do
