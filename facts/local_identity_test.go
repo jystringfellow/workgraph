@@ -235,8 +235,10 @@ func TestTodayAndResumeIncludeCommitsWhenLocalIdentityIsUnknown(t *testing.T) {
 }
 
 func TestResumeProjectListShowsTenRecentPersonalProjectsUnlessAllIsRequested(t *testing.T) {
-	homeDir := filepath.Join(t.TempDir(), ".workgraph")
-	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	homeDir, memoryDir := filepath.Join(root, ".workgraph"), filepath.Join(root, "workgraph-memory")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir, MemoryDir: memoryDir})
 	if err != nil {
 		t.Fatalf("init: %v", err)
 	}
@@ -259,7 +261,7 @@ func TestResumeProjectListShowsTenRecentPersonalProjectsUnlessAllIsRequested(t *
 		Payload:   `{"path":"/tmp/dormant/main.go"}`,
 	})
 
-	resume, err := workgraph.Resume(workgraph.ResumeConfig{HomeDir: homeDir, DatabasePath: initialized.DatabasePath, Now: now, GitEmails: []string{"me@example.test"}})
+	resume, err := workgraph.Resume(workgraph.ResumeConfig{HomeDir: homeDir, MemoryDir: memoryDir, DatabasePath: initialized.DatabasePath, Now: now, GitEmails: []string{"me@example.test"}})
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
@@ -284,7 +286,7 @@ func TestResumeProjectListShowsTenRecentPersonalProjectsUnlessAllIsRequested(t *
 		t.Errorf("expected ten listed projects, got %d", len(resume.Projects))
 	}
 
-	debug, err := workgraph.Resume(workgraph.ResumeConfig{HomeDir: homeDir, DatabasePath: initialized.DatabasePath, Now: now, GitEmails: []string{"me@example.test"}, DebugRelevance: true})
+	debug, err := workgraph.Resume(workgraph.ResumeConfig{HomeDir: homeDir, MemoryDir: memoryDir, DatabasePath: initialized.DatabasePath, Now: now, GitEmails: []string{"me@example.test"}, DebugRelevance: true})
 	if err != nil {
 		t.Fatalf("resume --debug-relevance: %v", err)
 	}
@@ -299,7 +301,7 @@ func TestResumeProjectListShowsTenRecentPersonalProjectsUnlessAllIsRequested(t *
 		}
 	}
 
-	all, err := workgraph.Resume(workgraph.ResumeConfig{HomeDir: homeDir, DatabasePath: initialized.DatabasePath, Now: now, AllProjects: true})
+	all, err := workgraph.Resume(workgraph.ResumeConfig{HomeDir: homeDir, MemoryDir: memoryDir, DatabasePath: initialized.DatabasePath, Now: now, AllProjects: true})
 	if err != nil {
 		t.Fatalf("resume --all: %v", err)
 	}
