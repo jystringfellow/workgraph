@@ -39,6 +39,19 @@ Scenario: Link a Slack thread by a shared identifier
   Then the thread is linked to "ask-kai" by the shared identifier rule
   And the link is marked auto and can be undone
 
+Scenario: Fix a wrong automatic link with one key
+  Given a deterministic and an LLM link were applied automatically
+  When I run "workgraph projects review --auto"
+  Then both links are listed with their run ids
+  When I press "r" on one and enter "ask-kai"
+  Then that unit is linked to "ask-kai" by me and the old link is corrected
+
+Scenario: Explain how a unit is linked
+  Given a unit was linked to "ask-kai" by me
+  When I run "workgraph projects explain <unit-id>"
+  Then the unit's members and every link row are listed
+  And the reassign and reject commands are printed without an undo command
+
 Scenario: Preview categorization without sending anything
   Given LLM categorization is enabled for Slack but not for Slack DMs
   When I run "workgraph llm associate --dry-run"
