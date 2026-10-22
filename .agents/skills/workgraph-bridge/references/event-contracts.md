@@ -67,15 +67,23 @@ provider search is indexed, capped, or partial.
 
 Slack Lists use declared `complete_snapshot` semantics with `slack_read_file`.
 For a one-List request, submit the complete provider output verbatim as
-`snapshot_csv` with `list_id`; workgraph parses it server-side. Multi-List
+`snapshot_csv` with `list_id`; workgraph parses it server-side. A snapshot too
+large for one call may be sent as ordered raw fragments under the same claim,
+with `snapshot_continues: true` on all but the last; workgraph stages them,
+renews the claim per fragment, and ingests the joined CSV atomically on the
+final fragment. Multi-List
 compatibility batches submit every CSV record as `slack.list_item` with payload
 containing `list_id` and a `fields` object, and omit `timestamp` and
 `external_id`. workgraph selects
 the first complete per-List row-key candidate, applies optional state and
 interest-column interpretation, assigns the request `until` as `observed_at`,
-hashes canonical JSON of the semantic row, and derives
-`<list>:<row-key>:<content-hash>`. Field order and observation metadata do not
-affect the content hash. Duplicate or missing row keys fail the complete batch.
+hashes canonical JSON of the row's revision content, and derives
+`<list>:<row-key>:<content-hash>`. Revision content is the List id, `done`, and
+every non-empty single-line field with whitespace collapsed. Multi-line values
+such as a Details body stay in `fields` but do not create revisions, so relay
+drift in long text cannot duplicate an unchanged row. Field order and
+observation metadata do not affect the content hash. A row matching its latest
+stored revision is deduplicated. Duplicate or missing row keys fail the complete batch.
 State is revision content, not identity, and never filters capture, so completed
 rows remain evidence while future next-work views can exclude them. Without a
 state mapping, `done` remains absent/unknown.

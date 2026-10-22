@@ -497,6 +497,23 @@ use the event-shaped compatibility batch so all Lists complete atomically. This 
 opaque string instead of requiring a worker to generate one nested JSON object
 per row while holding a short lease.
 
+A single-List snapshot too large to emit in one call may be submitted in
+ordered chunks under the same claim. Each `capture_ingest` call carries the
+same `request_id`, `claim_token`, and `list_id` plus the next consecutive raw
+fragment of the provider CSV in `snapshot_csv`; every chunk except the last
+sets `snapshot_continues = true`. Fragments may split anywhere, including
+inside a quoted field, because workgraph stages them unparsed in the
+`slack_list_snapshot_chunks` table bound to the request id and claim token.
+Each staged chunk renews the claim lease. The final chunk (without
+`snapshot_continues`) concatenates the staged fragments in submission order
+and ingests the complete snapshot through the same atomic path, so duplicate or
+missing row keys still reject the whole snapshot and nothing is stored until
+the final chunk succeeds. Staged fragments from an earlier claim of the same
+request are discarded, and completion removes the request's fragments. A
+rejected final chunk also discards the staged fragments and says so, so a
+retry resends the snapshot from its first fragment. The
+combined CSV is bounded by the normal ingest size limit.
+
 A scheduled batch derives its
 connector and event source from the claimed request; callers cannot override
 them. A manual batch supplies `--source`.
@@ -611,9 +628,22 @@ slack.list_item` and payload containing exactly the configured `list_id` and a
 `fields` object keyed by CSV column name. Both paths omit
 `timestamp` and `external_id`. workgraph validates the List scope, applies that
 List's optional state and interest interpretation, derives the first complete
-row-key candidate, hashes canonical semantic row content, assigns the request
+row-key candidate, hashes the row's revision content, assigns the request
 `until` as `observed_at`, and constructs
-`<list>:<row-key>:<content-hash>`. State is revision content, not identity:
+`<list>:<row-key>:<content-hash>`.
+
+Revision content is the List id, the interpreted `done` value when present,
+and every non-empty single-line field, keyed by case-insensitive column name
+with surrounding and repeated whitespace collapsed. Multi-line values (rich
+text such as a Details body) and empty values stay in `fields` but do not
+define a revision, because bridge workers relay provider CSV through model
+output and cannot reproduce long multi-line text byte-for-byte; empty values
+also absorb spurious columns from a garbled header. A row whose revision
+content equals the most recent stored revision for the same List and row key
+is reported as deduplicated and not stored, including rows stored before this
+revision rule. `today` and `resume` likewise hide a stored `slack.list_item`
+whose revision content repeats the preceding stored revision of the same row,
+so earlier transcription-drift duplicates do not reappear as new work. State is revision content, not identity:
 completed rows remain evidence but can be excluded from future next-work
 projections. A missing row is absence from the observation, not proof that the
 item was completed or deleted.

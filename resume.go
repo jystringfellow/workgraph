@@ -473,6 +473,10 @@ func loadResumeEvents(db *sql.DB, location *time.Location) ([]ResumeEvent, error
 	if involvementColumnCount == 0 {
 		query = `SELECT id, source, type, timestamp, project, summary, payload_json, created_at, NULL FROM events`
 	}
+	repeatedListRevisions, err := repeatedSlackListRevisionIDs(db)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := db.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("query events: %w", err)
@@ -485,6 +489,9 @@ func loadResumeEvents(db *sql.DB, location *time.Location) ([]ResumeEvent, error
 		var capturedAtRaw string
 		if err := rows.Scan(&stored.ID, &stored.Source, &stored.Type, &stored.Timestamp, &stored.Project, &stored.Summary, &stored.PayloadJSON, &capturedAtRaw, &stored.Involvement); err != nil {
 			return nil, fmt.Errorf("scan event: %w", err)
+		}
+		if repeatedListRevisions[stored.ID] {
+			continue
 		}
 
 		timestamp, err := time.Parse(time.RFC3339Nano, stored.Timestamp)

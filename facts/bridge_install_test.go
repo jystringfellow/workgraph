@@ -314,7 +314,7 @@ func TestSlackListsBridgeContractAllowsContentHashWithoutClaimingDeletion(t *tes
 		}
 		for _, expected := range []string{
 			"complete_snapshot", "slack_read_file", `response_format: "detailed"`,
-			"resource read needed", "routing context", "connector_required_tools",
+			"resource read needed", "routing context", "connector_required_tools", "snapshot_continues",
 		} {
 			if !strings.Contains(string(contents), expected) {
 				t.Fatalf("bridge skill %s omitted %q", path, expected)
@@ -331,7 +331,7 @@ func TestSlackListsBridgeContractAllowsContentHashWithoutClaimingDeletion(t *tes
 		if err != nil {
 			t.Fatalf("read Slack Lists bridge contract %s: %v", path, err)
 		}
-		for _, expected := range []string{"<revision-or-content-hash>", "canonical JSON", "A missing row is not a deletion", "complete_snapshot", "slack_read_file",
+		for _, expected := range []string{"<revision-or-content-hash>", "canonical JSON", "snapshot_continues", "Multi-line values", "A missing row is not a deletion", "complete_snapshot", "slack_read_file",
 			"`slack.thread_reply`", "`channel_id`", "`channel_name`", "`conversation_type`", "`DM: <user name>`", "Slack conversation info"} {
 			if !strings.Contains(string(contents), expected) {
 				t.Fatalf("Slack Lists bridge contract %s omitted %q", path, expected)

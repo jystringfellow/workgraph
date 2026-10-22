@@ -337,6 +337,7 @@ func createSchema(db *sql.DB) error {
 			completed_through TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		);`,
+		slackListSnapshotChunksSchema,
 		resumeCheckInSchema,
 		githubPRObservationsSchema,
 		githubPRWatchStateSchema,

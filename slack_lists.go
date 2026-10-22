@@ -1,9 +1,25 @@
 package workgraph
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 )
+
+const slackListSnapshotChunksSchema = `CREATE TABLE IF NOT EXISTS slack_list_snapshot_chunks (
+	request_id TEXT NOT NULL,
+	claim_token TEXT NOT NULL,
+	sequence INTEGER NOT NULL,
+	fragment TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	PRIMARY KEY (request_id, claim_token, sequence)
+);`
 
 type SlackListStateOptions struct {
 	Column     string   `json:"column"`
@@ -154,4 +170,234 @@ func interpretSlackListFields(fields map[string]any, options SlackListOptions, l
 		interest = nil
 	}
 	return done, interest, nil
+}
+
+func slackListRevisionKey(listID string, rowKey string) string {
+	return listID + "\x00" + rowKey
+}
+
+func slackListRevisionHash(listID string, fields map[string]any, done *bool) string {
+	stable := map[string]string{}
+	collided := map[string]bool{}
+	for column, value := range fields {
+		raw := snapshotFieldText(value)
+		if raw == "" || strings.ContainsAny(raw, "\r\n") {
+			continue
+		}
+		text := strings.Join(strings.Fields(raw), " ")
+		key := strings.ToLower(strings.Join(strings.Fields(column), " "))
+		if _, exists := stable[key]; exists {
+			collided[key] = true
+		}
+		stable[key] = text
+	}
+	for key := range collided {
+		delete(stable, key)
+	}
+	columns := make([]string, 0, len(stable))
+	for column := range stable {
+		columns = append(columns, column)
+	}
+	sort.Strings(columns)
+	revision := []any{listID}
+	if done != nil {
+		revision = append(revision, map[string]bool{"done": *done})
+	}
+	for _, column := range columns {
+		revision = append(revision, []string{column, stable[column]})
+	}
+	encoded, _ := json.Marshal(revision)
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:])
+}
+
+type slackListRevisionQueryer interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
+func slackListRevisionHistory(db slackListRevisionQueryer) (map[string]string, map[string]bool, error) {
+	rows, err := db.Query(`SELECT id, payload_json FROM events
+		WHERE type = 'slack.list_item' AND json_extract(payload_json, '$.capture_semantics') = 'complete_snapshot'
+		ORDER BY timestamp ASC, created_at ASC, id ASC`)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read Slack List revisions: %w", err)
+	}
+	defer rows.Close()
+	latest := map[string]string{}
+	repeated := map[string]bool{}
+	for rows.Next() {
+		var id, payloadJSON string
+		if err := rows.Scan(&id, &payloadJSON); err != nil {
+			return nil, nil, fmt.Errorf("scan Slack List revision: %w", err)
+		}
+		var payload struct {
+			ListID string         `json:"list_id"`
+			RowKey string         `json:"row_key"`
+			Fields map[string]any `json:"fields"`
+			Done   *bool          `json:"done"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader([]byte(payloadJSON)))
+		decoder.UseNumber()
+		if err := decoder.Decode(&payload); err != nil || payload.ListID == "" || payload.RowKey == "" {
+			continue
+		}
+		key := slackListRevisionKey(payload.ListID, payload.RowKey)
+		revision := slackListRevisionHash(payload.ListID, payload.Fields, payload.Done)
+		if previous, found := latest[key]; found && previous == revision {
+			repeated[id] = true
+			continue
+		}
+		latest[key] = revision
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("read Slack List revisions: %w", err)
+	}
+	return latest, repeated, nil
+}
+
+func repeatedSlackListRevisionIDs(db *sql.DB) (map[string]bool, error) {
+	_, repeated, err := slackListRevisionHistory(db)
+	return repeated, err
+}
+
+type SlackListSnapshotCSVConfig struct {
+	HomeDir      string
+	DatabasePath string
+	RequestID    string
+	ClaimToken   string
+	ListID       string
+	CSV          string
+	Continues    bool
+}
+
+func IngestSlackListSnapshotCSV(config SlackListSnapshotCSVConfig) (BridgedIngestResult, error) {
+	status, err := prepareRunStatus(RunConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath})
+	if err != nil {
+		return BridgedIngestResult{}, err
+	}
+	db, err := sql.Open("sqlite3", status.DatabasePath)
+	if err != nil {
+		return BridgedIngestResult{}, fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+	if err := createSchema(db); err != nil {
+		return BridgedIngestResult{}, fmt.Errorf("prepare database schema: %w", err)
+	}
+	requestID := strings.TrimSpace(config.RequestID)
+	listID := strings.TrimSpace(config.ListID)
+	if config.Continues {
+		return stageSlackListSnapshotChunk(db, status, requestID, config.ClaimToken, listID, config.CSV)
+	}
+
+	staged, err := stagedSlackListSnapshot(db, requestID, config.ClaimToken)
+	if err != nil {
+		return BridgedIngestResult{}, err
+	}
+	result, err := ingestSlackListSnapshotCSV(config, requestID, listID, staged+config.CSV)
+	if err != nil {
+		if staged == "" {
+			return BridgedIngestResult{}, err
+		}
+		if _, clearErr := db.Exec(`DELETE FROM slack_list_snapshot_chunks WHERE request_id = ? AND claim_token = ?`, requestID, config.ClaimToken); clearErr != nil {
+			return BridgedIngestResult{}, fmt.Errorf("%w; clear staged Slack List snapshot chunks: %v", err, clearErr)
+		}
+		return BridgedIngestResult{}, fmt.Errorf("%w; staged snapshot chunks were discarded, so resend the snapshot from its first fragment", err)
+	}
+	if _, err := db.Exec(`DELETE FROM slack_list_snapshot_chunks WHERE request_id = ?`, requestID); err != nil {
+		return BridgedIngestResult{}, fmt.Errorf("clear staged Slack List snapshot chunks: %w", err)
+	}
+	return result, nil
+}
+
+func ingestSlackListSnapshotCSV(config SlackListSnapshotCSVConfig, requestID string, listID string, contents string) (BridgedIngestResult, error) {
+	envelopes, err := slackListSnapshotEnvelopesFromCSV(listID, contents)
+	if err != nil {
+		return BridgedIngestResult{}, err
+	}
+	events, err := json.Marshal(envelopes)
+	if err != nil {
+		return BridgedIngestResult{}, fmt.Errorf("encode Slack List snapshot rows: %w", err)
+	}
+	return IngestBridgedCapture(BridgedIngestConfig{
+		HomeDir: config.HomeDir, DatabasePath: config.DatabasePath,
+		RequestID: requestID, ClaimToken: config.ClaimToken, SnapshotListID: listID,
+		Input: bytes.NewReader(events),
+	})
+}
+
+func stagedSlackListSnapshot(db *sql.DB, requestID string, claimToken string) (string, error) {
+	rows, err := db.Query(`SELECT fragment FROM slack_list_snapshot_chunks
+		WHERE request_id = ? AND claim_token = ? ORDER BY sequence ASC`, requestID, claimToken)
+	if err != nil {
+		return "", fmt.Errorf("read staged Slack List snapshot chunks: %w", err)
+	}
+	defer rows.Close()
+	var builder strings.Builder
+	for rows.Next() {
+		var fragment string
+		if err := rows.Scan(&fragment); err != nil {
+			return "", fmt.Errorf("scan staged Slack List snapshot chunk: %w", err)
+		}
+		builder.WriteString(fragment)
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("read staged Slack List snapshot chunks: %w", err)
+	}
+	return builder.String(), nil
+}
+
+func stageSlackListSnapshotChunk(db *sql.DB, status RunStatus, requestID string, claimToken string, listID string, fragment string) (BridgedIngestResult, error) {
+	request, found, err := readCaptureRequestDB(db, requestID)
+	if err != nil {
+		return BridgedIngestResult{}, err
+	}
+	if !found {
+		return BridgedIngestResult{}, fmt.Errorf("capture request %s was not found", requestID)
+	}
+	if request.Kind != captureRequestKindCapture || request.ConnectorID != "slack.lists" || request.CaptureSemantics != "complete_snapshot" {
+		return BridgedIngestResult{}, fmt.Errorf("snapshot_continues requires a claimed Slack Lists complete-snapshot request")
+	}
+	if err := validateSlackListRawSnapshotScope(request, listID); err != nil {
+		return BridgedIngestResult{}, err
+	}
+	now := time.Now().UTC()
+	tx, err := db.Begin()
+	if err != nil {
+		return BridgedIngestResult{}, fmt.Errorf("begin Slack List snapshot chunk: %w", err)
+	}
+	defer tx.Rollback()
+	renewed, err := tx.Exec(`UPDATE capture_requests SET lease_expires_at = ?
+		WHERE id = ? AND status = 'claimed' AND claim_token = ? AND lease_expires_at > ?`,
+		now.Add(bridgedClaimLease).Format(time.RFC3339Nano), requestID, claimToken, now.Format(time.RFC3339Nano))
+	if err != nil {
+		return BridgedIngestResult{}, fmt.Errorf("renew capture request: %w", err)
+	}
+	if count, _ := renewed.RowsAffected(); count != 1 || strings.TrimSpace(claimToken) == "" {
+		return BridgedIngestResult{}, fmt.Errorf("capture request %s is not validly claimed", requestID)
+	}
+	if _, err := tx.Exec(`DELETE FROM slack_list_snapshot_chunks WHERE request_id = ? AND claim_token <> ?`, requestID, claimToken); err != nil {
+		return BridgedIngestResult{}, fmt.Errorf("discard stale Slack List snapshot chunks: %w", err)
+	}
+	var sequence, stagedBytes int
+	if err := tx.QueryRow(`SELECT COUNT(*), COALESCE(SUM(length(CAST(fragment AS BLOB))), 0)
+		FROM slack_list_snapshot_chunks WHERE request_id = ? AND claim_token = ?`, requestID, claimToken).Scan(&sequence, &stagedBytes); err != nil {
+		return BridgedIngestResult{}, fmt.Errorf("read staged Slack List snapshot size: %w", err)
+	}
+	if stagedBytes+len(fragment) > maxBridgedIngestBytes {
+		return BridgedIngestResult{}, fmt.Errorf("snapshot_csv exceeds %d bytes", maxBridgedIngestBytes)
+	}
+	if _, err := tx.Exec(`INSERT INTO slack_list_snapshot_chunks (request_id, claim_token, sequence, fragment, created_at)
+		VALUES (?, ?, ?, ?, ?)`, requestID, claimToken, sequence, fragment, now.Format(time.RFC3339Nano)); err != nil {
+		return BridgedIngestResult{}, fmt.Errorf("stage Slack List snapshot chunk: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return BridgedIngestResult{}, fmt.Errorf("commit Slack List snapshot chunk: %w", err)
+	}
+	return BridgedIngestResult{
+		HomeDir:      status.HomeDir,
+		DatabasePath: status.DatabasePath,
+		Source:       request.Source,
+		Message: fmt.Sprintf("Slack List snapshot chunk %d staged (%d bytes total); request %s stays claimed until a final snapshot_csv chunk without snapshot_continues",
+			sequence+1, stagedBytes+len(fragment), requestID),
+	}, nil
 }
