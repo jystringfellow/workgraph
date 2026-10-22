@@ -1007,6 +1007,14 @@ empty, or equal to `channel_id`, ingest accepts the event if the store already
 pairs that `channel_id` with a name and uses that name as the container. The
 payload is stored as submitted.
 
+A channel_id-to-name pair keeps the privacy of the event it came from. A
+`channel` or `private_channel` event only takes a name from another `channel`
+or `private_channel` event. A name seen only on an event treated as a DM
+(missing, unrecognized, `im`, or `mpim` type) names only events that are
+themselves treated as DMs, so a restricted name never becomes the container of
+an event that categorization may send. Ingest, the store repair, and readers
+share this rule.
+
 When a Slack envelope omits `project`, ingest stores the payload
 `channel_name` as the container, trimmed and without a leading `#`, matching
 native Slack capture. An explicit Slack `project` is stored without a leading

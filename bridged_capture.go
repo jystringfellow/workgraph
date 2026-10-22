@@ -976,7 +976,7 @@ func IngestBridgedCapture(config BridgedIngestConfig) (BridgedIngestResult, erro
 
 	prepared := make([]preparedBridgedEvent, 0, len(envelopes))
 	snapshotKeys := map[string]bool{}
-	knownSlackChannelNames := map[string]string{}
+	knownSlackChannelNames := map[string]slackChannelNames{}
 	for index, envelope := range envelopes {
 		var event preparedBridgedEvent
 		switch {
@@ -1293,7 +1293,7 @@ func canonicalBridgedSlackType(eventType string) string {
 	return eventType
 }
 
-func requireBridgedSlackChannel(db *sql.DB, event *preparedBridgedEvent, knownNames map[string]string) error {
+func requireBridgedSlackChannel(db *sql.DB, event *preparedBridgedEvent, knownNames map[string]slackChannelNames) error {
 	if event.Type != "slack.message" && event.Type != "slack.thread_reply" {
 		return nil
 	}
@@ -1310,14 +1310,15 @@ func requireBridgedSlackChannel(db *sql.DB, event *preparedBridgedEvent, knownNa
 	if slackPayloadContainer(event.PayloadJSON) != "" {
 		return nil
 	}
-	name, checked := knownNames[channelID]
+	names, checked := knownNames[channelID]
 	if !checked {
 		var err error
-		if name, err = loadSlackChannelAlias(db, channelID); err != nil {
+		if names, err = loadSlackChannelAlias(db, channelID); err != nil {
 			return err
 		}
-		knownNames[channelID] = name
+		knownNames[channelID] = names
 	}
+	name := names.For(event.PayloadJSON)
 	if name == "" {
 		return fmt.Errorf("slack payload channel_name is required for %s: set it to the conversation name from Slack conversation info without a leading #; DMs use \"DM: <user name>\" and group DMs \"Group DM: <names>\"", channelID)
 	}

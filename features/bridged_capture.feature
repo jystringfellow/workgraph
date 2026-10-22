@@ -104,6 +104,7 @@ Feature: Bridged connector capture
     Then the whole batch is rejected with an error naming the event and the missing field
     But a missing channel_name is accepted when the store already names that channel_id
     And that stored name becomes the container while the payload is stored as submitted
+    But a name known only from an event treated as a DM never names a channel event
 
   Scenario: Treat bridged Slack replies as thread replies
     Given a bridged Slack reply submitted as slack.reply with a parent thread_ts

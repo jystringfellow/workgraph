@@ -113,7 +113,7 @@ func TestStoreBackfillsEmptySlackContainersFromChannelName(t *testing.T) {
 		t.Fatal(err)
 	}
 	payloads := map[string]string{
-		"empty":    `{"channel_id":"C0DEMO001","channel_name":"squad-demo-excellence","ts":"1789300800.000100","text":"Empty project"}`,
+		"empty":    `{"channel_id":"C0DEMO001","channel_name":"squad-demo-excellence","conversation_type":"channel","ts":"1789300800.000100","text":"Empty project"}`,
 		"null":     `{"channel_id":"C0DEMO002","channel_name":"#guild-demo","ts":"1789300801.000100","text":"Null project"}`,
 		"explicit": `{"channel_id":"C0DEMO003","channel_name":"demo-changes","ts":"1789300802.000100","text":"Explicit project"}`,
 		"dm":       `{"channel_id":"D0DEMO004","channel_name":"DM: Lila","conversation_type":"im","ts":"1789300803.000100","text":"Direct message"}`,
@@ -123,6 +123,8 @@ func TestStoreBackfillsEmptySlackContainersFromChannelName(t *testing.T) {
 		"alias":    `{"channel_id":"C0DEMO001","ts":"1789300806.000100","text":"Alias only"}`,
 		"hash":     `{"channel_id":"C0DEMO007","ts":"1789300807.000100","text":"Hash container"}`,
 		"reply":    `{"channel_id":"C0DEMO001","channel_name":"squad-demo-excellence","ts":"1789300808.000200","thread_ts":"1789300800.000100","text":"Reply"}`,
+		"legacy":   `{"channel_id":"C0DEMO008","channel_name":"private-name","ts":"1789300809.000100","text":"Untyped legacy"}`,
+		"leak":     `{"channel_id":"C0DEMO008","conversation_type":"channel","ts":"1789300810.000100","text":"Typed without name"}`,
 	}
 	now := time.Now()
 	insertEvent(t, initialized.DatabasePath, storedEvent{ID: "empty", Source: "slack", Type: "slack.message", Timestamp: now, Payload: payloads["empty"]})
@@ -134,6 +136,8 @@ func TestStoreBackfillsEmptySlackContainersFromChannelName(t *testing.T) {
 	insertEvent(t, initialized.DatabasePath, storedEvent{ID: "alias", Source: "slack", Type: "slack.message", Timestamp: now, Payload: payloads["alias"]})
 	insertEvent(t, initialized.DatabasePath, storedEvent{ID: "hash", Source: "slack", Type: "slack.message", Timestamp: now, Project: "#team-demo", Payload: payloads["hash"]})
 	insertEvent(t, initialized.DatabasePath, storedEvent{ID: "reply", Source: "slack", Type: "slack.reply", Timestamp: now, Payload: payloads["reply"]})
+	insertEvent(t, initialized.DatabasePath, storedEvent{ID: "legacy", Source: "slack", Type: "slack.message", Timestamp: now, Project: "kept", Payload: payloads["legacy"]})
+	insertEvent(t, initialized.DatabasePath, storedEvent{ID: "leak", Source: "slack", Type: "slack.message", Timestamp: now, Payload: payloads["leak"]})
 	db, err := sql.Open("sqlite3", initialized.DatabasePath)
 	if err != nil {
 		t.Fatal(err)
@@ -154,6 +158,8 @@ func TestStoreBackfillsEmptySlackContainersFromChannelName(t *testing.T) {
 		"alias":    {"slack.message", "squad-demo-excellence"},
 		"hash":     {"slack.message", "team-demo"},
 		"reply":    {"slack.thread_reply", "squad-demo-excellence"},
+		"legacy":   {"slack.message", "kept"},
+		"leak":     {"slack.message", ""},
 	}
 	var logs strings.Builder
 	log.SetOutput(&logs)

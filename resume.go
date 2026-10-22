@@ -544,55 +544,72 @@ func canonicalizeSlackResumeProjects(events []ResumeEvent) {
 	}
 }
 
-func slackResumeProjectAliases(events []ResumeEvent) map[string]string {
-	aliases := map[string]string{}
+func slackResumeProjectAliases(events []ResumeEvent) map[string]slackChannelNames {
+	aliases := map[string]slackChannelNames{}
 	for _, event := range events {
 		if !strings.HasPrefix(event.Type, "slack.") {
 			continue
 		}
-		if channelID, container := slackChannelAlias(event.Payload); channelID != "" {
-			aliases[channelID] = container
-		}
+		addSlackChannelAlias(aliases, event.Payload)
 	}
 	return aliases
 }
 
-func slackChannelAlias(payload string) (string, string) {
+type slackChannelNames struct {
+	Channel    string
+	Restricted string
+}
+
+func (names slackChannelNames) For(payload string) string {
+	if SlackPrivacySource(payload) == "slack" {
+		return names.Channel
+	}
+	if names.Restricted != "" {
+		return names.Restricted
+	}
+	return names.Channel
+}
+
+func addSlackChannelAlias(aliases map[string]slackChannelNames, payload string) {
 	channelID, _ := slackResumeChannelIdentity(payload)
 	container := slackPayloadContainer(payload)
 	if channelID == "" || container == "" {
-		return "", ""
+		return
 	}
-	return channelID, container
+	names := aliases[channelID]
+	if SlackPrivacySource(payload) == "slack" {
+		names.Channel = container
+	} else {
+		names.Restricted = container
+	}
+	aliases[channelID] = names
 }
 
 const slackChannelAliasQuery = `SELECT payload_json FROM events INDEXED BY idx_events_slack_channel_id
 	WHERE source = 'slack' AND json_extract(payload_json, '$.channel_id') = ?
 	ORDER BY timestamp ASC, id ASC`
 
-func loadSlackChannelAlias(db *sql.DB, channelID string) (string, error) {
+func loadSlackChannelAlias(db *sql.DB, channelID string) (slackChannelNames, error) {
 	rows, err := db.Query(slackChannelAliasQuery, channelID)
 	if err != nil {
-		return "", fmt.Errorf("query slack channel alias: %w", err)
+		return slackChannelNames{}, fmt.Errorf("query slack channel alias: %w", err)
 	}
 	defer rows.Close()
-	name := ""
+	aliases := map[string]slackChannelNames{}
 	for rows.Next() {
 		var payload string
 		if err := rows.Scan(&payload); err != nil {
-			return "", fmt.Errorf("scan slack channel alias: %w", err)
+			return slackChannelNames{}, fmt.Errorf("scan slack channel alias: %w", err)
 		}
-		if aliasID, container := slackChannelAlias(payload); aliasID == channelID {
-			name = container
-		}
+		addSlackChannelAlias(aliases, payload)
 	}
 	if err := rows.Err(); err != nil {
-		return "", fmt.Errorf("query slack channel alias: %w", err)
+		return slackChannelNames{}, fmt.Errorf("query slack channel alias: %w", err)
 	}
-	return name, nil
+	return aliases[channelID], nil
 }
 
-func slackResumeCanonicalProject(event ResumeEvent, aliases map[string]string) string {
+func slackResumeCanonicalProject(event ResumeEvent, aliases map[string]slackChannelNames) string {
 	if !strings.HasPrefix(event.Type, "slack.") {
 		return ""
 	}
@@ -601,7 +618,7 @@ func slackResumeCanonicalProject(event ResumeEvent, aliases map[string]string) s
 	}
 	channelID, _ := slackResumeChannelIdentity(event.Payload)
 	if channelID != "" {
-		return aliases[channelID]
+		return aliases[channelID].For(event.Payload)
 	}
 	return ""
 }

@@ -830,6 +830,14 @@ func TestBridgedSlackIngestEnforcesChannelContract(t *testing.T) {
 	if output, err := runworkgraphInput(t, repoRoot, known+"\n", "capture", "ingest", "--home", homeDir, "--source", "slack", "--json", "-"); err != nil {
 		t.Fatalf("expected a known channel_id without channel_name to be accepted: %v\n%s", err, output)
 	}
+	stamp := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.Exec(`INSERT INTO events (id, source, type, timestamp, payload_json, project, created_at) VALUES ('legacy-untyped', 'slack', 'slack.message', ?, ?, 'kept', ?)`, stamp, `{"channel_id":"C0DEMO009","channel_name":"private-name","ts":"1789300700.000100"}`, stamp); err != nil {
+		t.Fatal(err)
+	}
+	untypedAlias := `{"type":"slack.message","timestamp":"2026-09-13T12:00:03Z","external_id":"C0DEMO009:1789300803.000100","payload":{"channel_id":"C0DEMO009","conversation_type":"channel","ts":"1789300803.000100","text":"Name only known from a DM-treated event"}}`
+	if output, err := runworkgraphInput(t, repoRoot, untypedAlias+"\n", "capture", "ingest", "--home", homeDir, "--source", "slack", "--json", "-"); err == nil || !strings.Contains(string(output), "channel_name is required for C0DEMO009") {
+		t.Fatalf("expected a name known only from a DM-treated event to be refused, got %v:\n%s", err, output)
+	}
 	var project sql.NullString
 	var payloadJSON string
 	if err := db.QueryRow(`SELECT project, payload_json FROM events WHERE json_extract(payload_json, '$.ts') = '1789300802.000100'`).Scan(&project, &payloadJSON); err != nil {

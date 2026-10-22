@@ -533,7 +533,7 @@ func slackContainersForEmptyProjects(db *sql.DB) (map[string]string, error) {
 		return nil, fmt.Errorf("query slack events without container: %w", err)
 	}
 	containers := map[string]string{}
-	unnamed := map[string][]string{}
+	unnamed := map[string]map[string]string{}
 	for rows.Next() {
 		var id, payload string
 		if err := rows.Scan(&id, &payload); err != nil {
@@ -543,7 +543,10 @@ func slackContainersForEmptyProjects(db *sql.DB) (map[string]string, error) {
 		if container := slackPayloadContainer(payload); container != "" {
 			containers[id] = container
 		} else if channelID, _ := slackResumeChannelIdentity(payload); channelID != "" {
-			unnamed[channelID] = append(unnamed[channelID], id)
+			if unnamed[channelID] == nil {
+				unnamed[channelID] = map[string]string{}
+			}
+			unnamed[channelID][id] = payload
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -553,16 +556,15 @@ func slackContainersForEmptyProjects(db *sql.DB) (map[string]string, error) {
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	for channelID, ids := range unnamed {
-		name, err := loadSlackChannelAlias(db, channelID)
+	for channelID, payloads := range unnamed {
+		names, err := loadSlackChannelAlias(db, channelID)
 		if err != nil {
 			return nil, err
 		}
-		if name == "" {
-			continue
-		}
-		for _, id := range ids {
-			containers[id] = name
+		for id, payload := range payloads {
+			if name := names.For(payload); name != "" {
+				containers[id] = name
+			}
 		}
 	}
 	return containers, nil
