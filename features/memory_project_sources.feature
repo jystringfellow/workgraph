@@ -17,3 +17,8 @@ Feature: Explicit project evidence mappings
     When I inspect memory doctor, today, resume or empty memory suggestions
     Then I see a possible project mapping with a reason and explicit link command
     And no association is created until I accept it
+
+  Scenario: Link a Slack container that doctor suggests
+    Given Slack events resolve to a channel container at read time
+    When memory doctor suggests that container
+    Then memory link accepts it

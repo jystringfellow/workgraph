@@ -76,7 +76,9 @@ User-facing text calls it a container.
 containers. `memory unlink` removes those associations. Both accept
 `--home`, `--database` and `--memory`. Flags precede the project argument.
 All sources must exist in captured events when linking; an invalid source
-rejects the entire request. Repeated links and unlinks are idempotent.
+rejects the entire request. A source exists when it is a stored `project` or
+the container that memory doctor, today and resume resolve at read time, such
+as a Slack `channel_name`, so link accepts every container doctor suggests. Repeated links and unlinks are idempotent.
 
 Mappings are stored in SQLite `memory_project_sources`, keyed by the absolute
 memory document path and captured project. A project can have multiple sources,

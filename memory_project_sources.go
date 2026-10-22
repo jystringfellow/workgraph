@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const memoryProjectSourcesSchema = `CREATE TABLE IF NOT EXISTS memory_project_sources (
@@ -40,6 +41,11 @@ func UpdateMemoryProjectSources(config MemoryProjectSourcesConfig) (string, erro
 		return "", err
 	}
 	defer db.Close()
+	if !config.Unlink {
+		if err := requireMemoryContainers(db, config.Sources); err != nil {
+			return "", err
+		}
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return "", err
@@ -58,13 +64,6 @@ func UpdateMemoryProjectSources(config MemoryProjectSourcesConfig) (string, erro
 			}
 			continue
 		}
-		var exists bool
-		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM events WHERE project = ?)`, source).Scan(&exists); err != nil {
-			return "", err
-		}
-		if !exists {
-			return "", fmt.Errorf("container %q was not found; inspect workgraph today or resume --all", source)
-		}
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO memory_project_sources (memory_doc_path, captured_project) VALUES (?, ?)`, key, source); err != nil {
 			return "", err
 		}
@@ -77,6 +76,33 @@ func UpdateMemoryProjectSources(config MemoryProjectSourcesConfig) (string, erro
 		action = "Unlinked"
 	}
 	return fmt.Sprintf("%s containers for %s: %s\nAuthored memory and captured events were preserved.", action, target, strings.Join(config.Sources, ", ")), nil
+}
+
+func requireMemoryContainers(db *sql.DB, sources []string) error {
+	var resolved map[string]int
+	for _, source := range sources {
+		if strings.TrimSpace(source) == "" {
+			return fmt.Errorf("container cannot be empty")
+		}
+		var exists bool
+		if err := db.QueryRow(`SELECT EXISTS(SELECT 1 FROM events WHERE project = ?)`, source).Scan(&exists); err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		if resolved == nil {
+			events, err := loadResumeEvents(db, time.Local)
+			if err != nil {
+				return err
+			}
+			resolved, _ = memoryContainerActivity(events)
+		}
+		if resolved[source] == 0 {
+			return fmt.Errorf("container %q was not found; inspect workgraph today or resume --all", source)
+		}
+	}
+	return nil
 }
 
 func memoryProjectSourceKey(config MemoryProjectSourcesConfig) (string, string, error) {

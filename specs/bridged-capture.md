@@ -985,6 +985,14 @@ Payloads include `conversation_type` (`channel`, `private_channel`, `im`, or
 `mpim`) when the Slack tool result identifies the conversation, and omit it
 otherwise. A missing or unrecognized value is treated as a DM by readers.
 
+When a Slack envelope omits `project`, ingest stores the payload
+`channel_name` as the container, trimmed and without a leading `#`, matching
+native Slack capture. DM names such as `DM: <user>` follow the same rule; DM
+privacy stays governed by `conversation_type`. A name that is empty or equal to
+`channel_id` leaves `project` unset. Opening an existing store backfills the
+same container onto stored Slack events whose `project` is empty, without
+changing their payloads or any non-empty `project`.
+
 ```json
 {"type":"slack.message","timestamp":"2026-09-13T12:00:54.844Z","external_id":"C0DEMO123:1789300854.844369","project":"demo-production","actor":"U0DEMO001","summary":"Deployment succeeded for demo-service","payload":{"channel":"C0DEMO123","channel_name":"demo-changes","conversation_type":"channel","ts":"1789300854.844369","user":"U0DEMO001","is_bot":true,"bot_name":"Deployment Bot","text":"Deployment succeeded for demo-service\nhttps://deployments.example/runs/47555\ncreate: 1\nsame: 147"}}
 {"type":"slack.message","timestamp":"2026-09-13T12:00:38.180Z","external_id":"C0DEMO123:1789300838.180579","project":"demo-production","actor":"U0DEMO001","summary":"Kubernetes deployment demo-api modified","payload":{"channel":"C0DEMO123","channel_name":"demo-changes","conversation_type":"channel","ts":"1789300838.180579","user":"U0DEMO001","is_bot":true,"bot_name":"Deployment Bot","text":"Kubernetes deployment change\ndemo/demo-api modified"}}

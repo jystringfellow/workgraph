@@ -91,6 +91,13 @@ Feature: Bridged connector capture
     And it advances the connector cursor to the request until time
     And it schedules the next request from completion time
 
+  Scenario: Name the container of bridged Slack activity
+    Given a bridged Slack event without a project but with a channel name
+    When it is ingested
+    Then its container is the channel name without a leading hash
+    And DM names follow the same rule while DM privacy is unchanged
+    And existing Slack events without a container are backfilled the same way
+
   Scenario: Reject invalid bridged capture atomically
     Given an approved bridge worker has claimed a request
     When it submits malformed data, a mismatched source, or a stale claim token
