@@ -95,7 +95,10 @@ func canonicalSlackContainer(name, channelID, kind string) string {
 		}
 		return ""
 	}
-	if labelKind == slackKindMPIM {
+	if kind == "" {
+		kind = labelKind
+	}
+	if kind == slackKindMPIM {
 		return "Group DM: " + names
 	}
 	return "DM: " + names
@@ -143,4 +146,13 @@ func storedSlackContainer(project, payload string) string {
 		return container
 	}
 	return slackPayloadContainer(payload)
+}
+
+func slackDMRepairCandidate(project string) bool {
+	name := slackContainerName(project)
+	if slackConversationIDPattern.MatchString(name) {
+		return true
+	}
+	_, _, ok := parseSlackDMLabel(name)
+	return ok
 }

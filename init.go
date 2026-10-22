@@ -476,10 +476,8 @@ const (
 	slackReplyTypeRepair             = `UPDATE events SET type = 'slack.thread_reply' WHERE type = 'slack.reply' AND source = 'slack'`
 	slackContainersWithHashQuery     = `SELECT id, project FROM events INDEXED BY idx_events_project WHERE source = 'slack' AND project GLOB '#*'`
 	slackEventsWithoutContainerQuery = `SELECT id, '', payload_json FROM events INDEXED BY idx_events_slack_without_container WHERE source = 'slack' AND (project IS NULL OR project = '')`
-	slackDMLabelContainersQuery      = `SELECT id, project, payload_json FROM events INDEXED BY idx_events_project WHERE source = 'slack'
-		AND (project GLOB 'DM*' OR project GLOB 'dm*' OR project GLOB 'Dm*' OR project GLOB 'Group*' OR project GLOB 'group*'
-			OR project GLOB 'Direct*' OR project GLOB 'direct*' OR project GLOB 'mpdm-*' OR project IN ('im', 'mpim'))
-		AND NOT (project GLOB 'DM: *' OR project GLOB 'Group DM: *')`
+	slackDistinctProjectsQuery       = `SELECT DISTINCT project FROM events INDEXED BY idx_events_project WHERE project IS NOT NULL AND project <> ''`
+	slackEventsForProjectQuery       = `SELECT id, project, payload_json FROM events INDEXED BY idx_events_project WHERE project = ? AND source = 'slack'`
 )
 
 func backfillSlackEvents(db *sql.DB) error {
@@ -498,9 +496,19 @@ func backfillSlackEvents(db *sql.DB) error {
 	if err := updateSlackEventProjects(db, hashed, `project GLOB '#*'`); err != nil {
 		return err
 	}
-	dmLabels, err := slackContainerRepairs(db, slackDMLabelContainersQuery)
+	dmLabels := map[string]slackContainerRepair{}
+	candidates, err := slackDMRepairCandidates(db)
 	if err != nil {
 		return err
+	}
+	for _, project := range candidates {
+		repairs, err := slackContainerRepairs(db, slackEventsForProjectQuery, project)
+		if err != nil {
+			return err
+		}
+		for id, repair := range repairs {
+			dmLabels[id] = repair
+		}
 	}
 	if err := updateSlackEventContainerRepairs(db, dmLabels); err != nil {
 		return err
@@ -548,8 +556,30 @@ type slackStoredContainer struct {
 	Payload string
 }
 
-func slackContainerRepairs(db *sql.DB, query string) (map[string]slackContainerRepair, error) {
-	rows, err := db.Query(query)
+func slackDMRepairCandidates(db *sql.DB) ([]string, error) {
+	rows, err := db.Query(slackDistinctProjectsQuery)
+	if err != nil {
+		return nil, fmt.Errorf("query slack DM container candidates: %w", err)
+	}
+	defer rows.Close()
+	var candidates []string
+	for rows.Next() {
+		var project string
+		if err := rows.Scan(&project); err != nil {
+			return nil, fmt.Errorf("scan slack DM container candidate: %w", err)
+		}
+		if slackDMRepairCandidate(project) {
+			candidates = append(candidates, project)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("query slack DM container candidates: %w", err)
+	}
+	return candidates, nil
+}
+
+func slackContainerRepairs(db *sql.DB, query string, args ...any) (map[string]slackContainerRepair, error) {
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query slack containers to repair: %w", err)
 	}

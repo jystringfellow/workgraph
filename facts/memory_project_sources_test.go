@@ -214,6 +214,15 @@ func TestStoreGivesEachSlackDMConversationItsOwnContainer(t *testing.T) {
 		"generic-no-id":    {"DM", `{"ts":"1789300810.000100","text":"No conversation id"}`, "DM"},
 		"dm-named-channel": {"dm-requests", `{"channel_id":"C0DEMO019","channel_name":"dm-requests","conversation_type":"channel","ts":"1789300811.000100","text":"Real channel"}`, "dm-requests"},
 		"canonical":        {"DM: Lila", `{"channel_id":"D0DEMO020","channel_name":"DM: Lila","conversation_type":"im","ts":"1789300812.000100","text":"Canonical"}`, "DM: Lila"},
+		"upper-group":      {"GROUP DM", `{"channel_id":"C0DEMO021","ts":"1789300813.000100","text":"Uppercase generic group"}`, "Group DM (C0DEMO021)"},
+		"upper-im":         {"IM", `{"channel_id":"D0DEMO022","ts":"1789300814.000100","text":"Uppercase im"}`, "DM (D0DEMO022)"},
+		"upper-mpdm":       {"MPDM-ada--grace-1", `{"channel_id":"G0DEMO023","ts":"1789300815.000100","text":"Uppercase mpdm"}`, "Group DM: ada, grace"},
+		"raw-dm-id":        {"D0DEMO024", `{"channel_id":"D0DEMO024","ts":"1789300816.000100","text":"Raw DM id"}`, "DM (D0DEMO024)"},
+		"raw-channel-id":   {"C0DEMO028", `{"channel_id":"C0DEMO028","conversation_type":"channel","ts":"1789300820.000100","text":"Raw channel id"}`, "C0DEMO028"},
+		"empty-colon":      {"DM: ", `{"channel_id":"D0DEMO025","ts":"1789300817.000100","text":"Empty colon form"}`, "DM (D0DEMO025)"},
+		"id-colon":         {"DM: D12345678", `{"channel_id":"D0DEMO026","ts":"1789300818.000100","text":"Id colon form"}`, "DM (D0DEMO026)"},
+		"kind-over-label":  {"DM (Ada, Grace)", `{"channel_id":"C0DEMO027","conversation_type":"mpim","ts":"1789300819.000100","text":"Group labelled as DM"}`, "Group DM: Ada, Grace"},
+		"kind-over-colon":  {"DM: Ada, Grace", `{"channel_id":"C0DEMO029","conversation_type":"mpim","ts":"1789300821.000100","text":"Canonical-looking group"}`, "Group DM: Ada, Grace"},
 	}
 	now := time.Now()
 	for id, row := range rows {

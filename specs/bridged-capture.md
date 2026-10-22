@@ -1073,7 +1073,9 @@ Every DM and group DM conversation has its own container, because `today`,
 `resume`, units, and categorization group by container. One naming rule applies
 at bridged ingest, native capture, the store repair, and readers:
 
-- A 1:1 DM is `DM: <names>`; a group DM is `Group DM: <names>`. The names are
+- A 1:1 DM is `DM: <names>`; a group DM is `Group DM: <names>`. The prefix
+  follows the conversation kind below; the label's own prefix decides only when
+  the payload has no kind. The names are
   kept as given. Workgraph has no configured Slack display name for the user
   (bridged identity is `@Me`), so it never removes or reorders names itself.
 - Legacy labels are rewritten to that form: `DM (<names>)`, `DM with <names>`,
@@ -1127,8 +1129,11 @@ payload:
   containers alone, like removing a leading `#`.
 
 Every other non-empty `project` is unchanged. Each open reads only rows that
-may still need repair, through narrow indexes: empty containers and DM-labelled
-containers not already in `DM: ` or `Group DM: ` form.
+may still need repair, through narrow indexes: empty containers, and rows whose
+container is a raw conversation id or any DM label the rule above parses,
+matched without regard to case. Candidate containers come from a covering scan
+of distinct container values; the rule decides each row from its payload, so a
+`DM: <names>` container on an `mpim` event becomes `Group DM: <names>`.
 
 ```json
 {"type":"slack.message","timestamp":"2026-09-13T12:00:54.844Z","external_id":"C0DEMO123:1789300854.844369","project":"demo-production","actor":"U0DEMO001","summary":"Deployment succeeded for demo-service","payload":{"channel_id":"C0DEMO123","channel_name":"demo-changes","conversation_type":"channel","ts":"1789300854.844369","user":"U0DEMO001","is_bot":true,"bot_name":"Deployment Bot","text":"Deployment succeeded for demo-service\nhttps://deployments.example/runs/47555\ncreate: 1\nsame: 147"}}

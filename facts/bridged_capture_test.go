@@ -947,6 +947,7 @@ func TestBridgedSlackIngestGivesEachDMConversationItsOwnContainer(t *testing.T) 
 		`{"type":"slack.message","timestamp":"2026-09-13T12:00:03Z","external_id":"C0DEMO023:1789300803.000100","project":"Group DM","payload":{"channel_id":"C0DEMO023","channel_name":"Group DM","conversation_type":"mpim","ts":"1789300803.000100","text":"Generic name for a known group"}}`,
 		`{"type":"slack.message","timestamp":"2026-09-13T12:00:04Z","external_id":"D0DEMO024:1789300804.000100","payload":{"channel_id":"D0DEMO024","channel_name":"DM with Ryan Kalt","conversation_type":"im","ts":"1789300804.000100","text":"Legacy DM form"}}`,
 		`{"type":"slack.message","timestamp":"2026-09-13T12:00:05Z","external_id":"C0DEMO025:1789300805.000100","project":"Group DM","payload":{"channel_id":"C0DEMO025","channel_name":"Group DM (Lila, Ren)","conversation_type":"mpim","ts":"1789300805.000100","text":"Legacy group form"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:06Z","external_id":"C0DEMO026:1789300806.000100","payload":{"channel_id":"C0DEMO026","channel_name":"DM (Ada, Grace)","conversation_type":"mpim","ts":"1789300806.000100","text":"Group labelled as DM"}}`,
 	}, "\n") + "\n"
 	if output, err := runworkgraphInput(t, repoRoot, input, "capture", "ingest", "--home", homeDir, "--source", "slack", "--json", "-"); err != nil {
 		t.Fatalf("bridged ingest of generic DM names: %v\n%s", err, output)
@@ -959,6 +960,7 @@ func TestBridgedSlackIngestGivesEachDMConversationItsOwnContainer(t *testing.T) 
 		"C0DEMO023:1789300803.000100": {"Group DM: Lila, Omar", "Group DM"},
 		"D0DEMO024:1789300804.000100": {"DM: Ryan Kalt", "DM with Ryan Kalt"},
 		"C0DEMO025:1789300805.000100": {"Group DM: Lila, Ren", "Group DM (Lila, Ren)"},
+		"C0DEMO026:1789300806.000100": {"Group DM: Ada, Grace", "DM (Ada, Grace)"},
 	}
 	for key, want := range expected {
 		var project sql.NullString
