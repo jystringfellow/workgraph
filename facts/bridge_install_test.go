@@ -331,7 +331,8 @@ func TestSlackListsBridgeContractAllowsContentHashWithoutClaimingDeletion(t *tes
 		if err != nil {
 			t.Fatalf("read Slack Lists bridge contract %s: %v", path, err)
 		}
-		for _, expected := range []string{"<revision-or-content-hash>", "canonical JSON", "A missing row is not a deletion", "complete_snapshot", "slack_read_file"} {
+		for _, expected := range []string{"<revision-or-content-hash>", "canonical JSON", "A missing row is not a deletion", "complete_snapshot", "slack_read_file",
+			"`slack.thread_reply`", "`channel_id`", "`channel_name`", "`conversation_type`", "`DM: <user name>`", "Slack conversation info"} {
 			if !strings.Contains(string(contents), expected) {
 				t.Fatalf("Slack Lists bridge contract %s omitted %q", path, expected)
 			}
@@ -844,7 +845,7 @@ func TestReferenceWorkersDrainFakeProviderRequestEndToEnd(t *testing.T) {
 claim_file="${TMPDIR:-/tmp}/workgraph-reference-worker-$$.json"
 claim_output="$($WORKGRAPH_EXECUTABLE capture requests --claim --home "$WORKGRAPH_HOME" --connector slack --max 1 --worker reference-fact --claim-file "$claim_file")" || exit 1
 request_id="$(printf '%s\n' "$claim_output" | sed -n 's/^Request: //p')"
-printf '%s\n' '{"type":"slack.message","timestamp":"2026-09-13T12:00:00Z","external_id":"C0DEMO123:reference-worker","summary":"Reference worker event","payload":{"channel":"C0DEMO123","text":"fake approved provider result"}}' | "$WORKGRAPH_EXECUTABLE" capture ingest --home "$WORKGRAPH_HOME" --request "$request_id" --claim-file "$claim_file" --json -
+printf '%s\n' '{"type":"slack.message","timestamp":"2026-09-13T12:00:00Z","external_id":"C0DEMO123:reference-worker","summary":"Reference worker event","payload":{"channel_id":"C0DEMO123","channel_name":"demo-changes","conversation_type":"channel","text":"fake approved provider result"}}' | "$WORKGRAPH_EXECUTABLE" capture ingest --home "$WORKGRAPH_HOME" --request "$request_id" --claim-file "$claim_file" --json -
 rm -f "$claim_file"
 `
 			if err := os.WriteFile(clientPath, []byte(script), 0o700); err != nil {

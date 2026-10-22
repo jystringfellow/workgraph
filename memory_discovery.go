@@ -77,17 +77,7 @@ func inspectMemoryProjects(db *sql.DB, events []ResumeEvent, config MemoryDoctor
 	if err != nil {
 		return MemoryDoctorResult{}, err
 	}
-	counts := map[string]int{}
-	latest := map[string]time.Time{}
-	for _, event := range events {
-		if event.Project == "" || isTransientResumePath(event.Path) {
-			continue
-		}
-		counts[event.Project]++
-		if event.Timestamp.After(latest[event.Project]) {
-			latest[event.Project] = event.Timestamp
-		}
-	}
+	counts, latest := memoryContainerActivity(events)
 	var sources []string
 	for source := range counts {
 		sources = append(sources, source)
@@ -260,6 +250,21 @@ func memoryNameSimilarity(name, source string) (int, string) {
 		}
 	}
 	return 0, ""
+}
+
+func memoryContainerActivity(events []ResumeEvent) (map[string]int, map[string]time.Time) {
+	counts := map[string]int{}
+	latest := map[string]time.Time{}
+	for _, event := range events {
+		if event.Project == "" || isTransientResumePath(event.Path) {
+			continue
+		}
+		counts[event.Project]++
+		if event.Timestamp.After(latest[event.Project]) {
+			latest[event.Project] = event.Timestamp
+		}
+	}
+	return counts, latest
 }
 
 func memoryCandidateMessage(config MemoryDoctorConfig, candidate MemoryProjectCandidate) string {
