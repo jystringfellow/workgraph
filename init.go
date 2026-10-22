@@ -591,6 +591,9 @@ func slackContainerRepairs(db *sql.DB, query string, args ...any) (map[string]sl
 			rows.Close()
 			return nil, fmt.Errorf("scan slack container to repair: %w", err)
 		}
+		if slackRawChannelIDProject(project, payload) {
+			continue
+		}
 		if container := storedSlackContainer(project, payload); container != "" {
 			repairs[id] = slackContainerRepair{From: project, To: container}
 		} else if channelID, _ := slackResumeChannelIdentity(payload); channelID != "" {

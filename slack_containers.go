@@ -156,3 +156,7 @@ func slackDMRepairCandidate(project string) bool {
 	_, _, ok := parseSlackDMLabel(name)
 	return ok
 }
+
+func slackRawChannelIDProject(project, payload string) bool {
+	return slackConversationIDPattern.MatchString(slackContainerName(project)) && slackConversationFallbackContainer(payload, "") == ""
+}

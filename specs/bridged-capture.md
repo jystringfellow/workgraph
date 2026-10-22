@@ -1130,7 +1130,9 @@ payload:
 
 Every other non-empty `project` is unchanged. Each open reads only rows that
 may still need repair, through narrow indexes: empty containers, and rows whose
-container is a raw conversation id or any DM label the rule above parses,
+container is a raw conversation id of a DM or group DM (a raw id on a
+`channel`, `private_channel`, or untyped `C…` event is kept) or any DM label
+the rule above parses,
 matched without regard to case. Candidate containers come from a covering scan
 of distinct container values; the rule decides each row from its payload, so a
 `DM: <names>` container on an `mpim` event becomes `Group DM: <names>`.
