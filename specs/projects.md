@@ -82,6 +82,13 @@ description: Go-to-market segment definitions for the MMO launch.
 A catalog entry is `{slug, title, workstream, aliases, description}`. The
 title is the first H1, falling back to the slug.
 
+The title and a paragraph description are Markdown read as plain text: HTML
+character references such as `&amp;` are decoded, so `# Words &amp; Phrases`
+and `# Words & Phrases` both give `Words & Phrases`. Text output and the
+`associate_events` request show `&` as written, never as `&amp;` or
+`\u0026`; the request keeps `<` and `>` JSON-escaped so captured text cannot
+spell its data delimiters.
+
 ## Units Of Work
 
 Units are computed at read time from stored events. Each unit has a stable id,
@@ -440,10 +447,12 @@ accuracy = confirmed / (confirmed + corrected + undone)
 
 - Fewer than 20 decided links is `insufficient_data`; LLM auto-apply stays
   on.
-- While the sample is `insufficient_data`, every undecided auto-applied link,
-  deterministic or LLM, appears in `projects review` and in the `next`
-  Categorize count beside proposed links, so the evening review builds the
-  sample.
+- While the sample is `insufficient_data`, every undecided auto-applied LLM
+  link appears in `projects review` and in the `next` Categorize count beside
+  proposed links, so the evening review builds the sample. Deterministic
+  links never appear there: they come from rules and container mappings the
+  user set up and are not counted, so they stay available through `projects
+  review --auto`, `projects explain`, and `projects undo`.
 - When measured accuracy over at least 20 decided links is below 0.95,
   auto-apply pauses and workgraph appends a `projects.auto_apply_paused`
   event. New results are stored as `proposed`, and `projects review`, `next`,
@@ -451,8 +460,8 @@ accuracy = confirmed / (confirmed + corrected + undone)
 - A pause lifts only when measured accuracy over at least 20 decided links is
   back at or above 0.95, recorded as a `projects.auto_apply_resumed` event. A
   sample that falls below 20 does not lift a pause.
-- After the sample reaches 20, undecided auto-applied links leave the default
-  review and remain available through `projects review --auto`.
+- After the sample reaches 20, undecided auto-applied LLM links leave the
+  default review and remain available through `projects review --auto`.
 - The pause state is the latest `projects.auto_apply_paused` or
   `projects.auto_apply_resumed` event, overridden by the measured result
   whenever at least 20 links are decided. Reading the metric never writes.
@@ -588,8 +597,11 @@ workgraph projects explain <unit-id>
   skip, `q` quit. EOF or empty input skips, so with no input the command
   prints every item once and changes nothing, which is the default list.
 - While the auto-apply sample is `insufficient_data`, the default review
-  also lists undecided auto-applied links, oldest first, after the proposed
-  ones (see Accuracy Gate).
+  also lists undecided auto-applied LLM links, oldest first, after the
+  proposed ones (see Accuracy Gate). Deterministic links are not listed.
+- After the last item, the default review prints `Nothing left to decide.`
+  when every listed link was decided, or `<n> left to decide (workgraph
+  projects review).` when some were skipped or the review was quit.
 - `r`, `--project`, and `n`/`--new` take a catalog project slug; `--new`
   refuses a slug that already has project memory.
 - Approving a proposed `new_project` link creates its project memory, as
@@ -719,8 +731,9 @@ Grouping, shared by `today` and `resume`:
   project proposes, a recent rejection for the pair proposes, and measured
   accuracy below 0.95 over 20 decided links pauses auto-apply and says so;
   the pause survives the sample dropping below 20; with fewer than 20
-  decided links, auto-apply stays on and undecided auto links, deterministic
-  and LLM, are listed in the default review and the `next` count.
+  decided links, auto-apply stays on and undecided LLM auto links, but not
+  deterministic links, are listed in the default review and the `next` count;
+  the interactive review ends with a summary line of what is left to decide.
 - **P8. Review and undo record decisions.** Approve, reassign, reject, new
   project, and undo record the documented state and decision without editing
   events; `review --auto` lists a deterministic and an LLM auto link with

@@ -181,7 +181,7 @@ func TestProjectsDefaultReviewListsAutoLinksUntilTwentyDecided(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	assertReviewUnits(t, workgraph.ProjectReviewConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now}, "unit-prop", "unit-det", "unit-llm")
+	assertReviewUnits(t, workgraph.ProjectReviewConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now}, "unit-prop", "unit-llm")
 
 	sample := make([]workgraph.ProjectLinkProposal, 20)
 	for i := range sample {
@@ -223,7 +223,7 @@ func TestProjectsDefaultReviewListsAutoLinksUntilTwentyDecided(t *testing.T) {
 		}
 	}
 	review := workgraph.ProjectReviewConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now}
-	assertReviewUnits(t, review, "unit-prop", "sample-18", "unit-det", "unit-llm", "sample-19")
+	assertReviewUnits(t, review, "unit-prop", "sample-18", "unit-llm", "sample-19")
 
 	if _, err := workgraph.UndoProjectLink(store, run.Written[19].ID); err != nil {
 		t.Fatal(err)
@@ -334,12 +334,17 @@ func TestProjectsReviewCommandsRecordDecisions(t *testing.T) {
 	if shared.Rule != "shared_identifier" || burst.Rule != "container_mapping" || mapped.Rule != "container_mapping" || shared.RunID == "" || shared.RunID != burst.RunID {
 		t.Fatalf("expected review to run one deterministic pass, got %+v", links)
 	}
-	for _, expected := range []string{fmt.Sprintf("Link %d", llmProposed.ID), fmt.Sprintf("Link %d", shared.ID), fmt.Sprintf("Link %d", llmAuto.ID), "Sketched an idea", "evidence: slack.message:C999:5000.000100"} {
+	for _, expected := range []string{fmt.Sprintf("Link %d", llmProposed.ID), fmt.Sprintf("Link %d", llmAuto.ID), "Sketched an idea", "evidence: slack.message:C999:5000.000100", "3 left to decide (workgraph projects review)."} {
 		if !strings.Contains(listed, expected) {
 			t.Fatalf("default review omitted %q:\n%s", expected, listed)
 		}
 	}
-	if strings.Index(listed, fmt.Sprintf("Link %d", llmProposed.ID)) > strings.Index(listed, fmt.Sprintf("Link %d", shared.ID)) {
+	for _, deterministic := range []workgraph.ProjectLink{shared, burst, mapped} {
+		if strings.Contains(listed, fmt.Sprintf("Link %d:", deterministic.ID)) {
+			t.Fatalf("default review listed deterministic link %d:\n%s", deterministic.ID, listed)
+		}
+	}
+	if strings.Index(listed, fmt.Sprintf("Link %d", llmProposed.ID)) > strings.Index(listed, fmt.Sprintf("Link %d", llmAuto.ID)) {
 		t.Fatalf("expected proposed links before undecided auto links:\n%s", listed)
 	}
 
@@ -358,11 +363,14 @@ func TestProjectsReviewCommandsRecordDecisions(t *testing.T) {
 		t.Fatalf("expected r to reassign the LLM link to ask-kai, got %+v", current)
 	}
 
-	projects("x\ns\ns\na\nq\n", "review")
+	if quit := projects("x\nq\n", "review"); !strings.Contains(quit, "1 left to decide (workgraph projects review).") {
+		t.Fatalf("expected quitting to say what is left to decide:\n%s", quit)
+	}
 	assertProjectLinkRow(t, store, llmProposed.ID, "rejected", "corrected")
 	if current := currentProjectLink(t, store, llmProposed.UnitID); current.Source != "user" || current.Target != "none" {
 		t.Fatalf("expected x to assign no project, got %+v", current)
 	}
+	projects("", "review", "--approve", fmt.Sprint(burst.ID))
 	if current := currentProjectLink(t, store, burst.UnitID); current.ID != burst.ID || current.Decision != "confirmed" || current.State != "applied" {
 		t.Fatalf("expected a to confirm the auto link, got %+v", current)
 	}
@@ -457,6 +465,13 @@ func TestProjectsReviewCommandsRecordDecisions(t *testing.T) {
 	list := projects("", "list")
 	if !strings.Contains(list, "- ask-kai: Ask Kai") || !strings.Contains(list, "3 units linked in the last 7 days") || !strings.Contains(list, "0 units linked in the last 7 days") || !strings.Contains(list, "- graphql-gateway: graphql-gateway (1 unit linked in the last 7 days)") {
 		t.Fatalf("expected projects list to show applied unit counts:\n%s", list)
+	}
+	decidedAll := projects("a\n", "review")
+	if !strings.HasSuffix(strings.TrimSpace(decidedAll), "Nothing left to decide.") || strings.Count(decidedAll, "Link ") != 2 {
+		t.Fatalf("expected the review to end once the last link was decided:\n%s", decidedAll)
+	}
+	if nothing := projects("", "review"); !strings.Contains(nothing, "Nothing to review.") {
+		t.Fatalf("expected an empty review to say so:\n%s", nothing)
 	}
 	if projectUnitEventsSnapshot(t, home.DatabasePath) != eventsBefore {
 		t.Fatalf("expected review decisions not to edit events")

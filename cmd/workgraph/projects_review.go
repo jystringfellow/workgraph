@@ -139,7 +139,18 @@ func applyProjectsReviewFlag(config workgraph.ProjectReviewConfig, approve, reje
 
 func reviewProjectLinks(config workgraph.ProjectReviewConfig, links []workgraph.ProjectLink, units map[string]workgraph.ProjectUnit, scanner *bufio.Scanner, stdout, stderr io.Writer) int {
 	exit := 0
+	decidedCount := 0
 	answering := true
+	summarize := func() {
+		if config.Auto {
+			return
+		}
+		if left := len(links) - decidedCount; left > 0 {
+			fmt.Fprintf(stdout, "%d left to decide (workgraph projects review).\n", left)
+		} else {
+			fmt.Fprintln(stdout, "Nothing left to decide.")
+		}
+	}
 	read := func(prompt string) string {
 		if !answering {
 			return ""
@@ -160,6 +171,7 @@ func reviewProjectLinks(config workgraph.ProjectReviewConfig, links []workgraph.
 		case "", "s":
 			continue
 		case "q":
+			summarize()
 			return exit
 		case "a":
 			decided, err = workgraph.ApproveProjectReviewLink(config, link.ID)
@@ -186,12 +198,14 @@ func reviewProjectLinks(config workgraph.ProjectReviewConfig, links []workgraph.
 			exit = 1
 			continue
 		}
+		decidedCount++
 		fmt.Fprintln(stdout, workgraph.ProjectLinkLine(decided))
 	}
 	if err := scanner.Err(); err != nil {
 		fmt.Fprintf(stderr, "read review input: %v\n", err)
 		return 1
 	}
+	summarize()
 	return exit
 }
 

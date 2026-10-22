@@ -3,6 +3,7 @@ package workgraph
 import (
 	"database/sql"
 	"fmt"
+	"html"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -295,7 +296,11 @@ func firstBodyParagraph(body string) string {
 		}
 		paragraph = append(paragraph, line)
 	}
-	return strings.Join(paragraph, " ")
+	return markdownPlainText(strings.Join(paragraph, " "))
+}
+
+func markdownPlainText(markdown string) string {
+	return strings.TrimSpace(html.UnescapeString(markdown))
 }
 
 func truncateRunes(value string, limit int) string {

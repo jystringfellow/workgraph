@@ -75,7 +75,7 @@ func projectReviewDefaultLinks(links []ProjectLink, accuracy ProjectLinkAccuracy
 		switch {
 		case link.State == "proposed":
 			proposed = append(proposed, link)
-		case link.State == "applied" && link.Auto && link.Decision == "":
+		case link.State == "applied" && link.Auto && link.Source == "llm" && link.Decision == "":
 			undecided = append(undecided, link)
 		}
 	}

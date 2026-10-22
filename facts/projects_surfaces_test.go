@@ -19,7 +19,7 @@ func TestNextCategorizeGroupListsLinksAwaitingADecision(t *testing.T) {
 	writeProjectMemory(t, home.MemoryDir, "mmo-gtm-segments", "---\nworkstream: mmo\n---\n# MMO GTM Segments\n")
 	writeProjectMemory(t, home.MemoryDir, "ask-kai", "# Ask Kai\n")
 	now := time.Now().UTC().Truncate(time.Second)
-	units := insertSurfaceThreads(t, home, now.Add(-6*time.Hour), "C1", "general", 5)
+	units := insertSurfaceThreads(t, home, now.Add(-6*time.Hour), "C1", "general", 6)
 	store := workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now}
 	var proposals []workgraph.ProjectLinkProposal
 	for _, unit := range units[:4] {
@@ -29,8 +29,11 @@ func TestNextCategorizeGroupListsLinksAwaitingADecision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	auto, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "deterministic", Links: []workgraph.ProjectLinkProposal{surfaceProposal(units[4], "ask-kai", "", true)}})
+	auto, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "llm", Profile: "fake", Links: []workgraph.ProjectLinkProposal{surfaceProposal(units[4], "ask-kai", "", true)}})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "deterministic", Links: []workgraph.ProjectLinkProposal{surfaceProposal(units[5], "ask-kai", "", true)}}); err != nil {
 		t.Fatal(err)
 	}
 	slackBefore := surfaceSlackEvents(t, home.DatabasePath)
@@ -40,7 +43,7 @@ func TestNextCategorizeGroupListsLinksAwaitingADecision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Message, "Categorize: 5 awaiting a decision (workgraph projects review), 1 auto-applied today (workgraph projects review --auto)") {
+	if !strings.Contains(result.Message, "Categorize: 5 awaiting a decision (workgraph projects review), 2 auto-applied today (workgraph projects review --auto)") {
 		t.Fatalf("expected the categorize line, got:\n%s", result.Message)
 	}
 	if shown := strings.Count(result.Message, "\n  slack.thread:C1:"); shown != 3 {

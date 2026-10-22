@@ -672,7 +672,7 @@ func proposedProjectSlug(project *ProposedProject) string {
 }
 
 func associateMessages(payload associatePayload) ([]openAICompatibleMessage, error) {
-	data, err := json.MarshalIndent(payload, "", "  ")
+	data, err := marshalPromptJSON(payload)
 	if err != nil {
 		return nil, fmt.Errorf("encode associate payload: %w", err)
 	}
