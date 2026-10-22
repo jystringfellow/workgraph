@@ -13,6 +13,11 @@ Scenario: Show project titles as plain text
   Then the project is listed as "MMO Words & Phrases"
   And "workgraph llm associate --dry-run" sends the title "MMO Words & Phrases"
 
+Scenario: Keep terminal controls in project memory out of output
+  Given project memory whose heading and description contain escape sequences, line breaks, or bidi overrides, written raw or as character references
+  When I run "workgraph projects list"
+  Then each title and description prints on its own line without control characters
+
 Scenario: Group activity into units of work
   Given Slack, GitHub, git, Notion, and calendar events captured in any order
   When workgraph groups units of work

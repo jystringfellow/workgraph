@@ -89,6 +89,13 @@ and `# Words & Phrases` both give `Words & Phrases`. Text output and the
 `\u0026`; the request keeps `<` and `>` JSON-escaped so captured text cannot
 spell its data delimiters.
 
+Catalog titles and descriptions, from frontmatter or the first paragraph,
+are display text: after decoding, ANSI escape sequences, C0 and
+C1 control characters, DEL, and format characters such as bidi overrides are
+removed, and every run of whitespace, including line and paragraph
+separators, becomes one space. A memory file therefore cannot clear the
+terminal, move the cursor, or start a new output line.
+
 ## Units Of Work
 
 Units are computed at read time from stored events. Each unit has a stable id,
