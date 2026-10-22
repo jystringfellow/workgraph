@@ -77,6 +77,27 @@ Feature: Bridged connector capture
     When I disable the connector
     Then workgraph cancels that work with reason connector disabled and reports it
 
+  Scenario: Narrow a bounded window that is too large for one claim
+    Given a bridge worker holds a 24-hour bounded-events request
+    When it reports failure with reason window_too_large
+    Then workgraph halves the same request's window from its since bound and makes it claimable immediately
+    And repeated reports narrow it no further than one hour, after which it fails with normal backoff
+    And completing it lets the next request resume from the narrowed bound minus overlap
+    And a complete-snapshot request reported the same way keeps its bounds and backs off
+
+  Scenario: Give categorization fair turns with capture
+    Given capture work and a routed categorization task are both claimable
+    When the bridge drains repeatedly
+    Then sessions alternate between categorization and capture, starting with categorization
+    And each session uses its own model
+
+  Scenario: Refuse to drain without the workgraph MCP permissions
+    Given the Claude bridge settings lack a workgraph MCP permission such as llm_task_submit
+    When the bridge drains
+    Then it does not launch Claude and requests stay pending without consuming attempts
+    And connector status and plugin doctor name the missing permission and the reinstall command
+    And after reinstalling, a drain clears the blocked state
+
   Scenario: Bound an unattended drain session
     Given a bridge drain client session claims a request and hangs
     When the drain timeout elapses

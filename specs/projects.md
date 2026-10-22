@@ -526,8 +526,10 @@ Categorization runs through the bridged-capture outbox
   claimable now, `pending` with `available_at` reached, and for an
   `llm_task` only when this client is the routed one. A drain session runs
   either capture or categorization; a categorization session uses the
-  profile's model and config directory, not the worker's pinned model, and
-  runs only when no capture request is claimable for the client.
+  profile's model and config directory, not the worker's pinned model. When
+  both kinds are claimable, drain alternates between them, starting with
+  categorization, so capture work that stays claimable cannot starve it
+  (`specs/bridged-capture.md`).
 - A bridge claim carries `task`: the profile's `client` and `model` and the
   outbound-filtered `messages`. The hosted opt-in and managed-provider checks
   run before the task is returned; when they fail, the request returns to

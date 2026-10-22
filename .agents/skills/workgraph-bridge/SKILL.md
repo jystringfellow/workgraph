@@ -83,9 +83,14 @@ An installed unattended worker uses MCP only:
 4. Claim at most one request, filtered to a connector whose preflight succeeded.
 5. Fetch, normalize, and ingest through MCP. Report failures only when they
    occur after successful capability preflight.
-6. Never walk away from a claim. If you cannot finish it, including when the
-   window looks too large to fetch and assemble in one batch, call
-   `capture_request_fail` with the reason before the session ends.
+6. While work is progressing, renew the claim with `capture_request_renew`
+   before its lease expires.
+7. Never walk away from a claim. If you cannot finish it, call
+   `capture_request_fail` with the reason before the session ends. When a
+   `bounded_events` window is too large to fetch and assemble in one batch,
+   also pass `"reason": "window_too_large"`: workgraph narrows the same request
+   to the first half of its window, never below one hour, and the remainder is
+   requested after it completes. Do not submit a partial batch.
 
 Never fall back to the CLI in an unattended worker. That path is intentionally
 not authorized and would create claim files the worker cannot remove.
@@ -152,6 +157,9 @@ submit a partial batch. Report the failure so workgraph retries the same bounds:
 printf '%s' '{"error":"bounded failure description"}' |
   workgraph capture requests --fail <request-id> --claim-file <private-path> --error-json -
 ```
+
+Add `"reason":"window_too_large"` to that JSON when a `bounded_events` window
+is too large to finish within the claim.
 
 Never print, log, or place the claim token in process arguments. Never invent a
 successful empty result: an empty batch is valid only after a complete provider

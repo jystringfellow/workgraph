@@ -34,6 +34,13 @@ func detectBridgeStall(homeDir string, state connectorRuntimeFile, id string, re
 	}
 	threshold := bridgeStallThreshold(connectorInterval(state, id, defaultConnectorInterval(id)))
 	var stall bridgeStall
+	if blocked := bridgeDrainBlockedReasons(homeDir); len(blocked) > 0 {
+		if created, err := time.Parse(time.RFC3339Nano, request.CreatedAt); err == nil {
+			stall.Age = formatBridgeAge(now.Sub(created))
+		}
+		stall.Detail = strings.Join(blocked, "; ")
+		return stall, true
+	}
 	if created, err := time.Parse(time.RFC3339Nano, request.CreatedAt); err == nil && now.Sub(created) > threshold {
 		stall.Age = formatBridgeAge(now.Sub(created))
 		since := "no completed capture yet"
@@ -81,7 +88,7 @@ func bridgeStallWarning(homeDir string, databasePath string, now time.Time) stri
 func bridgeClientHint(homeDir string) string {
 	present := []string{}
 	for _, client := range bridgeClients {
-		for _, suffix := range []string{".launch-agent", ".heartbeat", ".last-error"} {
+		for _, suffix := range []string{".launch-agent", ".heartbeat", ".last-error", ".blocked"} {
 			if _, err := os.Stat(filepath.Join(homeDir, "bridge", client+suffix)); err == nil {
 				present = append(present, client)
 				break
@@ -169,4 +176,50 @@ func formatBridgeAge(age time.Duration) string {
 	default:
 		return fmt.Sprintf("%dm", int(age/time.Minute))
 	}
+}
+
+func bridgeDrainBlockedReasons(homeDir string) []string {
+	reasons := []string{}
+	for _, client := range bridgeClients {
+		contents, err := os.ReadFile(bridgeDrainBlockedPath(homeDir, client))
+		if line := strings.TrimSpace(string(contents)); err == nil && line != "" {
+			reasons = append(reasons, fmt.Sprintf("bridge drain blocked (%s): %s", client, line))
+		}
+	}
+	return reasons
+}
+
+func recordBridgeDrainBlocked(homeDir string, client string, reason string) {
+	path := bridgeDrainBlockedPath(homeDir, client)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err == nil {
+		_ = os.WriteFile(path, []byte(reason+"\n"), 0o600)
+	}
+}
+
+func clearBridgeDrainBlocked(homeDir string, client string) {
+	_ = os.Remove(bridgeDrainBlockedPath(homeDir, client))
+}
+
+func bridgeDrainBlockedPath(homeDir string, client string) string {
+	return filepath.Join(homeDir, "bridge", client+".blocked")
+}
+
+func lastBridgeDrainKind(homeDir string, client string) string {
+	contents, err := os.ReadFile(bridgeDrainKindPath(homeDir, client))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(contents))
+}
+
+func recordBridgeDrainKind(homeDir string, client string, kind string) error {
+	path := bridgeDrainKindPath(homeDir, client)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(kind+"\n"), 0o600)
+}
+
+func bridgeDrainKindPath(homeDir string, client string) string {
+	return filepath.Join(homeDir, "bridge", client+".drain-kind")
 }

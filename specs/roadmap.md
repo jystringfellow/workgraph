@@ -67,6 +67,11 @@ Priority labels used below:
 
 ## Recently Delivered
 
+- [x] Bridge drain reliability: categorization alternates with claimable
+  capture, `window_too_large` failures narrow bounded windows in place down to
+  one hour, and Claude drains refuse to claim without every workgraph MCP
+  permission. [spec: `specs/bridged-capture.md`; also `specs/projects.md`]
+
 - [x] Scheduled categorization: hourly and 05:00 `llm.associate` outbox
   requests with kind-aware emit, claim, and complete, run directly by the
   daemon or by the routed bridge client, with a 24h no-progress cooldown and

@@ -689,6 +689,10 @@ workgraph capture requests --fail <request-id> \
   --claim-file /private/path/claim.json --error-json -
 ```
 
+`--error-json` reads `{"error":"..."}` and an optional `"reason":"window_too_large"`,
+which narrows a `bounded_events` request to the first half of its window, never
+below one hour, instead of retrying the same bounds.
+
 `bridge drain` stops the client session after `--timeout` (default `20m`),
 returns only the requests that drain's worker claimed to `pending`, and records the failure for
 `connectors status`. `workgraph connectors disable <id>` cancels that

@@ -286,7 +286,7 @@ func bridgeMCPTools() []bridgeMCPTool {
 		{"capture_requests_claim", "Atomically claim daemon-scheduled capture work. Filter with connector. Without kind only capture requests are claimed; kind llm_task claims categorization work that returns a task to answer and submit with llm_task_submit. Every claim must end in capture_ingest, llm_task_submit, or capture_request_fail with a reason; never abandon it.", object(map[string]any{"connector": str, "kind": map[string]any{"type": "string", "enum": []string{"capture", "llm_task"}}, "worker": str, "max": integer}, "worker")},
 		{"capture_request_renew", "Renew an unexpired capture claim.", object(map[string]any{"request_id": str, "claim_token": str}, "request_id", "claim_token")},
 		{"capture_ingest", "Validate and atomically ingest one normalized event batch, or parse one claimed Slack List snapshot from raw CSV server-side. Every Slack message and slack.thread_reply payload needs channel_id, channel_name (DMs: \"DM: <user name>\"), and conversation_type (channel, private_channel, im, or mpim) from Slack conversation info; a rejection names the event and missing field so the batch can be corrected and resubmitted under the same claim.", captureIngest},
-		{"capture_request_fail", "Return claimed work for retry with bounded error details.", object(map[string]any{"request_id": str, "claim_token": str, "error": str}, "request_id", "claim_token")},
+		{"capture_request_fail", "Return claimed work for retry with bounded error details. Set reason window_too_large when a bounded_events window cannot be fetched and ingested within the claim; workgraph then narrows the same request to the first half of its window, never below one hour, and makes it claimable again immediately. Other failures, and complete_snapshot requests, retry the same bounds after backoff.", object(map[string]any{"request_id": str, "claim_token": str, "error": str, "reason": map[string]any{"type": "string", "enum": []string{"window_too_large"}}}, "request_id", "claim_token")},
 		{"capture_watermark", "Read a connector completed-through cursor.", object(map[string]any{"connector": str}, "connector")},
 		{"connector_status", "Read connector capture mode and health.", object(map[string]any{})},
 		{"connector_required_tools", "Read canonical provider fetch and identity requirements before claiming work.", object(map[string]any{"connector": str})},
@@ -381,7 +381,7 @@ func callBridgeMCPTool(config BridgeMCPConfig, name string, raw json.RawMessage)
 		}
 		return IngestBridgedCapture(BridgedIngestConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, Source: stringArg("source"), RequestID: stringArg("request_id"), ClaimToken: stringArg("claim_token"), SnapshotListID: snapshotListID, Input: strings.NewReader(string(events))})
 	case "capture_request_fail":
-		err := FailCaptureRequest(CaptureRequestCapabilityConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, RequestID: stringArg("request_id"), ClaimToken: stringArg("claim_token"), Error: stringArg("error")})
+		err := FailCaptureRequest(CaptureRequestCapabilityConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, RequestID: stringArg("request_id"), ClaimToken: stringArg("claim_token"), Error: stringArg("error"), Reason: stringArg("reason")})
 		return map[string]any{"failed": err == nil}, err
 	case "capture_watermark":
 		base.ConnectorID = stringArg("connector")

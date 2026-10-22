@@ -1328,7 +1328,7 @@ func runCaptureRequests(args []string, stdin io.Reader, stdout io.Writer, stderr
 	cancelReason := flags.String("reason", "", "reason recorded for request cancellation")
 	renewID := flags.String("renew", "", "renew a claimed request id")
 	failID := flags.String("fail", "", "report failure for a claimed request id")
-	errorJSON := flags.String("error-json", "", "JSON failure details; - reads stdin")
+	errorJSON := flags.String("error-json", "", "JSON failure details {\"error\", optional \"reason\": \"window_too_large\"}; - reads stdin")
 	connector := flags.String("connector", "", "limit claims to one connector")
 	kind := flags.String("kind", "", "request kind to claim: capture (default) or llm_task")
 	memory := flags.String("memory", "", "workgraph memory directory for llm_task claims")
@@ -1401,13 +1401,15 @@ func runCaptureRequests(args []string, stdin io.Reader, stdout io.Writer, stderr
 				return 2
 			}
 			var details struct {
-				Error string `json:"error"`
+				Error  string `json:"error"`
+				Reason string `json:"reason"`
 			}
 			if err := json.NewDecoder(stdin).Decode(&details); err != nil {
 				fmt.Fprintf(stderr, "workgraph capture requests: parse failure JSON: %v\n", err)
 				return 1
 			}
 			config.Error = details.Error
+			config.Reason = strings.TrimSpace(details.Reason)
 		}
 		if err := workgraph.FailCaptureRequest(config); err != nil {
 			fmt.Fprintf(stderr, "workgraph capture requests fail: %v\n", err)
