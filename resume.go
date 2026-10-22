@@ -563,10 +563,10 @@ func slackResumeCanonicalProject(event ResumeEvent, aliases map[string]string) s
 	if !strings.HasPrefix(event.Type, "slack.") {
 		return ""
 	}
-	channelID, channelName := slackResumeChannelIdentity(event.Payload)
-	if channelName != "" && channelName != channelID {
-		return channelName
+	if container := slackPayloadContainer(event.Payload); container != "" {
+		return container
 	}
+	channelID, _ := slackResumeChannelIdentity(event.Payload)
 	if channelID != "" {
 		return aliases[channelID]
 	}
@@ -581,7 +581,15 @@ func slackResumeChannelIdentity(payload string) (string, string) {
 	if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
 		return "", ""
 	}
-	return strings.TrimSpace(parsed.ChannelID), strings.TrimSpace(parsed.ChannelName)
+	return strings.TrimSpace(parsed.ChannelID), strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(parsed.ChannelName), "#"))
+}
+
+func slackPayloadContainer(payload string) string {
+	channelID, channelName := slackResumeChannelIdentity(payload)
+	if channelName == "" || channelName == channelID {
+		return ""
+	}
+	return channelName
 }
 
 func unresolvedRawSlackProject(event ResumeEvent) bool {

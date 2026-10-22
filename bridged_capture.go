@@ -1272,6 +1272,9 @@ func prepareBridgedEvent(source string, envelope bridgedEventEnvelope) (prepared
 		Summary:     strings.TrimSpace(envelope.Summary),
 		WeakDedupe:  weak,
 	}
+	if source == "slack" && event.Project == "" {
+		event.Project = slackPayloadContainer(payloadJSON)
+	}
 	return event, nil
 }
 

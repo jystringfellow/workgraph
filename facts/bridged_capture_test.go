@@ -781,6 +781,47 @@ func TestBridgedSlackIngestKeepsConversationTypeForPrivacy(t *testing.T) {
 	}
 }
 
+func TestBridgedSlackIngestDerivesContainerFromChannelName(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+	connectBridgedConnector(t, repoRoot, homeDir, "slack")
+
+	input := strings.Join([]string{
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:00Z","external_id":"C0DEMO001:1789300800.000100","payload":{"channel_id":"C0DEMO001","channel_name":"squad-demo-excellence","conversation_type":"channel","ts":"1789300800.000100","text":"Named channel"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:01Z","external_id":"C0DEMO002:1789300801.000100","payload":{"channel_id":"C0DEMO002","channel_name":"#guild-demo","ts":"1789300801.000100","text":"Hash channel"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:02Z","external_id":"C0DEMO003:1789300802.000100","project":"demo-production","payload":{"channel_id":"C0DEMO003","channel_name":"demo-changes","ts":"1789300802.000100","text":"Explicit project"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:03Z","external_id":"D0DEMO004:1789300803.000100","payload":{"channel_id":"D0DEMO004","channel_name":"DM: Lila","conversation_type":"im","ts":"1789300803.000100","text":"Direct message"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:04Z","external_id":"C0DEMO005:1789300804.000100","payload":{"channel_id":"C0DEMO005","ts":"1789300804.000100","text":"No name"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:05Z","external_id":"C0DEMO006:1789300805.000100","payload":{"channel_id":"C0DEMO006","channel_name":"C0DEMO006","ts":"1789300805.000100","text":"Raw id name"}}`,
+	}, "\n") + "\n"
+	if output, err := runworkgraphInput(t, repoRoot, input, "capture", "ingest", "--home", homeDir, "--source", "slack", "--json", "-"); err != nil {
+		t.Fatalf("bridged ingest: %v\n%s", err, output)
+	}
+
+	db := openBridgedCaptureDatabase(t, homeDir)
+	expected := map[string]sql.NullString{
+		"C0DEMO001": {String: "squad-demo-excellence", Valid: true},
+		"C0DEMO002": {String: "guild-demo", Valid: true},
+		"C0DEMO003": {String: "demo-production", Valid: true},
+		"D0DEMO004": {String: "DM: Lila", Valid: true},
+		"C0DEMO005": {},
+		"C0DEMO006": {},
+	}
+	for channel, want := range expected {
+		var project sql.NullString
+		var payloadJSON string
+		if err := db.QueryRow(`SELECT project, payload_json FROM events WHERE source = 'slack' AND json_extract(payload_json, '$.channel_id') = ?`, channel).Scan(&project, &payloadJSON); err != nil {
+			t.Fatalf("read bridged Slack event %s: %v", channel, err)
+		}
+		if project != want {
+			t.Fatalf("expected %s project %+v, got %+v", channel, want, project)
+		}
+		if channel == "D0DEMO004" && workgraph.SlackPrivacySource(payloadJSON) != "slack.dm" {
+			t.Fatalf("expected DM container to keep DM privacy, got %s", payloadJSON)
+		}
+	}
+}
+
 func TestHandEditedBridgedNotionCannotScheduleOrIngest(t *testing.T) {
 	homeDir := initBridgedCaptureHome(t)
 	repoRoot := repoRoot(t)

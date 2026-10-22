@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -406,6 +407,10 @@ func createSchema(db *sql.DB) error {
 		return err
 	}
 
+	if err := backfillSlackEventContainers(db); err != nil {
+		return err
+	}
+
 	indices := []struct{ name, table, column string }{
 		{"idx_events_timestamp", "events", "timestamp"},
 		{"idx_events_project", "events", "project"},
@@ -461,4 +466,48 @@ func ensureColumn(db *sql.DB, table string, column string, definition string) er
 	}
 	_, err = db.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition)
 	return err
+}
+
+func backfillSlackEventContainers(db *sql.DB) error {
+	rows, err := db.Query(`SELECT id, payload_json FROM events
+		WHERE source = 'slack' AND (project IS NULL OR project = '') AND json_extract(payload_json, '$.channel_name') IS NOT NULL`)
+	if err != nil {
+		return fmt.Errorf("query slack events without container: %w", err)
+	}
+	containers := map[string]string{}
+	for rows.Next() {
+		var id, payload string
+		if err := rows.Scan(&id, &payload); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan slack event without container: %w", err)
+		}
+		if container := slackPayloadContainer(payload); container != "" {
+			containers[id] = container
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("query slack events without container: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if len(containers) == 0 {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for id, container := range containers {
+		if _, err := tx.Exec(`UPDATE events SET project = ? WHERE id = ? AND (project IS NULL OR project = '')`, container, id); err != nil {
+			return fmt.Errorf("backfill slack event container: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	log.Printf("workgraph store backfilled slack containers: events=%d", len(containers))
+	return nil
 }
