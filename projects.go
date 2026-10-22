@@ -66,6 +66,12 @@ func projectsListMessage(catalog ProjectCatalog, mappings ContainerMappings, cou
 			containers[workstream] = append(containers[workstream], container)
 		}
 	}
+	projectContainers := map[string][]string{}
+	for container, projects := range mappings.Projects {
+		for _, project := range projects {
+			projectContainers[project] = append(projectContainers[project], container)
+		}
+	}
 	for _, workstream := range projectCatalogWorkstreams(catalog, mappings) {
 		lines = append(lines, "", "Workstream "+workstream)
 		if mapped := containers[workstream]; len(mapped) > 0 {
@@ -75,7 +81,7 @@ func projectsListMessage(catalog ProjectCatalog, mappings ContainerMappings, cou
 		count := 0
 		for _, project := range catalog.Projects {
 			if project.Workstream == workstream {
-				lines = append(lines, projectsListLine(project, counts[project.Slug]))
+				lines = append(lines, projectsListLine(project, counts[project.Slug], projectContainers[project.Slug]))
 				count++
 			}
 		}
@@ -86,7 +92,7 @@ func projectsListMessage(catalog ProjectCatalog, mappings ContainerMappings, cou
 	var ungrouped []string
 	for _, project := range catalog.Projects {
 		if project.Workstream == "" {
-			ungrouped = append(ungrouped, projectsListLine(project, counts[project.Slug]))
+			ungrouped = append(ungrouped, projectsListLine(project, counts[project.Slug], projectContainers[project.Slug]))
 		}
 	}
 	if len(ungrouped) > 0 {
@@ -99,7 +105,7 @@ func projectsListMessage(catalog ProjectCatalog, mappings ContainerMappings, cou
 	return strings.Join(lines, "\n")
 }
 
-func projectsListLine(project ProjectCatalogEntry, appliedUnits int) string {
+func projectsListLine(project ProjectCatalogEntry, appliedUnits int, containers []string) string {
 	line := fmt.Sprintf("- %s: %s", project.Slug, project.Title)
 	if project.Description != "" {
 		line += " — " + project.Description
@@ -108,7 +114,13 @@ func projectsListLine(project ProjectCatalogEntry, appliedUnits int) string {
 	if appliedUnits == 1 {
 		units = "unit"
 	}
-	return line + fmt.Sprintf(" (%d %s linked in the last 7 days)", appliedUnits, units)
+	line += fmt.Sprintf(" (%d %s linked in the last 7 days)", appliedUnits, units)
+	if len(containers) == 0 {
+		return line
+	}
+	sorted := append([]string{}, containers...)
+	sort.Strings(sorted)
+	return line + "\n  Containers: " + strings.Join(sorted, ", ")
 }
 
 func pluralizeProjectFiles(count int) string {

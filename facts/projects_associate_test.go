@@ -376,6 +376,98 @@ func TestAssociateAppliesDeterministicLinksBeforeTheModel(t *testing.T) {
 	assertAssociateLink(t, workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir}, open[0].ID, "proposed", false)
 }
 
+func TestSeveralProjectMappingNarrowsCatalogWithoutLinks(t *testing.T) {
+	home := initAssociateHome(t)
+	writeProjectMemory(t, home.MemoryDir, "domain-apis", "# Domain APIs\n")
+	writeProjectMemory(t, home.MemoryDir, "mmo-words-and-phrases", "# MMO Words & Phrases\n")
+	writeProjectMemory(t, home.MemoryDir, "i18n-glossary", "# I18n Glossary\n")
+	fake := newAssociateFakeModel(t)
+	configureAssociateProfile(t, home, fake.URL, "slack")
+	container := "Mindbody.Businesses.I18n"
+	base := time.Now().Add(-6 * time.Hour)
+	event := associateSlackEvent("C500", fmt.Sprintf("%d.000100", base.Unix()), "channel", container, "Sam", "Translate the booking strings", base)
+	insertEvent(t, home.DatabasePath, event)
+	unitID := "slack.thread:C500:" + fmt.Sprintf("%d.000100", base.Unix())
+	args := []string{"--home", home.HomeDir, "--memory", home.MemoryDir}
+	for _, project := range []string{"domain-apis", "mmo-words-and-phrases"} {
+		if output, err := runworkgraph(t, repoRoot(t), append(append([]string{"memory", "link"}, args...), "--source", container, project)...); err != nil {
+			t.Fatalf("memory link %s: %v\n%s", project, err, output)
+		}
+	}
+
+	dryRun := append([]string{"llm", "associate", "--dry-run"}, args...)
+	output, err := runworkgraph(t, repoRoot(t), dryRun...)
+	if err != nil {
+		t.Fatalf("dry run: %v\n%s", err, output)
+	}
+	payload := associateDryRunPayload(t, string(output))
+	if len(payload.Units) != 1 || payload.Units[0].UnitID != unitID {
+		t.Fatalf("expected the mapped container's unit, got %v", associatePayloadUnitIDs(payload))
+	}
+	mappedOnly := []string{"domain-apis", "mmo-words-and-phrases"}
+	if !reflect.DeepEqual(payload.Units[0].Projects, mappedOnly) || !reflect.DeepEqual(associatePayloadProjectSlugs(payload), mappedOnly) {
+		t.Fatalf("expected the mapped projects only, got unit %v payload %v", payload.Units[0].Projects, associatePayloadProjectSlugs(payload))
+	}
+
+	fake.Respond(associateResponse(associateEntry(workgraph.ProjectUnit{ID: unitID, EventIDs: []string{event.ID}}, "project", "domain-apis", 0.5)))
+	result, err := workgraph.AssociateWithLLM(workgraph.LLMAssociateConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, HTTPClient: fake.Client, Now: time.Now()})
+	if err != nil {
+		t.Fatalf("associate: %v", err)
+	}
+	if len(result.Deterministic.Written) != 0 || !reflect.DeepEqual(result.Sent, []string{unitID}) {
+		t.Fatalf("expected no deterministic link and the unit sent to the model, got %+v", result)
+	}
+
+	output, err = runworkgraph(t, repoRoot(t), append([]string{"projects", "list"}, args...)...)
+	if err != nil {
+		t.Fatalf("projects list: %v\n%s", err, output)
+	}
+	for _, project := range []string{"- domain-apis: Domain APIs", "- mmo-words-and-phrases: MMO Words & Phrases"} {
+		if !strings.Contains(string(output), project+" (0 units linked in the last 7 days)\n  Containers: "+container+"\n") {
+			t.Fatalf("projects list did not show the container under %q:\n%s", project, output)
+		}
+	}
+
+	today, err := workgraph.Today(workgraph.TodayConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, MemoryDir: home.MemoryDir, Now: base.Add(time.Minute)})
+	if err != nil {
+		t.Fatalf("today: %v", err)
+	}
+	if !strings.Contains(today.Message, "- "+container+": 1 event; mapped to domain-apis, mmo-words-and-phrases") {
+		t.Fatalf("today did not mark the container as mapped:\n%s", today.Message)
+	}
+	if strings.Contains(today.Message, "→ "+container) {
+		t.Fatalf("today offered the mapped container again:\n%s", today.Message)
+	}
+
+	output, err = runworkgraph(t, repoRoot(t), append([]string{"memory", "doctor"}, args...)...)
+	if err != nil {
+		t.Fatalf("memory doctor: %v\n%s", err, output)
+	}
+	if strings.Contains(string(output), "→ "+container) {
+		t.Fatalf("doctor offered the mapped container to another project:\n%s", output)
+	}
+
+	if output, err := runworkgraph(t, repoRoot(t), append(append([]string{"memory", "link"}, args...), "--workstream", "mmo", "--source", container)...); err != nil {
+		t.Fatalf("workstream link: %v\n%s", err, output)
+	}
+	db, err := sql.Open("sqlite3", home.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mappings, err := workgraph.LoadContainerMappings(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := workgraph.LoadProjectCatalog(home.MemoryDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := catalogSlugs(catalog.ForContainer(container, mappings)); !reflect.DeepEqual(got, []string{"domain-apis", "mmo-gtm-segments", "mmo-harness", "mmo-words-and-phrases"}) {
+		t.Fatalf("expected the union of the workstream and mapped projects, got %v", got)
+	}
+}
+
 type associateHome struct {
 	HomeDir      string
 	MemoryDir    string

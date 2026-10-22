@@ -37,6 +37,18 @@ Scenario: Map a container to a workstream
   And no project link is created
   And "workgraph projects list" shows the container under "mmo"
 
+Scenario: Map a container to several projects
+  Given captured Slack activity in "Mindbody.Businesses.I18n"
+  When I run "workgraph memory link --source Mindbody.Businesses.I18n domain-apis"
+  And I run "workgraph memory link --source Mindbody.Businesses.I18n mmo-words-and-phrases"
+  Then "workgraph llm associate --dry-run" offers only "domain-apis" and "mmo-words-and-phrases" for its units
+  And no project link is created
+  And "workgraph projects list" shows the container under both projects
+  And "workgraph today" marks the container as mapped to both projects
+  And "workgraph memory doctor" does not offer the container to another project
+  When I also map the container to workstream "mmo"
+  Then the dry run offers the workstream's projects and both mapped projects
+
 Scenario: Suggest a workstream for a shared acronym
   Given memory exists for "mmo-harness"
   And captured events belong to "Mindbody.Modernization.Orchestration"

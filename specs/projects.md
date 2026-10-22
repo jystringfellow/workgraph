@@ -208,6 +208,26 @@ parsed before any path handling: it is never passed to `filepath.Abs` or the
 memory-document helpers, and memory document paths, which are absolute, cannot
 take that form.
 
+A container may also map to several projects, by running `memory link
+--source <container> <project>` once per project. Such a container gets no
+deterministic link. Instead it narrows the LLM catalog for its units to the
+mapped catalog projects (plus `none` and `new_project`), the same way a
+workstream mapping does. A container mapped to exactly one project narrows
+nothing; its units reach the LLM only when a stronger rule withheld the
+link.
+
+When a container has both a workstream mapping and two or more mapped
+projects, its catalog is the union of the workstream's projects and the
+mapped projects. The union never drops a project the user mapped explicitly,
+which an intersection would whenever a mapped project sits outside the
+workstream.
+
+`projects list` prints `  Containers: <container>, ...` beneath each project
+that has mapped containers, so a container mapped to several projects is
+listed under each of them. `memory doctor`, and the mapping hints in `today`
+and `resume`, never offer a container that already has a project or
+workstream mapping.
+
 ## Deterministic Linking
 
 Deterministic rules run before any LLM call, in this order. The first rule
@@ -265,7 +285,7 @@ This is the `associate_events` task in `specs/llm-integration.md`.
   display names, cited identifiers, and member events (id, timestamp, actor
   name, summary or title) capped at 20 events and 2,000 characters
 - the catalog: slug, title, workstream, aliases, description; narrowed by a
-  workstream mapping when one applies
+  workstream mapping or a mapping to several projects when one applies
 - up to 20 recent user decisions: container, unit summary, chosen project or
   rejection
 
@@ -296,7 +316,7 @@ The payload is one JSON document:
 
 - `projects` is the union of the catalogs of the units in the request. Each
   unit's `projects` lists the slugs it may be linked to: its container's
-  catalog after any workstream narrowing.
+  catalog after any workstream or several-project narrowing.
 - The 50-unit limit counts units after the source policy, so units with no
   remaining members do not use up the batch.
 - Event summaries are capped so a unit's summaries total at most 2,000
@@ -676,7 +696,9 @@ Grouping, shared by `today` and `resume`:
   when the container maps to exactly one catalog project. An applied `none`
   link keeps the event out of every project.
 - Any other event stays under its container, nested under a workstream when
-  the container maps to exactly one workstream.
+  the container maps to exactly one workstream. A container mapped to two or
+  more catalog projects appends `; mapped to <slug>, <slug>` to its line, so
+  it does not read as unmapped.
 - Lines are `- <workstream> workstream: <counts>`, `- <slug> project:
   <counts>[; <kinds>][; <k> auto-applied (workgraph projects review
   --auto)]`, and `- <container>: <counts>`, with projects and containers in a
@@ -727,6 +749,12 @@ Grouping, shared by `today` and `resume`:
   seen only in an auto-applied or proposed link seeds nothing.
 - **P4. Workstream mappings narrow the catalog.** A container mapped to `mmo`
   sends only `mmo` projects in the dry-run payload and creates no link.
+- **P4a. Several-project mappings narrow the catalog.** A container mapped to
+  `domain-apis` and `mmo-words-and-phrases` sends only those projects in the
+  dry-run payload and creates no link; adding a workstream mapping sends the
+  union of both; `projects list` shows the container under each project,
+  `today` marks its line with both projects, and `memory doctor` does not
+  offer it to another project.
 - **P5. Dry run sends nothing and respects opt-in.** With only `slack`
   enabled, the payload contains channel units but no DM, unknown-type Slack,
   or GitHub units, and no decision context from those sources; the fake
