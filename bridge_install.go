@@ -157,6 +157,8 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 	return result, nil
 }
 
+const claudeWorkgraphServerRule = "mcp__plugin_workgraph_workgraph"
+
 var claudeBridgeDrainPermissions = []string{
 	"mcp__plugin_workgraph_workgraph__capture_requests_list",
 	"mcp__plugin_workgraph_workgraph__capture_requests_claim",
@@ -336,7 +338,7 @@ func countClaudeProviderPermissions(allowed map[string]bool) int {
 	}
 	count := 0
 	for permission := range allowed {
-		if strings.HasPrefix(permission, "mcp__") && !workgraph[permission] {
+		if strings.HasPrefix(permission, "mcp__") && !workgraph[permission] && permission != claudeWorkgraphServerRule && permission != claudeWorkgraphServerRule+"__*" {
 			count++
 		}
 	}
@@ -710,7 +712,9 @@ func DrainBridge(homeDir string, client string, clientCommand string, timeout ti
 		}
 		args = append(args, prompt)
 	}
-	recordBridgeDrainKind(homeDir, client, drainKind)
+	if err := recordBridgeDrainKind(homeDir, client, drainKind); err != nil {
+		return "", fmt.Errorf("record bridge drain kind: %w", err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, commandName, args...)
@@ -925,8 +929,9 @@ func verifyClaudeBridgePermissions(homeDir string) error {
 		allowed[permission] = true
 	}
 	missing := []string{}
+	serverWide := allowed[claudeWorkgraphServerRule] || allowed[claudeWorkgraphServerRule+"__*"]
 	for _, permission := range claudeBridgeDrainPermissions {
-		if !allowed[permission] {
+		if !serverWide && !allowed[permission] {
 			missing = append(missing, permission)
 		}
 	}

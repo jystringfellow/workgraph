@@ -768,7 +768,9 @@ setup error when either is unavailable.
 
 Before launching Claude, drain also verifies that the settings allow every
 workgraph MCP permission the installer manages, which a plugin installed before
-a newer tool existed may lack. When any is missing, drain does not launch the
+a newer tool existed may lack. A server-wide allow rule,
+`mcp__plugin_workgraph_workgraph` or `mcp__plugin_workgraph_workgraph__*`,
+grants all of them and is not counted as a provider tool. When any is missing, drain does not launch the
 client, so no request is claimed and no attempt is consumed. It records the
 heartbeat and a blocked reason in `bridge/claude-code.blocked` naming every
 missing permission with `rerun workgraph plugin install --client claude-code`,

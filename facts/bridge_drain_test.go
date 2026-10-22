@@ -179,3 +179,29 @@ func TestClaudeBridgeDrainRefusesToClaimWithoutWorkgraphPermissions(t *testing.T
 		t.Fatalf("expected reinstall and a passing drain to clear the blocked state:\n%s", statusOutput)
 	}
 }
+
+func TestClaudeBridgeDrainAcceptsServerWideWorkgraphPermissionRules(t *testing.T) {
+	for _, rule := range []string{"mcp__plugin_workgraph_workgraph__*", "mcp__plugin_workgraph_workgraph"} {
+		t.Run(rule, func(t *testing.T) {
+			homeDir := initBridgedCaptureHome(t)
+			clientPath, logPath, _ := installFactClaudeBridge(t, homeDir)
+			settings, err := json.Marshal(map[string]any{"permissions": map[string]any{"allow": []string{rule, "mcp__claude_ai_Slack__slack_list_user_channels"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(homeDir, ".claude", "settings.json"), settings, 0o600); err != nil {
+				t.Fatalf("write server-wide Claude bridge settings: %v", err)
+			}
+			connectBridgedConnector(t, repoRoot(t), homeDir, "slack")
+			if output, err := runworkgraph(t, repoRoot(t), "connectors", "poll", "--home", homeDir, "--once", "--connector", "slack"); err != nil {
+				t.Fatalf("emit capture request: %v\n%s", err, output)
+			}
+			if session := drainFactClaudeBridge(t, homeDir, clientPath, logPath); !strings.Contains(session, "connector_required_tools") {
+				t.Fatalf("expected a server-wide workgraph rule to allow a capture drain:\n%s", session)
+			}
+			if _, err := os.Stat(filepath.Join(homeDir, "bridge", "claude-code.blocked")); !os.IsNotExist(err) {
+				t.Fatalf("expected no blocked drain state for a server-wide workgraph rule: %v", err)
+			}
+		})
+	}
+}

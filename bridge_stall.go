@@ -212,11 +212,12 @@ func lastBridgeDrainKind(homeDir string, client string) string {
 	return strings.TrimSpace(string(contents))
 }
 
-func recordBridgeDrainKind(homeDir string, client string, kind string) {
+func recordBridgeDrainKind(homeDir string, client string, kind string) error {
 	path := bridgeDrainKindPath(homeDir, client)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err == nil {
-		_ = os.WriteFile(path, []byte(kind+"\n"), 0o600)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
 	}
+	return os.WriteFile(path, []byte(kind+"\n"), 0o600)
 }
 
 func bridgeDrainKindPath(homeDir string, client string) string {
