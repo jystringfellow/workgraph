@@ -338,6 +338,9 @@ func createSchema(db *sql.DB) error {
 			updated_at TEXT NOT NULL
 		);`,
 		slackListSnapshotChunksSchema,
+		slackListSnapshotChunksClaimTrigger,
+		slackListSnapshotChunksRequestDeleteTrigger,
+		slackListSnapshotChunksAbandonedSweep,
 		resumeCheckInSchema,
 		githubPRObservationsSchema,
 		githubPRWatchStateSchema,

@@ -509,9 +509,13 @@ Each staged chunk renews the claim lease. The final chunk (without
 and ingests the complete snapshot through the same atomic path, so duplicate or
 missing row keys still reject the whole snapshot and nothing is stored until
 the final chunk succeeds. Staged fragments from an earlier claim of the same
-request are discarded, and completion removes the request's fragments. A
-rejected final chunk also discards the staged fragments and says so, so a
-retry resends the snapshot from its first fragment. The
+request are discarded. Staged fragments live only as long as their claim: a
+database trigger removes them in the same transaction that completes, fails,
+cancels, expires, or reclaims the request (including completion through the
+event-shaped path), and opening the store sweeps any fragment whose request is
+not currently claimed with that token. A rejected final chunk also discards
+the staged fragments and says so, so a retry resends the snapshot from its
+first fragment. The
 combined CSV is bounded by the normal ingest size limit.
 
 A scheduled batch derives its
@@ -641,7 +645,12 @@ output and cannot reproduce long multi-line text byte-for-byte; empty values
 also absorb spurious columns from a garbled header. A row whose revision
 content equals the most recent stored revision for the same List and row key
 is reported as deduplicated and not stored, including rows stored before this
-revision rule. `today` and `resume` likewise hide a stored `slack.list_item`
+revision rule. "Most recent" orders stored revisions by the parsed timestamp
+instant, then capture time, then id, never by timestamp text. A changed row
+whose row key already has stored revisions takes the identity
+`<list>:<row-key>:<content-hash>:after:<previous-content-hash>`, so returning
+to an earlier state (open, done, open again) is stored as a new revision while
+an exact replay of the same transition still deduplicates. `today` and `resume` likewise hide a stored `slack.list_item`
 whose revision content repeats the preceding stored revision of the same row,
 so earlier transcription-drift duplicates do not reappear as new work. State is revision content, not identity:
 completed rows remain evidence but can be excluded from future next-work

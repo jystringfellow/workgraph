@@ -21,6 +21,28 @@ const slackListSnapshotChunksSchema = `CREATE TABLE IF NOT EXISTS slack_list_sna
 	PRIMARY KEY (request_id, claim_token, sequence)
 );`
 
+const slackListSnapshotChunksClaimTrigger = `CREATE TRIGGER IF NOT EXISTS slack_list_snapshot_chunks_follow_claim
+AFTER UPDATE OF status, claim_token ON capture_requests
+BEGIN
+	DELETE FROM slack_list_snapshot_chunks
+	WHERE request_id = NEW.id
+		AND (NEW.status <> 'claimed' OR NEW.claim_token IS NULL OR claim_token <> NEW.claim_token);
+END;`
+
+const slackListSnapshotChunksRequestDeleteTrigger = `CREATE TRIGGER IF NOT EXISTS slack_list_snapshot_chunks_follow_request_delete
+AFTER DELETE ON capture_requests
+BEGIN
+	DELETE FROM slack_list_snapshot_chunks WHERE request_id = OLD.id;
+END;`
+
+const slackListSnapshotChunksAbandonedSweep = `DELETE FROM slack_list_snapshot_chunks
+WHERE NOT EXISTS (
+	SELECT 1 FROM capture_requests
+	WHERE capture_requests.id = slack_list_snapshot_chunks.request_id
+		AND capture_requests.status = 'claimed'
+		AND capture_requests.claim_token = slack_list_snapshot_chunks.claim_token
+);`
+
 type SlackListStateOptions struct {
 	Column     string   `json:"column"`
 	DoneValues []string `json:"done_values"`
@@ -215,21 +237,60 @@ type slackListRevisionQueryer interface {
 	Query(query string, args ...any) (*sql.Rows, error)
 }
 
-func slackListRevisionHistory(db slackListRevisionQueryer) (map[string]string, map[string]bool, error) {
-	rows, err := db.Query(`SELECT id, payload_json FROM events
-		WHERE type = 'slack.list_item' AND json_extract(payload_json, '$.capture_semantics') = 'complete_snapshot'
-		ORDER BY timestamp ASC, created_at ASC, id ASC`)
+func slackListRevisionEventID(externalID string) string {
+	digest := sha256.Sum256([]byte("slack\x00" + externalID))
+	return hex.EncodeToString(digest[:16])
+}
+
+type storedSlackListRevision struct {
+	id          string
+	timestamp   time.Time
+	createdAt   time.Time
+	payloadJSON string
+}
+
+func slackListRevisionHistory(db slackListRevisionQueryer, listIDs []string) (map[string]string, map[string]bool, error) {
+	query := `SELECT id, timestamp, created_at, payload_json FROM events
+		WHERE type = 'slack.list_item' AND json_extract(payload_json, '$.capture_semantics') = 'complete_snapshot'`
+	args := make([]any, 0, len(listIDs))
+	if len(listIDs) > 0 {
+		query += ` AND json_extract(payload_json, '$.list_id') IN (?` + strings.Repeat(", ?", len(listIDs)-1) + `)`
+		for _, listID := range listIDs {
+			args = append(args, listID)
+		}
+	}
+	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read Slack List revisions: %w", err)
 	}
 	defer rows.Close()
-	latest := map[string]string{}
-	repeated := map[string]bool{}
+	var stored []storedSlackListRevision
 	for rows.Next() {
-		var id, payloadJSON string
-		if err := rows.Scan(&id, &payloadJSON); err != nil {
+		var revision storedSlackListRevision
+		var timestamp, createdAt string
+		if err := rows.Scan(&revision.id, &timestamp, &createdAt, &revision.payloadJSON); err != nil {
 			return nil, nil, fmt.Errorf("scan Slack List revision: %w", err)
 		}
+		revision.timestamp, _ = time.Parse(time.RFC3339Nano, timestamp)
+		revision.createdAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+		stored = append(stored, revision)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("read Slack List revisions: %w", err)
+	}
+	sort.Slice(stored, func(i, j int) bool {
+		if !stored[i].timestamp.Equal(stored[j].timestamp) {
+			return stored[i].timestamp.Before(stored[j].timestamp)
+		}
+		if !stored[i].createdAt.Equal(stored[j].createdAt) {
+			return stored[i].createdAt.Before(stored[j].createdAt)
+		}
+		return stored[i].id < stored[j].id
+	})
+	latest := map[string]string{}
+	repeated := map[string]bool{}
+	for _, revision := range stored {
+		id, payloadJSON := revision.id, revision.payloadJSON
 		var payload struct {
 			ListID string         `json:"list_id"`
 			RowKey string         `json:"row_key"`
@@ -249,14 +310,11 @@ func slackListRevisionHistory(db slackListRevisionQueryer) (map[string]string, m
 		}
 		latest[key] = revision
 	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("read Slack List revisions: %w", err)
-	}
 	return latest, repeated, nil
 }
 
 func repeatedSlackListRevisionIDs(db *sql.DB) (map[string]bool, error) {
-	_, repeated, err := slackListRevisionHistory(db)
+	_, repeated, err := slackListRevisionHistory(db, nil)
 	return repeated, err
 }
 
@@ -302,9 +360,6 @@ func IngestSlackListSnapshotCSV(config SlackListSnapshotCSVConfig) (BridgedInges
 			return BridgedIngestResult{}, fmt.Errorf("%w; clear staged Slack List snapshot chunks: %v", err, clearErr)
 		}
 		return BridgedIngestResult{}, fmt.Errorf("%w; staged snapshot chunks were discarded, so resend the snapshot from its first fragment", err)
-	}
-	if _, err := db.Exec(`DELETE FROM slack_list_snapshot_chunks WHERE request_id = ?`, requestID); err != nil {
-		return BridgedIngestResult{}, fmt.Errorf("clear staged Slack List snapshot chunks: %w", err)
 	}
 	return result, nil
 }
@@ -374,9 +429,6 @@ func stageSlackListSnapshotChunk(db *sql.DB, status RunStatus, requestID string,
 	}
 	if count, _ := renewed.RowsAffected(); count != 1 || strings.TrimSpace(claimToken) == "" {
 		return BridgedIngestResult{}, fmt.Errorf("capture request %s is not validly claimed", requestID)
-	}
-	if _, err := tx.Exec(`DELETE FROM slack_list_snapshot_chunks WHERE request_id = ? AND claim_token <> ?`, requestID, claimToken); err != nil {
-		return BridgedIngestResult{}, fmt.Errorf("discard stale Slack List snapshot chunks: %w", err)
 	}
 	var sequence, stagedBytes int
 	if err := tx.QueryRow(`SELECT COUNT(*), COALESCE(SUM(length(CAST(fragment AS BLOB))), 0)

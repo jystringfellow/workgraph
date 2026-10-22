@@ -311,3 +311,134 @@ func TestBridgeMCPRejectedFinalSlackListChunkDiscardsStagedFragments(t *testing.
 		t.Fatalf("expected a full resend under the same claim to succeed: %#v", retried)
 	}
 }
+
+func TestSlackListSnapshotRecordsReturnToEarlierStateAndDedupesReplays(t *testing.T) {
+	homeDir := configureSlackListDriftBridge(t)
+	now := time.Now().UTC().Add(-4 * time.Minute)
+	ingest := func(at time.Time, done string) workgraph.BridgedIngestResult {
+		t.Helper()
+		requestID, token := claimSlackListSnapshot(t, homeDir, at)
+		input := `[{"type":"slack.list_item","payload":{"list_id":"FDRIFT","fields":{"Title":"Round trip","Done":"` + done + `"}}}]`
+		result, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{
+			HomeDir: homeDir, RequestID: requestID, ClaimToken: token, Input: strings.NewReader(input),
+		})
+		if err != nil {
+			t.Fatalf("ingest Slack List row: %v", err)
+		}
+		return result
+	}
+	open := ingest(now, "false")
+	done := ingest(now.Add(time.Minute), "true")
+	reopened := ingest(now.Add(2*time.Minute), "false")
+	replay := ingest(now.Add(3*time.Minute), "false")
+	if open.EventsInserted != 1 || done.EventsInserted != 1 || reopened.EventsInserted != 1 || replay.EventsDuplicate != 1 {
+		t.Fatalf("expected open, done, and reopened revisions with the replay deduplicated: %#v %#v %#v %#v", open, done, reopened, replay)
+	}
+	db := openBridgedCaptureDatabase(t, homeDir)
+	var latestDone bool
+	if err := db.QueryRow(`SELECT json_extract(payload_json, '$.done') FROM events WHERE type = 'slack.list_item' ORDER BY timestamp DESC LIMIT 1`).Scan(&latestDone); err != nil {
+		t.Fatalf("read latest revision: %v", err)
+	}
+	if latestDone || countSlackListEvents(t, homeDir) != 3 {
+		t.Fatalf("expected three revisions ending open, latestDone=%v", latestDone)
+	}
+}
+
+func TestSlackListLatestRevisionUsesTimestampInstantNotText(t *testing.T) {
+	homeDir := configureSlackListDriftBridge(t)
+	db := openBridgedCaptureDatabase(t, homeDir)
+	second := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	rowKey := slackListRowKey(map[string]string{"Title": "Precision row"})
+	store := func(id string, timestamp string, priority string) {
+		t.Helper()
+		payload, _ := json.Marshal(map[string]any{
+			"capture_semantics": "complete_snapshot", "content_hash": id, "list_id": "FDRIFT", "row_key": rowKey,
+			"done": false, "observed_at": timestamp,
+			"fields": map[string]any{"Title": "Precision row", "Done": "false", "Priority": priority},
+		})
+		if _, err := db.Exec(`INSERT INTO events (id, source, type, timestamp, payload_json, project, summary, created_at)
+			VALUES (?, 'slack', 'slack.list_item', ?, ?, 'slack-list:FDRIFT', 'Precision row', ?)`, id, timestamp, string(payload), timestamp); err != nil {
+			t.Fatalf("store revision: %v", err)
+		}
+	}
+	base := second.Format("2006-01-02T15:04:05")
+	store("whole-second", base+"Z", "Low")
+	store("tenth", base+".1Z", "Medium")
+	store("hundredth", base+".11Z", "High")
+
+	requestID, token := claimSlackListSnapshot(t, homeDir, time.Now().UTC().Add(-time.Minute))
+	input := `[{"type":"slack.list_item","payload":{"list_id":"FDRIFT","fields":{"Title":"Precision row","Done":"false","Priority":"High"}}}]`
+	result, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{
+		HomeDir: homeDir, RequestID: requestID, ClaimToken: token, Input: strings.NewReader(input),
+	})
+	if err != nil {
+		t.Fatalf("ingest Slack List row: %v", err)
+	}
+	if result.EventsInserted != 0 || result.EventsDuplicate != 1 {
+		t.Fatalf("expected the row to match the latest-by-instant revision (.11Z): %#v", result)
+	}
+}
+
+func countSlackListChunks(t *testing.T, homeDir string) int {
+	t.Helper()
+	var count int
+	if err := openBridgedCaptureDatabase(t, homeDir).QueryRow(`SELECT COUNT(*) FROM slack_list_snapshot_chunks`).Scan(&count); err != nil {
+		t.Fatalf("count staged chunks: %v", err)
+	}
+	return count
+}
+
+func TestSlackListStagedChunksEndWithTheirClaim(t *testing.T) {
+	homeDir := configureSlackListDriftBridge(t)
+	stage := func(requestID string, token string) {
+		t.Helper()
+		staged := callBridgeMCPIngest(t, homeDir, map[string]any{
+			"request_id": requestID, "claim_token": token, "list_id": "FDRIFT",
+			"snapshot_csv": "Title,Done\r\nStaged row,false\r\n", "snapshot_continues": true,
+		})
+		if staged["isError"] == true || countSlackListChunks(t, homeDir) != 1 {
+			t.Fatalf("stage chunk: %#v", staged)
+		}
+	}
+
+	now := time.Now().UTC().Add(-5 * time.Minute)
+	requestID, token := claimSlackListSnapshot(t, homeDir, now)
+	stage(requestID, token)
+	if err := workgraph.FailCaptureRequest(workgraph.CaptureRequestCapabilityConfig{
+		HomeDir: homeDir, RequestID: requestID, ClaimToken: token, Error: "provider error", Now: now,
+	}); err != nil {
+		t.Fatalf("fail claim: %v", err)
+	}
+	if count := countSlackListChunks(t, homeDir); count != 0 {
+		t.Fatalf("expected failure to discard staged chunks, got %d", count)
+	}
+
+	claims, err := workgraph.ClaimCaptureRequests(workgraph.CaptureRequestClaimConfig{
+		HomeDir: homeDir, ConnectorID: "slack.lists", Worker: "facts", Max: 1, Now: now.Add(6 * time.Minute), Lease: 10 * time.Minute,
+	})
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("reclaim: claims=%d err=%v", len(claims), err)
+	}
+	stage(requestID, claims[0].ClaimToken)
+	input := `[{"type":"slack.list_item","payload":{"list_id":"FDRIFT","fields":{"Title":"Compatibility row","Done":"false"}}}]`
+	if _, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{
+		HomeDir: homeDir, RequestID: requestID, ClaimToken: claims[0].ClaimToken, Input: strings.NewReader(input),
+	}); err != nil {
+		t.Fatalf("complete through compatibility path: %v", err)
+	}
+	if count := countSlackListChunks(t, homeDir); count != 0 {
+		t.Fatalf("expected compatibility-path completion to discard staged chunks, got %d", count)
+	}
+
+	db := openBridgedCaptureDatabase(t, homeDir)
+	if _, err := db.Exec(`INSERT INTO slack_list_snapshot_chunks (request_id, claim_token, sequence, fragment, created_at)
+		VALUES ('abandoned', 'gone', 0, 'Title', ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("insert abandoned chunk: %v", err)
+	}
+	if _, err := workgraph.ListCaptureRequests(workgraph.CaptureRequestListConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if count := countSlackListChunks(t, homeDir); count != 0 {
+		t.Fatalf("expected store open to discard abandoned chunks, got %d", count)
+	}
+}
