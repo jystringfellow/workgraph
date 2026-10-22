@@ -81,6 +81,10 @@ func LoadProjectCatalog(memoryDir string) (ProjectCatalog, error) {
 }
 
 func (catalog ProjectCatalog) ForContainer(container string, mappings ContainerMappings) []ProjectCatalogEntry {
+	return catalog.forUnit(container, mappings, nil)
+}
+
+func (catalog ProjectCatalog) forUnit(container string, mappings ContainerMappings, cited map[string]bool) []ProjectCatalogEntry {
 	allowedWorkstreams := map[string]bool{}
 	for _, workstream := range mappings.Workstreams[container] {
 		allowedWorkstreams[workstream] = true
@@ -96,7 +100,7 @@ func (catalog ProjectCatalog) ForContainer(container string, mappings ContainerM
 	}
 	var narrowed []ProjectCatalogEntry
 	for _, project := range catalog.Projects {
-		if allowedWorkstreams[project.Workstream] || allowedProjects[project.Slug] {
+		if allowedWorkstreams[project.Workstream] || allowedProjects[project.Slug] || cited[project.Slug] {
 			narrowed = append(narrowed, project)
 		}
 	}

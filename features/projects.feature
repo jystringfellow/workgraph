@@ -49,6 +49,12 @@ Scenario: Map a container to several projects
   When I also map the container to workstream "mmo"
   Then the dry run offers the workstream's projects and both mapped projects
 
+Scenario: Keep projects named by a unit's identifiers when narrowing
+  Given "Mindbody.Businesses.I18n" is mapped to "domain-apis" and "mmo-words-and-phrases"
+  And a thread there cites a pull request recorded in "mmo-words-and-phrases" and "ask-kai" memory
+  When I run "workgraph llm associate --dry-run"
+  Then the thread is offered "ask-kai" as well as both mapped projects
+
 Scenario: Suggest a workstream for a shared acronym
   Given memory exists for "mmo-harness"
   And captured events belong to "Mindbody.Modernization.Orchestration"

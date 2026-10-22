@@ -222,6 +222,14 @@ mapped projects. The union never drops a project the user mapped explicitly,
 which an intersection would whenever a mapped project sits outside the
 workstream.
 
+Narrowing never removes a project that the unit's identifiers name. A
+narrowed catalog also includes every catalog project that the shared
+identifier rule matches for the unit, so a unit whose identifiers split
+between a mapped project and another project still gets both as candidates.
+Those identifiers come only from the unit's permitted members, and the
+user-approved links that seed the rule contribute only identifiers from
+members whose source is enabled.
+
 `projects list` prints `  Containers: <container>, ...` beneath each project
 that has mapped containers, so a container mapped to several projects is
 listed under each of them. `memory doctor`, and the mapping hints in `today`
@@ -285,7 +293,8 @@ This is the `associate_events` task in `specs/llm-integration.md`.
   display names, cited identifiers, and member events (id, timestamp, actor
   name, summary or title) capped at 20 events and 2,000 characters
 - the catalog: slug, title, workstream, aliases, description; narrowed by a
-  workstream mapping or a mapping to several projects when one applies
+  workstream mapping or a mapping to several projects when one applies, and
+  always including projects the unit's identifiers name
 - up to 20 recent user decisions: container, unit summary, chosen project or
   rejection
 
@@ -316,7 +325,8 @@ The payload is one JSON document:
 
 - `projects` is the union of the catalogs of the units in the request. Each
   unit's `projects` lists the slugs it may be linked to: its container's
-  catalog after any workstream or several-project narrowing.
+  catalog after any workstream or several-project narrowing, plus projects
+  its identifiers name.
 - The 50-unit limit counts units after the source policy, so units with no
   remaining members do not use up the batch.
 - Event summaries are capped so a unit's summaries total at most 2,000
@@ -754,7 +764,9 @@ Grouping, shared by `today` and `resume`:
   dry-run payload and creates no link; adding a workstream mapping sends the
   union of both; `projects list` shows the container under each project,
   `today` marks its line with both projects, and `memory doctor` does not
-  offer it to another project.
+  offer it to another project; a unit whose identifiers name a project
+  outside the mapped or workstream set still has that project in its catalog,
+  unless the only seed is a link from a disabled source.
 - **P5. Dry run sends nothing and respects opt-in.** With only `slack`
   enabled, the payload contains channel units but no DM, unknown-type Slack,
   or GitHub units, and no decision context from those sources; the fake
