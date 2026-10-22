@@ -165,6 +165,11 @@ For Slack messages, read threads with `response_format: "detailed"`; concise
 thread output omits the timestamps required for stable message identity. Do not
 trust `oldest` or `latest` on `slack_read_thread`. Read the complete thread and
 filter every reply against the exact request bounds during normalization.
+Give every Slack message and reply payload `channel_id`, `channel_name`, and
+`conversation_type` from Slack conversation info, and submit replies as
+`slack.thread_reply`; the event contract reference lists the accepted values.
+A capture_ingest rejection names the event and missing field, so look it up and
+resubmit under the same claim instead of dropping the event.
 
 For Slack Lists, preflight and use `slack_read_file` on every configured List
 id. It is a `complete_snapshot` recipe. When the request is scoped to exactly

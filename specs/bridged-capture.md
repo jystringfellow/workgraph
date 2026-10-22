@@ -979,24 +979,65 @@ request id and claim token.
 
 ## A.1 — `slack` (`--source slack`)
 
-Unedited messages use `external_id = "<channel>:<ts>"`. Edited revisions append
-`:edit:<edited-ts>`. Thread replies use `slack.thread_reply` and the reply `ts`.
-Payloads include `conversation_type` (`channel`, `private_channel`, `im`, or
-`mpim`) when the Slack tool result identifies the conversation, and omit it
-otherwise. A missing or unrecognized value is treated as a DM by readers.
+Unedited messages use `external_id = "<channel_id>:<ts>"`. Edited revisions
+append `:edit:<edited-ts>`. Thread replies use `slack.thread_reply`, the reply
+`ts`, and the parent `thread_ts`. Ingest accepts `slack.reply` as a synonym and
+stores it as `slack.thread_reply`, so bridged replies form thread units exactly
+like natively captured replies. The submitted type still feeds weak dedupe, so
+resubmitting the same reply without `external_id` stays idempotent.
+
+Every bridged `slack.message` and `slack.thread_reply` payload carries:
+
+- `channel_id`: the Slack conversation id (`C…`, `G…`, or `D…`).
+- `channel_name`: the conversation name without a leading `#`, read from Slack
+  conversation info. DMs use `DM: <user name>` and group DMs
+  `Group DM: <names>`, matching native capture.
+- `conversation_type`: `channel`, `private_channel`, `im`, or `mpim`, read from
+  Slack conversation info.
+
+Ingest rejects the whole batch when any of these is missing, empty, or
+unrecognized, with an error that names the event number and the missing field,
+so a worker can correct the payload and resubmit within its claim or report the
+failure for retry. A missing `conversation_type` is rejected rather than stored
+as a DM because privacy classification is part of the contract and a silent DM
+default would hide channel work from AI categorization without telling the
+worker. Readers still treat stored events with a missing or unrecognized value
+as DMs. One exception keeps capture moving: when `channel_name` is missing,
+empty, or equal to `channel_id`, ingest accepts the event if the store already
+pairs that `channel_id` with a name and uses that name as the container. The
+payload is stored as submitted.
+
+A channel_id-to-name pair keeps the privacy of the event it came from. A
+`channel` or `private_channel` event only takes a name from another `channel`
+or `private_channel` event. A name seen only on an event treated as a DM
+(missing, unrecognized, `im`, or `mpim` type) names only events that are
+themselves treated as DMs, so a restricted name never becomes the container of
+an event that categorization may send. Ingest, the store repair, and readers
+share this rule.
 
 When a Slack envelope omits `project`, ingest stores the payload
 `channel_name` as the container, trimmed and without a leading `#`, matching
-native Slack capture. DM names such as `DM: <user>` follow the same rule; DM
-privacy stays governed by `conversation_type`. A name that is empty or equal to
-`channel_id` leaves `project` unset. Opening an existing store backfills the
-same container onto stored Slack events whose `project` is empty, without
-changing their payloads or any non-empty `project`.
+native Slack capture. An explicit Slack `project` is stored without a leading
+`#` as well. DM names such as `DM: <user>` follow the same rule; DM privacy
+stays governed by `conversation_type`.
+
+Opening an existing store repairs stored Slack events without changing any
+payload:
+
+- `slack.reply` events become `slack.thread_reply`.
+- A container with a leading `#` is stored without it.
+- An empty container takes the payload `channel_name`, or, when the payload has
+  only `channel_id`, the name the store pairs with that id, using the same
+  derivation readers use for channel aliases. Events whose id is never paired
+  with a name stay empty.
+
+Every other non-empty `project` is unchanged. Each open reads only rows that still
+need repair, through narrow indexes, so repaired rows are not rescanned.
 
 ```json
-{"type":"slack.message","timestamp":"2026-09-13T12:00:54.844Z","external_id":"C0DEMO123:1789300854.844369","project":"demo-production","actor":"U0DEMO001","summary":"Deployment succeeded for demo-service","payload":{"channel":"C0DEMO123","channel_name":"demo-changes","conversation_type":"channel","ts":"1789300854.844369","user":"U0DEMO001","is_bot":true,"bot_name":"Deployment Bot","text":"Deployment succeeded for demo-service\nhttps://deployments.example/runs/47555\ncreate: 1\nsame: 147"}}
-{"type":"slack.message","timestamp":"2026-09-13T12:00:38.180Z","external_id":"C0DEMO123:1789300838.180579","project":"demo-production","actor":"U0DEMO001","summary":"Kubernetes deployment demo-api modified","payload":{"channel":"C0DEMO123","channel_name":"demo-changes","conversation_type":"channel","ts":"1789300838.180579","user":"U0DEMO001","is_bot":true,"bot_name":"Deployment Bot","text":"Kubernetes deployment change\ndemo/demo-api modified"}}
-{"type":"slack.message","timestamp":"2026-09-13T12:00:37.767Z","external_id":"C0DEMO123:1789300837.767919","project":"demo-production","actor":"U0DEMO001","summary":"Kubernetes deployment demo-worker modified","payload":{"channel":"C0DEMO123","channel_name":"demo-changes","conversation_type":"channel","ts":"1789300837.767919","user":"U0DEMO001","is_bot":true,"bot_name":"Deployment Bot","text":"Kubernetes deployment change\ndemo/demo-worker modified"}}
+{"type":"slack.message","timestamp":"2026-09-13T12:00:54.844Z","external_id":"C0DEMO123:1789300854.844369","project":"demo-production","actor":"U0DEMO001","summary":"Deployment succeeded for demo-service","payload":{"channel_id":"C0DEMO123","channel_name":"demo-changes","conversation_type":"channel","ts":"1789300854.844369","user":"U0DEMO001","is_bot":true,"bot_name":"Deployment Bot","text":"Deployment succeeded for demo-service\nhttps://deployments.example/runs/47555\ncreate: 1\nsame: 147"}}
+{"type":"slack.message","timestamp":"2026-09-13T12:00:38.180Z","external_id":"C0DEMO123:1789300838.180579","project":"demo-production","actor":"U0DEMO001","summary":"Kubernetes deployment demo-api modified","payload":{"channel_id":"C0DEMO123","channel_name":"demo-changes","conversation_type":"channel","ts":"1789300838.180579","user":"U0DEMO001","is_bot":true,"bot_name":"Deployment Bot","text":"Kubernetes deployment change\ndemo/demo-api modified"}}
+{"type":"slack.message","timestamp":"2026-09-13T12:00:37.767Z","external_id":"C0DEMO123:1789300837.767919","project":"demo-production","actor":"U0DEMO001","summary":"Kubernetes deployment demo-worker modified","payload":{"channel_id":"C0DEMO123","channel_name":"demo-changes","conversation_type":"channel","ts":"1789300837.767919","user":"U0DEMO001","is_bot":true,"bot_name":"Deployment Bot","text":"Kubernetes deployment change\ndemo/demo-worker modified"}}
 ```
 
 ## A.2 — `github` (`--source github`)

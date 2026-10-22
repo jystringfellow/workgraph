@@ -96,3 +96,42 @@ func TestEnsureColumnClosesPRAGMAReadBeforeAlter(t *testing.T) {
 		t.Fatalf("ensureColumn should close PRAGMA rows before ALTER TABLE: %v", err)
 	}
 }
+
+func TestSlackRepairReadsOnlyRowsThatNeedWork(t *testing.T) {
+	db, err := sql.Open("sqlite3", t.TempDir()+"/workgraph.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := createSchema(db); err != nil {
+		t.Fatal(err)
+	}
+	for query, plan := range map[string]string{
+		slackReplyTypeRepair:             "SEARCH events USING INDEX idx_events_type (type=?)",
+		slackContainersWithHashQuery:     "SEARCH events USING INDEX idx_events_project (project>? AND project<?)",
+		slackEventsWithoutContainerQuery: "SCAN events USING INDEX idx_events_slack_without_container",
+		slackChannelAliasQuery:           "SEARCH events USING INDEX idx_events_slack_channel_id (<expr>=?)",
+	} {
+		var args []any
+		if strings.Contains(query, "?") {
+			args = append(args, "C0DEMO001")
+		}
+		rows, err := db.Query("EXPLAIN QUERY PLAN "+query, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var details []string
+		for rows.Next() {
+			var id, parent, notUsed int
+			var detail string
+			if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
+				t.Fatal(err)
+			}
+			details = append(details, detail)
+		}
+		rows.Close()
+		if len(details) == 0 || details[0] != plan {
+			t.Errorf("expected %q to plan %q, got %q", query, plan, details)
+		}
+	}
+}

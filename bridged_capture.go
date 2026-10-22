@@ -976,6 +976,7 @@ func IngestBridgedCapture(config BridgedIngestConfig) (BridgedIngestResult, erro
 
 	prepared := make([]preparedBridgedEvent, 0, len(envelopes))
 	snapshotKeys := map[string]bool{}
+	knownSlackChannelNames := map[string]slackChannelNames{}
 	for index, envelope := range envelopes {
 		var event preparedBridgedEvent
 		switch {
@@ -985,6 +986,9 @@ func IngestBridgedCapture(config BridgedIngestConfig) (BridgedIngestResult, erro
 			event, err = prepareNotionActivityEvent(envelope)
 		default:
 			event, err = prepareBridgedEvent(source, envelope)
+			if err == nil && source == "slack" {
+				err = requireBridgedSlackChannel(db, &event, knownSlackChannelNames)
+			}
 		}
 		if err != nil {
 			return BridgedIngestResult{}, fmt.Errorf("event %d: %w", index+1, err)
@@ -1272,10 +1276,56 @@ func prepareBridgedEvent(source string, envelope bridgedEventEnvelope) (prepared
 		Summary:     strings.TrimSpace(envelope.Summary),
 		WeakDedupe:  weak,
 	}
-	if source == "slack" && event.Project == "" {
-		event.Project = slackPayloadContainer(payloadJSON)
+	if source == "slack" {
+		event.Type = canonicalBridgedSlackType(eventType)
+		event.Project = slackContainerName(event.Project)
+		if event.Project == "" {
+			event.Project = slackPayloadContainer(payloadJSON)
+		}
 	}
 	return event, nil
+}
+
+func canonicalBridgedSlackType(eventType string) string {
+	if eventType == "slack.reply" {
+		return "slack.thread_reply"
+	}
+	return eventType
+}
+
+func requireBridgedSlackChannel(db *sql.DB, event *preparedBridgedEvent, knownNames map[string]slackChannelNames) error {
+	if event.Type != "slack.message" && event.Type != "slack.thread_reply" {
+		return nil
+	}
+	channelID, _ := slackResumeChannelIdentity(event.PayloadJSON)
+	if channelID == "" {
+		return fmt.Errorf("slack payload channel_id is required: set it to the Slack conversation id (C..., G..., or D...) the message was read from")
+	}
+	var payload struct {
+		ConversationType string `json:"conversation_type"`
+	}
+	if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil || recognizedSlackConversationType(payload.ConversationType) == "" {
+		return fmt.Errorf("slack payload conversation_type is required and must be channel, private_channel, im, or mpim, got %q: read it from Slack conversation info for %s", payload.ConversationType, channelID)
+	}
+	if slackPayloadContainer(event.PayloadJSON) != "" {
+		return nil
+	}
+	names, checked := knownNames[channelID]
+	if !checked {
+		var err error
+		if names, err = loadSlackChannelAlias(db, channelID); err != nil {
+			return err
+		}
+		knownNames[channelID] = names
+	}
+	name := names.For(event.PayloadJSON)
+	if name == "" {
+		return fmt.Errorf("slack payload channel_name is required for %s: set it to the conversation name from Slack conversation info without a leading #; DMs use \"DM: <user name>\" and group DMs \"Group DM: <names>\"", channelID)
+	}
+	if event.Project == "" {
+		event.Project = name
+	}
+	return nil
 }
 
 func prepareNotionActivityEvent(envelope bridgedEventEnvelope) (preparedBridgedEvent, error) {

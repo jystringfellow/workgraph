@@ -11,7 +11,7 @@ Use these connector/source mappings and revision-aware identities:
 | Connector | Source and type | `external_id` |
 |---|---|---|
 | GitHub | `github`, `github.pull_request` or `github.issue` | `<repo>#<kind>:<number>:<updated-at>` |
-| Slack | `slack`, `slack.message`/`slack.reply` | `<channel>:<ts>`; append edited timestamp for edits |
+| Slack | `slack`, `slack.message`/`slack.thread_reply` | `<channel_id>:<ts>`; append edited timestamp for edits |
 | Slack Lists | `slack`, `slack.list_item` | `<list>:<row-key>:<revision-or-content-hash>` |
 | Google/Microsoft mail | `mail.google`/`mail.microsoft`, `<source>.message` | stable message id |
 | Google/Microsoft calendar | `calendar.google`/`calendar.microsoft`, `<source>.event` | `<event-id>:change:<change-key-or-last-modified>` |
@@ -31,9 +31,25 @@ rather than silently truncating it.
 For Slack messages, request `slack_read_thread` in detailed form because concise
 output omits per-message timestamps. Treat its `oldest` and `latest` arguments
 as advisory: filter every returned reply against the exact UTC request bounds
-during normalization. Set payload `conversation_type` to `channel`,
-`private_channel`, `im`, or `mpim` when the Slack tool result identifies the
-conversation type; omit it otherwise, and workgraph treats the message as a DM.
+during normalization. Submit thread replies as `slack.thread_reply` with the
+reply `ts` and the parent `thread_ts`; workgraph also accepts `slack.reply` and
+stores it as `slack.thread_reply`.
+
+Every Slack message and reply payload must carry all three conversation fields,
+or workgraph rejects the whole batch and names the event and missing field:
+
+- `channel_id`: the Slack conversation id (`C…`, `G…`, or `D…`), not `channel`.
+- `channel_name`: the conversation name without a leading `#`. DMs use
+  `DM: <user name>` and group DMs `Group DM: <names>`.
+- `conversation_type`: `channel`, `private_channel`, `im`, or `mpim`.
+
+Read the name and type from Slack conversation info: the channel metadata a
+read or search result returns, or a channel or user lookup by id with the
+approved read-only tools. Never guess a type from the id prefix alone, because
+`C…` ids can be public or private. A payload may omit `channel_name` only when
+workgraph already stores a name for that `channel_id`; if a rejection says the
+name is required, look it up and resubmit the corrected batch under the same
+claim, or report the request as failed so it retries.
 
 For Microsoft mail, express the provider date filter in the mailbox-local time
 zone over a two-day pad on each side of the requested window. Filter the
