@@ -191,7 +191,7 @@ func inspectMemoryProjects(db *sql.DB, events []ResumeEvent, config MemoryDoctor
 func memoryProjectTitle(content, fallback string) string {
 	for _, line := range strings.Split(content, "\n") {
 		if strings.HasPrefix(line, "# ") {
-			if title := strings.TrimSpace(strings.TrimPrefix(line, "# ")); title != "" {
+			if title := markdownPlainText(strings.TrimPrefix(line, "# ")); title != "" {
 				return title
 			}
 		}

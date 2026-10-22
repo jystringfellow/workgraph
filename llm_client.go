@@ -225,9 +225,9 @@ func aiClientArguments(client string, model string, workingDir string) ([]string
 }
 
 func aiClientPrompt(messages []openAICompatibleMessage) (string, error) {
-	request, err := json.MarshalIndent(struct {
+	request, err := marshalPromptJSON(struct {
 		Messages []openAICompatibleMessage `json:"messages"`
-	}{Messages: messages}, "", "  ")
+	}{Messages: messages})
 	if err != nil {
 		return "", fmt.Errorf("encode AI client request: %w", err)
 	}
@@ -240,6 +240,21 @@ func aiClientPrompt(messages []openAICompatibleMessage) (string, error) {
 		"Request messages:",
 		string(request),
 	}, "\n"), nil
+}
+
+func marshalPromptJSON(value any) ([]byte, error) {
+	var encoded bytes.Buffer
+	encoder := json.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return escapePromptDelimiterRunes(bytes.TrimSuffix(encoded.Bytes(), []byte("\n"))), nil
+}
+
+func escapePromptDelimiterRunes(encoded []byte) []byte {
+	return bytes.ReplaceAll(bytes.ReplaceAll(encoded, []byte("<"), []byte(`\u003c`)), []byte(">"), []byte(`\u003e`))
 }
 
 func readBoundedAIClientResponse(path string) (string, error) {

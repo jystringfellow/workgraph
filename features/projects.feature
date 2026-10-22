@@ -7,6 +7,12 @@ Scenario: Group projects under a workstream
   Then "mmo-gtm-segments" and "mmo-harness" are listed under "mmo"
   And "ask-kai" is listed without a workstream
 
+Scenario: Show project titles as plain text
+  Given project memory for "mmo-words-and-phrases" has the heading "MMO Words &amp; Phrases"
+  When I run "workgraph projects list"
+  Then the project is listed as "MMO Words & Phrases"
+  And "workgraph llm associate --dry-run" sends the title "MMO Words & Phrases"
+
 Scenario: Group activity into units of work
   Given Slack, GitHub, git, Notion, and calendar events captured in any order
   When workgraph groups units of work
@@ -75,10 +81,12 @@ Scenario: Undo an automatic link
   Then the unit waits for review with "mmo-harness" proposed
   And later categorization runs do not link it automatically
 
-Scenario: Review every automatic link until there is enough history
-  Given fewer than 20 automatic links have been decided
+Scenario: Review every automatic LLM link until there is enough history
+  Given fewer than 20 automatic LLM links have been decided
   When I run "workgraph projects review"
-  Then undecided automatic links are listed beside proposed ones
+  Then undecided automatic LLM links are listed beside proposed ones
+  And deterministic links are not listed
+  And the review ends by saying nothing is left to decide
 
 Scenario: Pause auto-apply when accuracy drops
   Given I corrected more than 5 percent of recent auto-applied links
