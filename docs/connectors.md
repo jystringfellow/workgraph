@@ -115,7 +115,9 @@ The reference-client matrix is:
 
 An empty batch is valid only after an exhaustive bounded query or an applicable
 control query proves emptiness. Never infer emptiness from one zero-result
-search when the provider search is indexed, capped, or partial.
+search when the provider search is indexed, capped, or partial. Submit the
+proof as `empty_proof` on the empty submission; workgraph rejects control
+queries submitted as events.
 
 Bridged connectors declare either `bounded_events` or `complete_snapshot`
 capture semantics. Slack Lists use complete snapshots because the reference MCP

@@ -251,6 +251,20 @@ Feature: Bridged connector capture
     Then workgraph accepts it only with an exhaustive query or passed control-query proof
     And workgraph rejects a bare empty array as unproven
 
+  Scenario: Keep control-query evidence out of the event store
+    Given a claimed bounded bridged request whose window is proven empty by a control query
+    When the worker submits the control query as an event over MCP capture_ingest
+    Then workgraph rejects the batch and directs the worker to empty_proof
+    When the worker submits empty_proof with no events
+    Then the request completes and no event is stored
+    And opening the store deletes previously stored control-query events
+
+  Scenario: Derive bridged summaries from provider titles
+    Given bridged mail, calendar, Notion activity, and Azure Boards events without summaries
+    When workgraph ingests them
+    Then each summary is the provider subject or title
+    And opening the store backfills empty summaries for stored events of those types
+
   Scenario: Bridge Notion participant activity that the public API cannot express
     Given the public Notion API cannot filter search by editor or creator workspace-wide
     When I configure notion.activity with participant scope and edited/created includes

@@ -988,6 +988,9 @@ func IngestBridgedCapture(config BridgedIngestConfig) (BridgedIngestResult, erro
 	snapshotKeys := map[string]bool{}
 	knownSlackChannelNames := map[string]slackChannelNames{}
 	for index, envelope := range envelopes {
+		if isControlQueryEvent(strings.TrimSpace(envelope.Type), string(envelope.Payload)) {
+			return BridgedIngestResult{}, errControlQueryEvent(index + 1)
+		}
 		var event preparedBridgedEvent
 		switch {
 		case claimedRequest != nil && claimedRequest.CaptureSemantics == "complete_snapshot" && connectorID == "slack.lists":
@@ -1002,6 +1005,9 @@ func IngestBridgedCapture(config BridgedIngestConfig) (BridgedIngestResult, erro
 		}
 		if err != nil {
 			return BridgedIngestResult{}, fmt.Errorf("event %d: %w", index+1, err)
+		}
+		if event.Summary == "" {
+			event.Summary = bridgedTitleSummary(event.Type, event.PayloadJSON)
 		}
 		if envelope.Involvement != nil {
 			encoded, encodeErr := involvementJSON(*envelope.Involvement)

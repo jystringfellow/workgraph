@@ -272,12 +272,15 @@ func bridgeMCPTools() []bridgeMCPTool {
 	}
 	str := map[string]any{"type": "string"}
 	integer := map[string]any{"type": "integer", "minimum": 1, "maximum": 100}
+	boolean := map[string]any{"type": "boolean"}
 	captureIngest := object(map[string]any{
 		"request_id": str, "claim_token": str, "source": str, "events": map[string]any{},
 		"list_id": str, "snapshot_csv": str,
+		"empty_proof": object(map[string]any{"exhaustive_query": boolean, "control_query_passed": boolean}),
 	})
-	captureIngest["oneOf"] = []any{
+	captureIngest["anyOf"] = []any{
 		map[string]any{"required": []string{"events"}},
+		map[string]any{"required": []string{"request_id", "claim_token", "empty_proof"}},
 		map[string]any{"required": []string{"request_id", "claim_token", "list_id", "snapshot_csv"}},
 	}
 	return []bridgeMCPTool{
@@ -285,7 +288,7 @@ func bridgeMCPTools() []bridgeMCPTool {
 		{"capture_requests_list", "List non-secret bridged capture outbox metadata.", object(map[string]any{"connector": str})},
 		{"capture_requests_claim", "Atomically claim daemon-scheduled capture work. Filter with connector. Without kind only capture requests are claimed; kind llm_task claims categorization work that returns a task to answer and submit with llm_task_submit. Every claim must end in capture_ingest, llm_task_submit, or capture_request_fail with a reason; never abandon it.", object(map[string]any{"connector": str, "kind": map[string]any{"type": "string", "enum": []string{"capture", "llm_task"}}, "worker": str, "max": integer}, "worker")},
 		{"capture_request_renew", "Renew an unexpired capture claim.", object(map[string]any{"request_id": str, "claim_token": str}, "request_id", "claim_token")},
-		{"capture_ingest", "Validate and atomically ingest one normalized event batch, or parse one claimed Slack List snapshot from raw CSV server-side. Every Slack message and slack.thread_reply payload needs channel_id, channel_name (DMs: \"DM: <user name>\"), and conversation_type (channel, private_channel, im, or mpim) from Slack conversation info; a rejection names the event and missing field so the batch can be corrected and resubmitted under the same claim.", captureIngest},
+		{"capture_ingest", "Validate and atomically ingest one normalized event batch, or parse one claimed Slack List snapshot from raw CSV server-side. Every Slack message and slack.thread_reply payload needs channel_id, channel_name (DMs: \"DM: <user name>\"), and conversation_type (channel, private_channel, im, or mpim) from Slack conversation info; a rejection names the event and missing field so the batch can be corrected and resubmitted under the same claim. When a bounded window is proven empty, omit events (or pass []) and pass empty_proof {\"exhaustive_query\":true} or {\"control_query_passed\":true}; the request completes without events. Never submit a control query as an event: workgraph rejects *.control_query types and payloads with a control_query field.", captureIngest},
 		{"capture_request_fail", "Return claimed work for retry with bounded error details. Set reason window_too_large when a bounded_events window cannot be fetched and ingested within the claim; workgraph then narrows the same request to the first half of its window, never below one hour, and makes it claimable again immediately. Other failures, and complete_snapshot requests, retry the same bounds after backoff.", object(map[string]any{"request_id": str, "claim_token": str, "error": str, "reason": map[string]any{"type": "string", "enum": []string{"window_too_large"}}}, "request_id", "claim_token")},
 		{"capture_watermark", "Read a connector completed-through cursor.", object(map[string]any{"connector": str}, "connector")},
 		{"connector_status", "Read connector capture mode and health.", object(map[string]any{})},
@@ -376,6 +379,19 @@ func callBridgeMCPTool(config BridgeMCPConfig, name string, raw json.RawMessage)
 				return nil, fmt.Errorf("encode Slack List snapshot rows: %w", err)
 			}
 		}
+		if proof := args["empty_proof"]; len(proof) > 0 {
+			if snapshotCSV != "" {
+				return nil, fmt.Errorf("specify empty_proof or snapshot_csv, not both")
+			}
+			if !emptyBridgeMCPEvents(events) {
+				return nil, fmt.Errorf("empty_proof applies only to an empty batch; omit events or pass []")
+			}
+			proven, err := json.Marshal(map[string]any{"events": []any{}, "empty_proof": proof})
+			if err != nil {
+				return nil, fmt.Errorf("encode empty_proof: %w", err)
+			}
+			events = proven
+		}
 		if len(events) == 0 {
 			return nil, fmt.Errorf("events are required")
 		}
@@ -452,4 +468,12 @@ func bridgeMCPError(id any, code int, message string) map[string]any {
 
 func bridgeMCPErrorData(code int, message string) map[string]any {
 	return map[string]any{"code": code, "message": message}
+}
+
+func emptyBridgeMCPEvents(events json.RawMessage) bool {
+	if len(events) == 0 || strings.TrimSpace(string(events)) == "null" {
+		return true
+	}
+	var list []json.RawMessage
+	return json.Unmarshal(events, &list) == nil && len(list) == 0
 }
