@@ -322,6 +322,21 @@ that can be reconciled from completed requests after an interrupted write.
    the real error is retained and the claim is released. A mismatched token
    cannot fail, ingest, or complete the request, and no expired token can ingest
    or complete it.
+7. **Narrow.** A worker that cannot fetch and ingest a `bounded_events`
+   window within its claim reports failure with reason `window_too_large`.
+   workgraph then shrinks the same request in place: `since` is unchanged,
+   `until` becomes `since + max(window / 2, 1h)`, the claim is cleared, and the
+   request is `pending` and claimable immediately with `last_error` recording
+   `window too large; narrowed to <since> through <until>: <error>`. Narrowing
+   is not a connector failure and writes no connector runtime state. Because
+   the request is replaced in place, the one-active-request-per-connector index
+   still holds; completing it advances the cursor to the narrowed `until`, and
+   the normal emit computes the remainder from that cursor minus overlap,
+   capped at 24 hours, and makes it due immediately while behind. A window
+   already at one hour, a `complete_snapshot` request, a calendar request, or
+   an `llm_task` reported with that reason fails normally: same bounds,
+   backoff, and connector failure state. Any other reason value is rejected
+   and leaves the claim held.
 
 The daemon coalesces while a request is pending or claimed, so an unavailable
 bridge cannot create an unbounded backlog. After a retried request succeeds, the
@@ -446,7 +461,13 @@ misspelled filter such as `connector_id` on `capture_requests_claim` fails
 instead of silently claiming work for any connector. A worker that claims a
 request must end the claim through `capture_ingest` or `capture_request_fail`
 with a reason, including when the window is too large to finish; the claim
-tool description, drain prompt, and bridge skill say so.
+tool description, drain prompt, and bridge skill say so. `capture_request_fail`
+accepts an optional `reason` whose only value is `window_too_large` (see
+Narrow above), and the CLI reads the same field from `--error-json`. The drain
+prompt and bridge skill tell a worker to renew its lease with
+`capture_request_renew` while work is progressing, so a session is bounded by
+the drain timeout rather than the five-minute lease, and to report
+`window_too_large` when a bounded window still cannot finish.
 
 Every successful `capture_*`, `connector_status`, and
 `connector_required_tools` result also includes a `runtime` object containing
@@ -625,6 +646,9 @@ connector can stall; `llm_task` requests are never reported as stalls.
 errors show it with its age, for example `bridge stalled 19d: no completed
 capture since 2026-10-02T09:00:00Z`. When the drain wrapper recorded a failure,
 the last line of the client's output is appended as `last drain error`.
+While a drain is blocked by setup (see Claude permission verification below),
+every active bridged capture request is reported immediately, without waiting
+for the stall threshold, as `bridge drain blocked (<client>): <reason>`.
 `workgraph today` and `workgraph resume` print one warning line naming the
 stalled connectors and the hint `workgraph plugin doctor --client <client>`.
 
@@ -742,6 +766,17 @@ project-registered provider MCP servers from the headless session. Drain and
 doctor verify both the permission file and workspace trust and fail with a
 setup error when either is unavailable.
 
+Before launching Claude, drain also verifies that the settings allow every
+workgraph MCP permission the installer manages, which a plugin installed before
+a newer tool existed may lack. When any is missing, drain does not launch the
+client, so no request is claimed and no attempt is consumed. It records the
+heartbeat and a blocked reason in `bridge/claude-code.blocked` naming every
+missing permission with `rerun workgraph plugin install --client claude-code`,
+and exits with that error. Connector list, connector status, and the running
+`workgraph status` show the blocked reason, and plugin doctor fails with the
+missing permissions and the same hint. A later drain whose permissions verify
+removes the blocked reason.
+
 The generated launch agent declares a minimal deterministic login environment:
 the user's `HOME` and an installation-time `PATH` augmented with the resolved
 client and workgraph executable directories plus standard macOS binary
@@ -797,7 +832,14 @@ unique worker name, `<client>-drain-<random>`, in the prompt and in
 `WORKGRAPH_BRIDGE_WORKER`. On timeout, only requests still claimed by that worker
 with their original claim token return to `pending`, with the same backoff as a
 reported failure and the error `bridge drain timed out after <timeout>`. Claims
-held by other workers are never touched. A provider call
+held by other workers are never touched.
+
+A drain session runs either capture or categorization (`llm_task`). When both
+are claimable for the client, drain alternates: it runs categorization unless
+the previous session it launched for that client was categorization, recorded
+in `bridge/<client>.drain-kind` before the client starts. When only one kind
+is claimable, it runs that kind. Capture sessions use the worker's pinned model
+and config directory; categorization sessions use the routed profile's. A provider call
 that hangs inside a client session is therefore bounded by the drain timeout;
 when a worker outside workgraph's control hangs, its claim is recovered by
 lease expiry in the daemon's emit cycle.

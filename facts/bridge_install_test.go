@@ -815,7 +815,15 @@ func TestReferenceWorkersDrainFakeProviderRequestEndToEnd(t *testing.T) {
 				if err := os.MkdirAll(settingsDir, 0o700); err != nil {
 					t.Fatalf("create Claude worker settings: %v", err)
 				}
-				if err := os.WriteFile(filepath.Join(settingsDir, "settings.json"), []byte(`{"permissions":{"allow":["mcp__fake_provider__read"]}}`), 0o600); err != nil {
+				allow := []string{"mcp__fake_provider__read"}
+				for _, tool := range []string{"capture_requests_list", "capture_requests_claim", "capture_request_renew", "capture_ingest", "capture_request_fail", "capture_watermark", "connector_status", "connector_required_tools", "bridge_worker_heartbeat", "llm_task_submit"} {
+					allow = append(allow, "mcp__plugin_workgraph_workgraph__"+tool)
+				}
+				settings, err := json.Marshal(map[string]any{"permissions": map[string]any{"allow": allow}})
+				if err != nil {
+					t.Fatalf("encode Claude worker settings: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(settingsDir, "settings.json"), settings, 0o600); err != nil {
 					t.Fatalf("write Claude worker settings: %v", err)
 				}
 				trust, err := json.Marshal(map[string]any{"projects": map[string]any{homeDir: map[string]any{"hasTrustDialogAccepted": true}}})

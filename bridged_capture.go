@@ -81,6 +81,7 @@ type CaptureRequestCapabilityConfig struct {
 	RequestID    string
 	ClaimToken   string
 	Error        string
+	Reason       string
 	Now          time.Time
 	Lease        time.Duration
 }
@@ -298,6 +299,9 @@ func FailCaptureRequest(config CaptureRequestCapabilityConfig) error {
 		now = time.Now()
 	}
 	now = now.UTC()
+	if err := validateCaptureFailureReason(config.Reason); err != nil {
+		return err
+	}
 	db, err := sql.Open("sqlite3", status.DatabasePath)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
@@ -318,12 +322,18 @@ func FailCaptureRequest(config CaptureRequestCapabilityConfig) error {
 	if requestStatus != "claimed" || storedToken != config.ClaimToken {
 		return fmt.Errorf("capture request claim token is stale or invalid")
 	}
-	delay := connectorRetryDelay(defaultConnectorRetryInitial, defaultConnectorRetryMax, attempts)
-	availableAt := now.Add(delay)
 	errorMessage := strings.TrimSpace(config.Error)
 	if errorMessage == "" {
 		errorMessage = "bridge reported capture failure"
 	}
+	if config.Reason == captureFailureWindowTooLarge && kind == captureRequestKindCapture && capturesBoundedWindow(connectorID) {
+		narrowed, err := narrowCaptureRequestWindow(db, config.RequestID, config.ClaimToken, errorMessage, now)
+		if err != nil || narrowed {
+			return err
+		}
+	}
+	delay := connectorRetryDelay(defaultConnectorRetryInitial, defaultConnectorRetryMax, attempts)
+	availableAt := now.Add(delay)
 	updated, err := db.Exec(`UPDATE capture_requests SET
 		status = 'pending', available_at = ?, last_error = ?, claim_token = NULL,
 		claimed_by = NULL, claimed_at = NULL, lease_expires_at = NULL
