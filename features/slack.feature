@@ -26,6 +26,14 @@ Scenario: Daemon collects configured Slack messages
   And workgraph captures later replies added to already-seen thread parents
   And workgraph does not post or react in Slack
 
+Scenario: Name each Slack DM conversation
+  Given workgraph has been initialized
+  And Slack access is configured for opted-in DMs
+  When workgraph collects an IM whose user name cannot be resolved
+  Then its container is "DM (<channel_id>)"
+  When workgraph collects an MPIM whose member names cannot be resolved
+  Then its container is "Group DM: <handles>" from its mpdm name
+
 Scenario: Record the Slack conversation type for privacy
   Given workgraph has been initialized
   And Slack access is configured for public channels, private channels, and opted-in DMs

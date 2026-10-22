@@ -192,6 +192,70 @@ func TestStoreBackfillsEmptySlackContainersFromChannelName(t *testing.T) {
 	}
 }
 
+func TestStoreGivesEachSlackDMConversationItsOwnContainer(t *testing.T) {
+	root := t.TempDir()
+	home, memory := filepath.Join(root, "state"), filepath.Join(root, "memory")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: home, MemoryDir: memory})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type row struct{ project, payload, want string }
+	rows := map[string]row{
+		"generic-dm":       {"DM", `{"channel_id":"D0DEMO010","channel_type":"im","ts":"1789300800.000100","text":"Generic DM"}`, "DM (D0DEMO010)"},
+		"generic-group-a":  {"Group DM", `{"channel_id":"C0DEMO011","channel_name":"Group DM","ts":"1789300801.000100","text":"First group"}`, "Group DM (C0DEMO011)"},
+		"generic-group-b":  {"Group DM", `{"channel_id":"C0DEMO012","channel_name":"Group DM","conversation_type":"mpim","ts":"1789300802.000100","text":"Second group"}`, "Group DM: Lila, Omar"},
+		"named-group-b":    {"Group DM: Lila, Omar", `{"channel_id":"C0DEMO012","channel_name":"Group DM: Lila, Omar","conversation_type":"mpim","ts":"1789300803.000100","text":"Named group"}`, "Group DM: Lila, Omar"},
+		"legacy-paren":     {"DM (Lila Park, Omar Diaz)", `{"channel_id":"D0DEMO013","ts":"1789300804.000100","text":"Legacy DM"}`, "DM: Lila Park, Omar Diaz"},
+		"legacy-with":      {"Group DM with Lila, Omar, Ren", `{"channel_id":"C0DEMO014","channel_type":"group_dm","ts":"1789300805.000100","text":"Legacy group"}`, "Group DM: Lila, Omar, Ren"},
+		"legacy-colon":     {"dm:Bonusly", `{"channel_id":"D0DEMO015","ts":"1789300806.000100","text":"Bot DM"}`, "DM: Bonusly"},
+		"mpdm":             {"mpdm-lila--omar--ren-1", `{"channel_id":"G0DEMO016","conversation_type":"mpim","ts":"1789300807.000100","text":"Slack mpdm name"}`, "Group DM: lila, omar, ren"},
+		"empty-dm":         {"", `{"channel_id":"D0DEMO017","channel_type":"dm","ts":"1789300808.000100","text":"Unnamed DM"}`, "DM (D0DEMO017)"},
+		"empty-generic":    {"", `{"channel_id":"C0DEMO018","channel_name":"Group DM","ts":"1789300809.000100","text":"Generic payload name"}`, "Group DM (C0DEMO018)"},
+		"generic-no-id":    {"DM", `{"ts":"1789300810.000100","text":"No conversation id"}`, "DM"},
+		"dm-named-channel": {"dm-requests", `{"channel_id":"C0DEMO019","channel_name":"dm-requests","conversation_type":"channel","ts":"1789300811.000100","text":"Real channel"}`, "dm-requests"},
+		"canonical":        {"DM: Lila", `{"channel_id":"D0DEMO020","channel_name":"DM: Lila","conversation_type":"im","ts":"1789300812.000100","text":"Canonical"}`, "DM: Lila"},
+	}
+	now := time.Now()
+	for id, row := range rows {
+		insertEvent(t, initialized.DatabasePath, storedEvent{ID: id, Source: "slack", Type: "slack.message", Timestamp: now, Project: row.project, Payload: row.payload})
+	}
+	db, err := sql.Open("sqlite3", initialized.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	var logs strings.Builder
+	log.SetOutput(&logs)
+	defer log.SetOutput(os.Stderr)
+	for open := 1; open <= 2; open++ {
+		logs.Reset()
+		if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: home, MemoryDir: memory}); err != nil {
+			t.Fatal(err)
+		}
+		repaired := strings.Contains(logs.String(), "backfilled slack")
+		if open == 1 && !repaired {
+			t.Fatalf("expected the first open to report the Slack repair, got %q", logs.String())
+		}
+		if open == 2 && repaired {
+			t.Fatalf("expected a repaired store to need no work on reopen, got %q", logs.String())
+		}
+		for id, want := range rows {
+			var project sql.NullString
+			var payloadJSON string
+			if err := db.QueryRow(`SELECT project, payload_json FROM events WHERE id = ?`, id).Scan(&project, &payloadJSON); err != nil {
+				t.Fatal(err)
+			}
+			if project.String != want.want {
+				t.Fatalf("open %d: expected %s container %q, got %q", open, id, want.want, project.String)
+			}
+			if payloadJSON != want.payload {
+				t.Fatalf("open %d: backfill rewrote %s payload: %s", open, id, payloadJSON)
+			}
+		}
+	}
+}
+
 func TestMemoryLinkAcceptsSlackContainerThatDoctorSuggests(t *testing.T) {
 	root := t.TempDir()
 	home, memory := filepath.Join(root, "state"), filepath.Join(root, "memory")

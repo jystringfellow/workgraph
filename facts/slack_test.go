@@ -893,6 +893,78 @@ func TestRunDiscoversSlackDMsOnlyWhenOptedIn(t *testing.T) {
 	assertSlackConversationType(t, groupDMEvent, "mpim", "slack.dm")
 }
 
+func TestRunNamesUnresolvedSlackDMsByConversation(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	transport := &fakeSlackTransport{}
+	client := &http.Client{Transport: transport}
+	transport.handle = func(request *http.Request) string {
+		switch request.URL.Path {
+		case "/api/auth.test":
+			return `{"ok":true,"user_id":"U789"}`
+		case "/api/conversations.list":
+			transport.listRequests++
+			return `{"ok":true,"channels":[{"id":"D0DEMO041","name":"","is_private":true,"is_im":true,"user":"U456"},{"id":"G0DEMO042","name":"mpdm-ada--grace-1","is_private":true,"is_mpim":true}]}`
+		case "/api/conversations.members":
+			return `{"ok":false,"error":"missing_scope"}`
+		case "/api/conversations.history":
+			transport.historyRequests++
+			switch request.URL.Query().Get("channel") {
+			case "D0DEMO041":
+				return `{"ok":true,"messages":[{"type":"message","user":"U456","text":"Unresolved DM.","ts":"1716215900.000600"}]}`
+			case "G0DEMO042":
+				return `{"ok":true,"messages":[{"type":"message","user":"U789","text":"Unresolved group.","ts":"1716216000.000700"}]}`
+			}
+		case "/api/users.info":
+			return `{"ok":false,"error":"user_not_found"}`
+		}
+		return `{"ok":false,"error":"unexpected_request"}`
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:           homeDir,
+		DatabasePath:      initResult.DatabasePath,
+		WatchDirs:         []string{tempDir},
+		SlackToken:        "test-token",
+		SlackIncludeDMs:   true,
+		SlackAPIBaseURL:   "https://slack.test/api",
+		SlackHTTPClient:   client,
+		SlackPollInterval: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("run start failed: %v", err)
+	}
+	go func() {
+		done <- capture.Run(ctx)
+	}()
+
+	waitForSlackEventOrRunError(t, initResult.DatabasePath, "slack.message", "D0DEMO041", "1716215900.000600", done, transport)
+	waitForSlackEvent(t, initResult.DatabasePath, "slack.message", "G0DEMO042", "1716216000.000700")
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+
+	dmEvent := slackEvent(t, initResult.DatabasePath, "slack.message", "D0DEMO041", "1716215900.000600")
+	if dmEvent.Project != "DM (D0DEMO041)" {
+		t.Fatalf("expected unresolved IM named by its conversation id, got %q", dmEvent.Project)
+	}
+	groupDMEvent := slackEvent(t, initResult.DatabasePath, "slack.message", "G0DEMO042", "1716216000.000700")
+	if groupDMEvent.Project != "Group DM: ada, grace" {
+		t.Fatalf("expected unresolved MPIM named from its mpdm handles, got %q", groupDMEvent.Project)
+	}
+	assertSlackConversationType(t, dmEvent, "im", "slack.dm")
+	assertSlackConversationType(t, groupDMEvent, "mpim", "slack.dm")
+}
+
 func TestSlackConnectPrintsOAuthURLWithoutStoringToken(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
