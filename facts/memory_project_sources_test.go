@@ -221,6 +221,7 @@ func TestStoreGivesEachSlackDMConversationItsOwnContainer(t *testing.T) {
 		"raw-channel-name":  {"C0DEMO030", `{"channel_id":"C0DEMO030","channel_name":"general","conversation_type":"channel","ts":"1789300822.000100","text":"Raw channel id with a name"}`, "C0DEMO030"},
 		"raw-channel-alias": {"C0DEMO031", `{"channel_id":"C0DEMO031","conversation_type":"private_channel","ts":"1789300823.000100","text":"Raw channel id with an alias"}`, "C0DEMO031"},
 		"channel-alias":     {"squad-alias", `{"channel_id":"C0DEMO031","channel_name":"squad-alias","conversation_type":"private_channel","ts":"1789300824.000100","text":"Channel alias"}`, "squad-alias"},
+		"raw-untyped-label": {"C0DEMO032", `{"channel_id":"C0DEMO032","channel_name":"im","ts":"1789300825.000100","text":"Raw untyped id with a DM-looking name"}`, "C0DEMO032"},
 		"raw-channel-id":    {"C0DEMO028", `{"channel_id":"C0DEMO028","conversation_type":"channel","ts":"1789300820.000100","text":"Raw channel id"}`, "C0DEMO028"},
 		"empty-colon":       {"DM: ", `{"channel_id":"D0DEMO025","ts":"1789300817.000100","text":"Empty colon form"}`, "DM (D0DEMO025)"},
 		"id-colon":          {"DM: D12345678", `{"channel_id":"D0DEMO026","ts":"1789300818.000100","text":"Id colon form"}`, "DM (D0DEMO026)"},

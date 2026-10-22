@@ -158,5 +158,15 @@ func slackDMRepairCandidate(project string) bool {
 }
 
 func slackRawChannelIDProject(project, payload string) bool {
-	return slackConversationIDPattern.MatchString(slackContainerName(project)) && slackConversationFallbackContainer(payload, "") == ""
+	if !slackConversationIDPattern.MatchString(slackContainerName(project)) {
+		return false
+	}
+	switch slackPayloadConversationKind(payload) {
+	case slackKindIM, slackKindMPIM:
+		return false
+	case slackKindChannel:
+		return true
+	}
+	channelID, _ := slackResumeChannelIdentity(payload)
+	return !strings.HasPrefix(channelID, "D")
 }
