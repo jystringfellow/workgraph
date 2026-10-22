@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 const (
@@ -231,7 +232,7 @@ func parseProjectFrontmatter(frontmatter string) (projectFrontmatter, error) {
 			}
 			fields.aliases = aliases
 		case "description":
-			fields.description = unquoteFrontmatter(value)
+			fields.description = catalogDisplayText(unquoteFrontmatter(value))
 			if len([]rune(fields.description)) > projectDescriptionLimit {
 				return projectFrontmatter{}, fmt.Errorf("description is longer than %d characters", projectDescriptionLimit)
 			}
@@ -300,7 +301,20 @@ func firstBodyParagraph(body string) string {
 }
 
 func markdownPlainText(markdown string) string {
-	return strings.TrimSpace(html.UnescapeString(markdown))
+	return catalogDisplayText(html.UnescapeString(markdown))
+}
+
+func catalogDisplayText(value string) string {
+	value = strings.Map(func(r rune) rune {
+		switch {
+		case unicode.IsSpace(r):
+			return ' '
+		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r):
+			return -1
+		}
+		return r
+	}, nextANSISequence.ReplaceAllString(value, ""))
+	return strings.Join(strings.Fields(value), " ")
 }
 
 func truncateRunes(value string, limit int) string {
