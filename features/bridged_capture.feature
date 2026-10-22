@@ -96,7 +96,29 @@ Feature: Bridged connector capture
     When it is ingested
     Then its container is the channel name without a leading hash
     And DM names follow the same rule while DM privacy is unchanged
-    And existing Slack events without a container are backfilled the same way
+    And an explicit container is stored without a leading hash
+
+  Scenario: Enforce the bridged Slack message contract
+    Given a bridged Slack message batch
+    When an event omits channel_id, channel_name, or a recognized conversation_type
+    Then the whole batch is rejected with an error naming the event and the missing field
+    But a missing channel_name is accepted when the store already names that channel_id
+    And that stored name becomes the container while the payload is stored as submitted
+
+  Scenario: Treat bridged Slack replies as thread replies
+    Given a bridged Slack reply submitted as slack.reply with a parent thread_ts
+    When it is ingested
+    Then it is stored as slack.thread_reply
+    And it joins its parent message in one thread unit
+
+  Scenario: Repair stored Slack events when the store opens
+    Given stored Slack events typed slack.reply, with a leading-hash container, or with an empty container
+    When the store opens
+    Then replies become slack.thread_reply
+    And leading-hash containers lose the hash
+    And empty containers take the channel_name or the name the store pairs with their channel_id
+    And payloads, explicit containers, and never-named channel ids are unchanged
+    And opening the store again changes nothing
 
   Scenario: Reject invalid bridged capture atomically
     Given an approved bridge worker has claimed a request

@@ -48,6 +48,11 @@ func TestLocalBridgeMCPAdvertisesToolsAndConfiguresScopedConnector(t *testing.T)
 			t.Fatalf("MCP tools/list omitted %s:\n%s", tool, stdout.String())
 		}
 	}
+	for _, expected := range []string{"channel_id", "channel_name", "conversation_type", "slack.thread_reply"} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Fatalf("MCP capture_ingest description omitted the Slack contract field %s:\n%s", expected, stdout.String())
+		}
+	}
 	if strings.Contains(stdout.String(), `"name":"capture_request_cancel"`) {
 		t.Fatalf("MCP exposed operator-only request cancellation:\n%s", stdout.String())
 	}

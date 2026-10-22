@@ -550,13 +550,46 @@ func slackResumeProjectAliases(events []ResumeEvent) map[string]string {
 		if !strings.HasPrefix(event.Type, "slack.") {
 			continue
 		}
-		channelID, channelName := slackResumeChannelIdentity(event.Payload)
-		if channelID == "" || channelName == "" || channelName == channelID {
-			continue
+		if channelID, container := slackChannelAlias(event.Payload); channelID != "" {
+			aliases[channelID] = container
 		}
-		aliases[channelID] = channelName
 	}
 	return aliases
+}
+
+func slackChannelAlias(payload string) (string, string) {
+	channelID, _ := slackResumeChannelIdentity(payload)
+	container := slackPayloadContainer(payload)
+	if channelID == "" || container == "" {
+		return "", ""
+	}
+	return channelID, container
+}
+
+const slackChannelAliasQuery = `SELECT payload_json FROM events INDEXED BY idx_events_slack_channel_id
+	WHERE source = 'slack' AND json_extract(payload_json, '$.channel_id') = ?
+	ORDER BY timestamp ASC, id ASC`
+
+func loadSlackChannelAlias(db *sql.DB, channelID string) (string, error) {
+	rows, err := db.Query(slackChannelAliasQuery, channelID)
+	if err != nil {
+		return "", fmt.Errorf("query slack channel alias: %w", err)
+	}
+	defer rows.Close()
+	name := ""
+	for rows.Next() {
+		var payload string
+		if err := rows.Scan(&payload); err != nil {
+			return "", fmt.Errorf("scan slack channel alias: %w", err)
+		}
+		if aliasID, container := slackChannelAlias(payload); aliasID == channelID {
+			name = container
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("query slack channel alias: %w", err)
+	}
+	return name, nil
 }
 
 func slackResumeCanonicalProject(event ResumeEvent, aliases map[string]string) string {
@@ -581,7 +614,11 @@ func slackResumeChannelIdentity(payload string) (string, string) {
 	if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
 		return "", ""
 	}
-	return strings.TrimSpace(parsed.ChannelID), strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(parsed.ChannelName), "#"))
+	return strings.TrimSpace(parsed.ChannelID), slackContainerName(parsed.ChannelName)
+}
+
+func slackContainerName(name string) string {
+	return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(name), "#"))
 }
 
 func slackPayloadContainer(payload string) string {

@@ -88,6 +88,13 @@ installed provider. Common Claude Code mappings are:
 | Microsoft connectors | `microsoft.read_resource` | `mcp__claude_ai_Microsoft_365__read_resource` |
 | `notion.activity` | `notion.search` | `mcp__claude_ai_Notion__notion-search` |
 
+Bridged Slack message and reply payloads must carry `channel_id`,
+`channel_name`, and `conversation_type`; ingest rejects a batch that omits them
+and names the missing field. When the approved read and search results do not
+include conversation names and types, also allow a read-only conversation
+lookup, for example `mcp__claude_ai_Slack__slack_search_channels`, and for DM
+names `mcp__claude_ai_Slack__slack_read_user_profile`.
+
 Tool names can change with provider versions. Inspect the tools actually
 available to the bound client, allow only exact names, and do not use
 wildcards. Claude permissions are stored in

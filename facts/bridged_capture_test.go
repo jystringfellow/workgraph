@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -430,7 +431,7 @@ func TestBridgedCaptureNormalizesAndValidatesInvolvement(t *testing.T) {
 	repoRoot := repoRoot(t)
 	connectBridgedConnector(t, repoRoot, homeDir, "slack")
 
-	input := `[{"type":"slack.message","timestamp":"2026-06-07T16:30:00Z","external_id":"message-1","involvement":["mentioned","authored","mentioned"],"payload":{"channel":"C0DEMO123"}}]`
+	input := `[{"type":"slack.message","timestamp":"2026-06-07T16:30:00Z","external_id":"message-1","involvement":["mentioned","authored","mentioned"],"payload":{"channel_id":"C0DEMO123","channel_name":"demo-changes","conversation_type":"channel"}}]`
 	result, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{
 		HomeDir: homeDir,
 		Source:  "slack",
@@ -452,7 +453,7 @@ func TestBridgedCaptureNormalizesAndValidatesInvolvement(t *testing.T) {
 		t.Fatalf("expected canonical involvement, got %s", stored)
 	}
 
-	invalid := `[{"type":"slack.message","timestamp":"2026-06-07T16:31:00Z","external_id":"message-2","involvement":["nearby"],"payload":{"channel":"C0DEMO123"}}]`
+	invalid := `[{"type":"slack.message","timestamp":"2026-06-07T16:31:00Z","external_id":"message-2","involvement":["nearby"],"payload":{"channel_id":"C0DEMO123","channel_name":"demo-changes","conversation_type":"channel"}}]`
 	if _, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{
 		HomeDir: homeDir,
 		Source:  "slack",
@@ -709,9 +710,9 @@ func TestManualBridgedIngestDeduplicatesSlackEvents(t *testing.T) {
 	connectBridgedConnector(t, repoRoot, homeDir, "slack")
 
 	input := strings.Join([]string{
-		`{"type":"slack.message","timestamp":"2026-09-13T12:00:54.844Z","external_id":"C0DEMO123:1789300854.844369","project":"demo-production","actor":"U0DEMO001","summary":"Deployment succeeded for demo-service","payload":{"channel":"C0DEMO123","ts":"1789300854.844369","text":"Deployment succeeded"}}`,
-		`{"type":"slack.message","timestamp":"2026-09-13T12:00:38.180Z","external_id":"C0DEMO123:1789300838.180579","project":"demo-production","actor":"U0DEMO001","summary":"demo-api modified","payload":{"channel":"C0DEMO123","ts":"1789300838.180579","text":"demo-api modified"}}`,
-		`{"type":"slack.message","timestamp":"2026-09-13T12:00:37.767Z","external_id":"C0DEMO123:1789300837.767919","project":"demo-production","actor":"U0DEMO001","summary":"demo-worker modified","payload":{"channel":"C0DEMO123","ts":"1789300837.767919","text":"demo-worker modified"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:54.844Z","external_id":"C0DEMO123:1789300854.844369","project":"demo-production","actor":"U0DEMO001","summary":"Deployment succeeded for demo-service","payload":{"channel_id":"C0DEMO123","channel_name":"demo-changes","conversation_type":"channel","ts":"1789300854.844369","text":"Deployment succeeded"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:38.180Z","external_id":"C0DEMO123:1789300838.180579","project":"demo-production","actor":"U0DEMO001","summary":"demo-api modified","payload":{"channel_id":"C0DEMO123","channel_name":"demo-changes","conversation_type":"channel","ts":"1789300838.180579","text":"demo-api modified"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:37.767Z","external_id":"C0DEMO123:1789300837.767919","project":"demo-production","actor":"U0DEMO001","summary":"demo-worker modified","payload":{"channel_id":"C0DEMO123","channel_name":"demo-changes","conversation_type":"channel","ts":"1789300837.767919","text":"demo-worker modified"}}`,
 	}, "\n") + "\n"
 
 	output, err := runworkgraphInput(t, repoRoot, input, "capture", "ingest", "--home", homeDir, "--source", "slack", "--json", "-")
@@ -761,23 +762,126 @@ func TestBridgedSlackIngestKeepsConversationTypeForPrivacy(t *testing.T) {
 	connectBridgedConnector(t, repoRoot, homeDir, "slack")
 
 	input := strings.Join([]string{
-		`{"type":"slack.message","timestamp":"2026-09-13T12:00:00Z","external_id":"C0DEMO123:1789300800.000100","payload":{"channel":"C0DEMO123","conversation_type":"channel","ts":"1789300800.000100","text":"Public channel"}}`,
-		`{"type":"slack.message","timestamp":"2026-09-13T12:00:01Z","external_id":"D0DEMO123:1789300801.000100","payload":{"channel":"D0DEMO123","conversation_type":"im","ts":"1789300801.000100","text":"Direct message"}}`,
-		`{"type":"slack.message","timestamp":"2026-09-13T12:00:02Z","external_id":"C0DEMO456:1789300802.000100","payload":{"channel":"C0DEMO456","ts":"1789300802.000100","text":"No type"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:00Z","external_id":"C0DEMO123:1789300800.000100","payload":{"channel_id":"C0DEMO123","channel_name":"demo-public","conversation_type":"channel","ts":"1789300800.000100","text":"Public channel"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:01Z","external_id":"G0DEMO123:1789300801.000100","payload":{"channel_id":"G0DEMO123","channel_name":"demo-private","conversation_type":"private_channel","ts":"1789300801.000100","text":"Private channel"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:02Z","external_id":"D0DEMO123:1789300802.000100","payload":{"channel_id":"D0DEMO123","channel_name":"DM: Lila","conversation_type":"im","ts":"1789300802.000100","text":"Direct message"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:03Z","external_id":"G0DEMO456:1789300803.000100","payload":{"channel_id":"G0DEMO456","channel_name":"Group DM: Lila, Omar","conversation_type":"mpim","ts":"1789300803.000100","text":"Group message"}}`,
 	}, "\n") + "\n"
 	if output, err := runworkgraphInput(t, repoRoot, input, "capture", "ingest", "--home", homeDir, "--source", "slack", "--json", "-"); err != nil {
 		t.Fatalf("bridged ingest: %v\n%s", err, output)
 	}
 
 	db := openBridgedCaptureDatabase(t, homeDir)
-	for channel, expected := range map[string]string{"C0DEMO123": "slack", "D0DEMO123": "slack.dm", "C0DEMO456": "slack.dm"} {
+	for channel, expected := range map[string]string{"C0DEMO123": "slack", "G0DEMO123": "slack", "D0DEMO123": "slack.dm", "G0DEMO456": "slack.dm"} {
 		var payloadJSON string
-		if err := db.QueryRow(`SELECT payload_json FROM events WHERE source = 'slack' AND json_extract(payload_json, '$.channel') = ?`, channel).Scan(&payloadJSON); err != nil {
+		if err := db.QueryRow(`SELECT payload_json FROM events WHERE source = 'slack' AND json_extract(payload_json, '$.channel_id') = ?`, channel).Scan(&payloadJSON); err != nil {
 			t.Fatalf("read bridged Slack event %s: %v", channel, err)
 		}
 		if got := workgraph.SlackPrivacySource(payloadJSON); got != expected {
 			t.Fatalf("expected %s privacy source %q, got %q for %s", channel, expected, got, payloadJSON)
 		}
+	}
+	if got := workgraph.SlackPrivacySource(`{"channel_id":"C0DEMO456","channel_name":"demo-legacy","ts":"1789300804.000100"}`); got != "slack.dm" {
+		t.Fatalf("expected a stored event without conversation_type to stay a DM, got %q", got)
+	}
+}
+
+func TestBridgedSlackIngestEnforcesChannelContract(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+	connectBridgedConnector(t, repoRoot, homeDir, "slack")
+
+	named := `{"type":"slack.message","timestamp":"2026-09-13T12:00:00Z","external_id":"C0DEMO001:1789300800.000100","payload":{"channel_id":"C0DEMO001","channel_name":"squad-demo","conversation_type":"channel","ts":"1789300800.000100","text":"Named"}}`
+	rejected := []struct {
+		name    string
+		event   string
+		message []string
+	}{
+		{"missing channel_id", `{"type":"slack.message","timestamp":"2026-09-13T12:00:01Z","external_id":"C0DEMO002:1789300801.000100","payload":{"channel":"C0DEMO002","channel_name":"guild-demo","conversation_type":"channel","ts":"1789300801.000100","text":"Legacy channel key"}}`, []string{"event 2", "channel_id is required"}},
+		{"missing conversation_type", `{"type":"slack.message","timestamp":"2026-09-13T12:00:01Z","external_id":"C0DEMO002:1789300801.000100","payload":{"channel_id":"C0DEMO002","channel_name":"guild-demo","ts":"1789300801.000100","text":"No type"}}`, []string{"event 2", "conversation_type is required", "channel, private_channel, im, or mpim"}},
+		{"unrecognized conversation_type", `{"type":"slack.thread_reply","timestamp":"2026-09-13T12:00:01Z","external_id":"C0DEMO002:1789300801.000100","payload":{"channel_id":"C0DEMO002","channel_name":"guild-demo","conversation_type":"public","ts":"1789300801.000100","thread_ts":"1789300800.000100","text":"Odd type"}}`, []string{"event 2", "conversation_type is required", `"public"`}},
+		{"missing channel_name", `{"type":"slack.reply","timestamp":"2026-09-13T12:00:01Z","external_id":"C0DEMO002:1789300801.000100","payload":{"channel_id":"C0DEMO002","conversation_type":"channel","ts":"1789300801.000100","thread_ts":"1789300800.000100","text":"No name"}}`, []string{"event 2", "channel_name is required", "C0DEMO002", "conversation info"}},
+		{"raw id channel_name", `{"type":"slack.message","timestamp":"2026-09-13T12:00:01Z","external_id":"C0DEMO002:1789300801.000100","payload":{"channel_id":"C0DEMO002","channel_name":"C0DEMO002","conversation_type":"channel","ts":"1789300801.000100","text":"Raw id"}}`, []string{"event 2", "channel_name is required"}},
+	}
+	for _, tc := range rejected {
+		output, err := runworkgraphInput(t, repoRoot, named+"\n"+tc.event+"\n", "capture", "ingest", "--home", homeDir, "--source", "slack", "--json", "-")
+		if err == nil {
+			t.Fatalf("%s: expected rejection, got:\n%s", tc.name, output)
+		}
+		for _, expected := range tc.message {
+			if !strings.Contains(string(output), expected) {
+				t.Fatalf("%s: expected error to mention %q, got:\n%s", tc.name, expected, output)
+			}
+		}
+	}
+	db := openBridgedCaptureDatabase(t, homeDir)
+	var stored int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE source = 'slack'`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != 0 {
+		t.Fatalf("expected rejected batches to store nothing, got %d events", stored)
+	}
+
+	if output, err := runworkgraphInput(t, repoRoot, named+"\n", "capture", "ingest", "--home", homeDir, "--source", "slack", "--json", "-"); err != nil {
+		t.Fatalf("ingest named channel: %v\n%s", err, output)
+	}
+	known := `{"type":"slack.message","timestamp":"2026-09-13T12:00:02Z","external_id":"C0DEMO001:1789300802.000100","payload":{"channel_id":"C0DEMO001","conversation_type":"channel","ts":"1789300802.000100","text":"Known id without name"}}`
+	if output, err := runworkgraphInput(t, repoRoot, known+"\n", "capture", "ingest", "--home", homeDir, "--source", "slack", "--json", "-"); err != nil {
+		t.Fatalf("expected a known channel_id without channel_name to be accepted: %v\n%s", err, output)
+	}
+	var project sql.NullString
+	var payloadJSON string
+	if err := db.QueryRow(`SELECT project, payload_json FROM events WHERE json_extract(payload_json, '$.ts') = '1789300802.000100'`).Scan(&project, &payloadJSON); err != nil {
+		t.Fatal(err)
+	}
+	if project.String != "squad-demo" {
+		t.Fatalf("expected the stored channel name as container, got %+v", project)
+	}
+	if payloadJSON != `{"channel_id":"C0DEMO001","conversation_type":"channel","text":"Known id without name","ts":"1789300802.000100"}` {
+		t.Fatalf("expected the payload stored as submitted, got %s", payloadJSON)
+	}
+}
+
+func TestBridgedSlackReplyJoinsThreadUnit(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+	connectBridgedConnector(t, repoRoot, homeDir, "slack")
+
+	input := strings.Join([]string{
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:00Z","external_id":"C0DEMO001:1789300800.000100","payload":{"channel_id":"C0DEMO001","channel_name":"squad-demo","conversation_type":"channel","ts":"1789300800.000100","text":"Root"}}`,
+		`{"type":"slack.reply","timestamp":"2026-09-13T12:05:00Z","external_id":"C0DEMO001:1789301100.000200","payload":{"channel_id":"C0DEMO001","channel_name":"squad-demo","conversation_type":"channel","ts":"1789301100.000200","thread_ts":"1789300800.000100","text":"Reply"}}`,
+	}, "\n") + "\n"
+	for attempt := 0; attempt < 2; attempt++ {
+		if output, err := runworkgraphInput(t, repoRoot, input, "capture", "ingest", "--home", homeDir, "--source", "slack", "--json", "-"); err != nil {
+			t.Fatalf("bridged ingest attempt %d: %v\n%s", attempt+1, err, output)
+		}
+	}
+
+	db := openBridgedCaptureDatabase(t, homeDir)
+	types := map[string]int{}
+	rows, err := db.Query(`SELECT type FROM events WHERE source = 'slack'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var eventType string
+		if err := rows.Scan(&eventType); err != nil {
+			t.Fatal(err)
+		}
+		types[eventType]++
+	}
+	rows.Close()
+	if !reflect.DeepEqual(types, map[string]int{"slack.message": 1, "slack.thread_reply": 1}) {
+		t.Fatalf("expected the reply stored once as slack.thread_reply, got %v", types)
+	}
+
+	units, err := workgraph.ListProjectUnits(workgraph.ProjectUnitsConfig{HomeDir: homeDir, Now: time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC), Location: time.UTC})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(units) != 1 || units[0].ID != "slack.thread:C0DEMO001:1789300800.000100" || len(units[0].EventIDs) != 2 || units[0].Container != "squad-demo" {
+		t.Fatalf("expected one thread unit with root and reply, got %+v", units)
 	}
 }
 
@@ -788,11 +892,10 @@ func TestBridgedSlackIngestDerivesContainerFromChannelName(t *testing.T) {
 
 	input := strings.Join([]string{
 		`{"type":"slack.message","timestamp":"2026-09-13T12:00:00Z","external_id":"C0DEMO001:1789300800.000100","payload":{"channel_id":"C0DEMO001","channel_name":"squad-demo-excellence","conversation_type":"channel","ts":"1789300800.000100","text":"Named channel"}}`,
-		`{"type":"slack.message","timestamp":"2026-09-13T12:00:01Z","external_id":"C0DEMO002:1789300801.000100","payload":{"channel_id":"C0DEMO002","channel_name":"#guild-demo","ts":"1789300801.000100","text":"Hash channel"}}`,
-		`{"type":"slack.message","timestamp":"2026-09-13T12:00:02Z","external_id":"C0DEMO003:1789300802.000100","project":"demo-production","payload":{"channel_id":"C0DEMO003","channel_name":"demo-changes","ts":"1789300802.000100","text":"Explicit project"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:01Z","external_id":"C0DEMO002:1789300801.000100","payload":{"channel_id":"C0DEMO002","channel_name":"#guild-demo","conversation_type":"private_channel","ts":"1789300801.000100","text":"Hash channel"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:02Z","external_id":"C0DEMO003:1789300802.000100","project":"demo-production","payload":{"channel_id":"C0DEMO003","channel_name":"demo-changes","conversation_type":"channel","ts":"1789300802.000100","text":"Explicit project"}}`,
 		`{"type":"slack.message","timestamp":"2026-09-13T12:00:03Z","external_id":"D0DEMO004:1789300803.000100","payload":{"channel_id":"D0DEMO004","channel_name":"DM: Lila","conversation_type":"im","ts":"1789300803.000100","text":"Direct message"}}`,
-		`{"type":"slack.message","timestamp":"2026-09-13T12:00:04Z","external_id":"C0DEMO005:1789300804.000100","payload":{"channel_id":"C0DEMO005","ts":"1789300804.000100","text":"No name"}}`,
-		`{"type":"slack.message","timestamp":"2026-09-13T12:00:05Z","external_id":"C0DEMO006:1789300805.000100","payload":{"channel_id":"C0DEMO006","channel_name":"C0DEMO006","ts":"1789300805.000100","text":"Raw id name"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:04Z","external_id":"C0DEMO005:1789300804.000100","project":"#demo-release","payload":{"channel_id":"C0DEMO005","channel_name":"demo-release-chat","conversation_type":"channel","ts":"1789300804.000100","text":"Hash project"}}`,
 	}, "\n") + "\n"
 	if output, err := runworkgraphInput(t, repoRoot, input, "capture", "ingest", "--home", homeDir, "--source", "slack", "--json", "-"); err != nil {
 		t.Fatalf("bridged ingest: %v\n%s", err, output)
@@ -804,8 +907,7 @@ func TestBridgedSlackIngestDerivesContainerFromChannelName(t *testing.T) {
 		"C0DEMO002": {String: "guild-demo", Valid: true},
 		"C0DEMO003": {String: "demo-production", Valid: true},
 		"D0DEMO004": {String: "DM: Lila", Valid: true},
-		"C0DEMO005": {},
-		"C0DEMO006": {},
+		"C0DEMO005": {String: "demo-release", Valid: true},
 	}
 	for channel, want := range expected {
 		var project sql.NullString
