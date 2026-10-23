@@ -96,8 +96,9 @@ func projectUnits(db *sql.DB, now time.Time, location *time.Location, gitEmails 
 
 func loadProjectUnitEvents(db *sql.DB, gitEmails map[string]bool) (map[string][]projectUnitEvent, error) {
 	rows, err := db.Query(`SELECT id, source, type, timestamp, COALESCE(project, ''), payload_json FROM events
-		WHERE type IN ('slack.message', 'slack.thread_reply', 'git.commit', 'notion.page_updated', 'calendar.event')
-			OR type = 'github.pull_request' OR type GLOB 'github.pull_request.*'
+		WHERE (type IN ('slack.message', 'slack.thread_reply', 'git.commit', 'notion.page_updated', 'calendar.event')
+			OR type = 'github.pull_request' OR type GLOB 'github.pull_request.*')
+			AND ` + notControlQueryEvent + `
 		ORDER BY timestamp ASC, id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("query unit events: %w", err)

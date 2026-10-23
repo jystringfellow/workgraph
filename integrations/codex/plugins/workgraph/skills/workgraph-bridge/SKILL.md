@@ -170,7 +170,7 @@ Submit the proof with the empty submission, never as an event: over MCP call
 `capture_ingest` with the claim, no `events` (or `[]`), and `empty_proof`
 `{"exhaustive_query":true}` or `{"control_query_passed":true}`; over the CLI
 submit `{"events":[],"empty_proof":{...}}`. workgraph rejects any event whose
-type ends in `.control_query` or whose payload has a `control_query` field.
+type ends in `.control_query` or whose payload `control_query` is JSON `true`.
 
 ## Reference provider recipes
 

@@ -9,7 +9,25 @@ import (
 	"strings"
 )
 
-const controlQueryEventCondition = `(type GLOB '*.control_query' OR json_type(payload_json, '$.control_query') NOT IN ('false', 'null'))`
+var controlQueryEventCondition = `(type GLOB '*.control_query' OR (source IN (` + bridgedEventSourceList() + `) AND COALESCE(json_type(payload_json, '$.control_query'), '') = 'true'))`
+
+var notControlQueryEvent = `NOT ` + controlQueryEventCondition
+
+func bridgedEventSourceList() string {
+	seen := map[string]bool{}
+	for _, definition := range connectorRegistry {
+		if definition.Bridged {
+			seen[definition.ID] = true
+			seen[definition.EventSource] = true
+		}
+	}
+	sources := make([]string, 0, len(seen))
+	for source := range seen {
+		sources = append(sources, "'"+source+"'")
+	}
+	sort.Strings(sources)
+	return strings.Join(sources, ", ")
+}
 
 var bridgedSummaryTitleFields = map[string]string{
 	"mail.microsoft.message":   "subject",
@@ -31,12 +49,7 @@ func isControlQueryEvent(eventType string, payloadJSON string) bool {
 	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
 		return false
 	}
-	value, found := payload["control_query"]
-	if !found {
-		return false
-	}
-	flag := strings.TrimSpace(string(value))
-	return flag != "false" && flag != "null"
+	return strings.TrimSpace(string(payload["control_query"])) == "true"
 }
 
 func bridgedTitleSummary(eventType string, payloadJSON string) string {
@@ -75,23 +88,10 @@ func bridgedSummaryTypeList() string {
 	return strings.Join(types, ", ")
 }
 
-func repairBridgedEvents(db *sql.DB) error {
+func backfillBridgedSummaries(db *sql.DB) error {
 	missingSummary := `(summary IS NULL OR summary = '') AND type IN (` + bridgedSummaryTypeList() + `)`
-	for _, statement := range []string{
-		`CREATE INDEX IF NOT EXISTS idx_events_control_query ON events (id) WHERE ` + controlQueryEventCondition,
-		`CREATE INDEX IF NOT EXISTS idx_events_bridged_without_summary ON events (id) WHERE ` + missingSummary,
-	} {
-		if _, err := db.Exec(statement); err != nil {
-			return fmt.Errorf("index bridged event repairs: %w", err)
-		}
-	}
-	deleted, err := db.Exec(`DELETE FROM events INDEXED BY idx_events_control_query WHERE ` + controlQueryEventCondition)
-	if err != nil {
-		return fmt.Errorf("remove control-query events: %w", err)
-	}
-	removed, err := deleted.RowsAffected()
-	if err != nil {
-		return err
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_events_bridged_without_summary ON events (id) WHERE ` + missingSummary); err != nil {
+		return fmt.Errorf("index bridged summary backfill: %w", err)
 	}
 	var summarized int64
 	for field, types := range bridgedSummaryTypesByField() {
@@ -113,8 +113,8 @@ func repairBridgedEvents(db *sql.DB) error {
 		}
 		summarized += count
 	}
-	if removed > 0 || summarized > 0 {
-		log.Printf("workgraph store repaired bridged events: control_queries_removed=%d summaries=%d", removed, summarized)
+	if summarized > 0 {
+		log.Printf("workgraph store backfilled bridged event summaries: %d", summarized)
 	}
 	return nil
 }

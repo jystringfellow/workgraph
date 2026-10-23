@@ -257,7 +257,7 @@ Feature: Bridged connector capture
     Then workgraph rejects the batch and directs the worker to empty_proof
     When the worker submits empty_proof with no events
     Then the request completes and no event is stored
-    And opening the store deletes previously stored control-query events
+    And stored control-query events are excluded from today, resume, next, and project views without reopening the store
 
   Scenario: Derive bridged summaries from provider titles
     Given bridged mail, calendar, Notion activity, and Azure Boards events without summaries

@@ -606,10 +606,17 @@ events.
 
 Control-query results are evidence about the window, not work. Ingest rejects
 the whole batch when any event type ends in `.control_query` or any payload has
-a top-level `control_query` field, and the error names the event and directs
-the worker to resubmit with `empty_proof`. Opening the store deletes previously
-stored events of either shape so they never reach today, resume, next, project
-activity, or association units.
+a top-level `control_query` field that is exactly JSON `true`; other values such
+as `0`, `false`, or a query string are ordinary payload data. The error names
+the event and directs the worker to resubmit with `empty_proof`.
+
+Events stored before this rule are classified on read, without changing the
+store: a row is synthetic control-query evidence when its type ends in
+`.control_query`, or when its source is a bridged connector id or bridged event
+source and its payload `control_query` is exactly JSON `true`. today, resume,
+`events today`, next, project units and activity, association candidates, and
+associate unit members exclude those rows in their queries, so the exclusion
+holds even if the store has not been reopened since upgrading.
 
 When a bridged event arrives without a summary, ingest derives it from the
 provider title: `subject` for `mail.microsoft.message` and
