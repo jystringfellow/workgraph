@@ -144,18 +144,15 @@ func TestInitCreatesDefaultSettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve workgraph home: %v", err)
 	}
-	expectedWatchDirs := []string{
-		filepath.Join(userHome, "Desktop"),
-		filepath.Join(userHome, "Documents"),
-		filepath.Join(userHome, "Downloads"),
-		filepath.Join(userHome, "Code"),
+	if config.WatchDirs == nil || len(config.WatchDirs) != 0 {
+		t.Fatalf("expected default settings to watch no directories, got %q", config.WatchDirs)
 	}
-
-	if !reflect.DeepEqual(config.WatchDirs, expectedWatchDirs) {
-		t.Fatalf("expected default watch dirs %q, got %q", expectedWatchDirs, config.WatchDirs)
+	if len(config.ConservativeWatchDirs) != 0 {
+		t.Fatalf("expected no automatic watch roots, got %q", config.ConservativeWatchDirs)
 	}
-	if !reflect.DeepEqual(config.ConservativeWatchDirs, expectedWatchDirs) {
-		t.Fatalf("expected default watch dirs to be conservative %q, got %q", expectedWatchDirs, config.ConservativeWatchDirs)
+	expectedRepoDirs := []string{filepath.Join(userHome, "Code")}
+	if !reflect.DeepEqual(config.RepoDirs, expectedRepoDirs) {
+		t.Fatalf("expected default repository scan dirs %q, got %q", expectedRepoDirs, config.RepoDirs)
 	}
 	if !reflect.DeepEqual(config.IgnorePaths, []string{workgraphHome}) {
 		t.Fatalf("expected default ignore paths %q, got %q", []string{workgraphHome}, config.IgnorePaths)
@@ -169,8 +166,8 @@ func TestInitCreatesDefaultSettings(t *testing.T) {
 	}
 }
 
-func TestInitDefaultSettingsWatchesCommonUserFolders(t *testing.T) {
-	userHome := fakeUserHomeWithDirs(t, "Desktop", "Documents", "Downloads", "Projects")
+func TestInitDefaultSettingsScanCodeFoldersWithoutWatchingThem(t *testing.T) {
+	userHome := fakeUserHomeWithDirs(t, "Desktop", "Documents", "Downloads", "Projects", "repos")
 	homeDir := filepath.Join(t.TempDir(), ".workgraph")
 
 	_, err := workgraph.Init(workgraph.InitConfig{
@@ -181,22 +178,23 @@ func TestInitDefaultSettingsWatchesCommonUserFolders(t *testing.T) {
 	}
 
 	config := readInitSettings(t, filepath.Join(homeDir, "settings.json"))
-	expectedWatchDirs := []string{
-		filepath.Join(userHome, "Desktop"),
-		filepath.Join(userHome, "Documents"),
-		filepath.Join(userHome, "Downloads"),
+	expectedRepoDirs := []string{
 		filepath.Join(userHome, "Projects"),
+		filepath.Join(userHome, "repos"),
 	}
 
-	if !reflect.DeepEqual(config.WatchDirs, expectedWatchDirs) {
-		t.Fatalf("expected default watch dirs %q, got %q", expectedWatchDirs, config.WatchDirs)
+	if len(config.WatchDirs) != 0 {
+		t.Fatalf("expected default settings to watch no directories, got %q", config.WatchDirs)
 	}
-	for _, watchDir := range config.WatchDirs {
-		if !filepath.IsAbs(watchDir) {
-			t.Fatalf("expected watch dir to be absolute, got %q", watchDir)
+	if !reflect.DeepEqual(config.RepoDirs, expectedRepoDirs) {
+		t.Fatalf("expected default repository scan dirs %q, got %q", expectedRepoDirs, config.RepoDirs)
+	}
+	for _, repoDir := range config.RepoDirs {
+		if !filepath.IsAbs(repoDir) {
+			t.Fatalf("expected repository scan dir to be absolute, got %q", repoDir)
 		}
-		if strings.Contains(watchDir, "$HOME") || strings.Contains(watchDir, "~") {
-			t.Fatalf("expected resolved watch dir, got %q", watchDir)
+		if strings.Contains(repoDir, "$HOME") || strings.Contains(repoDir, "~") {
+			t.Fatalf("expected resolved repository scan dir, got %q", repoDir)
 		}
 	}
 }
@@ -317,7 +315,7 @@ func TestInitPreservesExistingConfig(t *testing.T) {
 
 func TestInitForceOverwritesExistingConfigWithDefaults(t *testing.T) {
 	tempDir := t.TempDir()
-	userHome := fakeUserHomeWithDirs(t, "Desktop", "Documents")
+	userHome := fakeUserHomeWithDirs(t, "Desktop", "Documents", "Code")
 	homeDir := filepath.Join(tempDir, ".workgraph")
 	settingsPath := filepath.Join(homeDir, "settings.json")
 	oldConfig := initSettingsFile{
@@ -345,12 +343,11 @@ func TestInitForceOverwritesExistingConfigWithDefaults(t *testing.T) {
 		t.Fatalf("resolve workgraph home: %v", err)
 	}
 
-	expectedWatchDirs := []string{filepath.Join(userHome, "Desktop"), filepath.Join(userHome, "Documents")}
 	expected := initSettingsFile{
-		WatchDirs:             expectedWatchDirs,
-		ConservativeWatchDirs: expectedWatchDirs,
-		IgnorePaths:           []string{workgraphHome},
-		IgnoreNames:           []string{".git", "node_modules", "DerivedData", ".noindex", "xcuserdata", "bin", "obj", "dist", "build", "target", ".build", ".gradle"},
+		WatchDirs:   []string{},
+		RepoDirs:    []string{filepath.Join(userHome, "Code")},
+		IgnorePaths: []string{workgraphHome},
+		IgnoreNames: []string{".git", "node_modules", "DerivedData", ".noindex", "xcuserdata", "bin", "obj", "dist", "build", "target", ".build", ".gradle"},
 	}
 	if !reflect.DeepEqual(config, expected) {
 		t.Fatalf("expected force init to refresh config to %#v, got %#v", expected, config)
@@ -427,7 +424,7 @@ func TestInitOnMacOSSuggestsFullDiskAccess(t *testing.T) {
 		t.Fatalf("init failed: %v", err)
 	}
 
-	for _, expected := range []string{"macOS", "Full Disk Access", "Documents", "Desktop", "Downloads"} {
+	for _, expected := range []string{"macOS", "Full Disk Access", "File watching is off", "workgraph settings add-watch"} {
 		if !strings.Contains(result.Message, expected) {
 			t.Fatalf("expected init message to include %q, got %q", expected, result.Message)
 		}
@@ -521,6 +518,7 @@ func TestInitAppliesIndicesToExistingDatabase(t *testing.T) {
 type initSettingsFile struct {
 	WatchDirs             []string `json:"watch_dirs"`
 	ConservativeWatchDirs []string `json:"conservative_watch_dirs,omitempty"`
+	RepoDirs              []string `json:"repo_dirs,omitempty"`
 	IgnorePaths           []string `json:"ignore_paths"`
 	IgnoreNames           []string `json:"ignore_names"`
 }

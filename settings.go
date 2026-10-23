@@ -91,7 +91,8 @@ func GetSettings(config SettingsGetConfig) (SettingsGetResult, error) {
 		lines = append(lines, "Managed settings: none")
 	}
 	lines = append(lines,
-		fmt.Sprintf("Watch directories: %d (user config)", len(localSettings.WatchDirs)),
+		fmt.Sprintf("Watch directories: %d (user config)", len(userAddedWatchDirs(localSettings))),
+		fmt.Sprintf("Repository scan directories: %d (user config)", len(settingsRepoDirs(localSettings))),
 		fmt.Sprintf("Ignore paths: %d (user config)", len(localSettings.IgnorePaths)),
 		fmt.Sprintf("Ignore names: %d (user config)", len(localSettings.IgnoreNames)),
 	)
@@ -163,6 +164,7 @@ type settingsGetJSONPayload struct {
 type settingsJSONInfo struct {
 	Path            string `json:"path"`
 	WatchDirCount   int    `json:"watch_directory_count"`
+	RepoDirCount    int    `json:"repo_directory_count"`
 	IgnorePathCount int    `json:"ignore_path_count"`
 	IgnoreNameCount int    `json:"ignore_name_count"`
 	Source          string `json:"source"`
@@ -233,7 +235,8 @@ func settingsGetJSON(settingsPath, managedPath string, managedPresent bool, loca
 	payload := settingsGetJSONPayload{
 		Settings: settingsJSONInfo{
 			Path:            settingsPath,
-			WatchDirCount:   len(localSettings.WatchDirs),
+			WatchDirCount:   len(userAddedWatchDirs(localSettings)),
+			RepoDirCount:    len(settingsRepoDirs(localSettings)),
 			IgnorePathCount: len(localSettings.IgnorePaths),
 			IgnoreNameCount: len(localSettings.IgnoreNames),
 			Source:          "user_config",

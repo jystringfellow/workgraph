@@ -43,10 +43,22 @@ Watching: 1 configured directory
 Monitoring: git, github, slack, notion
 ```
 
-Path configuration starts with `~/.workgraph/settings.json`. By default,
-`workgraph init` configures capture to watch existing common user-facing folders
-and ignore workgraph internal storage. Users can add more roots with
+Path configuration starts with `~/.workgraph/settings.json`. File watching is
+opt-in: `workgraph init` configures no watch roots, only ignore rules for
+workgraph internal storage and repository scan roots for git capture (see
+`specs/config.md`). Users choose directories to watch with
 `workgraph settings add-watch [path]`.
+
+When no watch root is configured, start output says file watching is off and
+how to turn it on instead of reporting a watch count or limit:
+
+```text
+File watching: off
+Watch a directory with workgraph settings add-watch <path>.
+```
+
+Connectors such as git, GitHub, Slack, and calendar keep capturing while file
+watching is off.
 
 CLI flags can choose watch roots for a single start:
 
@@ -97,12 +109,12 @@ Top-level hidden directories under a broad watched root should not be traversed
 implicitly. If a hidden directory is explicitly listed in `watch_dirs`, that
 explicit watch root overrides the hidden-directory skip.
 
-Roots listed in `conservative_watch_dirs` are broad default roots. Capture
-should register the root and immediate child directories, but it should only
-recurse below an immediate child when that child looks like active work: it
-contains ordinary files, project marker files, or is a common work container.
-Folder-only app libraries and other deep containers should not consume the
-default watch budget unless the user explicitly adds them as watch roots.
+Capture configured programmatically with conservative roots registers each
+conservative root and its immediate child directories, but only recurses below
+an immediate child when that child looks like active work: it contains ordinary
+files, project marker files, or is a common work container. Settings-file
+entries listed in `conservative_watch_dirs` are automatic roots from older
+versions and are not watched at all (see `specs/config.md`).
 
 Path configuration uses this precedence:
 

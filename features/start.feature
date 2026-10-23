@@ -85,15 +85,15 @@ Scenario: Explicitly watch a hidden directory
   When capture starts
   Then workgraph watches the hidden directory
 
-Scenario: Traverse default roots conservatively
-  Given workgraph is configured to watch a broad default folder
-  And the default folder contains a nested folder-only app library
+Scenario: Traverse conservative roots cautiously
+  Given capture is configured with a conservative watch root
+  And the conservative root contains a nested folder-only app library
   When capture starts
-  Then workgraph watches the default folder and its immediate child
+  Then workgraph watches the conservative root and its immediate child
   And workgraph does not recursively watch the app library's descendants
 
-Scenario: Recurse into work-like folders under default roots
-  Given workgraph is configured to watch a broad default folder
+Scenario: Recurse into work-like folders under conservative roots
+  Given capture is configured with a conservative watch root
   And an immediate child folder contains ordinary documents
   When capture starts
   Then workgraph watches descendants of the work-like folder
@@ -119,6 +119,6 @@ Scenario: Stop gracefully
 
 Scenario: Use configured watch roots by default
   Given workgraph has been initialized
-  And the settings watch existing common user-facing folders
+  And the user added watch directories with "workgraph settings add-watch"
   When I run "workgraph start"
   Then workgraph watches the configured directories

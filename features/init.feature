@@ -22,8 +22,8 @@ Scenario: Create default settings
   Given workgraph has not been initialized
   When I run "workgraph init"
   Then the settings file exists at "~/.workgraph/settings.json"
-  And the settings watch existing common user-facing folders
-  And the settings do not watch the entire home directory when common folders exist
+  And the settings watch no directories
+  And the settings scan existing common code folders for git repositories
   And the settings ignore the workgraph home directory
   And the settings store resolved absolute paths
 

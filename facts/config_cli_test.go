@@ -489,8 +489,8 @@ func TestSettingsGetCommandSupportsJSONFormat(t *testing.T) {
 	if payload.Settings.Path != filepath.Join(homeDir, "settings.json") {
 		t.Fatalf("expected settings path in CLI JSON output, got %q", payload.Settings.Path)
 	}
-	if payload.Settings.WatchDirCount == 0 {
-		t.Fatalf("expected initialized watch directories in CLI JSON output, got %+v", payload.Settings)
+	if payload.Settings.WatchDirCount != 0 {
+		t.Fatalf("expected initialized settings to watch no directories in CLI JSON output, got %+v", payload.Settings)
 	}
 	if payload.ManagedSettings.Active {
 		t.Fatalf("expected no active managed settings in CLI JSON output, got %+v", payload.ManagedSettings)

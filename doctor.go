@@ -74,8 +74,9 @@ func doctorWatchLines(homeDir string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	lines := []string{fmt.Sprintf("Watch roots: %d configured", len(config.WatchDirs))}
-	for _, watchDir := range config.WatchDirs {
+	watchDirs := userAddedWatchDirs(config)
+	lines := []string{fmt.Sprintf("Watch roots: %d configured", len(watchDirs))}
+	for _, watchDir := range watchDirs {
 		status := "ok"
 		if info, err := os.Stat(watchDir); err != nil || !info.IsDir() {
 			status = "missing"
