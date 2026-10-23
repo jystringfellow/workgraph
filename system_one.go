@@ -23,6 +23,7 @@ const (
 	systemOneProjectQuestion   = "project"
 	systemOneKindQuestion      = "kind"
 	systemOneSummaryLimit      = 120
+	systemOneDiagnosticLimit   = 200
 )
 
 var errSystemOneNotGenerative = errors.New("system-one profiles answer decision questions only; route them with workgraph llm use <profile> --for associate")
@@ -52,8 +53,8 @@ type systemOneQuestion struct {
 }
 
 type systemOneAnswer struct {
-	Choice        string             `json:"choice"`
-	Probabilities map[string]float64 `json:"probabilities"`
+	Choice        string                     `json:"choice"`
+	Probabilities map[string]json.RawMessage `json:"probabilities"`
 }
 
 type systemOneResponse struct {
@@ -64,14 +65,26 @@ type systemOneResponse struct {
 }
 
 type systemOneState struct {
-	Unit            associateUnit       `json:"unit"`
+	Unit            systemOneStateUnit  `json:"unit"`
 	RecentDecisions []associateDecision `json:"recent_decisions"`
 }
 
+type systemOneStateUnit struct {
+	UnitID       string           `json:"unit_id"`
+	Kind         string           `json:"kind"`
+	Container    string           `json:"container"`
+	Start        string           `json:"start"`
+	End          string           `json:"end"`
+	Participants []string         `json:"participants"`
+	Identifiers  []string         `json:"identifiers"`
+	Events       []associateEvent `json:"events"`
+}
+
 type systemOnePlannedUnit struct {
-	unit    associateUnit
-	request systemOneRequest
-	skip    string
+	unit     associateUnit
+	request  systemOneRequest
+	projects map[string]string
+	skip     string
 }
 
 type systemOnePlan struct {
@@ -200,11 +213,12 @@ func planSystemOneRequests(profile llmProfile, payload associatePayload) (system
 		case options > systemOneChoiceOptionLimit:
 			planned.skip = fmt.Sprintf("unit offers %d options; System One choice questions accept at most %d", options, systemOneChoiceOptionLimit)
 		default:
-			request, redactions, err := systemOneUnitRequest(profile, unit, projects, payload.Decisions)
+			request, options, redactions, err := systemOneUnitRequest(profile, unit, projects, payload.Decisions)
 			if err != nil {
 				return systemOnePlan{}, err
 			}
 			planned.request = request
+			planned.projects = options
 			plan.redactionCount += redactions
 		}
 		plan.units = append(plan.units, planned)
@@ -212,10 +226,13 @@ func planSystemOneRequests(profile llmProfile, payload associatePayload) (system
 	return plan, nil
 }
 
-func systemOneUnitRequest(profile llmProfile, unit associateUnit, projects map[string]associateProject, decisions []associateDecision) (systemOneRequest, int, error) {
-	state, err := json.Marshal(systemOneState{Unit: unit, RecentDecisions: decisions})
+func systemOneUnitRequest(profile llmProfile, unit associateUnit, projects map[string]associateProject, decisions []associateDecision) (systemOneRequest, map[string]string, int, error) {
+	state, err := json.Marshal(systemOneState{Unit: systemOneStateUnit{
+		UnitID: unit.UnitID, Kind: unit.Kind, Container: unit.Container, Start: unit.Start, End: unit.End,
+		Participants: unit.Participants, Identifiers: unit.Identifiers, Events: unit.Events,
+	}, RecentDecisions: decisions})
 	if err != nil {
-		return systemOneRequest{}, 0, fmt.Errorf("encode system-one state: %w", err)
+		return systemOneRequest{}, nil, 0, fmt.Errorf("encode system-one state: %w", err)
 	}
 	texts := []string{string(state)}
 	for _, slug := range unit.Projects {
@@ -223,13 +240,16 @@ func systemOneUnitRequest(profile llmProfile, unit associateUnit, projects map[s
 	}
 	filtered, err := filterMessagesForProfile(profile, systemOneTextMessages(texts))
 	if err != nil {
-		return systemOneRequest{}, 0, err
+		return systemOneRequest{}, nil, 0, err
 	}
 	projectCriteria := map[string]string{
 		systemOneNoProject: "None of the listed projects; the work does not belong to any of them.",
 	}
+	options := map[string]string{}
 	for index, slug := range unit.Projects {
-		projectCriteria[slug] = filtered.Messages[index+1].Content
+		option := fmt.Sprintf("p%d", index+1)
+		options[option] = slug
+		projectCriteria[option] = filtered.Messages[index+1].Content
 	}
 	return systemOneRequest{
 		Model: profile.Model,
@@ -246,7 +266,7 @@ func systemOneUnitRequest(profile llmProfile, unit associateUnit, projects map[s
 				Criteria:     systemOneKindCriteria,
 			},
 		},
-	}, filtered.RedactionCount, nil
+	}, options, filtered.RedactionCount, nil
 }
 
 func systemOneTextMessages(texts []string) []openAICompatibleMessage {
@@ -272,7 +292,7 @@ func systemOneProjectDescription(project associateProject) string {
 }
 
 func systemOneResultEntry(planned systemOnePlannedUnit, answers map[string]systemOneAnswer) (associateResultEntry, string) {
-	project, probability, reason := systemOneChosen(answers, systemOneProjectQuestion, planned.request.Questions[systemOneProjectQuestion].Criteria)
+	option, probability, reason := systemOneChosen(answers, systemOneProjectQuestion, planned.request.Questions[systemOneProjectQuestion].Criteria)
 	if reason != "" {
 		return associateResultEntry{}, reason
 	}
@@ -282,15 +302,14 @@ func systemOneResultEntry(planned systemOnePlannedUnit, answers map[string]syste
 	}
 	entry := associateResultEntry{
 		UnitID:     planned.unit.UnitID,
-		Target:     "project",
-		Project:    project,
+		Target:     "none",
 		Kind:       kind,
 		Summary:    systemOneSummary(planned.unit),
 		Confidence: json.RawMessage(strconv.FormatFloat(probability, 'f', -1, 64)),
 		Evidence:   systemOneEvidence(planned.unit),
 	}
-	if project == systemOneNoProject {
-		entry.Target, entry.Project = "none", ""
+	if slug, found := planned.projects[option]; found {
+		entry.Target, entry.Project = "project", slug
 	}
 	return entry, ""
 }
@@ -303,11 +322,19 @@ func systemOneChosen(answers map[string]systemOneAnswer, question string, offere
 	if _, ok := offered[answer.Choice]; !ok {
 		return "", 0, fmt.Sprintf("%s choice %q was not offered", question, answer.Choice)
 	}
-	probability, found := answer.Probabilities[answer.Choice]
-	if !found || probability < 0 || probability > 1 {
+	probability, ok := systemOneProbability(answer.Probabilities[answer.Choice])
+	if !ok {
 		return "", 0, fmt.Sprintf("%s probability for choice %q is not a number in [0, 1]", question, answer.Choice)
 	}
 	return answer.Choice, probability, ""
+}
+
+func systemOneProbability(raw json.RawMessage) (float64, bool) {
+	var probability *float64
+	if len(raw) == 0 || json.Unmarshal(raw, &probability) != nil || probability == nil {
+		return 0, false
+	}
+	return *probability, *probability >= 0 && *probability <= 1
 }
 
 func systemOneSummary(unit associateUnit) string {
@@ -354,66 +381,125 @@ func (plan systemOnePlan) dryRunLines() ([]string, error) {
 }
 
 func callSystemOne(ctx context.Context, client *http.Client, profile llmProfile, request systemOneRequest) (map[string]systemOneAnswer, error) {
-	if client == nil {
-		client = &http.Client{Timeout: 60 * time.Second}
+	endpoint, err := systemOneEndpoint(profile.BaseURL)
+	if err != nil {
+		return nil, err
 	}
+	destination := systemOneDestination(profile.BaseURL)
 	body, err := json.Marshal(request)
 	if err != nil {
 		return nil, fmt.Errorf("encode system-one request: %w", err)
 	}
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, systemOneEndpoint(profile.BaseURL), bytes.NewReader(body))
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("build system-one request: %w", err)
+		return nil, fmt.Errorf("build system-one request for %s", destination)
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
 	httpRequest.Header.Set("Accept", "application/json")
+	key := ""
 	if profile.APIKeyEnv != "" {
-		if key := os.Getenv(profile.APIKeyEnv); key != "" {
-			httpRequest.Header.Set("Authorization", "Bearer "+key)
-		}
+		key = os.Getenv(profile.APIKeyEnv)
 	}
-	response, err := client.Do(httpRequest)
+	if key != "" {
+		httpRequest.Header.Set("Authorization", "Bearer "+key)
+	}
+	response, err := systemOneHTTPClient(client).Do(httpRequest)
 	if err != nil {
-		return nil, fmt.Errorf("call system-one profile: %w", err)
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
+		return nil, fmt.Errorf("call system-one profile at %s: %s", destination, systemOneDiagnostic(err.Error(), systemOneSecrets(profile.BaseURL, key)))
 	}
 	defer response.Body.Close()
+	if response.StatusCode >= 300 && response.StatusCode < 400 {
+		return nil, fmt.Errorf("call system-one profile at %s: status %d: redirects are refused", destination, response.StatusCode)
+	}
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, associateResponseLimit+1))
 	if err != nil {
-		return nil, fmt.Errorf("read system-one response: %w", err)
+		return nil, fmt.Errorf("read system-one response from %s", destination)
 	}
 	if len(responseBody) > associateResponseLimit {
-		return nil, fmt.Errorf("system-one response is larger than %d bytes", associateResponseLimit)
+		return nil, fmt.Errorf("system-one response from %s is larger than %d bytes", destination, associateResponseLimit)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, fmt.Errorf("call system-one profile: status %d: %s", response.StatusCode, truncateRunes(strings.TrimSpace(string(responseBody)), 500))
+		return nil, fmt.Errorf("call system-one profile at %s: status %d: %s", destination, response.StatusCode, systemOneDiagnostic(string(responseBody), systemOneSecrets(profile.BaseURL, key)))
 	}
 	var parsed systemOneResponse
 	if err := json.Unmarshal(responseBody, &parsed); err != nil {
-		return nil, fmt.Errorf("parse system-one response: %w", err)
+		return nil, fmt.Errorf("parse system-one response from %s: %w", destination, err)
 	}
 	if parsed.Answers == nil && parsed.Result != nil {
 		parsed.Answers = parsed.Result.Answers
 	}
 	if parsed.Answers == nil {
-		return nil, errors.New("system-one response has no answers object")
+		return nil, fmt.Errorf("system-one response from %s has no answers object", destination)
 	}
 	return parsed.Answers, nil
 }
 
-func systemOneEndpoint(baseURL string) string {
-	trimmed := strings.TrimRight(baseURL, "/")
-	parsed, err := url.Parse(trimmed)
-	if err != nil {
-		return trimmed + "/v1/systemone"
+func systemOneHTTPClient(client *http.Client) *http.Client {
+	refusing := http.Client{Timeout: 60 * time.Second}
+	if client != nil {
+		refusing = *client
 	}
+	refusing.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &refusing
+}
+
+func systemOneSecrets(baseURL string, key string) []string {
+	secrets := []string{key}
+	if parsed, err := url.Parse(baseURL); err == nil {
+		if password, set := parsed.User.Password(); set {
+			secrets = append(secrets, password)
+		}
+		for _, values := range parsed.Query() {
+			secrets = append(secrets, values...)
+		}
+	}
+	return secrets
+}
+
+func systemOneDiagnostic(text string, secrets []string) string {
+	sort.Slice(secrets, func(i, j int) bool { return len(secrets[i]) > len(secrets[j]) })
+	for _, secret := range secrets {
+		if len(secret) >= 4 {
+			text = strings.ReplaceAll(text, secret, "[REDACTED]")
+		}
+	}
+	if patterns, _, err := llmOutboundRedactionPatterns(); err == nil {
+		for _, pattern := range patterns {
+			text = pattern.Pattern.ReplaceAllString(text, "[REDACTED:"+pattern.Name+"]")
+		}
+	}
+	text = strings.Join(strings.Fields(sanitizeProjectLinkSummary(strings.Map(controlWhitespaceToSpace, text))), " ")
+	return truncateRunes(text, systemOneDiagnosticLimit)
+}
+
+func systemOneEndpoint(baseURL string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return "", errors.New("system-one llm base URL must be an http or https URL with a host")
+	}
+	if parsed.Fragment != "" || strings.Contains(baseURL, "#") {
+		return "", errors.New("system-one llm base URL must not have a fragment")
+	}
+	path := strings.TrimRight(parsed.Path, "/")
+	suffix := ""
 	switch {
-	case strings.HasSuffix(parsed.Path, "/systemone") || strings.Contains(parsed.Path, "/ai/run/"):
-		return trimmed
-	case strings.HasSuffix(parsed.Path, "/v1"):
-		return trimmed + "/systemone"
+	case strings.HasSuffix(path, "/systemone") || strings.Contains(path, "/ai/run/"):
+	case strings.HasSuffix(path, "/v1"):
+		suffix = "/systemone"
 	default:
-		return trimmed + "/v1/systemone"
+		suffix = "/v1/systemone"
 	}
+	parsed.Path = path + suffix
+	if parsed.RawPath != "" {
+		parsed.RawPath = strings.TrimRight(parsed.RawPath, "/") + suffix
+	}
+	return parsed.String(), nil
 }
 
 func systemOneDestination(baseURL string) string {

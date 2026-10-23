@@ -221,7 +221,12 @@ Configuration:
   System One host, so there is no default endpoint.
 - workgraph sends `POST <base-url>/v1/systemone`, or `<base-url>/systemone`
   when the base URL path ends in `/v1`. A base URL whose path already ends in
-  `/systemone`, or a Workers AI `/ai/run/<model>` URL, is used unchanged.
+  `/systemone`, or a Workers AI `/ai/run/<model>` URL, is used unchanged. The
+  suffix is added to the path, so a query string such as `?api-version=...` is
+  kept. The base URL must be `http` or `https` with a host, and a base URL with
+  a fragment is refused.
+- Redirects are refused: a 3xx response fails the run, and the request body is
+  never replayed to another destination.
 - The API key is read from the `--api-key-env` variable at call time and sent as
   `Authorization: Bearer <key>`. It is never written to `llm.json` or printed.
 - A `localhost` or loopback base URL is local, exactly as for
@@ -233,6 +238,12 @@ Configuration:
   stored profile with an execution setting is refused before any request.
 - `llm list` and `llm doctor` show the provider, model, and base URL host, never
   the path, key, or key variable name. `llm doctor` makes no request.
+- Call errors name only `scheme://host`. Transport errors omit the URL, and a
+  non-2xx body is shortened to 200 characters, stripped of control
+  characters, and has the API key, URL password, query values, and outbound
+  filter patterns redacted. The managed allowlist rejection, for every
+  provider with a base URL, prints the base URL without userinfo and with its
+  query and fragment replaced by `REDACTED`.
 - `llm test` and `llm summarize today` refuse `system-one` profiles because they
   need generated text.
 
@@ -247,7 +258,7 @@ and the `irr/clef-flash` server):
     "project": {
       "type": "choice",
       "instructions": "...",
-      "criteria": {"answer-bot": "Answer Bot", "no_project": "..."}
+      "criteria": {"p1": "Atlas Bot", "p2": "Harbor Harness. Workstream: harbor", "no_project": "..."}
     },
     "kind": {
       "type": "choice",
@@ -264,9 +275,9 @@ and the `irr/clef-flash` server):
   "answers": {
     "project": {
       "type": "choice",
-      "choice": "answer-bot",
+      "choice": "p1",
       "confidence": 0.91,
-      "probabilities": {"answer-bot": 0.93, "no_project": 0.07}
+      "probabilities": {"p1": 0.93, "p2": 0.05, "no_project": 0.02}
     }
   },
   "usage": {"input_tokens": 512, "output_tokens": 0}
@@ -283,9 +294,14 @@ Association mapping, one request per unit:
 
 - `state` is the unit (kind, container, time range, participants,
   identifiers, events) and the recent decisions, as JSON text.
-- The `project` choice offers the unit's candidate catalog slugs, described by
-  title, workstream, aliases, and description, plus `no_project`. A new-project
-  proposal needs a generated slug and name, so it is not offered.
+- The `project` choice offers one opaque option id per candidate project
+  (`p1`, `p2`, ... in slug order) plus `no_project`, and workgraph maps the
+  chosen id back to the slug locally. Slugs are never sent. Each option is
+  described by title, workstream, aliases, and description. The state carries
+  no candidate slug list. For hosted profiles the state and every option
+  description go through the outbound filter; instructions, option ids, and
+  kind descriptions are static. A new-project proposal needs a generated slug
+  and name, so it is not offered.
 - The `kind` choice offers the seven link kinds.
 - The link's confidence is `probabilities[choice]` for the `project` answer.
   The provider's `confidence` field is ignored because providers define it
@@ -294,8 +310,9 @@ Association mapping, one request per unit:
   self-reported text, but no provider documents it as calibrated.
 - The summary is the unit's first event summary, because the model returns no
   text. Evidence is every member event of the unit.
-- An answer whose choice was not offered, or whose probability is missing or
-  outside [0, 1], is discarded for that unit with a reason. A non-2xx status
+- An answer for either question whose choice was not offered, or whose
+  probability for that choice is missing, `null`, not a number, or outside
+  [0, 1], is discarded for that unit with a reason. A non-2xx status
   or a response that is not System One JSON fails the run without writing
   links, as for other providers.
 - A unit with no candidate project (one option) or more than 254 candidate

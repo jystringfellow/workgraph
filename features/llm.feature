@@ -117,13 +117,17 @@ Scenario: Classify System One base URLs as local or hosted
   Given a system-one profile whose base URL is a remote host
   Then associate refuses to send anything until hosted LLM use is enabled
   And managed settings that disable hosted providers block it
+  And look-alike hosts such as localhost.evil.example or 127.0.0.1@host are hosted
+  And a redirect from the System One host fails the run without replaying the request
+  And call errors name only the scheme and host and never print credentials or query values
 
 Scenario: Associate units with a System One decision model
   Given a system-one profile is routed to associate
   And units of work are eligible for association
   When workgraph associates them
   Then each unit is sent as one System One request with a project choice and a kind choice
-  And the project choice offers the unit's candidate projects plus no_project
+  And the project choice offers opaque option ids for the unit's candidate projects plus no_project
+  And no project slug is sent, and hosted state and option descriptions are filtered
   And each link's confidence is the returned probability of the chosen option
   And an answer whose choice was not offered is discarded for that unit with a reason
   And units that cannot be expressed as a choice are skipped with a reason

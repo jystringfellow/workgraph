@@ -1254,6 +1254,9 @@ func validateLLMProfile(profile llmProfile) error {
 		if profile.BaseURL == "" {
 			return errors.New("system-one llm base URL is required")
 		}
+		if _, err := systemOneEndpoint(profile.BaseURL); err != nil {
+			return err
+		}
 		if profile.Model == "" {
 			return errors.New("system-one llm model is required")
 		}

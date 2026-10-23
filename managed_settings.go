@@ -139,7 +139,7 @@ func enforceLLMManagedSettings(profile llmProfile, client *http.Client) error {
 	}
 	if len(settings.LLM.AllowedBaseURL.Value) > 0 && llmProviderHasBaseURL(profile.Provider) {
 		if !baseURLAllowed(profile.BaseURL, settings.LLM.AllowedBaseURL.Value) {
-			return fmt.Errorf("llm destination %q is not allowed by managed settings", profile.BaseURL)
+			return fmt.Errorf("llm destination %q is not allowed by managed settings", redactedLLMBaseURL(profile.BaseURL))
 		}
 	}
 	if len(settings.LLM.OpenAICompatible.AllowedModels.Value) > 0 && profile.Provider == "openai-compatible" {
@@ -316,4 +316,19 @@ func isLocalLLMBaseURL(baseURL string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+func redactedLLMBaseURL(baseURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return "[unparseable base URL]"
+	}
+	parsed.User = nil
+	if parsed.RawQuery != "" {
+		parsed.RawQuery = "REDACTED"
+	}
+	if parsed.Fragment != "" || parsed.RawFragment != "" {
+		parsed.Fragment, parsed.RawFragment = "REDACTED", ""
+	}
+	return parsed.String()
 }
