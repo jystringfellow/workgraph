@@ -62,8 +62,12 @@ The `categorize` group comes from project links (`specs/projects.md`, Daily
 Loop Surfaces). It has one item per link that the default `workgraph projects
 review` lists: every proposed link and, while the auto-apply accuracy sample
 has fewer than 20 decided links, every undecided auto-applied link. An item
-closes when its link is decided. Text output shows the `Categorize:` line,
-the pause line when auto-apply is paused, and at most three items.
+closes when its link is decided. Text output never lists `categorize` items
+under `Waiting on you`. It shows one `Project links to review: <n> (<p>
+project, <q> no project) (workgraph projects review), <m> auto-applied today
+(workgraph projects review --auto)` line and the pause line when auto-apply
+is paused. `workgraph next --reason categorize` also lists every item.
+JSON, MCP, `explain`, `done`, and `snooze` still cover every item.
 
 ### JSON shape
 
@@ -219,8 +223,9 @@ Ready
   and the command to fix it, before the items.
 - With no enabled sources, `next` says which connectors provide items and how
   to connect them. With sources but no items, it says nothing is waiting and
-  shows the freshness line. The `categorize` group follows either case and
-  needs no connector.
+  shows the freshness line. `categorize` items do not count as waiting on
+  the user. The `categorize` summary follows either case and needs no
+  connector.
 - `--project` and `--reason` are exact filters.
 
 ### `workgraph next explain <item-id>`
@@ -294,13 +299,16 @@ into tool descriptions or instructions (`specs/llm-integration.md`).
 - **`resume`**: the default overview shows `Waiting on you` after `Where you
   left off`, listing at most five pull requests in `next` order in the same
   grouped format as `next`, then `<n> more: workgraph next` with the number
-  of remaining pull requests when more exist. `categorize` items are counted
-  as remaining decisions instead (see `specs/resume.md`). `resume <project>` shows that project's
+  of remaining pull requests when more exist. `categorize` items are not
+  listed there; they are counted in the `Project links to review` line
+  instead (see `specs/resume.md`). `resume <project>` shows that project's
   items after `Recent activity`. Showing items does not advance the resume
   check-in beyond the existing rules.
-- **`today`**: stays a personal activity view. When items are open,
-  including `categorize` items, it ends with `Waiting on you: <n> items
-  (workgraph next)`.
+- **`today`**: stays a personal activity view. When items other than
+  `categorize` are open, it ends with `Waiting on you: <n> items (workgraph
+  next)`, counting only those items. When `categorize` items are open, it
+  then shows `Project links to review: <n> (<p> project, <q> no project)
+  (workgraph projects review)`. Each line is omitted when its count is zero.
 - A failed next projection does not fail `today` or `resume`. They omit the
   waiting items and show one short `Waiting on you unavailable: <error class>`
   warning. `next` itself still reports the error.

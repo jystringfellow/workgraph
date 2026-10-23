@@ -86,8 +86,10 @@ by its repository name as the container. With nothing to show, the section
 says `No new activity captured.`
 
 When categorization decisions remain, the default overview then shows
-`Categorize: <n> decisions remaining (workgraph projects review)`, where `<n>`
-is the number of `workgraph next` `categorize` items. This line does not need
+`Project links to review: <n> (<p> project, <q> no project) (workgraph
+projects review)`, where `<n>` is the number of `workgraph next` `categorize`
+items, `<p>` those targeting an existing or new project, and `<q>` those
+targeting no project. This line does not need
 a previous check-in.
 
 ## Project List

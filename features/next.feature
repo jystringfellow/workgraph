@@ -65,6 +65,15 @@ Scenario: Resume and today point at what is next
   When I run "workgraph today"
   Then today ends with the number of items waiting on me and still shows only my own activity
 
+Scenario: Project link reviews do not drown what is waiting on me
+  Given workgraph has items waiting on me and project links awaiting a decision
+  When I run "workgraph today"
+  Then "Waiting on you" counts only the items waiting on me
+  And a separate line counts the project links to review by project and no project
+  When I run "workgraph next"
+  Then the project links appear as one summary line pointing at "workgraph projects review"
+  And "workgraph next --json" still returns every item
+
 Scenario: Agents read the same items through MCP
   Given workgraph has items waiting on me
   When an agent calls the workgraph MCP next_items tool
