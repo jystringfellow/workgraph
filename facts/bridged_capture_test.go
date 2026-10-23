@@ -980,6 +980,64 @@ func TestBridgedSlackIngestStripsChannelKindPrefix(t *testing.T) {
 	}
 }
 
+func TestBridgedSlackIngestKindPrefixBoundaries(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+	connectBridgedConnector(t, repoRoot, homeDir, "slack")
+
+	type row struct{ channelID, channelName, conversationType, project, privacy string }
+	rows := map[string]row{
+		"1789300900.000100": {"D0DEMO0201", "ZC:D0DEMO0201:DM: Lila", "im", "DM: Lila", "slack.dm"},
+		"1789300901.000100": {"G0DEMO0202", "ZC:G0DEMO0202:Group DM: Ada, Grace", "mpim", "Group DM: Ada, Grace", "slack.dm"},
+		"1789300902.000100": {"C0DEMO0203", "Team: Ops: Notes", "channel", "Team: Ops: Notes", "slack"},
+		"1789300903.000100": {"C0DEMO0204", ":C0DEMO0204:Zero", "channel", ":C0DEMO0204:Zero", "slack"},
+		"1789300904.000100": {"C0DEMO0205", "ABCDE:C0DEMO0205:Five", "channel", "ABCDE:C0DEMO0205:Five", "slack"},
+		"1789300905.000100": {"C0DEMO0206", "ABCD:C0DEMO0206:Four", "channel", "Four", "slack"},
+		"1789300906.000100": {"X0DEMO0207", "ZC:X0DEMO0207:Other", "channel", "ZC:X0DEMO0207:Other", "slack"},
+		"1789300907.000100": {"C0DEMO0208", "ZC:C0DEMO0208:Restricted Name", "im", "Restricted Name", "slack.dm"},
+	}
+	var lines []string
+	for ts, r := range rows {
+		lines = append(lines, fmt.Sprintf(`{"type":"slack.message","timestamp":"2026-09-13T12:00:00Z","external_id":"%s:%s","payload":{"channel_id":"%s","channel_name":%q,"conversation_type":"%s","ts":"%s","text":"Boundary"}}`, r.channelID, ts, r.channelID, r.channelName, r.conversationType, ts))
+	}
+	if output, err := runworkgraphInput(t, repoRoot, strings.Join(lines, "\n")+"\n", "capture", "ingest", "--home", homeDir, "--source", "slack", "--json", "-"); err != nil {
+		t.Fatalf("bridged ingest: %v\n%s", err, output)
+	}
+
+	db := openBridgedCaptureDatabase(t, homeDir)
+	for ts, want := range rows {
+		var project sql.NullString
+		var payloadJSON string
+		if err := db.QueryRow(`SELECT project, payload_json FROM events WHERE source = 'slack' AND json_extract(payload_json, '$.ts') = ?`, ts).Scan(&project, &payloadJSON); err != nil {
+			t.Fatalf("read bridged Slack event %s: %v", ts, err)
+		}
+		if project.String != want.project {
+			t.Fatalf("expected %s container %q, got %q", ts, want.project, project.String)
+		}
+		if workgraph.SlackPrivacySource(payloadJSON) != want.privacy {
+			t.Fatalf("expected %s privacy %q, got %s", ts, want.privacy, payloadJSON)
+		}
+	}
+
+	restricted := `{"type":"slack.message","timestamp":"2026-09-13T12:01:00Z","external_id":"C0DEMO0208:1789300960.000100","payload":{"channel_id":"C0DEMO0208","conversation_type":"channel","ts":"1789300960.000100","text":"Channel event without a name"}}` + "\n"
+	output, err := runworkgraphInput(t, repoRoot, restricted, "capture", "ingest", "--home", homeDir, "--source", "slack", "--json", "-")
+	if err == nil || !strings.Contains(string(output), "channel_name is required") {
+		t.Fatalf("expected a stripped name seen only on a DM event never to name a channel event, got err=%v:\n%s", err, output)
+	}
+
+	aliased := `{"type":"slack.message","timestamp":"2026-09-13T12:01:01Z","external_id":"C0DEMO0206:1789300961.000100","payload":{"channel_id":"C0DEMO0206","conversation_type":"channel","ts":"1789300961.000100","text":"Channel event named by alias"}}` + "\n"
+	if output, err := runworkgraphInput(t, repoRoot, aliased, "capture", "ingest", "--home", homeDir, "--source", "slack", "--json", "-"); err != nil {
+		t.Fatalf("bridged ingest named by stripped alias: %v\n%s", err, output)
+	}
+	var project sql.NullString
+	if err := db.QueryRow(`SELECT project FROM events WHERE source = 'slack' AND json_extract(payload_json, '$.ts') = '1789300961.000100'`).Scan(&project); err != nil {
+		t.Fatal(err)
+	}
+	if project.String != "Four" {
+		t.Fatalf("expected the stripped channel name as the alias container, got %q", project.String)
+	}
+}
+
 func TestBridgedSlackIngestGivesEachDMConversationItsOwnContainer(t *testing.T) {
 	homeDir := initBridgedCaptureHome(t)
 	repoRoot := repoRoot(t)

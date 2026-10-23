@@ -1132,13 +1132,16 @@ share this rule.
 Slack reports some channel kinds with a kind prefix and the channel id
 embedded in the name, as `<KIND>:<channel_id>:<name>` (for example
 `ZC:C0123ABCDEF:Team Channel`). When `<KIND>` is one to four uppercase letters
-and the embedded id equals the payload `channel_id`, the channel's name is
-`<name>`: ingest stores `<name>` as the payload `channel_name` and keeps the
-submitted value under `channel_name_raw`, and ingest, the store repair, and
-readers derive the container from `<name>`, so the channel shares one
-container with events that carry the plain name. A name whose embedded id
-differs from `channel_id` is kept as submitted. `conversation_type` handling
-is unchanged.
+(`[A-Z]{1,4}`), the embedded id is a Slack conversation id
+(`[CDG][A-Z0-9]{8,}`), and it equals the payload `channel_id`, the channel's
+name is `<name>`: ingest stores `<name>` as the payload `channel_name` and
+keeps the submitted value under `channel_name_raw`, and ingest, the store
+repair, and readers derive the container from `<name>`, so the channel shares
+one container with events that carry the plain name. Any other name, including
+one whose embedded id differs from `channel_id`, is kept as submitted.
+`conversation_type` handling is unchanged: a prefixed DM or group DM name is
+stripped and then canonicalized like any other DM name, and the
+channel_id-to-name privacy rule above applies to the stripped name.
 
 When a Slack envelope omits `project`, ingest stores the payload
 `channel_name` as the container, trimmed and without a leading `#`, matching
@@ -1199,7 +1202,11 @@ payload:
 - A container with a leading `#` is stored without it.
 - A container in the kind-prefixed form `<KIND>:<channel_id>:<name>` whose
   embedded id equals the payload `channel_id` becomes `<name>`. The payload
-  keeps the stored `channel_name`.
+  keeps the stored `channel_name`. In the same transaction, every container
+  mapping on the prefixed name also maps its memory document to `<name>`
+  (a mapping that already exists is kept once), and the prefixed mapping is
+  removed only when no event still uses the prefixed container, so no
+  mapped event loses its project.
 - An empty container takes the payload `channel_name`, or, when the payload has
   only `channel_id`, the name the store pairs with that id, using the same
   derivation readers use for channel aliases. A DM or group DM that is still

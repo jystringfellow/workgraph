@@ -157,6 +157,7 @@ Feature: Bridged connector capture
     And empty containers take the channel_name or the name the store pairs with their channel_id
     And generic or legacy DM containers take their conversation's canonical DM container
     And kind-prefixed channel containers whose embedded id matches channel_id take the plain channel name
+    And container mappings on a repaired kind-prefixed name move to the plain channel name without duplicates
     And payloads, explicit containers, and never-named channel ids are unchanged
     And opening the store again changes nothing
 

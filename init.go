@@ -3,6 +3,7 @@ package workgraph
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -486,6 +487,7 @@ const (
 	slackEventsWithoutContainerQuery = `SELECT id, '', payload_json FROM events INDEXED BY idx_events_slack_without_container WHERE source = 'slack' AND (project IS NULL OR project = '')`
 	slackDistinctProjectsQuery       = `SELECT DISTINCT project FROM events INDEXED BY idx_events_project WHERE project IS NOT NULL AND project <> ''`
 	slackEventsForProjectQuery       = `SELECT id, project, payload_json FROM events INDEXED BY idx_events_project WHERE project = ? AND source = 'slack'`
+	slackContainerStillUsedQuery     = `SELECT 1 FROM events INDEXED BY idx_events_project WHERE project = ? LIMIT 1`
 	slackKindPrefixedContainersQuery = `SELECT id, project, payload_json FROM events INDEXED BY idx_events_slack_kind_prefixed_container WHERE source = 'slack' AND project GLOB '[A-Z]*:[CDG]*:*'`
 )
 
@@ -509,7 +511,7 @@ func backfillSlackEvents(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	if err := updateSlackEventContainerRepairs(db, kindPrefixed); err != nil {
+	if err := updateSlackEventContainerRepairsAndMappings(db, kindPrefixed); err != nil {
 		return err
 	}
 	dmLabels := map[string]slackContainerRepair{}
@@ -661,6 +663,46 @@ func updateSlackEventContainerRepairs(db *sql.DB, repairs map[string]slackContai
 	for id, repair := range repairs {
 		if _, err := tx.Exec(`UPDATE events SET project = ? WHERE id = ? AND COALESCE(project, '') = ?`, repair.To, id, repair.From); err != nil {
 			return fmt.Errorf("backfill slack event container: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+func updateSlackEventContainerRepairsAndMappings(db *sql.DB, repairs map[string]slackContainerRepair) error {
+	if len(repairs) == 0 {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	renames := map[string]map[string]bool{}
+	for id, repair := range repairs {
+		if _, err := tx.Exec(`UPDATE events SET project = ? WHERE id = ? AND COALESCE(project, '') = ?`, repair.To, id, repair.From); err != nil {
+			return fmt.Errorf("backfill slack event container: %w", err)
+		}
+		if renames[repair.From] == nil {
+			renames[repair.From] = map[string]bool{}
+		}
+		renames[repair.From][repair.To] = true
+	}
+	for from, targets := range renames {
+		for to := range targets {
+			if _, err := tx.Exec(`INSERT OR IGNORE INTO memory_project_sources (memory_doc_path, captured_project)
+				SELECT memory_doc_path, ? FROM memory_project_sources WHERE captured_project = ?`, to, from); err != nil {
+				return fmt.Errorf("backfill slack container mapping: %w", err)
+			}
+		}
+		var stillUsed int
+		err := tx.QueryRow(slackContainerStillUsedQuery, from).Scan(&stillUsed)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("check slack container use: %w", err)
+		}
+		if errors.Is(err, sql.ErrNoRows) {
+			if _, err := tx.Exec(`DELETE FROM memory_project_sources WHERE captured_project = ?`, from); err != nil {
+				return fmt.Errorf("backfill slack container mapping: %w", err)
+			}
 		}
 	}
 	return tx.Commit()

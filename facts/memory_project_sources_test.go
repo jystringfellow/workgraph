@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -245,6 +246,73 @@ func TestStoreRepairsKindPrefixedSlackChannelContainers(t *testing.T) {
 			if payloadJSON != want.payload {
 				t.Fatalf("open %d: backfill rewrote %s payload: %s", open, id, payloadJSON)
 			}
+		}
+	}
+}
+
+func TestStoreRepairMovesContainerMappingsOffKindPrefixedNames(t *testing.T) {
+	root := t.TempDir()
+	home, memory := filepath.Join(root, "state"), filepath.Join(root, "memory")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: home, MemoryDir: memory})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	events := map[string]struct{ project, payload string }{
+		"team":        {"ZC:C0123ABCDEF:Team Channel", `{"channel_id":"C0123ABCDEF","channel_name":"ZC:C0123ABCDEF:Team Channel","conversation_type":"channel","ts":"1789300800.000100","text":"Prefixed"}`},
+		"split":       {"ZC:C0DEMO0301:Split Channel", `{"channel_id":"C0DEMO0301","channel_name":"ZC:C0DEMO0301:Split Channel","conversation_type":"channel","ts":"1789300801.000100","text":"Repairable"}`},
+		"split-stays": {"ZC:C0DEMO0301:Split Channel", `{"channel_id":"C0DEMO0301:1789300802.000100","channel_name":"ZC:C0DEMO0301:Split Channel","conversation_type":"channel","ts":"1789300802.000100","text":"Malformed channel id"}`},
+	}
+	for id, event := range events {
+		insertEvent(t, initialized.DatabasePath, storedEvent{ID: id, Source: "slack", Type: "slack.message", Timestamp: now, Project: event.project, Payload: event.payload})
+	}
+	db, err := sql.Open("sqlite3", initialized.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, mapping := range [][2]string{
+		{"projects/team.md", "ZC:C0123ABCDEF:Team Channel"},
+		{"projects/team.md", "Team Channel"},
+		{"projects/other.md", "ZC:C0123ABCDEF:Team Channel"},
+		{"projects/split.md", "ZC:C0DEMO0301:Split Channel"},
+		{"projects/unrelated.md", "unrelated-channel"},
+	} {
+		if _, err := db.Exec(`INSERT INTO memory_project_sources (memory_doc_path, captured_project) VALUES (?, ?)`, mapping[0], mapping[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	want := []string{
+		"projects/other.md -> Team Channel",
+		"projects/split.md -> Split Channel",
+		"projects/split.md -> ZC:C0DEMO0301:Split Channel",
+		"projects/team.md -> Team Channel",
+		"projects/unrelated.md -> unrelated-channel",
+	}
+	for open := 1; open <= 2; open++ {
+		if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: home, MemoryDir: memory}); err != nil {
+			t.Fatal(err)
+		}
+		rows, err := db.Query(`SELECT memory_doc_path, captured_project FROM memory_project_sources ORDER BY memory_doc_path, captured_project`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for rows.Next() {
+			var path, project string
+			if err := rows.Scan(&path, &project); err != nil {
+				t.Fatal(err)
+			}
+			got = append(got, path+" -> "+project)
+		}
+		rows.Close()
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("open %d: expected mappings %q, got %q", open, want, got)
+		}
+		var project string
+		if err := db.QueryRow(`SELECT project FROM events WHERE id = 'team'`).Scan(&project); err != nil || project != "Team Channel" {
+			t.Fatalf("open %d: expected the mapped event repaired to Team Channel, got %q (%v)", open, project, err)
 		}
 	}
 }
