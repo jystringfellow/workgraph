@@ -207,7 +207,7 @@ func readNextSnapshot(config NextConfig) (nextSnapshot, error) {
 }
 
 func loadNextEvents(tx *sql.Tx) ([]nextStoredEvent, error) {
-	rows, err := tx.Query(`SELECT id,type,timestamp,COALESCE(project,''),COALESCE(actor,''),payload_json FROM events WHERE (source='github' AND type LIKE 'github.pull_request.%') OR (source='workgraph' AND type IN ('next.item_done','next.item_snoozed')) ORDER BY timestamp,id`)
+	rows, err := tx.Query(`SELECT id,type,timestamp,COALESCE(project,''),COALESCE(actor,''),payload_json FROM events WHERE ((source='github' AND type LIKE 'github.pull_request.%') OR (source='workgraph' AND type IN ('next.item_done','next.item_snoozed'))) AND ` + notControlQueryEvent + ` ORDER BY timestamp,id`)
 	if err != nil {
 		return nil, err
 	}

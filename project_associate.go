@@ -599,7 +599,7 @@ func loadAssociateEvents(db *sql.DB, ids []string) ([]associateStoredEvent, erro
 		args[index] = id
 	}
 	rows, err := db.Query(`SELECT id, source, timestamp, COALESCE(project, ''), COALESCE(actor, ''), COALESCE(summary, ''), payload_json
-		FROM events WHERE id IN (?`+strings.Repeat(", ?", len(ids)-1)+`) ORDER BY timestamp, id`, args...)
+		FROM events WHERE id IN (?`+strings.Repeat(", ?", len(ids)-1)+`) AND `+notControlQueryEvent+` ORDER BY timestamp, id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query unit members: %w", err)
 	}

@@ -175,7 +175,7 @@ func loadTodayEvents(db *sql.DB, now time.Time, actor string, involvement string
 	dayEnd := dayStart.AddDate(0, 0, 1)
 
 	query := `SELECT id, source, type, timestamp, project, actor, involvement_json, summary, payload_json
-		FROM events WHERE timestamp >= ? AND timestamp < ?`
+		FROM events WHERE timestamp >= ? AND timestamp < ? AND ` + notControlQueryEvent
 	args := []any{
 		dayStart.UTC().Format(time.RFC3339),
 		dayEnd.UTC().Format(time.RFC3339),

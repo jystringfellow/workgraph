@@ -69,6 +69,16 @@ timezone-bearing start and end objects in the payload.
 An empty batch requires an exhaustive bounded query or an applicable control
 query that proves emptiness. A zero-result search alone is not proof when the
 provider search is indexed, capped, or partial.
+Submit the proof with the empty submission, never as an event: over MCP call
+`capture_ingest` with the claim, no `events` (or `[]`), and `empty_proof`
+`{"exhaustive_query":true}` or `{"control_query_passed":true}`; over the CLI
+submit `{"events":[],"empty_proof":{...}}`. workgraph rejects any event whose
+type ends in `.control_query` or whose payload `control_query` is JSON `true`.
+
+Leave `summary` empty rather than inventing one when the provider gives a
+title: workgraph derives it from `subject` for `mail.microsoft.message` and
+`calendar.microsoft.event`, and from `title` for `notion.page_updated`,
+`notion.database_updated`, and `azure.boards.workitem`.
 
 Slack Lists use declared `complete_snapshot` semantics with `slack_read_file`.
 For a one-List request, submit the complete provider output verbatim as

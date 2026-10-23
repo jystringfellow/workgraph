@@ -618,6 +618,33 @@ truncated page fails the request.
 
 An empty bounded capture must include either an exhaustive-query proof or a
 provider-specific control-query proof. A bare empty JSON array is rejected.
+The proof travels with the empty submission, never as an event: the CLI accepts
+`{"events":[],"empty_proof":{"exhaustive_query":true}}` and the MCP
+`capture_ingest` tool accepts an `empty_proof` argument
+(`{"exhaustive_query":true}` or `{"control_query_passed":true}`) with `events`
+omitted or `[]`. Either form completes the claimed request without storing
+events.
+
+Control-query results are evidence about the window, not work. Ingest rejects
+the whole batch when any event type ends in `.control_query` or any payload has
+a top-level `control_query` field that is exactly JSON `true`; other values such
+as `0`, `false`, or a query string are ordinary payload data. The error names
+the event and directs the worker to resubmit with `empty_proof`.
+
+Events stored before this rule are classified on read, without changing the
+store: a row is synthetic control-query evidence when its type ends in
+`.control_query`, or when its source is a bridged connector id or bridged event
+source and its payload `control_query` is exactly JSON `true`. today, resume,
+`events today`, next, project units and activity, association candidates, and
+associate unit members exclude those rows in their queries, so the exclusion
+holds even if the store has not been reopened since upgrading.
+
+When a bridged event arrives without a summary, ingest derives it from the
+provider title: `subject` for `mail.microsoft.message` and
+`calendar.microsoft.event`, and `title` for `notion.page_updated`,
+`notion.database_updated`, and `azure.boards.workitem`. Opening the store
+backfills the same summary for stored events of those types whose summary is
+empty.
 
 The shared Microsoft calendar normalization path converts provider-local
 occurrence times with DST-aware Windows-to-IANA timezone mappings before using

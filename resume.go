@@ -469,9 +469,9 @@ func loadResumeEvents(db *sql.DB, location *time.Location) ([]ResumeEvent, error
 	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('events') WHERE name = 'involvement_json'`).Scan(&involvementColumnCount); err != nil {
 		return nil, fmt.Errorf("inspect event schema: %w", err)
 	}
-	query := `SELECT id, source, type, timestamp, project, summary, payload_json, created_at, involvement_json FROM events`
+	query := `SELECT id, source, type, timestamp, project, summary, payload_json, created_at, involvement_json FROM events WHERE ` + notControlQueryEvent
 	if involvementColumnCount == 0 {
-		query = `SELECT id, source, type, timestamp, project, summary, payload_json, created_at, NULL FROM events`
+		query = `SELECT id, source, type, timestamp, project, summary, payload_json, created_at, NULL FROM events WHERE ` + notControlQueryEvent
 	}
 	repeatedListRevisions, err := repeatedSlackListRevisionIDs(db)
 	if err != nil {
