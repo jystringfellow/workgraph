@@ -458,6 +458,16 @@ func buildAssociatePayload(homeDir string, config LLMAssociateConfig, now time.T
 			linked[link.UnitID] = true
 		}
 	}
+	identifierIndex, err := projectMemoryIdentifierIndex(catalog)
+	if err != nil {
+		return associatePayload{}, err
+	}
+	permitted := func(event AssociationEvent) bool {
+		return enabled[associateEventSource(associateStoredEvent{Source: event.Source, Payload: event.Payload})]
+	}
+	if err := seedProjectIdentifierIndex(db, identifierIndex, units, links, permitted); err != nil {
+		return associatePayload{}, err
+	}
 	candidates, positions := associateCandidates(units, requested)
 	included := map[string]bool{}
 	for index, unit := range candidates {
@@ -491,7 +501,15 @@ func buildAssociatePayload(homeDir string, config LLMAssociateConfig, now time.T
 			}
 			entry.UnitID = fmt.Sprintf("unit-%d", position)
 		}
-		for _, project := range catalog.ForContainer(entry.Container, mappings) {
+		var allowedIDs []string
+		for _, member := range allowed {
+			allowedIDs = append(allowedIDs, member.ID)
+		}
+		identifiers, err := projectEventIdentifiers(db, allowedIDs)
+		if err != nil {
+			return associatePayload{}, err
+		}
+		for _, project := range catalog.forUnit(entry.Container, mappings, identifierIndex.citedProjects(identifiers)) {
 			entry.Projects = append(entry.Projects, project.Slug)
 			if !included[project.Slug] {
 				included[project.Slug] = true

@@ -114,6 +114,9 @@ func inspectMemoryProjects(db *sql.DB, events []ResumeEvent, config MemoryDoctor
 		for source := range mappings.Workstreams {
 			linked[source] = true
 		}
+		for source := range mappings.Projects {
+			linked[source] = true
+		}
 		var candidates []MemoryProjectCandidate
 		for _, source := range sources {
 			if linked[source] {

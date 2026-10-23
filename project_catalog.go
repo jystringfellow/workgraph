@@ -81,21 +81,40 @@ func LoadProjectCatalog(memoryDir string) (ProjectCatalog, error) {
 }
 
 func (catalog ProjectCatalog) ForContainer(container string, mappings ContainerMappings) []ProjectCatalogEntry {
-	workstreams := mappings.Workstreams[container]
-	if len(workstreams) == 0 {
-		return catalog.Projects
+	return catalog.forUnit(container, mappings, nil)
+}
+
+func (catalog ProjectCatalog) forUnit(container string, mappings ContainerMappings, cited map[string]bool) []ProjectCatalogEntry {
+	allowedWorkstreams := map[string]bool{}
+	for _, workstream := range mappings.Workstreams[container] {
+		allowedWorkstreams[workstream] = true
 	}
-	allowed := map[string]bool{}
-	for _, workstream := range workstreams {
-		allowed[workstream] = true
+	allowedProjects := map[string]bool{}
+	if mapped := catalog.mappedProjects(container, mappings); len(mapped) >= 2 {
+		for _, slug := range mapped {
+			allowedProjects[slug] = true
+		}
+	}
+	if len(allowedWorkstreams) == 0 && len(allowedProjects) == 0 {
+		return catalog.Projects
 	}
 	var narrowed []ProjectCatalogEntry
 	for _, project := range catalog.Projects {
-		if allowed[project.Workstream] {
+		if allowedWorkstreams[project.Workstream] || allowedProjects[project.Slug] || cited[project.Slug] {
 			narrowed = append(narrowed, project)
 		}
 	}
 	return narrowed
+}
+
+func (catalog ProjectCatalog) mappedProjects(container string, mappings ContainerMappings) []string {
+	var mapped []string
+	for _, slug := range mappings.Projects[container] {
+		if catalogHasProject(catalog, slug) {
+			mapped = append(mapped, slug)
+		}
+	}
+	return mapped
 }
 
 func (catalog ProjectCatalog) workstreamOf(slug string) string {

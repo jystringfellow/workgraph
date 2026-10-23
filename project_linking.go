@@ -66,29 +66,13 @@ func LinkProjectUnits(config ProjectLinkPassConfig) (ProjectLinkRunResult, error
 	if err != nil {
 		return ProjectLinkRunResult{}, err
 	}
-	unitsByID := map[string]ProjectUnit{}
-	for _, unit := range units {
-		unitsByID[unit.ID] = unit
+	if err := seedProjectIdentifierIndex(db, index, units, links, nil); err != nil {
+		return ProjectLinkRunResult{}, err
 	}
 	linked := map[string]bool{}
 	for _, link := range links {
-		if !projectLinkCurrent(link) {
-			continue
-		}
-		linked[link.UnitID] = true
-		if link.State != "applied" || link.Target != "project" || !projectLinkUserApproved(link) {
-			continue
-		}
-		members := link.Evidence
-		if unit, ok := unitsByID[link.UnitID]; ok {
-			members = unit.EventIDs
-		}
-		identifiers, err := projectEventIdentifiers(db, members)
-		if err != nil {
-			return ProjectLinkRunResult{}, err
-		}
-		for _, cited := range identifiers {
-			index.add(cited.key, link.Project)
+		if projectLinkCurrent(link) {
+			linked[link.UnitID] = true
 		}
 	}
 	var proposals []ProjectLinkProposal
@@ -108,6 +92,40 @@ func LinkProjectUnits(config ProjectLinkPassConfig) (ProjectLinkRunResult, error
 		return ProjectLinkRunResult{}, nil
 	}
 	return RecordProjectLinkRun(store, ProjectLinkRun{Source: "deterministic", Links: proposals})
+}
+
+func seedProjectIdentifierIndex(db *sql.DB, index projectIdentifierIndex, units []ProjectUnit, links []ProjectLink, permitted func(AssociationEvent) bool) error {
+	unitsByID := map[string]ProjectUnit{}
+	for _, unit := range units {
+		unitsByID[unit.ID] = unit
+	}
+	for _, link := range links {
+		if !projectLinkCurrent(link) || link.State != "applied" || link.Target != "project" || !projectLinkUserApproved(link) {
+			continue
+		}
+		members := link.Evidence
+		if unit, ok := unitsByID[link.UnitID]; ok {
+			members = unit.EventIDs
+		}
+		identifiers, err := projectPermittedEventIdentifiers(db, members, permitted)
+		if err != nil {
+			return err
+		}
+		for _, cited := range identifiers {
+			index.add(cited.key, link.Project)
+		}
+	}
+	return nil
+}
+
+func (index projectIdentifierIndex) citedProjects(identifiers []projectCitedIdentifier) map[string]bool {
+	projects := map[string]bool{}
+	for _, cited := range identifiers {
+		for project := range index.lookup(cited.key) {
+			projects[project] = true
+		}
+	}
+	return projects
 }
 
 func deterministicProjectLink(db *sql.DB, unit ProjectUnit, index projectIdentifierIndex, catalog ProjectCatalog, mappings ContainerMappings) (ProjectLinkProposal, bool, error) {
@@ -217,6 +235,10 @@ type projectCitedIdentifier struct {
 }
 
 func projectEventIdentifiers(db *sql.DB, eventIDs []string) ([]projectCitedIdentifier, error) {
+	return projectPermittedEventIdentifiers(db, eventIDs, nil)
+}
+
+func projectPermittedEventIdentifiers(db *sql.DB, eventIDs []string, permitted func(AssociationEvent) bool) ([]projectCitedIdentifier, error) {
 	var cited []projectCitedIdentifier
 	for _, eventID := range eventIDs {
 		event, err := readAssociationEvent(db, eventID)
@@ -225,6 +247,9 @@ func projectEventIdentifiers(db *sql.DB, eventIDs []string) ([]projectCitedIdent
 		}
 		if err != nil {
 			return nil, fmt.Errorf("read unit event %s: %w", eventID, err)
+		}
+		if permitted != nil && !permitted(event) {
+			continue
 		}
 		for _, key := range projectEventIdentifierKeys(event) {
 			cited = append(cited, projectCitedIdentifier{eventID: eventID, key: key})
