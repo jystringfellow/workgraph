@@ -373,6 +373,9 @@ func (run associateRun) callVerifier(config LLMAssociateConfig, verify associate
 	if !run.hasVerifier {
 		return "", fmt.Errorf("no llm profile is routed for %s", llmTaskAssociateVerify)
 	}
+	if run.verifier.Provider == llmProviderSystemOne {
+		return "", errSystemOneCannotVerify
+	}
 	if err := enforceLLMManagedSettings(run.verifier, config.HTTPClient); err != nil {
 		return "", err
 	}

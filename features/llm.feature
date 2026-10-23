@@ -107,3 +107,35 @@ Scenario: Future LLM association suggestions stay reviewable
   Then the LLM output is stored as pending association suggestions
   And each suggestion includes grounded reasons and source event ids
   And workgraph does not mutate events or memory without approval
+
+Scenario: Configure a System One decision profile
+  Given workgraph has been initialized
+  When I run "workgraph llm add jev --provider system-one --base-url https://api.typesafe.ai --model jev-latest --api-key-env TYPESAFE_API_KEY"
+  Then workgraph stores a system-one profile without the API key
+  And "workgraph llm list" and "workgraph llm doctor" show the provider, model, and base URL host
+  And neither prints the API key or its variable name
+  When I add a system-one profile without --base-url
+  Then workgraph refuses it
+  When I add a system-one profile with --execution bridge
+  Then workgraph refuses it because system-one profiles run direct only
+
+Scenario: Classify System One base URLs as local or hosted
+  Given a system-one profile whose base URL is a loopback address
+  Then associate runs without hosted LLM opt-in and sends unfiltered context
+  Given a system-one profile whose base URL is a remote host
+  Then associate refuses to send anything until hosted LLM use is enabled
+  And managed settings that disable hosted providers block it
+  And look-alike hosts such as localhost.evil.example or 127.0.0.1@host are hosted
+  And a redirect from the System One host fails the run without replaying the request
+  And call errors name only the scheme and host with a fixed message and never echo provider output
+
+Scenario: Associate units with a System One decision model
+  Given a system-one profile is routed to associate
+  And units of work are eligible for association
+  When workgraph associates them
+  Then each unit is sent as one System One request with a project choice and a kind choice
+  And the project choice offers opaque option ids for the unit's candidate projects plus no_project
+  And project slugs are not option keys, and hosted state and option descriptions are filtered
+  And each link's confidence is the returned probability of the chosen option
+  And an answer whose choice was not offered is discarded for that unit with a reason
+  And units that cannot be expressed as a choice are skipped with a reason

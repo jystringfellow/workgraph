@@ -137,9 +137,9 @@ func enforceLLMManagedSettings(profile llmProfile, client *http.Client) error {
 	if profile.Provider == "ai-client" && len(settings.LLM.AIClient.AllowedClients.Value) > 0 && !stringAllowedFold(profile.Client, settings.LLM.AIClient.AllowedClients.Value) {
 		return fmt.Errorf("ai client %q is not allowed by managed settings", profile.Client)
 	}
-	if len(settings.LLM.AllowedBaseURL.Value) > 0 && profile.Provider == "openai-compatible" {
+	if len(settings.LLM.AllowedBaseURL.Value) > 0 && llmProviderHasBaseURL(profile.Provider) {
 		if !baseURLAllowed(profile.BaseURL, settings.LLM.AllowedBaseURL.Value) {
-			return fmt.Errorf("llm destination %q is not allowed by managed settings", profile.BaseURL)
+			return fmt.Errorf("llm destination %q is not allowed by managed settings", llmPolicyDestination(profile))
 		}
 	}
 	if len(settings.LLM.OpenAICompatible.AllowedModels.Value) > 0 && profile.Provider == "openai-compatible" {
@@ -158,7 +158,7 @@ func enforceLLMManagedSettings(profile llmProfile, client *http.Client) error {
 		}
 	}
 	if settings.LLM.HostedEnabled.Value != nil && !*settings.LLM.HostedEnabled.Value {
-		if profile.Provider != "openai-compatible" {
+		if !llmProviderHasBaseURL(profile.Provider) {
 			return errors.New("hosted LLM providers are disabled by managed settings")
 		}
 		if !isLocalLLMBaseURL(profile.BaseURL) {
@@ -316,4 +316,26 @@ func isLocalLLMBaseURL(baseURL string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+func llmPolicyDestination(profile llmProfile) string {
+	if profile.Provider == llmProviderSystemOne {
+		return systemOneDestination(profile.BaseURL)
+	}
+	return redactedLLMBaseURL(profile.BaseURL)
+}
+
+func redactedLLMBaseURL(baseURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return "[unparseable base URL]"
+	}
+	parsed.User = nil
+	if parsed.RawQuery != "" {
+		parsed.RawQuery = "REDACTED"
+	}
+	if parsed.Fragment != "" || parsed.RawFragment != "" {
+		parsed.Fragment, parsed.RawFragment = "REDACTED", ""
+	}
+	return parsed.String()
 }

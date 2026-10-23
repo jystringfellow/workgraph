@@ -209,6 +209,9 @@ func AssociateWithLLM(config LLMAssociateConfig) (LLMAssociateResult, error) {
 			return LLMAssociateResult{}, fmt.Errorf("an llm.associate request is active (Request: %s); the verifier runs in the bridge, so this run waits until it completes", id)
 		}
 	}
+	if run.profile.Provider == llmProviderSystemOne {
+		return associateWithSystemOne(config, run)
+	}
 	var deterministic ProjectLinkRunResult
 	if !config.DryRun {
 		if deterministic, err = run.linkDeterministic(config); err != nil {

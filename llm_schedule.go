@@ -274,6 +274,9 @@ func executeLLMTask(config LLMAssociateConfig, run associateRun, claim ClaimedCa
 		result.Message = llmTaskMessage(run, claim.Request.ID, result)
 		return result, nil
 	}
+	if run.profile.Provider == llmProviderSystemOne {
+		return executeSystemOneTask(config, run, claim, work.payload, completion, result)
+	}
 	filtered, err := run.filteredMessages(work.payload)
 	if err != nil {
 		return LLMAssociateResult{}, err

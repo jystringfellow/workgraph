@@ -642,6 +642,14 @@ workgraph llm use sonnet --for associate-verify
   the routed profile claims it again. When the verifier route
   runs directly at claim time, the daemon runs the request; when the route is
   gone, the daemon completes it by storing the associate results.
+- A `system-one` associate profile escalates the same way, using the returned
+  probability of the chosen option as the confidence; its verifier payload is
+  built from the same filtered field values as its System One requests, so a
+  redaction made for System One is never undone, and units it skipped,
+  discarded, or redacted only in the composed request form are not
+  escalated. A `system-one` profile cannot be the verifier:
+  routing one is refused, and a hand-routed one fails as a verifier call (see
+  `specs/llm-integration.md`).
 - `--dry-run` sends nothing and prints `Verifier: <profile>, confidence <floor>
   to below <threshold>`. A run report adds `Escalated: <n>`, and, when a
   verifier ran, `Verified: <n> by <profile> (<changed> changed)`, or
@@ -971,3 +979,10 @@ Grouping, shared by `today` and `resume`:
   associate request; no associate request is emitted while it is active; only
   the verifier's client can claim it and the claim carries the verifier's
   model; its submission writes the verifier's links and completes it.
+- **P15. A system-one associate profile works with a verifier.** Floor-to-
+  threshold units escalate to a direct verifier with the hosted-filtered
+  state, and the verifier's result is stored under its profile; a bridge
+  verifier gets an `associate-verify` request from direct and daemon runs;
+  discarded units are not escalated; a `system-one` verifier is refused at
+  `llm use` and, when hand-routed, at run time with the associate results
+  kept; `llm set` thresholds change what a `system-one` profile auto-applies.
