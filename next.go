@@ -150,7 +150,7 @@ func readNextSnapshot(config NextConfig) (nextSnapshot, error) {
 	if err != nil {
 		return snapshot, err
 	}
-	snapshot.categorize, snapshot.categorized, err = loadNextCategorizeItems(tx, snapshot.result.AsOf, config.IncludeUntrusted)
+	snapshot.categorize, snapshot.categorized, err = loadNextCategorizeItems(tx, snapshot.result.AsOf, config.IncludeUntrusted, loadAutoApplyThresholds(config.HomeDir))
 	if err != nil {
 		return snapshot, err
 	}

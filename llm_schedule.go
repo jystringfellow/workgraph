@@ -71,8 +71,16 @@ type LLMTaskSubmitConfig struct {
 }
 
 type llmTaskParams struct {
-	UnitIDs []string          `json:"unit_ids"`
-	Sent    map[string]string `json:"sent,omitempty"`
+	Task    string                         `json:"task,omitempty"`
+	UnitIDs []string                       `json:"unit_ids"`
+	Sent    map[string]string              `json:"sent,omitempty"`
+	Primary map[string]associateEscalation `json:"primary,omitempty"`
+}
+
+type llmTaskWork struct {
+	task      string
+	payload   associatePayload
+	primaries []ProjectLinkProposal
 }
 
 func ScheduleLLMAssociate(config LLMAssociateScheduleConfig) (LLMAssociateScheduleResult, error) {
@@ -85,8 +93,15 @@ func ScheduleLLMAssociate(config LLMAssociateScheduleConfig) (LLMAssociateSchedu
 		return LLMAssociateScheduleResult{}, err
 	}
 	result, err := emitLLMAssociateRequest(associate, run)
-	if err != nil || !result.Eligible || associateExecutesInBridge(run.profile) {
+	if err != nil || !result.Eligible {
 		return result, err
+	}
+	params, err := storedLLMTaskParams(associate, result.Request.ID)
+	if err != nil {
+		return result, err
+	}
+	if _, profile, routed := run.taskProfile(params.Task); routed && associateExecutesInBridge(profile) {
+		return result, nil
 	}
 	claims, err := claimCaptureRequests(CaptureRequestClaimConfig{
 		HomeDir: associate.HomeDir, DatabasePath: associate.DatabasePath, ConnectorID: llmAssociateConnectorID,
@@ -225,15 +240,29 @@ func emitAssociateRequestNow(config LLMAssociateConfig, run associateRun) (LLMAs
 }
 
 func executeLLMTask(config LLMAssociateConfig, run associateRun, claim ClaimedCaptureRequest) (LLMAssociateResult, error) {
-	payload, err := llmTaskPayload(config, run, claim.Request.ID)
+	work, err := loadLLMTaskWork(config, run, claim.Request.ID)
 	if err != nil {
 		return LLMAssociateResult{}, err
 	}
-	result := LLMAssociateResult{ConfigPath: llmConfigPath(run.homeDir), Sent: associatePayloadUnitIDs(payload)}
-	if len(payload.Units) == 0 {
+	result := LLMAssociateResult{ConfigPath: llmConfigPath(run.homeDir), Sent: associatePayloadUnitIDs(work.payload)}
+	if len(work.payload.Units) == 0 {
 		return result, completeEmptyLLMTask(config, run, claim)
 	}
-	filtered, err := run.filteredMessages(payload)
+	completion := llmTaskCompletion(claim.Request.ID, claim.ClaimToken, work.payload)
+	if work.task == llmTaskAssociateVerify {
+		verified := work.primaries
+		result.Escalated = len(work.primaries)
+		if run.hasVerifier {
+			result.verifier = run.verifierName
+			verified = run.verifyDirect(config, work.payload, work.primaries, &result)
+		}
+		if err := run.write(config, work.payload, verified, associateDeferral{}, claim.Request.ID, completion, &result); err != nil {
+			return LLMAssociateResult{}, err
+		}
+		result.Message = llmTaskMessage(run, claim.Request.ID, result)
+		return result, nil
+	}
+	filtered, err := run.filteredMessages(work.payload)
 	if err != nil {
 		return LLMAssociateResult{}, err
 	}
@@ -241,7 +270,7 @@ func executeLLMTask(config LLMAssociateConfig, run associateRun, claim ClaimedCa
 	if err != nil {
 		return LLMAssociateResult{}, err
 	}
-	if err := run.apply(config, payload, response, llmTaskCompletion(claim.Request.ID, claim.ClaimToken, payload), &result); err != nil {
+	if err := run.apply(config, work.payload, response, claim.Request.ID, completion, &result); err != nil {
 		return LLMAssociateResult{}, err
 	}
 	result.Message = llmTaskMessage(run, claim.Request.ID, result)
@@ -258,12 +287,23 @@ func SubmitLLMTask(config LLMTaskSubmitConfig) (LLMAssociateResult, error) {
 	if err != nil {
 		return LLMAssociateResult{}, err
 	}
-	payload, err := llmTaskPayload(associate, run, requestID)
+	work, err := loadLLMTaskWork(associate, run, requestID)
 	if err != nil {
 		return LLMAssociateResult{}, err
 	}
-	result := LLMAssociateResult{ConfigPath: llmConfigPath(run.homeDir), Sent: associatePayloadUnitIDs(payload)}
-	if err := run.apply(associate, payload, config.Response, llmTaskCompletion(requestID, config.ClaimToken, payload), &result); err != nil {
+	result := LLMAssociateResult{ConfigPath: llmConfigPath(run.homeDir), Sent: associatePayloadUnitIDs(work.payload)}
+	completion := llmTaskCompletion(requestID, config.ClaimToken, work.payload)
+	if work.task == llmTaskAssociateVerify {
+		result.verifier, result.Escalated = run.verifierName, len(work.primaries)
+		verified, err := run.mergeVerdicts(work.payload, work.primaries, config.Response, &result)
+		if err != nil {
+			return LLMAssociateResult{}, err
+		}
+		err = run.write(associate, work.payload, verified, associateDeferral{}, requestID, completion, &result)
+	} else {
+		err = run.apply(associate, work.payload, config.Response, requestID, completion, &result)
+	}
+	if err != nil {
 		return LLMAssociateResult{}, err
 	}
 	result.Message = llmTaskMessage(run, requestID, result)
@@ -379,11 +419,11 @@ func sentLLMTaskMembers(tx *sql.Tx, requestID string) (map[string]string, error)
 }
 
 func recordSentLLMTaskMembers(config LLMAssociateConfig, claim ClaimedCaptureRequest, payload associatePayload) error {
-	unitIDs, err := storedLLMTaskUnitIDs(config, claim.Request.ID)
+	params, err := storedLLMTaskParams(config, claim.Request.ID)
 	if err != nil {
 		return err
 	}
-	params := llmTaskParams{UnitIDs: unitIDs, Sent: map[string]string{}}
+	params.Sent = map[string]string{}
 	for _, unit := range payload.Units {
 		params.Sent[unit.linkUnitID] = associateMembersHash(unit)
 	}
@@ -453,36 +493,81 @@ func completeEmptyLLMTask(config LLMAssociateConfig, run associateRun, claim Cla
 	return withProjectLinksTx(run.store(config), completeLLMTaskTx(claim.Request.ID, claim.ClaimToken))
 }
 
-func llmTaskPayload(config LLMAssociateConfig, run associateRun, requestID string) (associatePayload, error) {
-	unitIDs, err := storedLLMTaskUnitIDs(config, requestID)
+func loadLLMTaskWork(config LLMAssociateConfig, run associateRun, requestID string) (llmTaskWork, error) {
+	params, err := storedLLMTaskParams(config, requestID)
 	if err != nil {
-		return associatePayload{}, err
+		return llmTaskWork{}, err
 	}
-	return buildAssociatePayload(run.homeDir, config, run.now, run.catalog, run.enabled, unitIDs, nil)
+	payload, err := buildAssociatePayload(run.homeDir, config, run.now, run.catalog, run.enabled, params.UnitIDs, nil)
+	if err != nil {
+		return llmTaskWork{}, err
+	}
+	work := llmTaskWork{task: params.Task, payload: payload}
+	if params.Task == llmTaskAssociateVerify {
+		work.payload = verifyPayloadFor(payload, params.Primary)
+		work.primaries = primaryProposals(work.payload, params.Primary)
+	}
+	return work, nil
 }
 
-func storedLLMTaskUnitIDs(config LLMAssociateConfig, requestID string) ([]string, error) {
+func storedLLMTaskParams(config LLMAssociateConfig, requestID string) (llmTaskParams, error) {
 	dbPath, err := resumeDatabasePath(ResumeConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath})
 	if err != nil {
-		return nil, err
+		return llmTaskParams{}, err
 	}
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
-		return nil, fmt.Errorf("open database: %w", err)
+		return llmTaskParams{}, fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
 	var raw string
 	if err := db.QueryRow(`SELECT params_json FROM capture_requests WHERE id = ? AND kind = ?`, requestID, captureRequestKindLLMTask).Scan(&raw); err != nil {
-		return nil, fmt.Errorf("read llm task request %s: %w", requestID, err)
+		return llmTaskParams{}, fmt.Errorf("read llm task request %s: %w", requestID, err)
 	}
 	var params llmTaskParams
 	if err := json.Unmarshal([]byte(raw), &params); err != nil {
-		return nil, fmt.Errorf("parse llm task params: %w", err)
+		return llmTaskParams{}, fmt.Errorf("parse llm task params: %w", err)
 	}
 	if params.UnitIDs == nil {
 		params.UnitIDs = []string{}
 	}
-	return params.UnitIDs, nil
+	return params, nil
+}
+
+func activeLLMAssociateRequest(config LLMAssociateConfig) (string, bool, error) {
+	dbPath, err := resumeDatabasePath(ResumeConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath})
+	if err != nil {
+		return "", false, err
+	}
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		return "", false, fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+	if err := createSchema(db); err != nil {
+		return "", false, fmt.Errorf("prepare capture outbox: %w", err)
+	}
+	var id string
+	err = db.QueryRow(`SELECT id FROM capture_requests WHERE connector_id = ? AND status IN ('pending', 'claimed') LIMIT 1`, llmAssociateConnectorID).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("read active llm task request: %w", err)
+	}
+	return id, true, nil
+}
+
+func activeLLMTaskName(config LLMAssociateConfig) string {
+	id, active, err := activeLLMAssociateRequest(config)
+	if err != nil || !active {
+		return ""
+	}
+	params, err := storedLLMTaskParams(config, id)
+	if err != nil {
+		return ""
+	}
+	return params.Task
 }
 
 func llmTaskParamsSummary(raw string) json.RawMessage {
@@ -516,37 +601,58 @@ func attachLLMTasks(config CaptureRequestClaimConfig, claimed []ClaimedCaptureRe
 }
 
 func prepareLLMTask(config LLMAssociateConfig, run associateRun, claim ClaimedCaptureRequest) (*LLMTask, error) {
-	payload, err := llmTaskPayload(config, run, claim.Request.ID)
+	work, err := loadLLMTaskWork(config, run, claim.Request.ID)
 	if err != nil {
 		return nil, err
 	}
-	if len(payload.Units) == 0 {
+	if len(work.payload.Units) == 0 {
 		return nil, completeEmptyLLMTask(config, run, claim)
 	}
-	if err := run.checkOutboundPolicy(config); err != nil {
-		return nil, err
+	name, profile, routed := run.taskProfile(work.task)
+	if !routed {
+		return nil, fmt.Errorf("no llm profile is routed for %s", llmTaskAssociateVerify)
 	}
-	filtered, err := run.filteredMessages(payload)
+	var filtered llmOutboundFilterResult
+	if work.task == llmTaskAssociateVerify {
+		if err := run.checkVerifierPolicy(config); err != nil {
+			return nil, err
+		}
+		filtered, err = run.filteredVerifyMessages(work.payload)
+	} else {
+		if err := run.checkOutboundPolicy(config); err != nil {
+			return nil, err
+		}
+		filtered, err = run.filteredMessages(work.payload)
+	}
 	if err != nil {
 		return nil, err
 	}
-	if err := recordSentLLMTaskMembers(config, claim, payload); err != nil {
+	if err := recordSentLLMTaskMembers(config, claim, work.payload); err != nil {
 		return nil, err
 	}
-	return &LLMTask{Task: llmTaskAssociate, Profile: run.profileName, Client: run.profile.Client, Model: run.profile.Model, Messages: filtered.Messages}, nil
+	return &LLMTask{Task: firstNonEmpty(work.task, llmTaskAssociate), Profile: name, Client: profile.Client, Model: profile.Model, Messages: filtered.Messages}, nil
+}
+
+func routedBridgeLLMTaskProfile(config LLMAssociateConfig) (llmProfile, bool) {
+	run, err := newAssociateRun(config)
+	if err != nil {
+		return llmProfile{}, false
+	}
+	_, profile, routed := run.taskProfile(activeLLMTaskName(config))
+	return profile, routed && associateExecutesInBridge(profile)
 }
 
 func bridgeLLMTaskProfile(homeDir string, client string) (llmProfile, bool) {
-	run, err := newAssociateRun(LLMAssociateConfig{HomeDir: homeDir})
-	if err != nil || !associateExecutesInBridge(run.profile) || run.profile.Client != client {
+	profile, routed := routedBridgeLLMTaskProfile(LLMAssociateConfig{HomeDir: homeDir})
+	if !routed || profile.Client != client {
 		return llmProfile{}, false
 	}
-	return run.profile, true
+	return profile, true
 }
 
 func llmTaskClaimAllowed(config CaptureRequestClaimConfig) bool {
-	run, err := newAssociateRun(LLMAssociateConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir})
-	return err == nil && associateExecutesInBridge(run.profile) && strings.HasPrefix(strings.TrimSpace(config.Worker), run.profile.Client+"-")
+	profile, routed := routedBridgeLLMTaskProfile(LLMAssociateConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir})
+	return routed && strings.HasPrefix(strings.TrimSpace(config.Worker), profile.Client+"-")
 }
 
 func captureRequestClaimableAt(request CaptureRequest, now time.Time) bool {

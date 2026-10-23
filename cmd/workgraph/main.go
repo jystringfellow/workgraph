@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	stdflag "flag"
 	"fmt"
 	"io"
 	"os"
@@ -820,6 +821,8 @@ func runLLM(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) 
 		return runLLMRemove(args[1:], stdout, stderr)
 	case "use":
 		return runLLMUse(args[1:], stdout, stderr)
+	case "set":
+		return runLLMSet(args[1:], stdout, stderr)
 	case "hosted":
 		return runLLMHosted(args[1:], stdout, stderr)
 	case "test":
@@ -859,10 +862,13 @@ func runLLMAdd(args []string, stdout io.Writer, stderr io.Writer) int {
 	modelARN := flags.String("model-arn", "", "Bedrock model or inference profile ARN")
 	configDir := flags.String("config-dir", "", "signed-in AI client configuration directory")
 	execution := flags.String("execution", "", "ai-client execution: bridge runs scheduled tasks in the bridge worker")
+	autoApply := flags.Float64("auto-apply-confidence", 0, "Lowest confidence from this profile that links a unit automatically, 0.5 to 1.0; default 0.95")
+	verifyFloor := flags.Float64("verify-floor", 0, "Lowest confidence from this profile that is sent to the associate-verify profile, 0 to 1; default 0.6")
 
 	if err := flags.Parse(args[1:]); err != nil {
 		return 2
 	}
+	autoApplySetting, verifyFloorSetting := thresholdFlags(flags, autoApply, verifyFloor)
 
 	result, err := workgraph.AddLLMProfile(workgraph.LLMAddProfileConfig{
 		HomeDir:    *homeDir,
@@ -877,9 +883,54 @@ func runLLMAdd(args []string, stdout io.Writer, stderr io.Writer) int {
 		ModelARN:   *modelARN,
 		ConfigDir:  *configDir,
 		Execution:  *execution,
+
+		AutoApplyConfidence: autoApplySetting,
+		VerifyFloor:         verifyFloorSetting,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph llm add: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func thresholdFlags(flags *stdflag.FlagSet, autoApply, verifyFloor *float64) (*float64, *float64) {
+	var autoApplySetting, verifyFloorSetting *float64
+	flags.Visit(func(set *stdflag.Flag) {
+		switch set.Name {
+		case "auto-apply-confidence":
+			autoApplySetting = autoApply
+		case "verify-floor":
+			verifyFloorSetting = verifyFloor
+		}
+	})
+	return autoApplySetting, verifyFloorSetting
+}
+
+func runLLMSet(args []string, stdout io.Writer, stderr io.Writer) int {
+	usage := "usage: workgraph llm set <profile> [--auto-apply-confidence <0.5-1.0>] [--verify-floor <0-1>]"
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		fmt.Fprintln(stderr, usage)
+		return 2
+	}
+	profile := args[0]
+	flags := flag.NewFlagSet("llm set "+profile, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	autoApply := flags.Float64("auto-apply-confidence", 0, "Lowest confidence from this profile that links a unit automatically, 0.5 to 1.0")
+	verifyFloor := flags.Float64("verify-floor", 0, "Lowest confidence from this profile that is sent to the associate-verify profile, 0 to 1")
+	if err := flags.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, usage)
+		return 2
+	}
+	autoApplySetting, verifyFloorSetting := thresholdFlags(flags, autoApply, verifyFloor)
+	result, err := workgraph.SetLLMProfile(workgraph.LLMSetProfileConfig{HomeDir: *homeDir, Name: profile, AutoApplyConfidence: autoApplySetting, VerifyFloor: verifyFloorSetting})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph llm set: %v\n", err)
 		return 1
 	}
 	fmt.Fprintln(stdout, result.Message)

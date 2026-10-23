@@ -79,8 +79,10 @@ func projectReviewDefaultLinks(links []ProjectLink, accuracy ProjectLinkAccuracy
 			undecided = append(undecided, link)
 		}
 	}
-	if accuracy.Status == "insufficient_data" {
-		proposed = append(proposed, undecided...)
+	for _, link := range undecided {
+		if accuracy.For(link.Profile).Status == "insufficient_data" {
+			proposed = append(proposed, link)
+		}
 	}
 	return proposed
 }
@@ -209,12 +211,16 @@ func ExplainProjectUnit(config ProjectReviewConfig, unitID string) (ProjectExpla
 	if err != nil {
 		return ProjectExplainResult{}, err
 	}
+	verifications, err := loadProjectLinkVerifications(config.store(), links)
+	if err != nil {
+		return ProjectExplainResult{}, err
+	}
 	result := ProjectExplainResult{Unit: unit, Links: links}
-	result.Message = projectExplainMessage(unitID, unit, links, config)
+	result.Message = projectExplainMessage(unitID, unit, links, verifications, config)
 	return result, nil
 }
 
-func projectExplainMessage(unitID string, unit *ProjectUnit, links []ProjectLink, config ProjectReviewConfig) string {
+func projectExplainMessage(unitID string, unit *ProjectUnit, links []ProjectLink, verifications map[int64]projectLinkVerification, config ProjectReviewConfig) string {
 	lines := []string{"Unit " + unitID}
 	if unit == nil {
 		lines = append(lines, "This unit no longer exists; the links below belong to an earlier grouping.")
@@ -235,6 +241,9 @@ func projectExplainMessage(unitID string, unit *ProjectUnit, links []ProjectLink
 	var current *ProjectLink
 	for index, link := range links {
 		lines = append(lines, "- "+ProjectLinkLine(link))
+		if verification, found := verifications[link.ID]; found {
+			lines = append(lines, verification.lines()...)
+		}
 		if projectLinkCurrent(link) {
 			current = &links[index]
 		}
