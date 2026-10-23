@@ -188,6 +188,9 @@ func AssociateWithLLM(config LLMAssociateConfig) (LLMAssociateResult, error) {
 	if err != nil {
 		return LLMAssociateResult{}, err
 	}
+	if run.profile.Provider == llmProviderSystemOne {
+		return associateWithSystemOne(config, run)
+	}
 	if !config.DryRun && associateExecutesInBridge(run.profile) {
 		return emitAssociateRequestNow(config, run)
 	}

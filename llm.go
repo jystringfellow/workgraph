@@ -245,6 +245,9 @@ func ListLLMProfiles(config LLMListConfig) (LLMResult, error) {
 		if profile.Provider == "ai-client" {
 			line += " config-dir " + llmProfileConfigDirLabel(profile)
 		}
+		if profile.Provider == llmProviderSystemOne {
+			line += " host " + systemOneDestination(profile.BaseURL)
+		}
 		lines = append(lines, line)
 	}
 	if len(stored.TaskProfiles) > 0 {
@@ -438,6 +441,9 @@ func TestLLMProfile(config LLMTestConfig) (LLMResult, error) {
 	if err != nil {
 		return LLMResult{}, err
 	}
+	if profile.Provider == llmProviderSystemOne {
+		return LLMResult{}, errSystemOneNotGenerative
+	}
 	if err := enforceLLMManagedSettings(profile, config.HTTPClient); err != nil {
 		return LLMResult{}, err
 	}
@@ -556,6 +562,9 @@ func SummarizeTodayWithLLM(config LLMSummarizeTodayConfig) (LLMResult, error) {
 	profileName, profile, err := resolveLLMProfile(stored, "", llmTaskSummarize)
 	if err != nil {
 		return LLMResult{}, err
+	}
+	if profile.Provider == llmProviderSystemOne {
+		return LLMResult{}, errSystemOneNotGenerative
 	}
 	if !config.DryRun {
 		if err := enforceLLMManagedSettings(profile, config.HTTPClient); err != nil {
@@ -729,7 +738,7 @@ func managedHostedLLMDisabled() bool {
 }
 
 func isHostedLLMProfile(profile llmProfile) bool {
-	if profile.Provider != "openai-compatible" {
+	if !llmProviderHasBaseURL(profile.Provider) {
 		return true
 	}
 	return !isLocalLLMBaseURL(profile.BaseURL)
@@ -1225,6 +1234,9 @@ func validateLLMProfile(profile llmProfile) error {
 	if profile.Provider != "ai-client" && profile.ConfigDir != "" {
 		return errors.New("config_dir is supported only for ai-client profiles")
 	}
+	if profile.Provider == llmProviderSystemOne && profile.Execution != "" {
+		return errSystemOneDirectOnly
+	}
 	if profile.Execution != "" && (profile.Provider != "ai-client" || profile.Execution != llmExecutionBridge) {
 		return errors.New(`execution "bridge" is the only execution setting, and only for ai-client profiles`)
 	}
@@ -1237,6 +1249,13 @@ func validateLLMProfile(profile llmProfile) error {
 		}
 		if profile.Model == "" {
 			return errors.New("openai-compatible llm model is required")
+		}
+	case llmProviderSystemOne:
+		if profile.BaseURL == "" {
+			return errors.New("system-one llm base URL is required")
+		}
+		if profile.Model == "" {
+			return errors.New("system-one llm model is required")
 		}
 	case "bedrock":
 		if profile.Region == "" {
@@ -1343,6 +1362,8 @@ func llmProfileDestination(profile llmProfile) string {
 	switch profile.Provider {
 	case "openai-compatible":
 		return profile.BaseURL
+	case llmProviderSystemOne:
+		return systemOneDestination(profile.BaseURL)
 	case "bedrock":
 		return "bedrock://" + profile.Region + "/" + profile.ModelARN
 	case "ai-client":

@@ -851,7 +851,7 @@ func runLLMAdd(args []string, stdout io.Writer, stderr io.Writer) int {
 	homeDir := flags.String("home", "", "workgraph home directory")
 	provider := flags.String("provider", "", "LLM provider")
 	client := flags.String("client", "", "Signed-in AI client: codex or claude-code")
-	baseURL := flags.String("base-url", "", "OpenAI-compatible base URL")
+	baseURL := flags.String("base-url", "", "OpenAI-compatible or system-one base URL")
 	model := flags.String("model", "", "LLM model")
 	apiKeyEnv := flags.String("api-key-env", "", "Environment variable containing the API key")
 	awsProfile := flags.String("aws-profile", "", "AWS profile for Bedrock")

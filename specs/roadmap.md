@@ -67,6 +67,12 @@ Priority labels used below:
 
 ## Recently Delivered
 
+- [x] System One decision-model profiles: `llm add --provider system-one`
+  for Jev, Clef, Clef-flash, Microsoft-Decision-1, and local System One
+  servers, used by `associate` with one choice question per unit, the
+  returned probability as confidence, loopback-as-local classification, and
+  direct-only execution. [spec: `specs/llm-integration.md`]
+
 - [x] Bridge drain reliability: categorization alternates with claimable
   capture, `window_too_large` failures narrow bounded windows in place down to
   one hour, and Claude drains refuse to claim without every workgraph MCP

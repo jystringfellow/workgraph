@@ -184,6 +184,129 @@ applies links automatically only under the gates in `specs/projects.md`.
 Future provider commands may add provider-specific flags for OpenAI, Anthropic,
 Google, Bedrock, and Azure without changing the task command surface.
 
+## System One decision profiles
+
+System One models (TypeSafe Jev, Cloudflare Clef and Clef-flash,
+Microsoft-Decision-1, and Ollama's local System One endpoint) do not generate
+text. A request carries a `state` and named `questions`, and each answer is a
+probability distribution over the options the question offered. workgraph
+supports them as a `system-one` provider for the `associate` route only.
+
+```text
+workgraph llm add <profile> --provider system-one --base-url <url> --model <model> [--api-key-env <VAR>]
+workgraph llm use <profile> --for associate
+```
+
+```json
+{
+  "profiles": {
+    "jev": {
+      "provider": "system-one",
+      "base_url": "https://api.typesafe.ai",
+      "model": "jev-latest",
+      "api_key_env": "TYPESAFE_API_KEY"
+    },
+    "clef-local": {
+      "provider": "system-one",
+      "base_url": "http://127.0.0.1:8000",
+      "model": "clef-flash"
+    }
+  }
+}
+```
+
+Configuration:
+
+- `--base-url` and `--model` are required. The same adapter serves every
+  System One host, so there is no default endpoint.
+- workgraph sends `POST <base-url>/v1/systemone`, or `<base-url>/systemone`
+  when the base URL path ends in `/v1`. A base URL whose path already ends in
+  `/systemone`, or a Workers AI `/ai/run/<model>` URL, is used unchanged.
+- The API key is read from the `--api-key-env` variable at call time and sent as
+  `Authorization: Bearer <key>`. It is never written to `llm.json` or printed.
+- A `localhost` or loopback base URL is local, exactly as for
+  `openai-compatible`: no hosted opt-in, no outbound filter, and allowed when
+  managed settings disable hosted providers. Every other base URL is hosted: it
+  needs `workgraph llm hosted enable`, is filtered, and is subject to the
+  managed `llm.allowed_base_urls` allowlist.
+- `system-one` profiles run direct only. `--execution bridge` is refused, and a
+  stored profile with an execution setting is refused before any request.
+- `llm list` and `llm doctor` show the provider, model, and base URL host, never
+  the path, key, or key variable name. `llm doctor` makes no request.
+- `llm test` and `llm summarize today` refuse `system-one` profiles because they
+  need generated text.
+
+Wire contract (confirmed against TypeSafe, Ollama, DigitalOcean, Cloudflare,
+and the `irr/clef-flash` server):
+
+```json
+{
+  "model": "jev-latest",
+  "state": "<filtered unit context as JSON text>",
+  "questions": {
+    "project": {
+      "type": "choice",
+      "instructions": "...",
+      "criteria": {"answer-bot": "Answer Bot", "no_project": "..."}
+    },
+    "kind": {
+      "type": "choice",
+      "instructions": "...",
+      "criteria": {"review": "...", "build": "...", "fyi": "..."}
+    }
+  }
+}
+```
+
+```json
+{
+  "model": "jev-1.13.0",
+  "answers": {
+    "project": {
+      "type": "choice",
+      "choice": "answer-bot",
+      "confidence": 0.91,
+      "probabilities": {"answer-bot": 0.93, "no_project": 0.07}
+    }
+  },
+  "usage": {"input_tokens": 512, "output_tokens": 0}
+}
+```
+
+Unconfirmed by primary documentation: the Workers AI REST path and whether its
+response is wrapped as `{"result": {...}}` (workgraph unwraps that envelope),
+the Microsoft Foundry auth header (workgraph sends only a bearer token), and an
+OpenRouter System One route (OpenRouter documents a different alpha decisions
+endpoint, which this provider does not speak).
+
+Association mapping, one request per unit:
+
+- `state` is the unit (kind, container, time range, participants,
+  identifiers, events) and the recent decisions, as JSON text.
+- The `project` choice offers the unit's candidate catalog slugs, described by
+  title, workstream, aliases, and description, plus `no_project`. A new-project
+  proposal needs a generated slug and name, so it is not offered.
+- The `kind` choice offers the seven link kinds.
+- The link's confidence is `probabilities[choice]` for the `project` answer.
+  The provider's `confidence` field is ignored because providers define it
+  differently (normalised top probability, entropy, or top probability). The
+  probability comes from the model's output distribution rather than
+  self-reported text, but no provider documents it as calibrated.
+- The summary is the unit's first event summary, because the model returns no
+  text. Evidence is every member event of the unit.
+- An answer whose choice was not offered, or whose probability is missing or
+  outside [0, 1], is discarded for that unit with a reason. A non-2xx status
+  or a response that is not System One JSON fails the run without writing
+  links, as for other providers.
+- A unit with no candidate project (one option) or more than 254 candidate
+  projects (over the 255-option choice limit) is not sent and is reported as
+  discarded with a reason.
+- Validated entries go through the same validation, auto-apply gates, and
+  persistence as every other associate profile, including scheduled daemon
+  runs.
+- `--dry-run` prints every request body that would be sent and makes no
+  request.
+
 ## Task Contracts
 
 LLM requests should be organized around workgraph tasks. Each task defines its
@@ -406,6 +529,7 @@ Dry-run behavior remains provider-independent and does not call Bedrock.
 - [x] Signed-in Codex and Claude Code profiles with guided `llm connect` setup.
 - [x] Client-backed `test`, `doctor`, and `summarize today` execution.
 - [ ] Hosted provider support for OpenAI, Anthropic, Google, and similar APIs.
+- [x] `system-one` decision-model profiles for the `associate` route.
 - [ ] Project categorization of units across Slack, GitHub, git, Notion, and
   calendar (`associate_events`, `specs/projects.md`).
 - [ ] Memory suggestion drafts with explicit approval before memory changes.

@@ -137,7 +137,7 @@ func enforceLLMManagedSettings(profile llmProfile, client *http.Client) error {
 	if profile.Provider == "ai-client" && len(settings.LLM.AIClient.AllowedClients.Value) > 0 && !stringAllowedFold(profile.Client, settings.LLM.AIClient.AllowedClients.Value) {
 		return fmt.Errorf("ai client %q is not allowed by managed settings", profile.Client)
 	}
-	if len(settings.LLM.AllowedBaseURL.Value) > 0 && profile.Provider == "openai-compatible" {
+	if len(settings.LLM.AllowedBaseURL.Value) > 0 && llmProviderHasBaseURL(profile.Provider) {
 		if !baseURLAllowed(profile.BaseURL, settings.LLM.AllowedBaseURL.Value) {
 			return fmt.Errorf("llm destination %q is not allowed by managed settings", profile.BaseURL)
 		}
@@ -158,7 +158,7 @@ func enforceLLMManagedSettings(profile llmProfile, client *http.Client) error {
 		}
 	}
 	if settings.LLM.HostedEnabled.Value != nil && !*settings.LLM.HostedEnabled.Value {
-		if profile.Provider != "openai-compatible" {
+		if !llmProviderHasBaseURL(profile.Provider) {
 			return errors.New("hosted LLM providers are disabled by managed settings")
 		}
 		if !isLocalLLMBaseURL(profile.BaseURL) {

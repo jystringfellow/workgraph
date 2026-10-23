@@ -861,6 +861,44 @@ workgraph llm summarize today
 The Bedrock call uses local AWS credential resolution through the AWS SDK and
 sends the configured ARN as the Bedrock Runtime Converse model id.
 
+### System One decision models
+
+System One models such as Jev, Clef, Clef-flash, and Microsoft-Decision-1 do
+not generate text. They answer typed questions with a probability per option,
+so workgraph uses them only for project association:
+
+```sh
+workgraph llm add clef-local \
+  --provider system-one \
+  --base-url http://127.0.0.1:8000 \
+  --model clef-flash
+workgraph llm use clef-local --for associate
+workgraph llm associate --dry-run
+```
+
+`--base-url` is required. workgraph posts to `<base-url>/v1/systemone` (or
+`<base-url>/systemone` when the base URL ends in `/v1`); a base URL that
+already ends in `/systemone`, or a Workers AI `/ai/run/<model>` URL, is used
+unchanged. For a hosted endpoint, name the environment variable that holds the
+key; workgraph sends it as a bearer token and never stores or prints it:
+
+```sh
+workgraph llm add jev \
+  --provider system-one \
+  --base-url https://api.typesafe.ai \
+  --model jev-latest \
+  --api-key-env TYPESAFE_API_KEY
+workgraph llm hosted enable
+```
+
+A loopback base URL is treated as local, like a local OpenAI-compatible
+endpoint. Every other base URL is hosted and needs `llm hosted enable`.
+Each unit becomes one request with a `project` choice (the unit's candidate
+projects plus `no_project`) and a `kind` choice, and the link's confidence is
+the returned probability of the chosen project. `system-one` profiles run
+direct only, cannot use `--execution bridge`, and are refused by `llm test` and
+`llm summarize today`.
+
 ## New Machine Setup
 
 For a second machine, install from source or GitHub, initialize local state, and
