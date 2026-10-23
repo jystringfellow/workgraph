@@ -1,6 +1,7 @@
 package facts
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -284,4 +285,109 @@ func (models *systemOneWithChat) lastChat() string {
 	models.mu.Lock()
 	defer models.mu.Unlock()
 	return models.last
+}
+
+func TestSystemOneVerifierKeepsRedactionsMadeForTheSystemOneRequest(t *testing.T) {
+	for _, path := range []string{"direct", "bridge"} {
+		t.Run(path, func(t *testing.T) {
+			home := initSystemOneHome(t, true)
+			writeProjectMemory(t, home.MemoryDir, "harbor-harness", "---\nworkstream: harbor\ndescription: Deploy uses client-secret=\"private-123456789\" today\n---\n# Harbor Harness\n")
+			managedPath := filepath.Join(t.TempDir(), "managed-settings.json")
+			writeManagedPatterns(t, managedPath, `"client-secret=\"[^\"]+\""`)
+			defer workgraph.SetManagedSettingsPathForTest(managedPath)()
+			models := newSystemOneWithChat(t)
+			configureSystemOneProfile(t, home, "https://decisions.example.net", "", "slack")
+			if path == "direct" {
+				addChatVerifier(t, home, "big-verifier")
+			} else {
+				configureBridgeVerifier(t, home, "codex-verify")
+			}
+			if _, err := workgraph.EnableHostedLLM(workgraph.LLMHostedConfig{HomeDir: home.HomeDir}); err != nil {
+				t.Fatal(err)
+			}
+			units := insertSystemOneThreads(t, home, time.Now().UTC().Add(-6*time.Hour), "uncertain unit")
+			models.systemOne.answer("uncertain unit", systemOneChoice("p2", 0.8, map[string]any{"p2": 0.8}), systemOneChoice("build", 1, map[string]any{"build": 1}))
+			models.respondChat(associateResponse())
+
+			result, err := workgraph.AssociateWithLLM(workgraph.LLMAssociateConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, HTTPClient: models.client})
+			if err != nil {
+				t.Fatalf("associate: %v", err)
+			}
+			if !strings.Contains(result.Message, "Escalated: 1") {
+				t.Fatalf("expected the uncertain unit to escalate:\n%s", result.Message)
+			}
+			requests := models.systemOne.received()
+			if len(requests) != 1 || strings.Contains(requests[0].raw, "private-123456789") || !strings.Contains(requests[0].body.Questions["project"].Criteria["p2"], "[REDACTED:managed-pattern]") {
+				t.Fatalf("expected the System One description redacted, got %+v", requests)
+			}
+			var verifierInput string
+			if path == "direct" {
+				if models.chatCalls() != 1 {
+					t.Fatalf("expected one direct verifier call, got %d", models.chatCalls())
+				}
+				verifierInput = models.lastChat()
+			} else {
+				if models.chatCalls() != 0 || result.VerifyRequest == "" {
+					t.Fatalf("expected a bridge verify request and no direct call:\n%s", result.Message)
+				}
+				verifierInput = storedLLMRequestParams(t, home, result.VerifyRequest)
+				claims, err := workgraph.ClaimCaptureRequests(workgraph.CaptureRequestClaimConfig{HomeDir: home.HomeDir, ConnectorID: "llm.associate", Kind: "llm_task", Worker: "codex-drain-fact", Max: 1})
+				if err != nil || len(claims) != 1 || claims[0].Task == nil {
+					t.Fatalf("expected the verifier's client to claim the verify task, got %+v %v", claims, err)
+				}
+				encoded, _ := json.Marshal(claims[0].Task)
+				verifierInput += string(encoded)
+			}
+			if !strings.Contains(verifierInput, units[0].ID) || !strings.Contains(verifierInput, "[REDACTED:managed-pattern]") {
+				t.Fatalf("expected the verifier input to carry the unit with its redaction:\n%s", verifierInput)
+			}
+			if strings.Contains(verifierInput, "private-123456789") {
+				t.Fatalf("the verifier input carried a value redacted from the System One request:\n%s", verifierInput)
+			}
+		})
+	}
+}
+
+func TestSystemOneUnitRedactedOnlyInItsRequestFormatIsNotEscalated(t *testing.T) {
+	home := initSystemOneHome(t, true)
+	managedPath := filepath.Join(t.TempDir(), "managed-settings.json")
+	writeManagedPatterns(t, managedPath, `"\"actor\":\"Sam\""`)
+	defer workgraph.SetManagedSettingsPathForTest(managedPath)()
+	models := newSystemOneWithChat(t)
+	configureSystemOneProfile(t, home, "https://decisions.example.net", "", "slack")
+	addChatVerifier(t, home, "big-verifier")
+	if _, err := workgraph.EnableHostedLLM(workgraph.LLMHostedConfig{HomeDir: home.HomeDir}); err != nil {
+		t.Fatal(err)
+	}
+	units := insertSystemOneThreads(t, home, time.Now().UTC().Add(-6*time.Hour), "uncertain unit")
+	models.systemOne.answer("uncertain unit", systemOneChoice("p2", 0.8, map[string]any{"p2": 0.8}), systemOneChoice("build", 1, map[string]any{"build": 1}))
+
+	result, err := workgraph.AssociateWithLLM(workgraph.LLMAssociateConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, HTTPClient: models.client})
+	if err != nil {
+		t.Fatalf("associate: %v", err)
+	}
+	requests := models.systemOne.received()
+	if len(requests) != 1 || !strings.Contains(requests[0].body.State, "[REDACTED:managed-pattern]") {
+		t.Fatalf("expected the System One state redacted in its JSON form, got %+v", requests)
+	}
+	if models.chatCalls() != 0 || !strings.Contains(result.Message, "Escalated: 0") {
+		t.Fatalf("expected no escalation for a unit redacted only in its System One form, got calls=%d:\n%s", models.chatCalls(), result.Message)
+	}
+	if link := currentProjectLink(t, workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir}, units[0].ID); link.State != "proposed" || link.Profile != "decisions" {
+		t.Fatalf("expected the System One result kept, got %+v", link)
+	}
+}
+
+func storedLLMRequestParams(t *testing.T, home associateHome, requestID string) string {
+	t.Helper()
+	db, err := sql.Open("sqlite3", home.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var params string
+	if err := db.QueryRow(`SELECT params_json FROM capture_requests WHERE id = ?`, requestID).Scan(&params); err != nil {
+		t.Fatal(err)
+	}
+	return params
 }

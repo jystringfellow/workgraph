@@ -84,13 +84,15 @@ type systemOneStateUnit struct {
 }
 
 type systemOnePlannedUnit struct {
-	unit     associateUnit
-	request  systemOneRequest
-	projects map[string]string
-	skip     string
+	unit             associateUnit
+	request          systemOneRequest
+	projects         map[string]string
+	skip             string
+	formatRedactions int
 }
 
 type systemOnePlan struct {
+	payload        associatePayload
 	units          []systemOnePlannedUnit
 	redactionCount int
 }
@@ -135,7 +137,7 @@ func associateWithSystemOne(config LLMAssociateConfig, run associateRun) (LLMAss
 	if err != nil {
 		return LLMAssociateResult{}, err
 	}
-	sent, err := run.systemOneSent(payload, plan)
+	sent, err := run.systemOneSent(plan)
 	if err != nil {
 		return LLMAssociateResult{}, err
 	}
@@ -161,7 +163,7 @@ func executeSystemOneTask(config LLMAssociateConfig, run associateRun, claim Cla
 	if err != nil {
 		return LLMAssociateResult{}, err
 	}
-	sent, err := run.systemOneSent(payload, plan)
+	sent, err := run.systemOneSent(plan)
 	if err != nil {
 		return LLMAssociateResult{}, err
 	}
@@ -174,10 +176,13 @@ func executeSystemOneTask(config LLMAssociateConfig, run associateRun, claim Cla
 	return result, nil
 }
 
-func (run associateRun) systemOneSent(payload associatePayload, plan systemOnePlan) (associateSent, error) {
+func (run associateRun) systemOneSent(plan systemOnePlan) (associateSent, error) {
+	payload := plan.payload
 	sentUnits := map[string]bool{}
-	for _, id := range plan.sentUnitIDs() {
-		sentUnits[id] = true
+	for _, planned := range plan.units {
+		if planned.skip == "" && planned.formatRedactions == 0 {
+			sentUnits[planned.unit.UnitID] = true
+		}
 	}
 	sent := associatePayload{Schema: payload.Schema, Projects: []associateProject{}, Units: []associateUnit{}, Decisions: payload.Decisions}
 	offered := map[string]bool{}
@@ -238,12 +243,16 @@ func (run associateRun) decideWithSystemOne(config LLMAssociateConfig, plan syst
 	return string(encoded), discarded, nil
 }
 
-func planSystemOneRequests(profile llmProfile, payload associatePayload) (systemOnePlan, error) {
+func planSystemOneRequests(profile llmProfile, original associatePayload) (systemOnePlan, error) {
+	payload, redactions, err := filterSystemOnePayloadFields(profile, original)
+	if err != nil {
+		return systemOnePlan{}, err
+	}
 	projects := map[string]associateProject{}
 	for _, project := range payload.Projects {
 		projects[project.Slug] = project
 	}
-	var plan systemOnePlan
+	plan := systemOnePlan{payload: payload, redactionCount: redactions}
 	for _, unit := range payload.Units {
 		planned := systemOnePlannedUnit{unit: unit}
 		options := len(unit.Projects) + 1
@@ -259,6 +268,7 @@ func planSystemOneRequests(profile llmProfile, payload associatePayload) (system
 			}
 			planned.request = request
 			planned.projects = options
+			planned.formatRedactions = redactions
 			plan.redactionCount += redactions
 		}
 		plan.units = append(plan.units, planned)
@@ -307,6 +317,58 @@ func systemOneUnitRequest(profile llmProfile, unit associateUnit, projects map[s
 			},
 		},
 	}, options, filtered.RedactionCount, nil
+}
+
+func filterSystemOnePayloadFields(profile llmProfile, payload associatePayload) (associatePayload, int, error) {
+	filtered := associatePayload{Schema: payload.Schema, Projects: []associateProject{}, Units: []associateUnit{}, Decisions: []associateDecision{}}
+	var fields []*string
+	for _, project := range payload.Projects {
+		project.Aliases = append([]string{}, project.Aliases...)
+		filtered.Projects = append(filtered.Projects, project)
+	}
+	for _, unit := range payload.Units {
+		unit.Participants = append([]string{}, unit.Participants...)
+		unit.Identifiers = append([]string{}, unit.Identifiers...)
+		unit.Events = append([]associateEvent{}, unit.Events...)
+		filtered.Units = append(filtered.Units, unit)
+	}
+	filtered.Decisions = append(filtered.Decisions, payload.Decisions...)
+	for index := range filtered.Projects {
+		project := &filtered.Projects[index]
+		fields = append(fields, &project.Title, &project.Workstream, &project.Description)
+		for alias := range project.Aliases {
+			fields = append(fields, &project.Aliases[alias])
+		}
+	}
+	for index := range filtered.Units {
+		unit := &filtered.Units[index]
+		fields = append(fields, &unit.Container)
+		for participant := range unit.Participants {
+			fields = append(fields, &unit.Participants[participant])
+		}
+		for identifier := range unit.Identifiers {
+			fields = append(fields, &unit.Identifiers[identifier])
+		}
+		for event := range unit.Events {
+			fields = append(fields, &unit.Events[event].Actor, &unit.Events[event].Summary)
+		}
+	}
+	for index := range filtered.Decisions {
+		decision := &filtered.Decisions[index]
+		fields = append(fields, &decision.Container, &decision.Project)
+	}
+	texts := make([]string, len(fields))
+	for index, field := range fields {
+		texts[index] = *field
+	}
+	result, err := filterMessagesForProfile(profile, systemOneTextMessages(texts))
+	if err != nil {
+		return associatePayload{}, 0, err
+	}
+	for index, field := range fields {
+		*field = result.Messages[index].Content
+	}
+	return filtered, result.RedactionCount, nil
 }
 
 func systemOneTextMessages(texts []string) []openAICompatibleMessage {

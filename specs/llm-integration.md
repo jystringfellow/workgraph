@@ -330,9 +330,17 @@ Association mapping, one request per unit:
 - With an `associate-verify` route, units whose returned probability is at or
   above the profile's verify floor and below its auto-apply threshold go to
   the verifier exactly as on the chat path (`specs/projects.md`, Verifier).
-  The verifier payload is built from the units actually sent: the payload
-  restricted to them and their catalog entries, passed through the hosted
-  outbound filter when the `system-one` profile is hosted. Skipped units and
+  For a hosted `system-one` profile, the outbound filter first runs on each
+  captured text field (event summaries and actors, participants, identifiers,
+  container, catalog titles, workstreams, aliases, and descriptions, and
+  decision containers and projects) in plain form. The System One requests
+  and the verifier payload are both built from those filtered values, so a
+  redaction made for System One is carried to the verifier. The composed
+  state and option descriptions are filtered again before they are sent, and
+  a unit whose request needed a redaction only in that composed form is not
+  escalated. The verifier payload holds only the units actually sent and
+  their catalog entries, and the hosted filter runs on it again in its JSON
+  form. Skipped units and
   discarded answers are never escalated. A direct verifier is called in the
   same run; a bridge verifier gets an `associate-verify` request, from both
   direct and daemon runs.
