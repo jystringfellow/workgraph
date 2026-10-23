@@ -1075,8 +1075,10 @@ Every bridged `slack.message` and `slack.thread_reply` payload carries:
 
 - `channel_id`: the Slack conversation id (`C…`, `G…`, or `D…`).
 - `channel_name`: the conversation name without a leading `#`, read from Slack
-  conversation info. DMs use `DM: <user name>` and group DMs
-  `Group DM: <names>`, matching native capture.
+  conversation info. DMs use `DM: <user name>` with the other person's name and
+  group DMs `Group DM: <names>` with the participant names Slack lists,
+  matching native capture. When the names cannot be resolved, send `DM` or
+  `Group DM`.
 - `conversation_type`: `channel`, `private_channel`, `im`, or `mpim`, read from
   Slack conversation info.
 
@@ -1106,6 +1108,52 @@ native Slack capture. An explicit Slack `project` is stored without a leading
 `#` as well. DM names such as `DM: <user>` follow the same rule; DM privacy
 stays governed by `conversation_type`.
 
+### DM and group DM containers
+
+Every DM and group DM conversation has its own container, because `today`,
+`resume`, units, and categorization group by container. One naming rule applies
+at bridged ingest, native capture, the store repair, and readers:
+
+- A 1:1 DM is `DM: <names>`; a group DM is `Group DM: <names>`. The prefix
+  follows the conversation kind below; the label's own prefix decides only when
+  the payload has no kind. The names are
+  kept as given. Workgraph has no configured Slack display name for the user
+  (bridged identity is `@Me`), so it never removes or reorders names itself.
+- Legacy labels are rewritten to that form: `DM (<names>)`, `DM with <names>`,
+  and `dm:<names>` become `DM: <names>`; `Group DM (<names>)` and
+  `Group DM with <names>` become `Group DM: <names>`; a Slack `mpdm-a--b--c-1`
+  name becomes `Group DM: a, b, c`. Prefixes match without regard to case.
+- Generic labels name no conversation: `DM`, `Direct message`, `Group DM`,
+  `Group direct message`, `im`, `mpim`, an empty name, the channel id itself,
+  or a label whose only name is a Slack conversation id. When the event has a
+  `channel_id`, a generic label is never its container. The container is the
+  first specific name among the submitted or stored container, the payload
+  `channel_name`, and the name the store pairs with the `channel_id` under the
+  privacy rule above (readers check the payload name first, as they do for
+  channels), and otherwise `DM (<channel_id>)` for a 1:1 DM or
+  `Group DM (<channel_id>)` for a group DM.
+  Those id forms are generic too, so readers name the conversation as soon as
+  any event pairs a name with its `channel_id`, and the next store open
+  rewrites the stored id form.
+- A conversation is a 1:1 DM or group DM by `conversation_type` (`im`, `mpim`),
+  then legacy `channel_type` (`im` or `dm`, `mpim` or `group_dm`), then the
+  DM or group DM label itself, then a `D…` channel id. A `channel` or
+  `private_channel` conversation keeps its name unchanged, so channel names that
+  merely start with `dm` are never rewritten. A generic label on an event
+  without `channel_id` is kept, because nothing better identifies it.
+
+Ingest canonicalizes instead of rejecting generic DM names: bridge workers often
+cannot resolve Slack user names through the approved connector tools, and
+`conversation_type` already proves the event is a DM, so a channel id form keeps
+capture moving while still separating conversations. `channel_name` is still
+required for `channel` and `private_channel` events the store cannot name.
+
+Every container derived from a DM event stays DM-class: privacy is still
+governed by `conversation_type`, and a name seen only on a DM event never names
+a channel event. Readers hide containers that carry only a channel id,
+including the `DM (<channel_id>)` forms, from the default `resume` project list,
+like raw Slack ids.
+
 Opening an existing store repairs stored Slack events without changing any
 payload:
 
@@ -1113,11 +1161,23 @@ payload:
 - A container with a leading `#` is stored without it.
 - An empty container takes the payload `channel_name`, or, when the payload has
   only `channel_id`, the name the store pairs with that id, using the same
-  derivation readers use for channel aliases. Events whose id is never paired
-  with a name stay empty.
+  derivation readers use for channel aliases. A DM or group DM that is still
+  unnamed takes its `DM (<channel_id>)` or `Group DM (<channel_id>)` form.
+  Other events whose id is never paired with a name stay empty.
+- A container in a legacy DM form is rewritten to its canonical form, and a
+  generic DM container on an event with a `channel_id` is resolved the same way
+  as an empty one. This is a deliberate exception to leaving explicit
+  containers alone, like removing a leading `#`.
 
-Every other non-empty `project` is unchanged. Each open reads only rows that still
-need repair, through narrow indexes, so repaired rows are not rescanned.
+Every other non-empty `project` is unchanged. Each open reads only rows that
+may still need repair, through narrow indexes: empty containers, and rows whose
+container is a raw conversation id of a DM or group DM, known only from an
+explicit DM type or an untyped `D…` id and never from the name (a raw id on a
+`channel`, `private_channel`, or otherwise untyped event is kept), or any DM
+label the rule above parses,
+matched without regard to case. Candidate containers come from a covering scan
+of distinct container values; the rule decides each row from its payload, so a
+`DM: <names>` container on an `mpim` event becomes `Group DM: <names>`.
 
 ```json
 {"type":"slack.message","timestamp":"2026-09-13T12:00:54.844Z","external_id":"C0DEMO123:1789300854.844369","project":"demo-production","actor":"U0DEMO001","summary":"Deployment succeeded for demo-service","payload":{"channel_id":"C0DEMO123","channel_name":"demo-changes","conversation_type":"channel","ts":"1789300854.844369","user":"U0DEMO001","is_bot":true,"bot_name":"Deployment Bot","text":"Deployment succeeded for demo-service\nhttps://deployments.example/runs/47555\ncreate: 1\nsame: 147"}}

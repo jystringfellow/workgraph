@@ -176,6 +176,9 @@ filter every reply against the exact request bounds during normalization.
 Give every Slack message and reply payload `channel_id`, `channel_name`, and
 `conversation_type` from Slack conversation info, and submit replies as
 `slack.thread_reply`; the event contract reference lists the accepted values.
+Name DMs `DM: <user name>` and group DMs `Group DM: <names>`, or send `DM` or
+`Group DM` when the names cannot be resolved so workgraph keeps each
+conversation separate by `channel_id`.
 A capture_ingest rejection names the event and missing field, so look it up and
 resubmit under the same claim instead of dropping the event.
 

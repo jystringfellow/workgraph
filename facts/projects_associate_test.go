@@ -376,6 +376,152 @@ func TestAssociateAppliesDeterministicLinksBeforeTheModel(t *testing.T) {
 	assertAssociateLink(t, workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir}, open[0].ID, "proposed", false)
 }
 
+func TestSeveralProjectMappingNarrowsCatalogWithoutLinks(t *testing.T) {
+	home := initAssociateHome(t)
+	writeProjectMemory(t, home.MemoryDir, "domain-apis", "# Domain APIs\n")
+	writeProjectMemory(t, home.MemoryDir, "mmo-words-and-phrases", "# MMO Words & Phrases\n")
+	writeProjectMemory(t, home.MemoryDir, "i18n-glossary", "# I18n Glossary\n")
+	fake := newAssociateFakeModel(t)
+	configureAssociateProfile(t, home, fake.URL, "slack")
+	container := "Mindbody.Businesses.I18n"
+	base := time.Now().Add(-6 * time.Hour)
+	event := associateSlackEvent("C500", fmt.Sprintf("%d.000100", base.Unix()), "channel", container, "Sam", "Translate the booking strings", base)
+	insertEvent(t, home.DatabasePath, event)
+	unitID := "slack.thread:C500:" + fmt.Sprintf("%d.000100", base.Unix())
+	args := []string{"--home", home.HomeDir, "--memory", home.MemoryDir}
+	for _, project := range []string{"domain-apis", "mmo-words-and-phrases"} {
+		if output, err := runworkgraph(t, repoRoot(t), append(append([]string{"memory", "link"}, args...), "--source", container, project)...); err != nil {
+			t.Fatalf("memory link %s: %v\n%s", project, err, output)
+		}
+	}
+
+	dryRun := append([]string{"llm", "associate", "--dry-run"}, args...)
+	output, err := runworkgraph(t, repoRoot(t), dryRun...)
+	if err != nil {
+		t.Fatalf("dry run: %v\n%s", err, output)
+	}
+	payload := associateDryRunPayload(t, string(output))
+	if len(payload.Units) != 1 || payload.Units[0].UnitID != unitID {
+		t.Fatalf("expected the mapped container's unit, got %v", associatePayloadUnitIDs(payload))
+	}
+	mappedOnly := []string{"domain-apis", "mmo-words-and-phrases"}
+	if !reflect.DeepEqual(payload.Units[0].Projects, mappedOnly) || !reflect.DeepEqual(associatePayloadProjectSlugs(payload), mappedOnly) {
+		t.Fatalf("expected the mapped projects only, got unit %v payload %v", payload.Units[0].Projects, associatePayloadProjectSlugs(payload))
+	}
+
+	fake.Respond(associateResponse(associateEntry(workgraph.ProjectUnit{ID: unitID, EventIDs: []string{event.ID}}, "project", "domain-apis", 0.5)))
+	result, err := workgraph.AssociateWithLLM(workgraph.LLMAssociateConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, HTTPClient: fake.Client, Now: time.Now()})
+	if err != nil {
+		t.Fatalf("associate: %v", err)
+	}
+	if len(result.Deterministic.Written) != 0 || !reflect.DeepEqual(result.Sent, []string{unitID}) {
+		t.Fatalf("expected no deterministic link and the unit sent to the model, got %+v", result)
+	}
+
+	output, err = runworkgraph(t, repoRoot(t), append([]string{"projects", "list"}, args...)...)
+	if err != nil {
+		t.Fatalf("projects list: %v\n%s", err, output)
+	}
+	for _, project := range []string{"- domain-apis: Domain APIs", "- mmo-words-and-phrases: MMO Words & Phrases"} {
+		if !strings.Contains(string(output), project+" (0 units linked in the last 7 days)\n  Containers: "+container+"\n") {
+			t.Fatalf("projects list did not show the container under %q:\n%s", project, output)
+		}
+	}
+
+	today, err := workgraph.Today(workgraph.TodayConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, MemoryDir: home.MemoryDir, Now: base.Add(time.Minute)})
+	if err != nil {
+		t.Fatalf("today: %v", err)
+	}
+	if !strings.Contains(today.Message, "- "+container+": 1 event; mapped to domain-apis, mmo-words-and-phrases") {
+		t.Fatalf("today did not mark the container as mapped:\n%s", today.Message)
+	}
+	if strings.Contains(today.Message, "→ "+container) {
+		t.Fatalf("today offered the mapped container again:\n%s", today.Message)
+	}
+
+	output, err = runworkgraph(t, repoRoot(t), append([]string{"memory", "doctor"}, args...)...)
+	if err != nil {
+		t.Fatalf("memory doctor: %v\n%s", err, output)
+	}
+	if strings.Contains(string(output), "→ "+container) {
+		t.Fatalf("doctor offered the mapped container to another project:\n%s", output)
+	}
+
+	if output, err := runworkgraph(t, repoRoot(t), append(append([]string{"memory", "link"}, args...), "--workstream", "mmo", "--source", container)...); err != nil {
+		t.Fatalf("workstream link: %v\n%s", err, output)
+	}
+	db, err := sql.Open("sqlite3", home.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mappings, err := workgraph.LoadContainerMappings(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := workgraph.LoadProjectCatalog(home.MemoryDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := catalogSlugs(catalog.ForContainer(container, mappings)); !reflect.DeepEqual(got, []string{"domain-apis", "mmo-gtm-segments", "mmo-harness", "mmo-words-and-phrases"}) {
+		t.Fatalf("expected the union of the workstream and mapped projects, got %v", got)
+	}
+}
+
+func TestNarrowedCatalogKeepsProjectsCitedByIdentifiers(t *testing.T) {
+	home := initAssociateHome(t)
+	writeProjectMemory(t, home.MemoryDir, "ask-kai", "# Ask Kai\n\nhttps://github.com/acme/i18n/pull/7\nhttps://github.com/acme/harness/pull/8\n")
+	writeProjectMemory(t, home.MemoryDir, "mmo-harness", "---\nworkstream: mmo\n---\n# MMO Harness\n\nhttps://github.com/acme/harness/pull/8\n")
+	writeProjectMemory(t, home.MemoryDir, "domain-apis", "# Domain APIs\n")
+	writeProjectMemory(t, home.MemoryDir, "mmo-words-and-phrases", "# MMO Words & Phrases\n\nhttps://github.com/acme/i18n/pull/7\n")
+	writeProjectMemory(t, home.MemoryDir, "i18n-glossary", "# I18n Glossary\n")
+	fake := newAssociateFakeModel(t)
+	configureAssociateProfile(t, home, fake.URL, "slack")
+	base := time.Now().Add(-6 * time.Hour)
+	ts := func(offset int) string { return fmt.Sprintf("%d.000100", base.Unix()+int64(offset)) }
+	insertEvent(t, home.DatabasePath, associateSlackEvent("C1", ts(0), "channel", "Mindbody.Businesses.I18n", "Sam", "Strings PR https://github.com/acme/i18n/pull/7", base))
+	insertEvent(t, home.DatabasePath, associateSlackEvent("C2", ts(1), "channel", associateContainer, "Sam", "Harness PR https://github.com/acme/harness/pull/8", base.Add(time.Minute)))
+	insertEvent(t, home.DatabasePath, associateSlackEvent("C3", ts(2), "channel", associateContainer, "Sam", "Glossary PR https://github.com/acme/i18n/pull/9", base.Add(2*time.Minute)))
+	insertEvent(t, home.DatabasePath, associateSlackEvent("C4", ts(3), "channel", "Mindbody.Businesses.Both", "Sam", "Both mappings", base.Add(3*time.Minute)))
+	dm := associateSlackEvent("D1", ts(4), "im", "D1", "Robin", "Glossary PR https://github.com/acme/i18n/pull/9", base.Add(4*time.Minute))
+	insertEvent(t, home.DatabasePath, dm)
+	if _, err := workgraph.AssignProjectLink(workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir}, workgraph.ProjectLinkAssignment{UnitID: "slack.thread:D1:" + ts(4), UnitKind: "slack.thread", Container: "D1", Evidence: []string{dm.ID}, Target: "project", Project: "i18n-glossary", Summary: "Glossary"}); err != nil {
+		t.Fatalf("assign: %v", err)
+	}
+	args := []string{"--home", home.HomeDir, "--memory", home.MemoryDir}
+	for _, mapping := range [][]string{
+		{"--source", "Mindbody.Businesses.I18n", "domain-apis"},
+		{"--source", "Mindbody.Businesses.I18n", "mmo-words-and-phrases"},
+		{"--workstream", "mmo", "--source", associateContainer},
+		{"--source", "Mindbody.Businesses.Both", "domain-apis"},
+		{"--source", "Mindbody.Businesses.Both", "mmo-words-and-phrases"},
+		{"--workstream", "mmo", "--source", "Mindbody.Businesses.Both"},
+	} {
+		if output, err := runworkgraph(t, repoRoot(t), append(append([]string{"memory", "link"}, args...), mapping...)...); err != nil {
+			t.Fatalf("memory link %v: %v\n%s", mapping, err, output)
+		}
+	}
+
+	output, err := runworkgraph(t, repoRoot(t), append([]string{"llm", "associate", "--dry-run"}, args...)...)
+	if err != nil {
+		t.Fatalf("dry run: %v\n%s", err, output)
+	}
+	projects := map[string][]string{}
+	for _, unit := range associateDryRunPayload(t, string(output)).Units {
+		projects[unit.UnitID] = unit.Projects
+	}
+	for unitID, expected := range map[string][]string{
+		"slack.thread:C1:" + ts(0): {"ask-kai", "domain-apis", "mmo-words-and-phrases"},
+		"slack.thread:C2:" + ts(1): {"ask-kai", "mmo-gtm-segments", "mmo-harness"},
+		"slack.thread:C3:" + ts(2): {"mmo-gtm-segments", "mmo-harness"},
+		"slack.thread:C4:" + ts(3): {"domain-apis", "mmo-gtm-segments", "mmo-harness", "mmo-words-and-phrases"},
+	} {
+		if !reflect.DeepEqual(projects[unitID], expected) {
+			t.Fatalf("unit %s offered %v, expected %v; payload units %v", unitID, projects[unitID], expected, projects)
+		}
+	}
+}
+
 type associateHome struct {
 	HomeDir      string
 	MemoryDir    string

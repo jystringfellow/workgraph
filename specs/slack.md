@@ -121,7 +121,11 @@ The daemon:
   capture is running
 - polls IM and MPIM conversations only when the user has explicitly opted in
 - resolves Slack conversation names so public and private channels use channel
-  names, IMs use the other participant name, and MPIMs use group DM/member names
+  names, IMs use `DM: <other participant>`, and MPIMs use
+  `Group DM: <member names>`; an IM whose user cannot be resolved is
+  `DM (<channel_id>)`, and an MPIM whose members cannot be resolved uses its
+  `mpdm-` name as `Group DM: <handles>` or else `Group DM (<channel_id>)`, per the
+  DM container rule in `bridged-capture.md`
 - resolves Slack user ids to display names for event actors when user profile
   metadata is available
 - normalizes Slack user and channel mention tokens in event summaries, labels
