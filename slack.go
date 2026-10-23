@@ -1311,17 +1311,23 @@ func resolveSlackConversationNames(config SlackAPICaptureConfig, channels []Slac
 }
 
 func slackConversationDisplayName(config SlackAPICaptureConfig, channel SlackChannel, userNames map[string]string) (string, error) {
-	if channel.IsIM && channel.User != "" {
-		userName := fetchSlackUserName(config, channel.User, userNames)
-		if userName != "" {
-			return "DM: " + userName, nil
+	if channel.IsIM {
+		if channel.User != "" {
+			if userName := fetchSlackUserName(config, channel.User, userNames); userName != "" {
+				return "DM: " + userName, nil
+			}
 		}
+		return slackChannelIDContainer(channel.ID, slackKindIM), nil
 	}
 	if channel.IsMPIM {
 		memberNames := fetchSlackConversationMemberNames(config, channel.ID, userNames)
 		if len(memberNames) > 0 {
 			return "Group DM: " + strings.Join(memberNames, ", "), nil
 		}
+		if container := canonicalSlackContainer(channel.Name, channel.ID, slackKindMPIM); container != "" {
+			return container, nil
+		}
+		return slackChannelIDContainer(channel.ID, slackKindMPIM), nil
 	}
 	if channel.Name != "" {
 		return strings.TrimPrefix(channel.Name, "#"), nil

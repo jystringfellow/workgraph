@@ -932,6 +932,57 @@ func TestBridgedSlackIngestDerivesContainerFromChannelName(t *testing.T) {
 	}
 }
 
+func TestBridgedSlackIngestGivesEachDMConversationItsOwnContainer(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+	connectBridgedConnector(t, repoRoot, homeDir, "slack")
+
+	named := `{"type":"slack.message","timestamp":"2026-09-13T12:00:00Z","external_id":"C0DEMO023:1789300800.000100","payload":{"channel_id":"C0DEMO023","channel_name":"Group DM: Lila, Omar","conversation_type":"mpim","ts":"1789300800.000100","text":"Named group"}}` + "\n"
+	if output, err := runworkgraphInput(t, repoRoot, named, "capture", "ingest", "--home", homeDir, "--source", "slack", "--json", "-"); err != nil {
+		t.Fatalf("bridged ingest of named group DM: %v\n%s", err, output)
+	}
+	input := strings.Join([]string{
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:01Z","external_id":"D0DEMO021:1789300801.000100","payload":{"channel_id":"D0DEMO021","channel_name":"DM","conversation_type":"im","ts":"1789300801.000100","text":"Unnamed DM"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:02Z","external_id":"C0DEMO022:1789300802.000100","payload":{"channel_id":"C0DEMO022","channel_name":"Group DM","conversation_type":"mpim","ts":"1789300802.000100","text":"Unnamed group"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:03Z","external_id":"C0DEMO023:1789300803.000100","project":"Group DM","payload":{"channel_id":"C0DEMO023","channel_name":"Group DM","conversation_type":"mpim","ts":"1789300803.000100","text":"Generic name for a known group"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:04Z","external_id":"D0DEMO024:1789300804.000100","payload":{"channel_id":"D0DEMO024","channel_name":"DM with Ryan Kalt","conversation_type":"im","ts":"1789300804.000100","text":"Legacy DM form"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:05Z","external_id":"C0DEMO025:1789300805.000100","project":"Group DM","payload":{"channel_id":"C0DEMO025","channel_name":"Group DM (Lila, Ren)","conversation_type":"mpim","ts":"1789300805.000100","text":"Legacy group form"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:06Z","external_id":"C0DEMO026:1789300806.000100","payload":{"channel_id":"C0DEMO026","channel_name":"DM (Ada, Grace)","conversation_type":"mpim","ts":"1789300806.000100","text":"Group labelled as DM"}}`,
+	}, "\n") + "\n"
+	if output, err := runworkgraphInput(t, repoRoot, input, "capture", "ingest", "--home", homeDir, "--source", "slack", "--json", "-"); err != nil {
+		t.Fatalf("bridged ingest of generic DM names: %v\n%s", err, output)
+	}
+
+	db := openBridgedCaptureDatabase(t, homeDir)
+	expected := map[string]struct{ project, channelName string }{
+		"D0DEMO021:1789300801.000100": {"DM (D0DEMO021)", "DM"},
+		"C0DEMO022:1789300802.000100": {"Group DM (C0DEMO022)", "Group DM"},
+		"C0DEMO023:1789300803.000100": {"Group DM: Lila, Omar", "Group DM"},
+		"D0DEMO024:1789300804.000100": {"DM: Ryan Kalt", "DM with Ryan Kalt"},
+		"C0DEMO025:1789300805.000100": {"Group DM: Lila, Ren", "Group DM (Lila, Ren)"},
+		"C0DEMO026:1789300806.000100": {"Group DM: Ada, Grace", "DM (Ada, Grace)"},
+	}
+	for key, want := range expected {
+		var project sql.NullString
+		var payloadJSON string
+		if err := db.QueryRow(`SELECT project, payload_json FROM events WHERE source = 'slack' AND json_extract(payload_json, '$.channel_id') || ':' || json_extract(payload_json, '$.ts') = ?`, key).Scan(&project, &payloadJSON); err != nil {
+			t.Fatalf("read bridged Slack event %s: %v", key, err)
+		}
+		if project.String != want.project {
+			t.Fatalf("expected %s container %q, got %q", key, want.project, project.String)
+		}
+		var payload struct {
+			ChannelName string `json:"channel_name"`
+		}
+		if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil || payload.ChannelName != want.channelName {
+			t.Fatalf("expected %s payload stored as submitted, got %s", key, payloadJSON)
+		}
+		if workgraph.SlackPrivacySource(payloadJSON) != "slack.dm" {
+			t.Fatalf("expected %s to keep DM privacy, got %s", key, payloadJSON)
+		}
+	}
+}
+
 func TestHandEditedBridgedNotionCannotScheduleOrIngest(t *testing.T) {
 	homeDir := initBridgedCaptureHome(t)
 	repoRoot := repoRoot(t)
