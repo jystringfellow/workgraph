@@ -4,9 +4,8 @@ Scenario: Initialize default capture settings
   Given workgraph has not been initialized
   When I run "workgraph init"
   Then workgraph creates a settings file under the workgraph home
-  And the settings watch existing common user-facing folders
-  And the default watch folders are marked for conservative traversal
-  And the settings do not watch the entire home directory when common folders exist
+  And the settings watch no directories
+  And the settings scan existing common code folders for git repositories
   And the settings ignore the workgraph home directory
 
 Scenario: Store portable absolute paths
@@ -78,6 +77,22 @@ Scenario: Add a specific directory as a watch root
   Then "/path/to/project" is added to the front of watch_dirs
   And "/path/to/project" is treated as an explicit watch root
   And running the command again does not duplicate it
+
+Scenario: Stop watching automatic roots from older versions
+  Given settings from an older version list automatic watch roots in conservative_watch_dirs
+  And the settings also contain a directory the user added with "workgraph settings add-watch"
+  When I run "workgraph start"
+  Then workgraph watches only the user-added directory
+  And git capture still scans the automatic roots for repositories
+  And the settings file is not modified
+
+Scenario: Report that file watching is off
+  Given workgraph has been initialized
+  And no watch directories are configured
+  When I run "workgraph start"
+  Then the output says file watching is off
+  And the output explains how to add a watch directory
+  And the output does not report a watch limit
 
 Scenario: Respect admin-managed settings
   Given workgraph has been initialized

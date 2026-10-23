@@ -6,7 +6,8 @@ workgraph keeps local configuration in the workgraph home:
 ~/.workgraph/settings.json
 ```
 
-The settings file answers what local paths workgraph watches and what paths it must never record.
+The settings file answers what local paths workgraph watches, where it looks for
+git repositories, and what paths it must never record.
 
 Project-level settings are a non-goal for now. workgraph should use global user
 settings plus optional admin-managed settings so local repositories cannot
@@ -26,13 +27,19 @@ with user-only file permissions.
 
 `workgraph init` creates `settings.json` when it does not already exist.
 
-By default, workgraph watches existing common user-facing folders under the current user's home directory instead of recursively watching the entire home directory. Paths are resolved with Go's `os.UserHomeDir()` and persisted as absolute paths, not as shell tokens such as `$HOME`.
+File watching is opt-in. A fresh `settings.json` watches no directories:
+`watch_dirs` is empty until the user adds a directory with `workgraph settings
+add-watch`. workgraph does not guess which folders to watch, and it never falls
+back to watching the home directory or the current working directory.
 
-Default candidates include:
+Git repository discovery is separate from file watching. `workgraph init`
+records existing common code folders under the current user's home directory in
+`repo_dirs` so git and GitHub capture can find local repositories without
+registering any file watches. Paths are resolved with Go's `os.UserHomeDir()`
+and persisted as absolute paths, not as shell tokens such as `$HOME`.
 
-- Desktop
-- Documents
-- Downloads
+Default `repo_dirs` candidates are:
+
 - Code
 - Projects
 - Developer
@@ -40,14 +47,15 @@ Default candidates include:
 - source
 - repos
 
-Only candidates that already exist are included. If none exist, workgraph falls back to the user home directory so the config is still usable.
+Only candidates that already exist are included. If none exist, `repo_dirs` is
+empty.
 
 Example on macOS:
 
 ```json
 {
-  "watch_dirs": ["/Users/craig/Desktop", "/Users/craig/Documents", "/Users/craig/Downloads", "/Users/craig/Code"],
-  "conservative_watch_dirs": ["/Users/craig/Desktop", "/Users/craig/Documents", "/Users/craig/Downloads", "/Users/craig/Code"],
+  "watch_dirs": [],
+  "repo_dirs": ["/Users/craig/Code"],
   "ignore_paths": ["/Users/craig/.workgraph"],
   "ignore_names": [".git", "node_modules", "DerivedData", ".noindex", "xcuserdata", "bin", "obj", "dist", "build", "target", ".build", ".gradle"]
 }
@@ -57,8 +65,8 @@ Example on Windows:
 
 ```json
 {
-  "watch_dirs": ["C:\\Users\\Craig\\Desktop", "C:\\Users\\Craig\\Documents", "C:\\Users\\Craig\\Downloads", "C:\\Users\\Craig\\repos"],
-  "conservative_watch_dirs": ["C:\\Users\\Craig\\Desktop", "C:\\Users\\Craig\\Documents", "C:\\Users\\Craig\\Downloads", "C:\\Users\\Craig\\repos"],
+  "watch_dirs": [],
+  "repo_dirs": ["C:\\Users\\Craig\\repos"],
   "ignore_paths": ["C:\\Users\\Craig\\.workgraph"],
   "ignore_names": [".git", "node_modules", "DerivedData", ".noindex", "xcuserdata", "bin", "obj", "dist", "build", "target", ".build", ".gradle"]
 }
@@ -70,32 +78,73 @@ The default must always ignore the workgraph home directory so database writes, 
 
 ### watch_dirs
 
-`watch_dirs` is a list of absolute directory paths. Foreground and background capture use these directories when no `--watch` flag is provided.
+`watch_dirs` is a list of absolute directory paths the user chose to watch for
+local file activity. Foreground and background capture watch these directories
+when no `--watch` flag is provided. When no directory is configured, capture
+watches nothing and reports that file watching is off along with the command
+that adds a directory.
 
-### conservative_watch_dirs
-
-`conservative_watch_dirs` is a list of `watch_dirs` roots created by `workgraph
-init` that should be traversed cautiously. Capture registers each conservative
-root and its immediate children, but only recurses deeper into children that
-look like active work directories. This keeps broad default folders such as
-Documents from spending the watch budget on app libraries or nested folder-only
-containers.
-
-Explicit watch roots added by users are not added to `conservative_watch_dirs`.
-If a user adds a directory with `workgraph settings add-watch`, workgraph treats
-that path as intentional and may recurse normally, subject to ignore rules and
-the watch budget.
-
-Users can add a watch root with:
+Users add a watch root with:
 
 ```text
 workgraph settings add-watch [path]
 ```
 
 If `path` is omitted, the command adds the current working directory. Added
-paths are resolved to absolute paths and placed before existing watch roots so a
-newly added project is not starved by a broad home-directory watch budget.
-Adding a path that is already watched is idempotent.
+paths are resolved to absolute paths and placed before existing watch roots.
+Adding a path that is already watched is idempotent. Watched roots are traversed
+recursively, subject to ignore rules and the watch budget; when the configured
+roots exceed the budget, capture reports the watch limit and suggests
+prioritizing directories with `workgraph settings add-watch`.
+
+Watched roots are also scanned for git repositories, so a repository under an
+explicitly watched directory is captured even when it is not under `repo_dirs`.
+
+### repo_dirs
+
+`repo_dirs` is a list of absolute directory paths that git and GitHub capture
+scan for local git repositories. These directories are walked on each git or
+GitHub poll; they are never registered as file watches. Entries that no longer
+exist are skipped. An explicit `"repo_dirs": []` disables repository scanning
+outside watched roots and is preserved when workgraph rewrites settings; an
+absent or `null` value means the settings predate `repo_dirs`. `--watch` flags change only which directories are watched for that run;
+repository discovery still scans `repo_dirs` plus the watched roots.
+
+### conservative_watch_dirs
+
+`conservative_watch_dirs` is written only by older workgraph versions. It lists
+the `watch_dirs` entries that `workgraph init` populated automatically, and
+`workgraph settings add-watch` removed a path from it when the user added that
+path explicitly. workgraph uses it to tell the two apart on upgrade; see
+Upgrading from automatic watch roots.
+
+## Upgrading from automatic watch roots
+
+Older versions of `workgraph init` populated `watch_dirs` with existing common
+folders such as Desktop, Documents, Downloads, and Code and recorded the same
+paths in `conservative_watch_dirs`. Capture reads such settings without
+rewriting them:
+
+- A `watch_dirs` entry that is also listed in `conservative_watch_dirs` was
+  populated automatically and is not watched.
+- Every other `watch_dirs` entry was added by the user and is watched exactly as
+  before.
+- When `repo_dirs` is absent, the automatically populated entries are used as
+  repository scan roots, so git and GitHub capture keep finding the same local
+  repositories.
+
+A background capture daemon started by an older version records its watch roots
+in daemon state without saying where they came from. When a connector setup
+command restarts background capture, workgraph passes through only watch roots
+that the running daemon recorded as `--watch` overrides, stored as resolved
+absolute paths so a restart from another working directory watches the same
+roots; all other roots are
+resolved again from settings by the new daemon, so automatic roots stay
+unwatched after a restart.
+
+The settings file is never modified by this upgrade rule. Users who want to
+watch a previously automatic folder add it with `workgraph settings add-watch`,
+which marks it as user-added.
 
 ### ignore_paths
 
@@ -262,7 +311,7 @@ The JSON output should include:
 
 - whether managed settings are active and which fixed platform path was checked
 - effective managed controls, their locked state, and their provenance
-- local settings path and non-secret counts for watch and ignore rules
+- local settings path and non-secret counts for watch, repository scan, and ignore rules
 
 The JSON output must not include connector tokens, OAuth client secrets, raw
 captured data, memory contents, or unknown fields from managed settings files.

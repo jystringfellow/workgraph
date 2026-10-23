@@ -22,7 +22,8 @@ Manual capture is also available for debugging and backfill:
 workgraph git capture
 ```
 
-Both paths scan configured watch roots for git repositories, read recent commits,
+Both paths scan configured repository scan roots (`repo_dirs`) and explicit
+watch roots for git repositories, read recent commits,
 and store them in the local event store. They do not require GitHub or network
 access.
 
@@ -51,7 +52,9 @@ trimmed and lowercased. The identity is computed once per command invocation.
 Commit event IDs are deterministic so repeated git capture runs do not create
 duplicates for the same commit.
 
-Git capture should respect configured watch roots and ignore rules. It should
+Repository discovery walks those roots on each poll and does not depend on file
+watching: git capture finds repositories under `repo_dirs` even when no watch
+root is configured. It respects ignore rules and should
 skip unsupported or unreadable directories rather than aborting the whole scan.
 
 This is the local foundation for later GitHub ingestion. GitHub events can link

@@ -158,7 +158,7 @@ func CaptureGitHubEvents(config GitHubCaptureConfig) (GitHubCaptureResult, error
 		return GitHubCaptureResult{}, fmt.Errorf("open database: %w", err)
 	}
 
-	remoteProjects := githubRemoteProjects(context.Background(), status.WatchDirs, status.HomeDir, status.DatabasePath, status.IgnorePaths, status.IgnoreNames)
+	remoteProjects := githubRemoteProjects(context.Background(), status.RepoDirs, status.HomeDir, status.DatabasePath, status.IgnorePaths, status.IgnoreNames)
 	stored := 0
 	for _, event := range exported {
 		inserted, err := storeGitHubEvent(db, event, inferGitHubProject(db, event, remoteProjects))
@@ -246,7 +246,7 @@ func CaptureGitHubFromGH(config GitHubCaptureConfig) (GitHubCaptureResult, error
 		return GitHubCaptureResult{}, ctx.Err()
 	}
 
-	remoteProjects := githubRemoteProjects(ctx, status.WatchDirs, status.HomeDir, status.DatabasePath, status.IgnorePaths, status.IgnoreNames)
+	remoteProjects := githubRemoteProjects(ctx, status.RepoDirs, status.HomeDir, status.DatabasePath, status.IgnorePaths, status.IgnoreNames)
 
 	tx, err := db.Begin()
 	if err != nil {

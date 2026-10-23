@@ -1073,11 +1073,7 @@ func restartDaemonAfterSlackUpdate(homeDir string) (bool, error) {
 		return false, nil
 	}
 
-	config := DaemonConfig{
-		HomeDir:      status.HomeDir,
-		DatabasePath: status.DatabasePath,
-		WatchDirs:    append([]string(nil), status.WatchDirs...),
-	}
+	config := daemonRestartConfig(status)
 	if _, err := StopDaemon(config); err != nil {
 		return false, err
 	}

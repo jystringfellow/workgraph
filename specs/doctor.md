@@ -7,7 +7,8 @@ The first health report checks:
 
 - workgraph home and database initialization
 - daemon running state
-- configured watch roots and whether each exists
+- user-added watch roots and whether each exists (automatic roots from older
+  settings are not counted; see `specs/config.md`)
 - OAuth-backed connector config presence and token presence
 - LLM profile configuration and whether the selected profile has required local
   inputs such as API key environment variables

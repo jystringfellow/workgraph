@@ -12,8 +12,8 @@ import (
 	workgraph "github.com/jystringfellow/workgraph"
 )
 
-func TestInitCreatesConfigWithSaneDefaultWatchRoots(t *testing.T) {
-	userHome := fakeUserHomeWithDirs(t, "Desktop", "Documents", "Downloads", "Developer")
+func TestInitCreatesConfigThatWatchesNothingByDefault(t *testing.T) {
+	userHome := fakeUserHomeWithDirs(t, "Desktop", "Documents", "Downloads", "Developer", "Code")
 	homeDir := filepath.Join(t.TempDir(), ".workgraph")
 
 	_, err := workgraph.Init(workgraph.InitConfig{
@@ -24,17 +24,18 @@ func TestInitCreatesConfigWithSaneDefaultWatchRoots(t *testing.T) {
 	}
 
 	config := readInitSettings(t, filepath.Join(homeDir, "settings.json"))
-	expectedWatchDirs := []string{
-		filepath.Join(userHome, "Desktop"),
-		filepath.Join(userHome, "Documents"),
-		filepath.Join(userHome, "Downloads"),
+	if len(config.WatchDirs) != 0 {
+		t.Fatalf("expected settings to watch no directories, got %q", config.WatchDirs)
+	}
+	if len(config.ConservativeWatchDirs) != 0 {
+		t.Fatalf("expected no automatic watch roots, got %q", config.ConservativeWatchDirs)
+	}
+	expectedRepoDirs := []string{
+		filepath.Join(userHome, "Code"),
 		filepath.Join(userHome, "Developer"),
 	}
-	if !reflect.DeepEqual(config.WatchDirs, expectedWatchDirs) {
-		t.Fatalf("expected settings watch dirs %q, got %q", expectedWatchDirs, config.WatchDirs)
-	}
-	if !reflect.DeepEqual(config.ConservativeWatchDirs, expectedWatchDirs) {
-		t.Fatalf("expected default watch dirs to be conservative %q, got %q", expectedWatchDirs, config.ConservativeWatchDirs)
+	if !reflect.DeepEqual(config.RepoDirs, expectedRepoDirs) {
+		t.Fatalf("expected repository scan dirs %q, got %q", expectedRepoDirs, config.RepoDirs)
 	}
 	for _, ignoredName := range []string{"xcuserdata", "bin", "obj", "dist", "build", "target", ".build", ".gradle"} {
 		if !containsString(config.IgnoreNames, ignoredName) {
@@ -44,7 +45,7 @@ func TestInitCreatesConfigWithSaneDefaultWatchRoots(t *testing.T) {
 }
 
 func TestConfigPersistsResolvedAbsoluteHomePath(t *testing.T) {
-	fakeUserHomeWithDirs(t, "Desktop", "Documents")
+	fakeUserHomeWithDirs(t, "Desktop", "Documents", "Code")
 	homeDir := filepath.Join(t.TempDir(), ".workgraph")
 
 	_, err := workgraph.Init(workgraph.InitConfig{
@@ -55,10 +56,10 @@ func TestConfigPersistsResolvedAbsoluteHomePath(t *testing.T) {
 	}
 
 	config := readInitSettings(t, filepath.Join(homeDir, "settings.json"))
-	if len(config.WatchDirs) == 0 {
-		t.Fatalf("expected watch dirs, got none")
+	if len(config.RepoDirs) == 0 {
+		t.Fatalf("expected repository scan dirs, got none")
 	}
-	for _, watchDir := range config.WatchDirs {
+	for _, watchDir := range config.RepoDirs {
 		if !filepath.IsAbs(watchDir) {
 			t.Fatalf("expected absolute watch dir, got %q", watchDir)
 		}

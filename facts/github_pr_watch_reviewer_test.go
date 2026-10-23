@@ -3,6 +3,7 @@ package facts
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -580,5 +581,43 @@ func TestGitHubPRWatchIgnoredRepositoriesApplyToBothRoles(t *testing.T) {
 		if _, err := workgraph.ConnectGitHubPRWatch(workgraph.ConnectorConnectConfig{HomeDir: h.homeDir, GitHubCommand: h.gh.Path, ParamsJSON: json.RawMessage(params)}); err == nil {
 			t.Fatalf("expected %s to be rejected", params)
 		}
+	}
+}
+
+func TestGitHubPRWatchTruncatedReviewRequestsStayListed(t *testing.T) {
+	located := func(node map[string]any, repository string, number int) map[string]any {
+		node["number"] = number
+		node["repository"] = map[string]any{"nameWithOwner": repository}
+		node["url"] = fmt.Sprintf("https://github.com/%s/pull/%d", repository, number)
+		return node
+	}
+	truncated := located(requestedPR("PR_truncated", "acme/platform"), "acme/api", 7)
+	truncated["reviewRequests"].(map[string]any)["totalCount"] = 51
+	complete := located(requestedPR("PR_complete", "acme/platform"), "acme/web", 8)
+
+	h := reviewerHarness(t, reviewerParams)
+	h.mustPoll(watchBase, reviewerStatus(t, truncated, complete))
+	request := h.observationForRole("PR_truncated", "reviewer")["review_request"].(map[string]any)
+	if request["incomplete"] != true || request["direct"] != false {
+		t.Fatalf("expected the truncated request recorded as incomplete, got %#v", request)
+	}
+	if complete := h.observationForRole("PR_complete", "reviewer")["review_request"].(map[string]any); complete["incomplete"] != nil {
+		t.Fatalf("expected the complete request without incomplete, got %#v", complete)
+	}
+	output, err := h.cli("next", "--home", h.homeDir)
+	if err != nil {
+		t.Fatalf("next failed: %s %v", output, err)
+	}
+	listed := strings.Index(output, "\n  acme/api#7 ")
+	summary := strings.Index(output, "\nTeam review requests via acme/platform: 1 PR across 1 repo\n")
+	if listed < 0 || summary < 0 || listed > summary || strings.Index(output[summary:], "acme/api#7") >= 0 {
+		t.Fatalf("expected the truncated request listed under Waiting on you and only the complete one summarized: %s", output)
+	}
+	today, err := workgraph.Today(workgraph.TodayConfig{HomeDir: h.homeDir, Now: watchBase.Add(time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(today.Message, "Waiting on you: 1 items + 1 team review request (workgraph next)") {
+		t.Fatalf("today: %s", today.Message)
 	}
 }

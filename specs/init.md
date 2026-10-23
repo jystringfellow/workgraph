@@ -29,8 +29,8 @@ Init creates `settings.json` when it does not already exist.
 
 The default settings:
 
-- watches existing common user-facing folders such as Desktop, Documents, Downloads, Code, Projects, Developer, Work, source, and repos
-- avoids recursively watching the entire home directory when common folders exist
+- watches no directories; file watching is opt-in through `workgraph settings add-watch`
+- records existing common code folders such as Code, Projects, Developer, Work, source, and repos as git repository scan roots in `repo_dirs`, without watching them
 - ignores the workgraph home directory
 - stores watch and ignore paths as normalized absolute paths
 - includes high-noise ignored names such as `.git`, `node_modules`, and common build output directories
@@ -54,7 +54,8 @@ Init reports the initialized paths:
 - project memory directory
 - settings file
 
-On macOS, init also explains that capture may need access to protected folders
-such as Documents, Desktop, and Downloads when those folders are watched. It
+On macOS, init also explains that file watching is off until the user adds a
+directory, and that capture may need access to protected folders such as
+Documents, Desktop, and Downloads when the user watches them. It
 should suggest granting Full Disk Access once to the terminal app or installed
 workgraph binary to avoid repeated per-folder prompts.

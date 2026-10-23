@@ -119,6 +119,14 @@ Feature: Bridged connector capture
     And DM names follow the same rule while DM privacy is unchanged
     And an explicit container is stored without a leading hash
 
+  Scenario: Strip a Slack channel kind prefix from the channel name
+    Given a bridged Slack channel event whose channel_name is "ZC:<channel_id>:Team Channel"
+    And the embedded id equals the event's channel_id
+    When it is ingested
+    Then its container and payload channel_name are "Team Channel"
+    And the submitted name is kept as payload channel_name_raw
+    But a prefixed name whose embedded id differs from channel_id is kept as submitted
+
   Scenario: Enforce the bridged Slack message contract
     Given a bridged Slack message batch
     When an event omits channel_id, channel_name, or a recognized conversation_type
@@ -148,6 +156,8 @@ Feature: Bridged connector capture
     And leading-hash containers lose the hash
     And empty containers take the channel_name or the name the store pairs with their channel_id
     And generic or legacy DM containers take their conversation's canonical DM container
+    And kind-prefixed channel containers whose embedded id matches channel_id take the plain channel name
+    And container mappings on a repaired kind-prefixed name move to the plain channel name without duplicates
     And payloads, explicit containers, and never-named channel ids are unchanged
     And opening the store again changes nothing
 

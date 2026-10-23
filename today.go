@@ -171,8 +171,8 @@ func Today(config TodayConfig) (TodayResult, error) {
 
 func todayNextLines(items []NextItem) []string {
 	var lines []string
-	if waiting := len(nextNonCategorizeItems(items)); waiting > 0 {
-		lines = append(lines, fmt.Sprintf("Waiting on you: %d items (workgraph next)", waiting))
+	if waiting := nextWaitingCountMessage(nextNonCategorizeItems(items)); waiting != "" {
+		lines = append(lines, waiting)
 	}
 	if links := nextLinkReviewSummary(items); links != "" {
 		lines = append(lines, links)

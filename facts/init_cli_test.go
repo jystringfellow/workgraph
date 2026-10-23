@@ -84,7 +84,7 @@ func TestInitCommandCreatesAndReportsSettingsPath(t *testing.T) {
 
 func TestInitCommandForceRefreshesConfig(t *testing.T) {
 	tempDir := t.TempDir()
-	userHome := fakeUserHomeWithDirs(t, "Desktop", "Documents", "Downloads")
+	fakeUserHomeWithDirs(t, "Desktop", "Documents", "Downloads")
 	homeDir := filepath.Join(tempDir, ".workgraph")
 	memoryDir := filepath.Join(tempDir, "workgraph-memory")
 	settingsPath := filepath.Join(homeDir, "settings.json")
@@ -124,7 +124,7 @@ func TestInitCommandForceRefreshesConfig(t *testing.T) {
 	}
 
 	expected := cliInitConfigFile{
-		WatchDirs:   []string{filepath.Join(userHome, "Desktop"), filepath.Join(userHome, "Documents"), filepath.Join(userHome, "Downloads")},
+		WatchDirs:   []string{},
 		IgnorePaths: []string{workgraphHome},
 		IgnoreNames: []string{".git", "node_modules", "DerivedData", ".noindex", "xcuserdata", "bin", "obj", "dist", "build", "target", ".build", ".gradle"},
 	}
