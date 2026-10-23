@@ -199,6 +199,10 @@ func loadTodayEvents(db *sql.DB, now time.Time, actor string, involvement string
 				OR (type = 'github.pull_request.author_replied' AND json_extract(payload_json, '$.triage.responder') = 'author')))`
 	}
 	query += ` ORDER BY timestamp ASC, id ASC`
+	repeatedListRevisions, err := repeatedSlackListRevisionIDs(db)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query events: %w", err)
@@ -210,6 +214,9 @@ func loadTodayEvents(db *sql.DB, now time.Time, actor string, involvement string
 		var stored storedTodayEvent
 		if err := rows.Scan(&stored.ID, &stored.Source, &stored.Type, &stored.Timestamp, &stored.Project, &stored.Actor, &stored.Involvement, &stored.Summary, &stored.PayloadJSON); err != nil {
 			return nil, fmt.Errorf("scan event: %w", err)
+		}
+		if repeatedListRevisions[stored.ID] {
+			continue
 		}
 
 		timestamp, err := time.Parse(time.RFC3339Nano, stored.Timestamp)

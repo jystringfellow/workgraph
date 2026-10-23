@@ -235,6 +235,23 @@ Feature: Bridged connector capture
     And duplicate or missing row keys reject the entire snapshot
     And the contract does not claim that an absent row is completed or deleted
 
+  Scenario: Ignore Slack List transcription drift
+    Given a bridged Slack List row has a multi-line Details body
+    When successive snapshots relay the unchanged row with whitespace or line drift in Details
+    Then workgraph stores one revision for the row
+    And a changed single-line field such as Priority creates a new revision
+    And a row that returns to an earlier state creates a new revision while a replay deduplicates
+    And the latest revision is chosen by timestamp instant regardless of fractional-second precision
+    And today hides already-stored revisions that repeat the previous revision of the same row
+
+  Scenario: Submit a large Slack List snapshot in chunks
+    Given a claimed single-List Slack Lists snapshot is too large to emit in one call
+    When the worker submits consecutive raw CSV fragments with snapshot_continues set on all but the last
+    Then each staged chunk renews the claim and stores no events
+    And the final chunk ingests the concatenated CSV atomically and completes the request
+    And fragments staged under a stale claim are not combined with a new claim's chunks
+    And staged fragments are discarded when their claim completes, fails, expires, or is abandoned
+
   Scenario: Interpret bridged Slack Lists per List
     Given bridged Slack Lists use different state and identity columns
     When the worker submits each complete List snapshot

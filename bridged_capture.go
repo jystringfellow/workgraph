@@ -878,16 +878,18 @@ type bridgedEventEnvelope struct {
 }
 
 type preparedBridgedEvent struct {
-	ID              string
-	Type            string
-	Timestamp       string
-	PayloadJSON     string
-	Project         string
-	Actor           string
-	InvolvementJSON *string
-	Summary         string
-	WeakDedupe      bool
-	SnapshotKey     string
+	ID                 string
+	Type               string
+	Timestamp          string
+	PayloadJSON        string
+	Project            string
+	Actor              string
+	InvolvementJSON    *string
+	Summary            string
+	WeakDedupe         bool
+	SnapshotKey        string
+	SnapshotRevision   string
+	SnapshotExternalID string
 }
 
 func IngestBridgedCapture(config BridgedIngestConfig) (BridgedIngestResult, error) {
@@ -1040,9 +1042,34 @@ func IngestBridgedCapture(config BridgedIngestConfig) (BridgedIngestResult, erro
 		Source:       source,
 		EventsRead:   len(prepared),
 	}
+	latestSlackListRevisions := map[string]latestSlackListRevision{}
+	if len(snapshotKeys) > 0 {
+		listIDs := map[string]bool{}
+		for key := range snapshotKeys {
+			listIDs[strings.SplitN(key, "\x00", 2)[0]] = true
+		}
+		scope := make([]string, 0, len(listIDs))
+		for listID := range listIDs {
+			scope = append(scope, listID)
+		}
+		latestSlackListRevisions, _, err = slackListRevisionHistory(tx, scope)
+		if err != nil {
+			return BridgedIngestResult{}, err
+		}
+	}
 	now := time.Now().UTC()
 	createdAt := now.Format(time.RFC3339Nano)
 	for _, event := range prepared {
+		if event.SnapshotKey != "" {
+			previous, found := latestSlackListRevisions[event.SnapshotKey]
+			if found && previous.hash == event.SnapshotRevision {
+				result.EventsDuplicate++
+				continue
+			}
+			if found {
+				event.ID = slackListRevisionEventID(event.SnapshotExternalID + ":after:" + previous.eventID)
+			}
+		}
 		insert, err := tx.Exec(`INSERT OR IGNORE INTO events (
 			id, source, type, timestamp, payload_json, project, actor, involvement_json, summary, created_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1447,19 +1474,7 @@ func prepareSlackListSnapshotEvent(request CaptureRequest, envelope bridgedEvent
 	if err != nil {
 		return preparedBridgedEvent{}, err
 	}
-	semantic := map[string]any{"fields": input.Fields, "list_id": input.ListID}
-	if done != nil {
-		semantic["done"] = *done
-	}
-	if len(interestFields) > 0 {
-		semantic["interest_fields"] = interestFields
-	}
-	semanticJSON, err := json.Marshal(semantic)
-	if err != nil {
-		return preparedBridgedEvent{}, fmt.Errorf("encode Slack List semantic row: %w", err)
-	}
-	contentDigest := sha256.Sum256(semanticJSON)
-	contentHash := hex.EncodeToString(contentDigest[:])
+	contentHash := slackListRevisionHash(input.ListID, input.Fields, done)
 	observedAt, err := time.Parse(time.RFC3339Nano, request.Until)
 	if err != nil {
 		return preparedBridgedEvent{}, fmt.Errorf("parse Slack List snapshot observation time: %w", err)
@@ -1483,7 +1498,6 @@ func prepareSlackListSnapshotEvent(request CaptureRequest, envelope bridgedEvent
 		return preparedBridgedEvent{}, fmt.Errorf("encode Slack List snapshot payload: %w", err)
 	}
 	externalID := input.ListID + ":" + rowKey + ":" + contentHash
-	eventDigest := sha256.Sum256([]byte("slack\x00" + externalID))
 	summary := strings.TrimSpace(envelope.Summary)
 	if summary == "" {
 		if len(options.InterestColumns) > 0 {
@@ -1502,14 +1516,16 @@ func prepareSlackListSnapshotEvent(request CaptureRequest, envelope bridgedEvent
 		project = "slack-list:" + input.ListID
 	}
 	return preparedBridgedEvent{
-		ID:          hex.EncodeToString(eventDigest[:16]),
-		Type:        "slack.list_item",
-		Timestamp:   observedAt.UTC().Format(time.RFC3339Nano),
-		PayloadJSON: string(payloadJSON),
-		Project:     project,
-		Actor:       strings.TrimSpace(envelope.Actor),
-		Summary:     summary,
-		SnapshotKey: input.ListID + "\x00" + rowKey,
+		ID:                 slackListRevisionEventID(externalID),
+		Type:               "slack.list_item",
+		Timestamp:          observedAt.UTC().Format(time.RFC3339Nano),
+		PayloadJSON:        string(payloadJSON),
+		Project:            project,
+		Actor:              strings.TrimSpace(envelope.Actor),
+		Summary:            summary,
+		SnapshotKey:        slackListRevisionKey(input.ListID, rowKey),
+		SnapshotRevision:   contentHash,
+		SnapshotExternalID: externalID,
 	}, nil
 }
 

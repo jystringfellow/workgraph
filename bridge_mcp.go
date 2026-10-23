@@ -275,7 +275,7 @@ func bridgeMCPTools() []bridgeMCPTool {
 	boolean := map[string]any{"type": "boolean"}
 	captureIngest := object(map[string]any{
 		"request_id": str, "claim_token": str, "source": str, "events": map[string]any{},
-		"list_id": str, "snapshot_csv": str,
+		"list_id": str, "snapshot_csv": str, "snapshot_continues": boolean,
 		"empty_proof": object(map[string]any{"exhaustive_query": boolean, "control_query_passed": boolean}),
 	})
 	captureIngest["anyOf"] = []any{
@@ -288,7 +288,7 @@ func bridgeMCPTools() []bridgeMCPTool {
 		{"capture_requests_list", "List non-secret bridged capture outbox metadata.", object(map[string]any{"connector": str})},
 		{"capture_requests_claim", "Atomically claim daemon-scheduled capture work. Filter with connector. Without kind only capture requests are claimed; kind llm_task claims categorization work that returns a task to answer and submit with llm_task_submit. Every claim must end in capture_ingest, llm_task_submit, or capture_request_fail with a reason; never abandon it.", object(map[string]any{"connector": str, "kind": map[string]any{"type": "string", "enum": []string{"capture", "llm_task"}}, "worker": str, "max": integer}, "worker")},
 		{"capture_request_renew", "Renew an unexpired capture claim.", object(map[string]any{"request_id": str, "claim_token": str}, "request_id", "claim_token")},
-		{"capture_ingest", "Validate and atomically ingest one normalized event batch, or parse one claimed Slack List snapshot from raw CSV server-side. Every Slack message and slack.thread_reply payload needs channel_id, channel_name (DMs: \"DM: <user name>\", group DMs: \"Group DM: <names>\", or \"DM\" / \"Group DM\" when names are unknown), and conversation_type (channel, private_channel, im, or mpim) from Slack conversation info; a rejection names the event and missing field so the batch can be corrected and resubmitted under the same claim. When a bounded window is proven empty, omit events (or pass []) and pass empty_proof {\"exhaustive_query\":true} or {\"control_query_passed\":true}; the request completes without events. Never submit a control query as an event: workgraph rejects *.control_query types and payloads whose control_query is true.", captureIngest},
+		{"capture_ingest", "Validate and atomically ingest one normalized event batch, or parse one claimed Slack List snapshot from raw CSV server-side. A large snapshot may be sent as consecutive raw CSV fragments under the same claim: set snapshot_continues true on every fragment except the last; each staged fragment renews the claim and nothing is stored until the final fragment. Every Slack message and slack.thread_reply payload needs channel_id, channel_name (DMs: \"DM: <user name>\", group DMs: \"Group DM: <names>\", or \"DM\" / \"Group DM\" when names are unknown), and conversation_type (channel, private_channel, im, or mpim) from Slack conversation info; a rejection names the event and missing field so the batch can be corrected and resubmitted under the same claim. When a bounded window is proven empty, omit events (or pass []) and pass empty_proof {\"exhaustive_query\":true} or {\"control_query_passed\":true}; the request completes without events. Never submit a control query as an event: workgraph rejects *.control_query types and payloads whose control_query is true.", captureIngest},
 		{"capture_request_fail", "Return claimed work for retry with bounded error details. Set reason window_too_large when a bounded_events window cannot be fetched and ingested within the claim; workgraph then narrows the same request to the first half of its window, never below one hour, and makes it claimable again immediately. Other failures, and complete_snapshot requests, retry the same bounds after backoff.", object(map[string]any{"request_id": str, "claim_token": str, "error": str, "reason": map[string]any{"type": "string", "enum": []string{"window_too_large"}}}, "request_id", "claim_token")},
 		{"capture_watermark", "Read a connector completed-through cursor.", object(map[string]any{"connector": str}, "connector")},
 		{"connector_status", "Read connector capture mode and health.", object(map[string]any{})},
@@ -364,25 +364,18 @@ func callBridgeMCPTool(config BridgeMCPConfig, name string, raw json.RawMessage)
 	case "capture_ingest":
 		events := args["events"]
 		snapshotCSV := rawStringArg("snapshot_csv")
-		snapshotListID := ""
 		if len(events) > 0 && snapshotCSV != "" {
 			return nil, fmt.Errorf("specify events or snapshot_csv, not both")
 		}
 		if snapshotCSV != "" {
-			snapshotListID = stringArg("list_id")
-			envelopes, err := slackListSnapshotEnvelopesFromCSV(snapshotListID, snapshotCSV)
-			if err != nil {
-				return nil, err
-			}
-			events, err = json.Marshal(envelopes)
-			if err != nil {
-				return nil, fmt.Errorf("encode Slack List snapshot rows: %w", err)
-			}
-		}
-		if proof := args["empty_proof"]; len(proof) > 0 {
-			if snapshotCSV != "" {
+			if len(args["empty_proof"]) > 0 {
 				return nil, fmt.Errorf("specify empty_proof or snapshot_csv, not both")
 			}
+			var continues bool
+			_ = json.Unmarshal(args["snapshot_continues"], &continues)
+			return IngestSlackListSnapshotCSV(SlackListSnapshotCSVConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, RequestID: stringArg("request_id"), ClaimToken: stringArg("claim_token"), ListID: stringArg("list_id"), CSV: snapshotCSV, Continues: continues})
+		}
+		if proof := args["empty_proof"]; len(proof) > 0 {
 			if !emptyBridgeMCPEvents(events) {
 				return nil, fmt.Errorf("empty_proof applies only to an empty batch; omit events or pass []")
 			}
@@ -395,7 +388,7 @@ func callBridgeMCPTool(config BridgeMCPConfig, name string, raw json.RawMessage)
 		if len(events) == 0 {
 			return nil, fmt.Errorf("events are required")
 		}
-		return IngestBridgedCapture(BridgedIngestConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, Source: stringArg("source"), RequestID: stringArg("request_id"), ClaimToken: stringArg("claim_token"), SnapshotListID: snapshotListID, Input: strings.NewReader(string(events))})
+		return IngestBridgedCapture(BridgedIngestConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, Source: stringArg("source"), RequestID: stringArg("request_id"), ClaimToken: stringArg("claim_token"), Input: strings.NewReader(string(events))})
 	case "capture_request_fail":
 		err := FailCaptureRequest(CaptureRequestCapabilityConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, RequestID: stringArg("request_id"), ClaimToken: stringArg("claim_token"), Error: stringArg("error"), Reason: stringArg("reason")})
 		return map[string]any{"failed": err == nil}, err

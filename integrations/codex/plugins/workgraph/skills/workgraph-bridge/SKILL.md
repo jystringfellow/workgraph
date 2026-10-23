@@ -196,6 +196,14 @@ verbatim so workgraph parses it server-side:
 {"request_id":"...","claim_token":"...","list_id":"F123","snapshot_csv":"<verbatim CSV>"}
 ```
 
+If the CSV is too large to emit in one call before the claim lease expires,
+send it as consecutive raw fragments under the same claim: split the verbatim
+CSV anywhere, send each fragment in order as `snapshot_csv` with the same
+`request_id`, `claim_token`, and `list_id`, and set `"snapshot_continues":true`
+on every fragment except the last. Each staged fragment renews the claim;
+workgraph stores nothing until the final fragment, then parses the joined CSV
+atomically. Do not drop, reorder, or summarize fragments.
+
 Do not transcribe CSV rows into nested JSON when raw mode applies. For a
 multi-List request, preserve the existing atomic contract by parsing every List
 and submitting all rows together as event-shaped compatibility input. Omit
