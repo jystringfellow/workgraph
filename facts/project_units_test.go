@@ -151,7 +151,7 @@ func TestProjectLinkUndoReachesConfirmedAutoLinks(t *testing.T) {
 
 	single, err := workgraph.RecordProjectLinkRun(config, workgraph.ProjectLinkRun{
 		Source: "deterministic",
-		Links:  []workgraph.ProjectLinkProposal{projectLinkProposal("unit-single", "mmo-harness", "container_mapping", true)},
+		Links:  []workgraph.ProjectLinkProposal{projectLinkProposal("unit-single", "mpo-harness", "container_mapping", true)},
 	})
 	if err != nil {
 		t.Fatalf("record deterministic run: %v", err)
@@ -163,7 +163,7 @@ func TestProjectLinkUndoReachesConfirmedAutoLinks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("undo confirmed link: %v", err)
 	}
-	if replacement.State != "proposed" || replacement.Auto || replacement.Decision != "" || replacement.Project != "mmo-harness" {
+	if replacement.State != "proposed" || replacement.Auto || replacement.Decision != "" || replacement.Project != "mpo-harness" {
 		t.Fatalf("expected a proposed replacement for the confirmed link, got %+v", replacement)
 	}
 	assertProjectLinkRow(t, config, single.Written[0].ID, "rejected", "undone")
@@ -172,7 +172,7 @@ func TestProjectLinkUndoReachesConfirmedAutoLinks(t *testing.T) {
 		Source:  "llm",
 		Profile: "hosted-mini",
 		Links: []workgraph.ProjectLinkProposal{
-			{UnitID: "unit-run-confirmed", UnitKind: "slack.burst", Container: "harness-team", Target: "project", Project: "ask-kai", Kind: "build", Summary: "Built", Confidence: 0.97, Evidence: []string{"slack.message:C123:1"}, Apply: true},
+			{UnitID: "unit-run-confirmed", UnitKind: "slack.burst", Container: "harness-team", Target: "project", Project: "answer-bot", Kind: "build", Summary: "Built", Confidence: 0.97, Evidence: []string{"slack.message:C123:1"}, Apply: true},
 			{UnitID: "unit-run-open", UnitKind: "slack.burst", Container: "harness-team", Target: "none", Kind: "fyi", Summary: "Lunch", Confidence: 0.99, Evidence: []string{"slack.message:C123:2"}, Apply: true},
 		},
 	})
@@ -207,8 +207,8 @@ func TestProjectLinkDecisionsRecordStateWithoutEditingEvents(t *testing.T) {
 	deterministic, err := workgraph.RecordProjectLinkRun(config, workgraph.ProjectLinkRun{
 		Source: "deterministic",
 		Links: []workgraph.ProjectLinkProposal{
-			projectLinkProposal("unit-confirm", "mmo-harness", "container_mapping", true),
-			projectLinkProposal("unit-reassign", "mmo-harness", "container_mapping", true),
+			projectLinkProposal("unit-confirm", "mpo-harness", "container_mapping", true),
+			projectLinkProposal("unit-reassign", "mpo-harness", "container_mapping", true),
 		},
 	})
 	if err != nil {
@@ -227,8 +227,8 @@ func TestProjectLinkDecisionsRecordStateWithoutEditingEvents(t *testing.T) {
 		Source:  "llm",
 		Profile: "local-gemma",
 		Links: []workgraph.ProjectLinkProposal{
-			{UnitID: "unit-approve", UnitKind: "slack.thread", Container: "harness-team", Target: "project", Project: "ask-kai", Kind: "advice", Summary: "Advised​ Sam on\x07 GraphQL", Confidence: 0.82, Evidence: []string{"slack.message:C123:1760950800.000100"}},
-			{UnitID: "unit-reject", UnitKind: "slack.thread", Container: "harness-team", Target: "project", Project: "ask-kai", Kind: "fyi", Summary: "Shared a link", Confidence: 0.7, Evidence: []string{"slack.message:C123:1760950800.000100"}},
+			{UnitID: "unit-approve", UnitKind: "slack.thread", Container: "harness-team", Target: "project", Project: "answer-bot", Kind: "advice", Summary: "Advised​ Sam on\x07 GraphQL", Confidence: 0.82, Evidence: []string{"slack.message:C123:1760950800.000100"}},
+			{UnitID: "unit-reject", UnitKind: "slack.thread", Container: "harness-team", Target: "project", Project: "answer-bot", Kind: "fyi", Summary: "Shared a link", Confidence: 0.7, Evidence: []string{"slack.message:C123:1760950800.000100"}},
 		},
 	})
 	if err != nil {
@@ -258,11 +258,11 @@ func TestProjectLinkDecisionsRecordStateWithoutEditingEvents(t *testing.T) {
 		t.Fatalf("expected approving a decided link to fail")
 	}
 
-	reassigned, err := workgraph.AssignProjectLink(config, workgraph.ProjectLinkAssignment{UnitID: "unit-reassign", Target: "project", Project: "ask-kai"})
+	reassigned, err := workgraph.AssignProjectLink(config, workgraph.ProjectLinkAssignment{UnitID: "unit-reassign", Target: "project", Project: "answer-bot"})
 	if err != nil {
 		t.Fatalf("reassign link: %v", err)
 	}
-	if reassigned.Source != "user" || reassigned.State != "applied" || reassigned.Auto || reassigned.Project != "ask-kai" || reassigned.RunID != "" || reassigned.Confidence != 1 || !reflect.DeepEqual(reassigned.Evidence, deterministic.Written[1].Evidence) || reassigned.Container != "harness-team" {
+	if reassigned.Source != "user" || reassigned.State != "applied" || reassigned.Auto || reassigned.Project != "answer-bot" || reassigned.RunID != "" || reassigned.Confidence != 1 || !reflect.DeepEqual(reassigned.Evidence, deterministic.Written[1].Evidence) || reassigned.Container != "harness-team" {
 		t.Fatalf("expected an applied user link carrying the unit's evidence, got %+v", reassigned)
 	}
 	assertProjectLinkRow(t, config, deterministic.Written[1].ID, "rejected", "corrected")
@@ -278,12 +278,12 @@ func TestProjectLinkDecisionsRecordStateWithoutEditingEvents(t *testing.T) {
 
 	created, err := workgraph.AssignProjectLink(config, workgraph.ProjectLinkAssignment{
 		UnitID: "unit-new", UnitKind: "git.session", Container: "Harness", Evidence: []string{"git.commit:aaa111"},
-		Target: "new_project", NewProject: &workgraph.ProposedProject{Slug: "mmo-words", Name: "MMO Words", Workstream: "mmo"},
+		Target: "new_project", NewProject: &workgraph.ProposedProject{Slug: "mpo-terms", Name: "MPO Terms", Workstream: "mpo"},
 	})
 	if err != nil {
 		t.Fatalf("assign new project: %v", err)
 	}
-	if created.Target != "new_project" || created.NewProject == nil || created.NewProject.Slug != "mmo-words" || created.Source != "user" || created.State != "applied" {
+	if created.Target != "new_project" || created.NewProject == nil || created.NewProject.Slug != "mpo-terms" || created.Source != "user" || created.State != "applied" {
 		t.Fatalf("expected an applied user link to a new project, got %+v", created)
 	}
 
@@ -306,8 +306,8 @@ func TestProjectLinkUndoLeavesAProposalNoLaterRunReapplies(t *testing.T) {
 	firstRun, err := workgraph.RecordProjectLinkRun(config, workgraph.ProjectLinkRun{
 		Source: "deterministic",
 		Links: []workgraph.ProjectLinkProposal{
-			projectLinkProposal("unit-undo", "mmo-harness", "shared_identifier", true),
-			projectLinkProposal("unit-user", "mmo-harness", "container_mapping", true),
+			projectLinkProposal("unit-undo", "mpo-harness", "shared_identifier", true),
+			projectLinkProposal("unit-user", "mpo-harness", "container_mapping", true),
 		},
 	})
 	if err != nil {
@@ -317,7 +317,7 @@ func TestProjectLinkUndoLeavesAProposalNoLaterRunReapplies(t *testing.T) {
 		Source:  "llm",
 		Profile: "hosted-mini",
 		Links: []workgraph.ProjectLinkProposal{
-			{UnitID: "unit-run-a", UnitKind: "slack.burst", Container: "harness-team", Target: "project", Project: "ask-kai", Kind: "build", Summary: "Built the thing", Confidence: 0.97, Evidence: []string{"slack.message:C123:1"}, Apply: true},
+			{UnitID: "unit-run-a", UnitKind: "slack.burst", Container: "harness-team", Target: "project", Project: "answer-bot", Kind: "build", Summary: "Built the thing", Confidence: 0.97, Evidence: []string{"slack.message:C123:1"}, Apply: true},
 			{UnitID: "unit-run-b", UnitKind: "slack.burst", Container: "harness-team", Target: "none", Kind: "fyi", Summary: "Lunch", Confidence: 0.99, Evidence: []string{"slack.message:C123:2"}, Apply: true},
 		},
 	})
@@ -349,7 +349,7 @@ func TestProjectLinkUndoLeavesAProposalNoLaterRunReapplies(t *testing.T) {
 		assertProjectLinkRow(t, config, link.ID, "rejected", "undone")
 	}
 
-	if _, err := workgraph.AssignProjectLink(config, workgraph.ProjectLinkAssignment{UnitID: "unit-user", Target: "project", Project: "ask-kai"}); err != nil {
+	if _, err := workgraph.AssignProjectLink(config, workgraph.ProjectLinkAssignment{UnitID: "unit-user", Target: "project", Project: "answer-bot"}); err != nil {
 		t.Fatalf("reassign link: %v", err)
 	}
 
@@ -357,9 +357,9 @@ func TestProjectLinkUndoLeavesAProposalNoLaterRunReapplies(t *testing.T) {
 		Source:  "llm",
 		Profile: "hosted-mini",
 		Links: []workgraph.ProjectLinkProposal{
-			{UnitID: "unit-undo", UnitKind: "slack.thread", Container: "harness-team", Target: "project", Project: "mmo-harness", Kind: "build", Summary: "Again", Confidence: 0.99, Evidence: []string{"slack.message:C123:1760950800.000100"}, Apply: true},
-			{UnitID: "unit-run-a", UnitKind: "slack.burst", Container: "harness-team", Target: "project", Project: "ask-kai", Kind: "build", Summary: "Again", Confidence: 0.99, Evidence: []string{"slack.message:C123:1"}, Apply: true},
-			{UnitID: "unit-user", UnitKind: "slack.thread", Container: "harness-team", Target: "project", Project: "mmo-harness", Kind: "build", Summary: "Again", Confidence: 0.99, Evidence: []string{"slack.message:C123:1760950800.000100"}, Apply: true},
+			{UnitID: "unit-undo", UnitKind: "slack.thread", Container: "harness-team", Target: "project", Project: "mpo-harness", Kind: "build", Summary: "Again", Confidence: 0.99, Evidence: []string{"slack.message:C123:1760950800.000100"}, Apply: true},
+			{UnitID: "unit-run-a", UnitKind: "slack.burst", Container: "harness-team", Target: "project", Project: "answer-bot", Kind: "build", Summary: "Again", Confidence: 0.99, Evidence: []string{"slack.message:C123:1"}, Apply: true},
+			{UnitID: "unit-user", UnitKind: "slack.thread", Container: "harness-team", Target: "project", Project: "mpo-harness", Kind: "build", Summary: "Again", Confidence: 0.99, Evidence: []string{"slack.message:C123:1760950800.000100"}, Apply: true},
 		},
 	})
 	if err != nil {
@@ -374,7 +374,7 @@ func TestProjectLinkUndoLeavesAProposalNoLaterRunReapplies(t *testing.T) {
 		t.Fatalf("expected the undo replacement to stay proposed, got %+v", current)
 	}
 	user := currentProjectLink(t, config, "unit-user")
-	if user.Source != "user" || user.Project != "ask-kai" || user.State != "applied" {
+	if user.Source != "user" || user.Project != "answer-bot" || user.State != "applied" {
 		t.Fatalf("expected the user-approved link to survive the later run, got %+v", user)
 	}
 }

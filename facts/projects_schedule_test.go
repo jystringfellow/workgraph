@@ -93,7 +93,7 @@ func TestScheduledAssociateRunsDirectlyAsDaemon(t *testing.T) {
 	fake := newAssociateFakeModel(t)
 	configureAssociateProfile(t, home, fake.URL, "slack")
 	units := insertAssociateThreads(t, home, time.Now().UTC().Add(-6*time.Hour), "C1", "harness-team", 2)
-	fake.Respond(associateResponse(associateEntry(units[0], "project", "ask-kai", 0.99), associateEntry(units[1], "project", "mmo-harness", 0.8)))
+	fake.Respond(associateResponse(associateEntry(units[0], "project", "answer-bot", 0.99), associateEntry(units[1], "project", "mpo-harness", 0.8)))
 	schedule := workgraph.LLMAssociateScheduleConfig{HomeDir: home.HomeDir, HTTPClient: fake.Client}
 
 	ran, err := workgraph.ScheduleLLMAssociate(schedule)
@@ -154,7 +154,7 @@ func TestBridgeAssociateRequestCompletesOnlyWithValidClaimToken(t *testing.T) {
 		}
 	}
 
-	response := associateResponse(associateEntry(units[0], "project", "ask-kai", 0.99), associateEntry(units[1], "project", "mmo-harness", 0.8))
+	response := associateResponse(associateEntry(units[0], "project", "answer-bot", 0.99), associateEntry(units[1], "project", "mpo-harness", 0.8))
 	forged := filepath.Join(t.TempDir(), "forged.json")
 	if err := os.WriteFile(forged, []byte(`{"request_id":"`+emitted.Request.ID+`","claim_token":"forged"}`), 0o600); err != nil {
 		t.Fatal(err)
@@ -244,7 +244,7 @@ func TestScheduledAssociateRechecksSourcePolicyAtClaim(t *testing.T) {
 	submitted, failure := callScheduleMCP(t, home, "llm_task_submit", map[string]any{
 		"request_id":  emitted.Request.ID,
 		"claim_token": claim["claim_token"],
-		"result":      associateResponse(associateEntry(channelUnit, "project", "ask-kai", 0.8), associateEntry(dmUnit, "project", "ask-kai", 0.8)),
+		"result":      associateResponse(associateEntry(channelUnit, "project", "answer-bot", 0.8), associateEntry(dmUnit, "project", "answer-bot", 0.8)),
 	})
 	if failure != "" || submitted["request_completed"] != true {
 		t.Fatalf("submit: %v %s", submitted, failure)
@@ -267,8 +267,8 @@ func initScheduleHome(t *testing.T) associateHome {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeProjectMemory(t, memory, "mmo-harness", "---\nworkstream: mmo\n---\n# MMO Harness\n\nTest harness.\n")
-	writeProjectMemory(t, memory, "ask-kai", "# Ask Kai\n")
+	writeProjectMemory(t, memory, "mpo-harness", "---\nworkstream: mpo\n---\n# MPO Harness\n\nTest harness.\n")
+	writeProjectMemory(t, memory, "answer-bot", "# Answer Bot\n")
 	return associateHome{HomeDir: home, MemoryDir: memory, DatabasePath: initialized.DatabasePath}
 }
 
@@ -518,7 +518,7 @@ func TestScheduledAssociateDoesNotResendUnitsWithoutProgress(t *testing.T) {
 	}
 
 	insertEvent(t, home.DatabasePath, associateThreadReply(start, "C1", "follow-up in the same thread"))
-	fake.Respond(associateResponse(withEvidence(associateEntry(units[0], "project", "ask-kai", 0.8), units[0].EventIDs[0])))
+	fake.Respond(associateResponse(withEvidence(associateEntry(units[0], "project", "answer-bot", 0.8), units[0].EventIDs[0])))
 	if ran, err := workgraph.ScheduleLLMAssociate(later); err != nil || !ran.Executed || fake.Calls() != 3 {
 		t.Fatalf("expected a changed unit to be sent again, got %+v calls=%d %v", ran, fake.Calls(), err)
 	}

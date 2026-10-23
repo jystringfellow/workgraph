@@ -49,15 +49,15 @@ func TestMachineReadableSecurityReportIsHonestAndDoesNotExposeSecrets(t *testing
 		t.Fatalf("workgraph init failed: %v\n%s", err, output)
 	}
 	secrets := []string{
-		"xoxp-playlist-security-review-secret",
-		"captured Playlist acquisition plan",
+		"xoxp-acme-security-review-secret",
+		"captured Acme acquisition plan",
 	}
 	slackMode := os.FileMode(0o600)
 	if runtime.GOOS != "windows" {
 		slackMode = 0o644
 	}
 	if err := os.WriteFile(filepath.Join(homeDir, "slack.json"), []byte(`{
-  "access_token": "xoxp-playlist-security-review-secret",
+  "access_token": "xoxp-acme-security-review-secret",
   "api_base_url": "https://slack.com/api"
 }`), slackMode); err != nil {
 		t.Fatalf("write fake Slack credentials: %v", err)
