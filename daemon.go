@@ -184,7 +184,7 @@ func RunDaemon(config DaemonConfig) error {
 	if err != nil {
 		return err
 	}
-	status := daemonStatusFromRun(capture.Status, os.Getpid(), config.WatchDirs)
+	status := daemonStatusFromRun(capture.Status, os.Getpid(), len(config.WatchDirs) > 0)
 	if err := writeDaemonState(status); err != nil {
 		capture.Close()
 		return err
@@ -329,14 +329,18 @@ func StopDaemon(config DaemonConfig) (DaemonStatus, error) {
 	return status, nil
 }
 
-func daemonStatusFromRun(status RunStatus, pid int, watchOverrides []string) DaemonStatus {
+func daemonStatusFromRun(status RunStatus, pid int, watchOverridden bool) DaemonStatus {
+	var watchOverrides []string
+	if watchOverridden {
+		watchOverrides = append([]string(nil), status.WatchDirs...)
+	}
 	return DaemonStatus{
 		Running:             true,
 		PID:                 pid,
 		HomeDir:             status.HomeDir,
 		DatabasePath:        status.DatabasePath,
 		WatchDirs:           append([]string(nil), status.WatchDirs...),
-		WatchOverrides:      append([]string(nil), watchOverrides...),
+		WatchOverrides:      watchOverrides,
 		IgnorePaths:         append([]string(nil), status.IgnorePaths...),
 		IgnoreNames:         append([]string(nil), status.IgnoreNames...),
 		WatchCount:          status.WatchCount,

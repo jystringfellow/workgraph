@@ -176,58 +176,94 @@ func TestGitCaptureScansRepoDirsWithoutWatchingThem(t *testing.T) {
 	}
 }
 
-func TestExplicitlyEmptyRepoDirsSurviveSettingsWrites(t *testing.T) {
-	tempDir := t.TempDir()
-	homeDir := filepath.Join(tempDir, ".workgraph")
-	automaticDir := filepath.Join(tempDir, "Code")
-	userAddedDir := filepath.Join(tempDir, "notes")
-	repoDir := filepath.Join(automaticDir, "Cupcake")
-	for _, dir := range []string{repoDir, userAddedDir} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatalf("create %s: %v", dir, err)
-		}
+func TestRepoDirsPresenceSurvivesEverySettingsWrite(t *testing.T) {
+	mutators := map[string]func(homeDir, tempDir string) error{
+		"add-watch": func(homeDir, tempDir string) error {
+			_, err := workgraph.AddWatchDir(workgraph.SettingsWatchConfig{HomeDir: homeDir, Path: filepath.Join(tempDir, "notes")})
+			return err
+		},
+		"add-ignore-path": func(homeDir, tempDir string) error {
+			_, err := workgraph.AddIgnorePath(workgraph.SettingsIgnoreConfig{HomeDir: homeDir, Path: filepath.Join(tempDir, "private")})
+			return err
+		},
+		"remove-ignore-path": func(homeDir, tempDir string) error {
+			_, err := workgraph.RemoveIgnorePath(workgraph.SettingsIgnoreConfig{HomeDir: homeDir, Path: homeDir})
+			return err
+		},
+		"add-ignore-name": func(homeDir, tempDir string) error {
+			_, err := workgraph.AddIgnoreName(workgraph.SettingsIgnoreConfig{HomeDir: homeDir, Name: ".cache"})
+			return err
+		},
+		"remove-ignore-name": func(homeDir, tempDir string) error {
+			_, err := workgraph.RemoveIgnoreName(workgraph.SettingsIgnoreConfig{HomeDir: homeDir, Name: ".git"})
+			return err
+		},
 	}
-	createGitCommit(t, repoDir, "Add cupcake API")
+	repoDirsValues := []struct {
+		name           string
+		field          string
+		scansAutomatic bool
+		keepsEmpty     bool
+	}{
+		{name: "absent", field: "", scansAutomatic: true},
+		{name: "null", field: `"repo_dirs": null,`, scansAutomatic: true},
+		{name: "empty", field: `"repo_dirs": [],`, keepsEmpty: true},
+	}
 
-	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
-	if err != nil {
-		t.Fatalf("init failed: %v", err)
-	}
-	if err := os.WriteFile(initResult.SettingsPath, []byte(`{
+	for _, repoDirs := range repoDirsValues {
+		for mutatorName, mutate := range mutators {
+			t.Run(repoDirs.name+"/"+mutatorName, func(t *testing.T) {
+				tempDir := t.TempDir()
+				homeDir := filepath.Join(tempDir, ".workgraph")
+				automaticDir := filepath.Join(tempDir, "Code")
+				repoDir := filepath.Join(automaticDir, "Cupcake")
+				for _, dir := range []string{repoDir, filepath.Join(tempDir, "notes")} {
+					if err := os.MkdirAll(dir, 0o755); err != nil {
+						t.Fatalf("create %s: %v", dir, err)
+					}
+				}
+				createGitCommit(t, repoDir, "Add cupcake API")
+
+				initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+				if err != nil {
+					t.Fatalf("init failed: %v", err)
+				}
+				if err := os.WriteFile(initResult.SettingsPath, []byte(`{
   "watch_dirs": ["`+automaticDir+`"],
   "conservative_watch_dirs": ["`+automaticDir+`"],
-  "repo_dirs": [],
+  `+repoDirs.field+`
   "ignore_paths": ["`+homeDir+`"],
   "ignore_names": [".git"]
 }
 `), 0o600); err != nil {
-		t.Fatalf("write settings: %v", err)
-	}
+					t.Fatalf("write settings: %v", err)
+				}
 
-	if _, err := workgraph.AddWatchDir(workgraph.SettingsWatchConfig{HomeDir: homeDir, Path: userAddedDir}); err != nil {
-		t.Fatalf("add watch dir: %v", err)
-	}
-	if _, err := workgraph.AddIgnoreName(workgraph.SettingsIgnoreConfig{HomeDir: homeDir, Name: ".cache"}); err != nil {
-		t.Fatalf("add ignore name: %v", err)
-	}
+				if err := mutate(homeDir, tempDir); err != nil {
+					t.Fatalf("%s failed: %v", mutatorName, err)
+				}
 
-	contents, err := os.ReadFile(initResult.SettingsPath)
-	if err != nil {
-		t.Fatalf("read settings: %v", err)
-	}
-	if !strings.Contains(string(contents), `"repo_dirs": []`) {
-		t.Fatalf("expected explicitly empty repo_dirs to survive settings writes, got:\n%s", contents)
-	}
+				contents, err := os.ReadFile(initResult.SettingsPath)
+				if err != nil {
+					t.Fatalf("read settings: %v", err)
+				}
+				if repoDirs.keepsEmpty && !strings.Contains(string(contents), `"repo_dirs": []`) {
+					t.Fatalf("expected explicitly empty repo_dirs to survive %s, got:\n%s", mutatorName, contents)
+				}
 
-	result, err := workgraph.CaptureGitCommits(workgraph.GitCaptureConfig{
-		HomeDir:      homeDir,
-		DatabasePath: initResult.DatabasePath,
-	})
-	if err != nil {
-		t.Fatalf("git capture failed: %v", err)
-	}
-	if len(result.Repositories) != 0 {
-		t.Fatalf("expected no repository scan under excluded automatic root, got %q", result.Repositories)
+				result, err := workgraph.CaptureGitCommits(workgraph.GitCaptureConfig{
+					HomeDir:      homeDir,
+					DatabasePath: initResult.DatabasePath,
+				})
+				if err != nil {
+					t.Fatalf("git capture failed: %v", err)
+				}
+				scanned := containsString(result.Repositories, repoDir)
+				if scanned != repoDirs.scansAutomatic {
+					t.Fatalf("expected automatic root scanned=%v after %s, got repositories %q", repoDirs.scansAutomatic, mutatorName, result.Repositories)
+				}
+			})
+		}
 	}
 }
 

@@ -136,7 +136,9 @@ rewriting them:
 A background capture daemon started by an older version records its watch roots
 in daemon state without saying where they came from. When a connector setup
 command restarts background capture, workgraph passes through only watch roots
-that the running daemon recorded as `--watch` overrides; all other roots are
+that the running daemon recorded as `--watch` overrides, stored as resolved
+absolute paths so a restart from another working directory watches the same
+roots; all other roots are
 resolved again from settings by the new daemon, so automatic roots stay
 unwatched after a restart.
 
