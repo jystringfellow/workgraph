@@ -31,7 +31,7 @@ type InitResult struct {
 type settingsFile struct {
 	WatchDirs             []string `json:"watch_dirs"`
 	ConservativeWatchDirs []string `json:"conservative_watch_dirs,omitempty"`
-	RepoDirs              []string `json:"repo_dirs,omitempty"`
+	RepoDirs              []string `json:"repo_dirs"`
 	IgnorePaths           []string `json:"ignore_paths"`
 	IgnoreNames           []string `json:"ignore_names"`
 }

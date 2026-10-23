@@ -41,6 +41,7 @@ type DaemonStatus struct {
 	HomeDir             string                   `json:"home_dir"`
 	DatabasePath        string                   `json:"database_path"`
 	WatchDirs           []string                 `json:"watch_dirs"`
+	WatchOverrides      []string                 `json:"watch_overrides,omitempty"`
 	IgnorePaths         []string                 `json:"ignore_paths"`
 	IgnoreNames         []string                 `json:"ignore_names"`
 	WatchCount          int                      `json:"watch_count"`
@@ -183,7 +184,7 @@ func RunDaemon(config DaemonConfig) error {
 	if err != nil {
 		return err
 	}
-	status := daemonStatusFromRun(capture.Status, os.Getpid())
+	status := daemonStatusFromRun(capture.Status, os.Getpid(), config.WatchDirs)
 	if err := writeDaemonState(status); err != nil {
 		capture.Close()
 		return err
@@ -328,13 +329,14 @@ func StopDaemon(config DaemonConfig) (DaemonStatus, error) {
 	return status, nil
 }
 
-func daemonStatusFromRun(status RunStatus, pid int) DaemonStatus {
+func daemonStatusFromRun(status RunStatus, pid int, watchOverrides []string) DaemonStatus {
 	return DaemonStatus{
 		Running:             true,
 		PID:                 pid,
 		HomeDir:             status.HomeDir,
 		DatabasePath:        status.DatabasePath,
 		WatchDirs:           append([]string(nil), status.WatchDirs...),
+		WatchOverrides:      append([]string(nil), watchOverrides...),
 		IgnorePaths:         append([]string(nil), status.IgnorePaths...),
 		IgnoreNames:         append([]string(nil), status.IgnoreNames...),
 		WatchCount:          status.WatchCount,
@@ -344,6 +346,14 @@ func daemonStatusFromRun(status RunStatus, pid int) DaemonStatus {
 		RegisteredWatchDirs: append([]string(nil), status.RegisteredWatchDirs...),
 		MonitoredConnectors: append([]string(nil), status.MonitoredConnectors...),
 		Runtime:             captureProcessRuntimeStatus(),
+	}
+}
+
+func daemonRestartConfig(status DaemonStatus) DaemonConfig {
+	return DaemonConfig{
+		HomeDir:      status.HomeDir,
+		DatabasePath: status.DatabasePath,
+		WatchDirs:    append([]string(nil), status.WatchOverrides...),
 	}
 }
 

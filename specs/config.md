@@ -105,7 +105,9 @@ explicitly watched directory is captured even when it is not under `repo_dirs`.
 `repo_dirs` is a list of absolute directory paths that git and GitHub capture
 scan for local git repositories. These directories are walked on each git or
 GitHub poll; they are never registered as file watches. Entries that no longer
-exist are skipped. `--watch` flags change only which directories are watched for that run;
+exist are skipped. An explicit `"repo_dirs": []` disables repository scanning
+outside watched roots and is preserved when workgraph rewrites settings; an
+absent or `null` value means the settings predate `repo_dirs`. `--watch` flags change only which directories are watched for that run;
 repository discovery still scans `repo_dirs` plus the watched roots.
 
 ### conservative_watch_dirs
@@ -130,6 +132,13 @@ rewriting them:
 - When `repo_dirs` is absent, the automatically populated entries are used as
   repository scan roots, so git and GitHub capture keep finding the same local
   repositories.
+
+A background capture daemon started by an older version records its watch roots
+in daemon state without saying where they came from. When a connector setup
+command restarts background capture, workgraph passes through only watch roots
+that the running daemon recorded as `--watch` overrides; all other roots are
+resolved again from settings by the new daemon, so automatic roots stay
+unwatched after a restart.
 
 The settings file is never modified by this upgrade rule. Users who want to
 watch a previously automatic folder add it with `workgraph settings add-watch`,

@@ -175,3 +175,140 @@ func TestGitCaptureScansRepoDirsWithoutWatchingThem(t *testing.T) {
 		t.Fatalf("expected commit %s to be captured", commitSHA)
 	}
 }
+
+func TestExplicitlyEmptyRepoDirsSurviveSettingsWrites(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	automaticDir := filepath.Join(tempDir, "Code")
+	userAddedDir := filepath.Join(tempDir, "notes")
+	repoDir := filepath.Join(automaticDir, "Cupcake")
+	for _, dir := range []string{repoDir, userAddedDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("create %s: %v", dir, err)
+		}
+	}
+	createGitCommit(t, repoDir, "Add cupcake API")
+
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	if err := os.WriteFile(initResult.SettingsPath, []byte(`{
+  "watch_dirs": ["`+automaticDir+`"],
+  "conservative_watch_dirs": ["`+automaticDir+`"],
+  "repo_dirs": [],
+  "ignore_paths": ["`+homeDir+`"],
+  "ignore_names": [".git"]
+}
+`), 0o600); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	if _, err := workgraph.AddWatchDir(workgraph.SettingsWatchConfig{HomeDir: homeDir, Path: userAddedDir}); err != nil {
+		t.Fatalf("add watch dir: %v", err)
+	}
+	if _, err := workgraph.AddIgnoreName(workgraph.SettingsIgnoreConfig{HomeDir: homeDir, Name: ".cache"}); err != nil {
+		t.Fatalf("add ignore name: %v", err)
+	}
+
+	contents, err := os.ReadFile(initResult.SettingsPath)
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	if !strings.Contains(string(contents), `"repo_dirs": []`) {
+		t.Fatalf("expected explicitly empty repo_dirs to survive settings writes, got:\n%s", contents)
+	}
+
+	result, err := workgraph.CaptureGitCommits(workgraph.GitCaptureConfig{
+		HomeDir:      homeDir,
+		DatabasePath: initResult.DatabasePath,
+	})
+	if err != nil {
+		t.Fatalf("git capture failed: %v", err)
+	}
+	if len(result.Repositories) != 0 {
+		t.Fatalf("expected no repository scan under excluded automatic root, got %q", result.Repositories)
+	}
+}
+
+func TestAddWatchOnAutomaticRootWatchesItAgain(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	automaticDir := filepath.Join(tempDir, "Documents")
+	if err := os.MkdirAll(automaticDir, 0o755); err != nil {
+		t.Fatalf("create automatic dir: %v", err)
+	}
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	writeInitSettings(t, initResult.SettingsPath, initSettingsFile{
+		WatchDirs:             []string{automaticDir},
+		ConservativeWatchDirs: []string{automaticDir},
+		IgnorePaths:           []string{homeDir},
+		IgnoreNames:           []string{".git"},
+	})
+
+	if _, err := workgraph.AddWatchDir(workgraph.SettingsWatchConfig{HomeDir: homeDir, Path: automaticDir}); err != nil {
+		t.Fatalf("add watch dir: %v", err)
+	}
+
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:      homeDir,
+		DatabasePath: initResult.DatabasePath,
+	})
+	if err != nil {
+		t.Fatalf("run start failed: %v", err)
+	}
+	defer capture.Close()
+	if !sameStrings(capture.Status.WatchDirs, []string{automaticDir}) {
+		t.Fatalf("expected add-watch to make the automatic root user-added, got %q", capture.Status.WatchDirs)
+	}
+}
+
+func TestGitHubCaptureLinksProjectThroughRepoDirsOnly(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	codeDir := filepath.Join(tempDir, "Code")
+	repoDir := filepath.Join(codeDir, "Cupcake")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("create repo dir: %v", err)
+	}
+	createGitCommit(t, repoDir, "Add cupcake API")
+	runGit(t, repoDir, "remote", "add", "origin", "https://github.com/jystringfellow/Cupcake.git")
+
+	eventsPath := filepath.Join(tempDir, "github-events.json")
+	if err := os.WriteFile(eventsPath, []byte(`[
+  {
+    "kind": "pull_request",
+    "repository": "jystringfellow/Cupcake",
+    "number": 42,
+    "url": "https://github.com/jystringfellow/Cupcake/pull/42",
+    "state": "open",
+    "actor": "octocat",
+    "title": "Add cupcake API",
+    "updated_at": "2026-05-20T14:30:00Z"
+  }
+]`), 0o644); err != nil {
+		t.Fatalf("write github events: %v", err)
+	}
+
+	repoRoot := repoRoot(t)
+	if output, err := runworkgraph(t, repoRoot, "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	writeInitSettings(t, filepath.Join(homeDir, "settings.json"), initSettingsFile{
+		WatchDirs:   []string{},
+		RepoDirs:    []string{codeDir},
+		IgnorePaths: []string{homeDir},
+		IgnoreNames: []string{".git"},
+	})
+	if output, err := runworkgraph(t, repoRoot, "github", "capture", "--home", homeDir, "--events-file", eventsPath); err != nil {
+		t.Fatalf("workgraph github capture failed: %v\n%s", err, output)
+	}
+
+	event := githubEvent(t, filepath.Join(homeDir, "workgraph.db"), "github.pull_request", "jystringfellow/Cupcake", 42)
+	if event.Project != "Cupcake" {
+		t.Fatalf("expected repo_dirs remote project %q, got %q", "Cupcake", event.Project)
+	}
+}
