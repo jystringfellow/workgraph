@@ -239,7 +239,7 @@ func AssociateWithLLM(config LLMAssociateConfig) (LLMAssociateResult, error) {
 	if err != nil {
 		return LLMAssociateResult{}, err
 	}
-	if err := run.apply(config, payload, run.sentAs(payload), response, "", nil, &result); err != nil {
+	if err := run.apply(config, payload, run.sentFrom(payload, filtered), response, "", nil, &result); err != nil {
 		return LLMAssociateResult{}, err
 	}
 	lines := append([]string{"LLM associate complete"}, header...)
@@ -368,8 +368,8 @@ func (run associateRun) call(config LLMAssociateConfig, filtered llmOutboundFilt
 	return callLLMProfileContext(ctx, config.HTTPClient, run.profile, filtered.Messages)
 }
 
-func (run associateRun) sentAs(payload associatePayload) associateSent {
-	return associateSent{payload: payload, hosted: isHostedLLMProfile(run.profile)}
+func (run associateRun) sentFrom(payload associatePayload, filtered llmOutboundFilterResult) associateSent {
+	return sentFromFiltered(payload, filtered, isHostedLLMProfile(run.profile))
 }
 
 func (run associateRun) apply(config LLMAssociateConfig, payload associatePayload, sent associateSent, response string, requestID string, complete func(*sql.Tx, time.Time, ProjectLinkRunResult) error, result *LLMAssociateResult) error {

@@ -282,7 +282,7 @@ func executeLLMTask(config LLMAssociateConfig, run associateRun, claim ClaimedCa
 	if err != nil {
 		return LLMAssociateResult{}, err
 	}
-	if err := run.apply(config, work.payload, work.sent, response, claim.Request.ID, completion, &result); err != nil {
+	if err := run.apply(config, work.payload, run.sentFrom(work.payload, filtered), response, claim.Request.ID, completion, &result); err != nil {
 		return LLMAssociateResult{}, err
 	}
 	result.Message = llmTaskMessage(run, claim.Request.ID, result)
@@ -530,10 +530,8 @@ func loadLLMTaskWork(config LLMAssociateConfig, run associateRun, requestID stri
 		work.primaries = primaryProposals(work.payload, params.Primary)
 	case params.Snapshot != nil:
 		work.sent = params.Snapshot.within(payload)
-	case params.Sent != nil:
-		work.sent = (*associateSnapshot)(nil).within(payload)
 	default:
-		work.sent = run.sentAs(payload)
+		work.sent = (*associateSnapshot)(nil).within(payload)
 	}
 	return work, nil
 }
@@ -655,7 +653,7 @@ func prepareLLMTask(config LLMAssociateConfig, run associateRun, claim ClaimedCa
 			return nil, err
 		}
 		filtered, err = run.filteredMessages(work.payload)
-		snapshot = snapshotOf(run.sentAs(work.payload))
+		snapshot = snapshotOf(run.sentFrom(work.payload, filtered))
 	}
 	if err != nil {
 		return nil, err

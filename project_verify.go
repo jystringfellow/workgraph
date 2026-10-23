@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -68,23 +69,34 @@ func snapshotOf(sent associateSent) *associateSnapshot {
 }
 
 func (snapshot *associateSnapshot) within(current associatePayload) associateSent {
-	sent := associateSent{payload: associatePayload{Schema: associateRequestSchema, Projects: []associateProject{}, Units: []associateUnit{}, Decisions: []associateDecision{}}}
 	if snapshot == nil {
-		return sent
+		return associateSent{payload: emptyAssociatePayload()}
 	}
-	sent.hosted = snapshot.Hosted
+	stored := associatePayload{Schema: associateRequestSchema, Projects: snapshot.Projects, Units: []associateUnit{}, Decisions: snapshot.Decisions}
+	for _, entry := range snapshot.Units {
+		unit := entry.Unit
+		unit.linkUnitID, unit.linkKind, unit.linkSource = entry.LinkUnitID, entry.LinkKind, entry.LinkSource
+		unit.members = map[string]bool{}
+		for _, id := range entry.Members {
+			unit.members[id] = true
+		}
+		stored.Units = append(stored.Units, unit)
+	}
+	return associateSent{payload: restrictToCurrent(stored, current), hosted: snapshot.Hosted}
+}
+
+func emptyAssociatePayload() associatePayload {
+	return associatePayload{Schema: associateRequestSchema, Projects: []associateProject{}, Units: []associateUnit{}, Decisions: []associateDecision{}}
+}
+
+func restrictToCurrent(stored associatePayload, current associatePayload) associatePayload {
+	restricted := emptyAssociatePayload()
 	currentUnits := map[string]associateUnit{}
 	for _, unit := range current.Units {
 		currentUnits[unit.linkUnitID] = unit
 	}
 	offered := map[string]bool{}
-	for _, stored := range snapshot.Units {
-		unit := stored.Unit
-		unit.linkUnitID, unit.linkKind, unit.linkSource = stored.LinkUnitID, stored.LinkKind, stored.LinkSource
-		unit.members = map[string]bool{}
-		for _, id := range stored.Members {
-			unit.members[id] = true
-		}
+	for _, unit := range stored.Units {
 		now, found := currentUnits[unit.linkUnitID]
 		if !found || associateMembersHash(now) != associateMembersHash(unit) {
 			continue
@@ -101,23 +113,74 @@ func (snapshot *associateSnapshot) within(current associatePayload) associateSen
 			}
 		}
 		unit.Projects = projects
-		sent.payload.Units = append(sent.payload.Units, unit)
+		restricted.Units = append(restricted.Units, unit)
 	}
-	for _, project := range snapshot.Projects {
+	for _, project := range stored.Projects {
 		if offered[project.Slug] {
-			sent.payload.Projects = append(sent.payload.Projects, project)
+			restricted.Projects = append(restricted.Projects, project)
 		}
 	}
 	permitted := map[associateDecision]bool{}
 	for _, decision := range current.Decisions {
 		permitted[decision] = true
 	}
-	for _, decision := range snapshot.Decisions {
+	for _, decision := range stored.Decisions {
 		if permitted[decision] {
-			sent.payload.Decisions = append(sent.payload.Decisions, decision)
+			restricted.Decisions = append(restricted.Decisions, decision)
 		}
 	}
-	return sent
+	return restricted
+}
+
+func sentFromFiltered(payload associatePayload, filtered llmOutboundFilterResult, hosted bool) associateSent {
+	if !hosted {
+		return associateSent{payload: payload}
+	}
+	none := associateSent{payload: emptyAssociatePayload(), hosted: true}
+	if len(filtered.Messages) < 2 {
+		return none
+	}
+	_, data, found := strings.Cut(filtered.Messages[1].Content, associateDataOpen+"\n")
+	if !found {
+		return none
+	}
+	data, _, found = strings.Cut(data, "\n"+associateDataClose)
+	if !found {
+		return none
+	}
+	var received associatePayload
+	if json.Unmarshal([]byte(data), &received) != nil || len(received.Units) != len(payload.Units) {
+		return none
+	}
+	for index := range received.Units {
+		original := payload.Units[index]
+		received.Units[index].linkUnitID, received.Units[index].linkKind, received.Units[index].linkSource = original.linkUnitID, original.linkKind, original.linkSource
+		received.Units[index].members = original.members
+	}
+	return associateSent{payload: received, hosted: true}
+}
+
+func (run associateRun) revalidateVerify(config LLMAssociateConfig, verify associateSent) (associateSent, llmConnectorConfig, error) {
+	fresh, err := readLLMConnectorConfig(run.homeDir)
+	if err != nil {
+		return associateSent{}, llmConnectorConfig{}, err
+	}
+	if fresh.TaskProfiles[llmTaskAssociateVerify] != run.verifierName {
+		return associateSent{}, llmConnectorConfig{}, errLLMTaskRouteChanged
+	}
+	enabled := map[string]bool{}
+	for _, source := range fresh.TaskSources[llmTaskAssociate] {
+		enabled[source] = true
+	}
+	var unitIDs []string
+	for _, unit := range verify.payload.Units {
+		unitIDs = append(unitIDs, unit.linkUnitID)
+	}
+	current, err := buildAssociatePayload(run.homeDir, config, run.now, run.catalog, enabled, unitIDs, nil)
+	if err != nil {
+		return associateSent{}, llmConnectorConfig{}, err
+	}
+	return associateSent{payload: restrictToCurrent(verify.payload, current), hosted: verify.hosted}, fresh, nil
 }
 
 type associateEscalation struct {
@@ -310,7 +373,7 @@ func (run associateRun) callVerifier(config LLMAssociateConfig, verify associate
 	if !run.hasVerifier {
 		return "", fmt.Errorf("no llm profile is routed for %s", llmTaskAssociateVerify)
 	}
-	if err := run.checkVerifierPolicy(config); err != nil {
+	if err := enforceLLMManagedSettings(run.verifier, config.HTTPClient); err != nil {
 		return "", err
 	}
 	filtered, err := run.filteredVerifyMessages(verify)
@@ -356,7 +419,17 @@ func (run associateRun) mergeVerdicts(verify associatePayload, primaries []Proje
 }
 
 func (run associateRun) verifyDirect(config LLMAssociateConfig, verify associateSent, primaries []ProjectLinkProposal, result *LLMAssociateResult) []ProjectLinkProposal {
-	response, err := run.callVerifier(config, verify)
+	verify, fresh, err := run.revalidateVerify(config, verify)
+	if err == nil {
+		err = enforceHostedLLMOptIn(fresh, run.verifier)
+	}
+	if err == nil && len(verify.payload.Units) == 0 {
+		return primaries
+	}
+	var response string
+	if err == nil {
+		response, err = run.callVerifier(config, verify)
+	}
 	if err == nil {
 		var merged []ProjectLinkProposal
 		if merged, err = run.mergeVerdicts(verify.payload, primaries, response, result); err == nil {

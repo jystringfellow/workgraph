@@ -589,16 +589,20 @@ workgraph llm use sonnet --for associate-verify
   `primary_answer` (`target`, `project`, `new_project`, `kind`, `summary`,
   `confidence`), plus the catalog entries those units offer and the same
   recent decisions. It never receives more than the associate profile saw.
-  The verifier payload is built from the associate's own payload, never
-  rebuilt from current data: a bridge claim stores the payload it sent, and a
+  The verifier payload is built from the payload the associate model
+  actually received, after its outbound filter, never rebuilt from current
+  data and never from an earlier attempt: a direct run uses what it just
+  sent, a bridge claim stores the filtered payload it returned, and a
   verify request stores the escalated units, their catalog entries, the
   recent decisions, and whether the associate request passed the hosted
   outbound filter. Before that stored payload is reused, it is checked
   against current permissions: a unit whose permitted members changed, or
   that is no longer eligible, is not verified, a catalog entry no longer
   offered to the unit is dropped, and a decision no longer permitted is
-  dropped. Nothing added after the associate pass is sent. The request passes
-  the hosted outbound filter when either profile is hosted.
+  dropped. Nothing added after the associate pass is sent, and a redaction
+  made for the associate is never undone. The request passes the current
+  hosted outbound filter, on top of those redactions, when either profile is
+  hosted.
 - The verifier answers in the associate result shape and is validated the
   same way. Its valid result becomes the unit's link, with `profile` set to
   the verifier, so auto-apply uses the verifier's threshold, recent
@@ -612,9 +616,10 @@ workgraph llm use sonnet --for associate-verify
   Before the associate model is called, the verifier passes the same hosted
   opt-in and managed-provider checks as the associate profile, so a verifier
   that is not allowed fails the run before anything is sent. The checks run
-  again immediately before every verifier call, so a route changed later to a
-  profile that is not allowed sends nothing and the escalated units keep
-  their associate results.
+  again immediately before every verifier call, with `llm.json` and the source
+  policy read again at that moment, so withdrawn hosted consent, a disabled
+  source, or a route changed to a profile that is not allowed sends nothing
+  for the affected units, and they keep their associate results.
 - The verifier follows the execution rule of its own profile. A direct
   verifier is called in the same run as the associate pass, whether that pass
   ran directly or was submitted by the bridge, before any link is written. A

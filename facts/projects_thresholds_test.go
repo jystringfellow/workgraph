@@ -332,6 +332,9 @@ func TestBridgeVerifierUsesTheOutbox(t *testing.T) {
 		t.Fatalf("expected the escalated unit to wait for the verifier, got %+v", links)
 	}
 	requests := llmAssociateRequests(t, home)
+	if len(requests) == 2 && requests[0].Status == "pending" {
+		requests[0], requests[1] = requests[1], requests[0]
+	}
 	if len(requests) != 2 || requests[0].Status != "completed" || requests[1].Status != "pending" || storedLLMRequestTask(t, home, requests[1].ID) != "associate-verify" {
 		t.Fatalf("expected a completed associate request and a pending verify request, got %+v", requests)
 	}
@@ -385,8 +388,10 @@ func TestBridgeVerifierUsesTheOutbox(t *testing.T) {
 	if link := currentProjectLink(t, store, units[1].ID); link.State != "applied" || link.Profile != "codex-verify" || link.Project != "atlas-bot" {
 		t.Fatalf("expected the verifier's answer applied under its profile, got %+v", link)
 	}
-	if requests := llmAssociateRequests(t, home); requests[1].Status != "completed" {
-		t.Fatalf("expected the verify request completed, got %+v", requests)
+	for _, request := range llmAssociateRequests(t, home) {
+		if request.ID == verifyID && request.Status != "completed" {
+			t.Fatalf("expected the verify request completed, got %+v", request)
+		}
 	}
 
 	fake.Respond(associateResponse(associateEntry(late[0], "project", "atlas-bot", 0.99)))
@@ -493,11 +498,12 @@ type routedAssociateModels struct {
 	responses map[string]string
 	failing   map[string]bool
 	last      map[string]string
+	hooks     map[string]func()
 }
 
 func newRoutedAssociateModels(t *testing.T) *routedAssociateModels {
 	t.Helper()
-	models := &routedAssociateModels{URL: "http://127.0.0.1:9", calls: map[string]int{}, responses: map[string]string{}, failing: map[string]bool{}, last: map[string]string{}}
+	models := &routedAssociateModels{URL: "http://127.0.0.1:9", calls: map[string]int{}, responses: map[string]string{}, failing: map[string]bool{}, last: map[string]string{}, hooks: map[string]func(){}}
 	models.Client = &http.Client{Transport: associateRoundTripper(func(request *http.Request) (*http.Response, error) {
 		body, err := io.ReadAll(request.Body)
 		if err != nil {
@@ -507,6 +513,12 @@ func newRoutedAssociateModels(t *testing.T) *routedAssociateModels {
 			Model string `json:"model"`
 		}
 		_ = json.Unmarshal(body, &decoded)
+		models.mu.Lock()
+		hook := models.hooks[decoded.Model]
+		models.mu.Unlock()
+		if hook != nil {
+			hook()
+		}
 		models.mu.Lock()
 		defer models.mu.Unlock()
 		models.calls[decoded.Model]++
@@ -525,6 +537,12 @@ func (models *routedAssociateModels) Respond(model, response string) {
 	models.mu.Lock()
 	defer models.mu.Unlock()
 	models.responses[model] = response
+}
+
+func (models *routedAssociateModels) OnCall(model string, hook func()) {
+	models.mu.Lock()
+	defer models.mu.Unlock()
+	models.hooks[model] = hook
 }
 
 func (models *routedAssociateModels) Fail(model string) {
