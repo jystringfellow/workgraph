@@ -21,6 +21,7 @@ import (
 
 func TestLLMProfileThresholdSettings(t *testing.T) {
 	home := initAssociateHome(t)
+	writeInventedProjects(t, home)
 	args := []string{"--home", home.HomeDir}
 	add := append([]string{"llm", "add", "tuned"}, args...)
 	add = append(add, "--provider", "openai-compatible", "--base-url", "http://localhost:11434/v1", "--model", "small-model", "--auto-apply-confidence", "0.9")
@@ -85,6 +86,7 @@ func TestLLMProfileThresholdSettings(t *testing.T) {
 
 func TestAssociateAutoAppliesAtTheProfileThreshold(t *testing.T) {
 	home := initAssociateHome(t)
+	writeInventedProjects(t, home)
 	fake := newAssociateFakeModel(t)
 	configureAssociateProfile(t, home, fake.URL, "slack")
 	setProfileThresholds(t, home, "local-associate", 0.9, -1)
@@ -93,8 +95,8 @@ func TestAssociateAutoAppliesAtTheProfileThreshold(t *testing.T) {
 	units := insertAssociateThreads(t, home, now.Add(-6*time.Hour), "C1", "harness-team", 3)
 
 	fake.Respond(associateResponse(
-		associateEntry(units[0], "project", "mpo-harness", 0.92),
-		associateEntry(units[1], "project", "mpo-harness", 0.89),
+		associateEntry(units[0], "project", "harbor-harness", 0.92),
+		associateEntry(units[1], "project", "harbor-harness", 0.89),
 	))
 	result, err := workgraph.AssociateWithLLM(workgraph.LLMAssociateConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, HTTPClient: fake.Client, Now: now})
 	if err != nil || result.Applied != 1 || result.Proposed != 1 {
@@ -109,7 +111,7 @@ func TestAssociateAutoAppliesAtTheProfileThreshold(t *testing.T) {
 	if _, err := workgraph.UseLLMProfile(workgraph.LLMUseProfileConfig{HomeDir: home.HomeDir, Name: "strict", Task: "associate"}); err != nil {
 		t.Fatal(err)
 	}
-	fake.Respond(associateResponse(associateEntry(units[2], "project", "mpo-harness", 0.92)))
+	fake.Respond(associateResponse(associateEntry(units[2], "project", "harbor-harness", 0.92)))
 	result, err = workgraph.AssociateWithLLM(workgraph.LLMAssociateConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, HTTPClient: fake.Client, Now: now})
 	if err != nil || result.Applied != 0 || result.Proposed != 1 {
 		t.Fatalf("expected the default profile to propose at 0.92, got %+v %v", result, err)
@@ -121,6 +123,7 @@ func TestAssociateAutoAppliesAtTheProfileThreshold(t *testing.T) {
 
 func TestAccuracyGateIsPerProfile(t *testing.T) {
 	home := initAssociateHome(t)
+	writeInventedProjects(t, home)
 	fake := newAssociateFakeModel(t)
 	configureAssociateProfile(t, home, fake.URL, "slack")
 	setProfileThresholds(t, home, "local-associate", 0.9, -1)
@@ -148,7 +151,7 @@ func TestAccuracyGateIsPerProfile(t *testing.T) {
 	}
 
 	units := insertAssociateThreads(t, home, now.Add(-6*time.Hour), "C1", "harness-team", 2)
-	fake.Respond(associateResponse(associateEntry(units[0], "project", "mpo-harness", 0.95)))
+	fake.Respond(associateResponse(associateEntry(units[0], "project", "harbor-harness", 0.95)))
 	result, err := workgraph.AssociateWithLLM(workgraph.LLMAssociateConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, HTTPClient: fake.Client, Now: now})
 	if err != nil || result.Applied != 1 {
 		t.Fatalf("expected the tuned profile to keep auto-applying while strict is paused, got %+v %v", result, err)
@@ -195,7 +198,7 @@ func TestAccuracyGateIsPerProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	insertLegacyAutoApplyPause(t, home, now.Add(-time.Hour))
-	fake.Respond(associateResponse(associateEntry(units[1], "project", "mpo-harness", 0.99)))
+	fake.Respond(associateResponse(associateEntry(units[1], "project", "harbor-harness", 0.99)))
 	result, err = workgraph.AssociateWithLLM(workgraph.LLMAssociateConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, HTTPClient: fake.Client, Now: now})
 	if err != nil || result.Applied != 0 || result.Proposed != 1 || !strings.Contains(result.Message, "Auto-apply paused: legacy pause") {
 		t.Fatalf("expected a pause event without a profile to hold a profile with no event, got %+v %v", result, err)
@@ -208,6 +211,7 @@ func TestAccuracyGateIsPerProfile(t *testing.T) {
 
 func TestDirectVerifierDecidesUncertainUnits(t *testing.T) {
 	home := initAssociateHome(t)
+	writeInventedProjects(t, home)
 	models := newRoutedAssociateModels(t)
 	configureAssociateProfile(t, home, models.URL, "slack")
 	if _, err := workgraph.AddLLMProfile(workgraph.LLMAddProfileConfig{HomeDir: home.HomeDir, Name: "big-verifier", Provider: "openai-compatible", BaseURL: models.URL + "/v1", Model: "big-model"}); err != nil {
@@ -218,7 +222,7 @@ func TestDirectVerifierDecidesUncertainUnits(t *testing.T) {
 	config := workgraph.LLMAssociateConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, HTTPClient: models.Client, Now: now}
 
 	unrouted := insertAssociateThreads(t, home, now.Add(-7*time.Hour), "C0", "harness-team", 1)
-	models.Respond("small-model", associateResponse(associateEntry(unrouted[0], "project", "mpo-harness", 0.8)))
+	models.Respond("small-model", associateResponse(associateEntry(unrouted[0], "project", "harbor-harness", 0.8)))
 	if result, err := workgraph.AssociateWithLLM(config); err != nil || models.Calls("big-model") != 0 || strings.Contains(result.Message, "Escalated") {
 		t.Fatalf("expected no verifier without the route, got %+v calls=%d %v", result, models.Calls("big-model"), err)
 	}
@@ -233,12 +237,12 @@ func TestDirectVerifierDecidesUncertainUnits(t *testing.T) {
 
 	units := insertAssociateThreads(t, home, now.Add(-6*time.Hour), "C1", "harness-team", 4)
 	models.Respond("small-model", associateResponse(
-		associateEntry(units[0], "project", "mpo-harness", 0.97),
-		associateEntry(units[1], "project", "mpo-harness", 0.80),
-		associateEntry(units[2], "project", "mpo-harness", 0.40),
+		associateEntry(units[0], "project", "harbor-harness", 0.97),
+		associateEntry(units[1], "project", "harbor-harness", 0.80),
+		associateEntry(units[2], "project", "harbor-harness", 0.40),
 		associateEntry(units[3], "none", "", 0.85),
 	))
-	verdict := associateEntry(units[1], "project", "answer-bot", 0.96)
+	verdict := associateEntry(units[1], "project", "atlas-bot", 0.96)
 	verdict["summary"] = "Verifier says answer bot"
 	models.Respond("big-model", associateResponse(verdict))
 	result, err := workgraph.AssociateWithLLM(config)
@@ -269,7 +273,7 @@ func TestDirectVerifierDecidesUncertainUnits(t *testing.T) {
 		t.Fatalf("expected the confident unit applied by the associate profile, got %+v", link)
 	}
 	verified := currentProjectLink(t, store, units[1].ID)
-	if verified.State != "applied" || !verified.Auto || verified.Profile != "big-verifier" || verified.Project != "answer-bot" || verified.Summary != "Verifier says answer bot" || verified.RunID != result.RunID {
+	if verified.State != "applied" || !verified.Auto || verified.Profile != "big-verifier" || verified.Project != "atlas-bot" || verified.Summary != "Verifier says answer bot" || verified.RunID != result.RunID {
 		t.Fatalf("expected the verifier's answer applied under its profile, got %+v", verified)
 	}
 	if link := currentProjectLink(t, store, units[2].ID); link.State != "proposed" || link.Profile != "local-associate" {
@@ -282,14 +286,14 @@ func TestDirectVerifierDecidesUncertainUnits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("projects explain: %v\n%s", err, explain)
 	}
-	for _, expected := range []string{"  Associate local-associate: project mpo-harness (confidence 0.80)", "  Verifier big-verifier: project answer-bot (confidence 0.96)"} {
+	for _, expected := range []string{"  Associate local-associate: project harbor-harness (confidence 0.80)", "  Verifier big-verifier: project atlas-bot (confidence 0.96)"} {
 		if !strings.Contains(string(explain), expected) {
 			t.Fatalf("explain omitted %q:\n%s", expected, explain)
 		}
 	}
 
 	failing := insertAssociateThreads(t, home, now.Add(-5*time.Hour), "C2", "harness-team", 1)
-	models.Respond("small-model", associateResponse(associateEntry(failing[0], "project", "mpo-harness", 0.7)))
+	models.Respond("small-model", associateResponse(associateEntry(failing[0], "project", "harbor-harness", 0.7)))
 	models.Fail("big-model")
 	result, err = workgraph.AssociateWithLLM(config)
 	if err != nil || !strings.Contains(result.Message, "Verifier failed:") || result.Proposed != 1 {
@@ -302,6 +306,7 @@ func TestDirectVerifierDecidesUncertainUnits(t *testing.T) {
 
 func TestBridgeVerifierUsesTheOutbox(t *testing.T) {
 	home := initScheduleHome(t)
+	writeInventedProjects(t, home)
 	fake := newAssociateFakeModel(t)
 	configureAssociateProfile(t, home, fake.URL, "slack")
 	if _, err := workgraph.AddLLMProfile(workgraph.LLMAddProfileConfig{HomeDir: home.HomeDir, Name: "codex-verify", Provider: "ai-client", Client: "codex", Model: "gpt-verify", Execution: "bridge"}); err != nil {
@@ -315,7 +320,7 @@ func TestBridgeVerifierUsesTheOutbox(t *testing.T) {
 	}
 	store := workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir}
 	units := insertAssociateThreads(t, home, time.Now().UTC().Add(-6*time.Hour), "C1", "harness-team", 2)
-	fake.Respond(associateResponse(associateEntry(units[0], "project", "answer-bot", 0.99), associateEntry(units[1], "project", "mpo-harness", 0.8)))
+	fake.Respond(associateResponse(associateEntry(units[0], "project", "atlas-bot", 0.99), associateEntry(units[1], "project", "harbor-harness", 0.8)))
 	schedule := workgraph.LLMAssociateScheduleConfig{HomeDir: home.HomeDir, HTTPClient: fake.Client}
 
 	ran, err := workgraph.ScheduleLLMAssociate(schedule)
@@ -372,19 +377,19 @@ func TestBridgeVerifierUsesTheOutbox(t *testing.T) {
 	if task["task"] != "associate-verify" || task["profile"] != "codex-verify" || task["model"] != "gpt-verify" || !strings.Contains(string(encodedTask), units[1].ID) || !strings.Contains(string(encodedTask), "primary_answer") || strings.Contains(string(encodedTask), units[0].ID) {
 		t.Fatalf("unexpected verify task: %s", encodedTask)
 	}
-	verdict := associateResponse(associateEntry(units[1], "project", "answer-bot", 0.97))
+	verdict := associateResponse(associateEntry(units[1], "project", "atlas-bot", 0.97))
 	submitted, failure := callScheduleMCP(t, home, "llm_task_submit", map[string]any{"request_id": verifyID, "claim_token": claim["claim_token"], "result": json.RawMessage(verdict)})
 	if failure != "" || submitted["request_completed"] != true {
 		t.Fatalf("submit the verifier result: %v %s", submitted, failure)
 	}
-	if link := currentProjectLink(t, store, units[1].ID); link.State != "applied" || link.Profile != "codex-verify" || link.Project != "answer-bot" {
+	if link := currentProjectLink(t, store, units[1].ID); link.State != "applied" || link.Profile != "codex-verify" || link.Project != "atlas-bot" {
 		t.Fatalf("expected the verifier's answer applied under its profile, got %+v", link)
 	}
 	if requests := llmAssociateRequests(t, home); requests[1].Status != "completed" {
 		t.Fatalf("expected the verify request completed, got %+v", requests)
 	}
 
-	fake.Respond(associateResponse(associateEntry(late[0], "project", "answer-bot", 0.99)))
+	fake.Respond(associateResponse(associateEntry(late[0], "project", "atlas-bot", 0.99)))
 	resumed, err := workgraph.ScheduleLLMAssociate(schedule)
 	if err != nil || !resumed.Created || !resumed.Executed || fake.Calls() != 2 {
 		t.Fatalf("expected associate requests to resume after verification, got %+v calls=%d %v", resumed, fake.Calls(), err)
@@ -411,7 +416,7 @@ func seedDecidedProfileLinks(t *testing.T, home associateHome, decidedAt time.Ti
 	var proposals []workgraph.ProjectLinkProposal
 	for i := 0; i < confirmed+corrected; i++ {
 		id := fmt.Sprintf("seed-%s-%d", prefix, i)
-		proposals = append(proposals, workgraph.ProjectLinkProposal{UnitID: id, UnitKind: "slack.thread", Container: "seed-team", Target: "project", Project: "mpo-harness", Kind: "build", Summary: "seed", Confidence: 0.99, Evidence: []string{id}, Apply: true})
+		proposals = append(proposals, workgraph.ProjectLinkProposal{UnitID: id, UnitKind: "slack.thread", Container: "seed-team", Target: "project", Project: "harbor-harness", Kind: "build", Summary: "seed", Confidence: 0.99, Evidence: []string{id}, Apply: true})
 	}
 	run, err := workgraph.RecordProjectLinkRun(config, workgraph.ProjectLinkRun{Source: "llm", Profile: profile, Links: proposals})
 	if err != nil {

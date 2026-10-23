@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -30,6 +31,93 @@ type projectLinkVerification struct {
 	Primary         associateAnswer
 	VerifierProfile string
 	Verifier        associateAnswer
+}
+
+type associateSent struct {
+	payload associatePayload
+	hosted  bool
+}
+
+type associateSnapshot struct {
+	Projects  []associateProject      `json:"projects"`
+	Units     []associateSnapshotUnit `json:"units"`
+	Decisions []associateDecision     `json:"recent_decisions"`
+	Hosted    bool                    `json:"hosted"`
+}
+
+type associateSnapshotUnit struct {
+	Unit       associateUnit `json:"unit"`
+	LinkUnitID string        `json:"link_unit_id"`
+	LinkKind   string        `json:"link_kind"`
+	LinkSource string        `json:"link_source"`
+	Members    []string      `json:"members"`
+}
+
+func snapshotOf(sent associateSent) *associateSnapshot {
+	snapshot := &associateSnapshot{Projects: sent.payload.Projects, Units: []associateSnapshotUnit{}, Decisions: sent.payload.Decisions, Hosted: sent.hosted}
+	for _, unit := range sent.payload.Units {
+		members := make([]string, 0, len(unit.members))
+		for id := range unit.members {
+			members = append(members, id)
+		}
+		sort.Strings(members)
+		unit.PrimaryAnswer = nil
+		snapshot.Units = append(snapshot.Units, associateSnapshotUnit{Unit: unit, LinkUnitID: unit.linkUnitID, LinkKind: unit.linkKind, LinkSource: unit.linkSource, Members: members})
+	}
+	return snapshot
+}
+
+func (snapshot *associateSnapshot) within(current associatePayload) associateSent {
+	sent := associateSent{payload: associatePayload{Schema: associateRequestSchema, Projects: []associateProject{}, Units: []associateUnit{}, Decisions: []associateDecision{}}}
+	if snapshot == nil {
+		return sent
+	}
+	sent.hosted = snapshot.Hosted
+	currentUnits := map[string]associateUnit{}
+	for _, unit := range current.Units {
+		currentUnits[unit.linkUnitID] = unit
+	}
+	offered := map[string]bool{}
+	for _, stored := range snapshot.Units {
+		unit := stored.Unit
+		unit.linkUnitID, unit.linkKind, unit.linkSource = stored.LinkUnitID, stored.LinkKind, stored.LinkSource
+		unit.members = map[string]bool{}
+		for _, id := range stored.Members {
+			unit.members[id] = true
+		}
+		now, found := currentUnits[unit.linkUnitID]
+		if !found || associateMembersHash(now) != associateMembersHash(unit) {
+			continue
+		}
+		still := map[string]bool{}
+		for _, slug := range now.Projects {
+			still[slug] = true
+		}
+		projects := []string{}
+		for _, slug := range unit.Projects {
+			if still[slug] {
+				projects = append(projects, slug)
+				offered[slug] = true
+			}
+		}
+		unit.Projects = projects
+		sent.payload.Units = append(sent.payload.Units, unit)
+	}
+	for _, project := range snapshot.Projects {
+		if offered[project.Slug] {
+			sent.payload.Projects = append(sent.payload.Projects, project)
+		}
+	}
+	permitted := map[associateDecision]bool{}
+	for _, decision := range current.Decisions {
+		permitted[decision] = true
+	}
+	for _, decision := range snapshot.Decisions {
+		if permitted[decision] {
+			sent.payload.Decisions = append(sent.payload.Decisions, decision)
+		}
+	}
+	return sent
 }
 
 type associateEscalation struct {
@@ -120,14 +208,18 @@ func (verification projectLinkVerification) lines() []string {
 	}
 }
 
-func (run associateRun) escalated(proposals []ProjectLinkProposal) map[string]bool {
+func (run associateRun) escalated(sent associatePayload, proposals []ProjectLinkProposal) map[string]bool {
 	escalated := map[string]bool{}
 	if !run.hasVerifier {
 		return escalated
 	}
+	seen := map[string]bool{}
+	for _, unit := range sent.Units {
+		seen[unit.linkUnitID] = true
+	}
 	threshold, floor := run.profile.autoApplyThreshold(), run.profile.verifyFloor()
 	for _, proposal := range proposals {
-		if proposal.Confidence >= floor && proposal.Confidence < threshold {
+		if seen[proposal.UnitID] && proposal.Confidence >= floor && proposal.Confidence < threshold {
 			escalated[proposal.UnitID] = true
 		}
 	}
@@ -144,7 +236,6 @@ func verifyPayloadFor(payload associatePayload, primaries map[string]associateEs
 		}
 		answer := primary.Answer
 		unit.PrimaryAnswer = &answer
-		unit.primaryProfile = primary.Profile
 		for _, slug := range unit.Projects {
 			offered[slug] = true
 		}
@@ -194,17 +285,12 @@ func verifyMessages(payload associatePayload) ([]openAICompatibleMessage, error)
 	})
 }
 
-func (run associateRun) filteredVerifyMessages(payload associatePayload) (llmOutboundFilterResult, error) {
-	messages, err := verifyMessages(payload)
+func (run associateRun) filteredVerifyMessages(verify associateSent) (llmOutboundFilterResult, error) {
+	messages, err := verifyMessages(verify.payload)
 	if err != nil {
 		return llmOutboundFilterResult{}, err
 	}
-	hosted := isHostedLLMProfile(run.verifier)
-	for _, unit := range payload.Units {
-		primary, found := run.stored.Profiles[unit.primaryProfile]
-		hosted = hosted || !found || isHostedLLMProfile(primary)
-	}
-	if hosted {
+	if verify.hosted || isHostedLLMProfile(run.verifier) {
 		return filterHostedLLMMessages(messages)
 	}
 	return llmOutboundFilterResult{Messages: append([]openAICompatibleMessage(nil), messages...)}, nil
@@ -220,7 +306,13 @@ func (run associateRun) checkVerifierPolicy(config LLMAssociateConfig) error {
 	return enforceHostedLLMOptIn(run.stored, run.verifier)
 }
 
-func (run associateRun) callVerifier(config LLMAssociateConfig, verify associatePayload) (string, error) {
+func (run associateRun) callVerifier(config LLMAssociateConfig, verify associateSent) (string, error) {
+	if !run.hasVerifier {
+		return "", fmt.Errorf("no llm profile is routed for %s", llmTaskAssociateVerify)
+	}
+	if err := run.checkVerifierPolicy(config); err != nil {
+		return "", err
+	}
 	filtered, err := run.filteredVerifyMessages(verify)
 	if err != nil {
 		return "", err
@@ -263,11 +355,11 @@ func (run associateRun) mergeVerdicts(verify associatePayload, primaries []Proje
 	return merged, nil
 }
 
-func (run associateRun) verifyDirect(config LLMAssociateConfig, verify associatePayload, primaries []ProjectLinkProposal, result *LLMAssociateResult) []ProjectLinkProposal {
+func (run associateRun) verifyDirect(config LLMAssociateConfig, verify associateSent, primaries []ProjectLinkProposal, result *LLMAssociateResult) []ProjectLinkProposal {
 	response, err := run.callVerifier(config, verify)
 	if err == nil {
 		var merged []ProjectLinkProposal
-		if merged, err = run.mergeVerdicts(verify, primaries, response, result); err == nil {
+		if merged, err = run.mergeVerdicts(verify.payload, primaries, response, result); err == nil {
 			return merged
 		}
 	}
@@ -287,12 +379,12 @@ func otherActiveLLMRequest(tx *sql.Tx, currentID string) (string, bool, error) {
 	return id, true, nil
 }
 
-func emitVerifyRequestTx(tx *sql.Tx, now time.Time, primaries map[string]associateEscalation, order []string) (string, error) {
+func emitVerifyRequestTx(tx *sql.Tx, now time.Time, primaries map[string]associateEscalation, order []string, snapshot *associateSnapshot) (string, error) {
 	requestID, err := newEventID()
 	if err != nil {
 		return "", fmt.Errorf("create verify request id: %w", err)
 	}
-	params, err := json.Marshal(llmTaskParams{Task: llmTaskAssociateVerify, UnitIDs: order, Primary: primaries})
+	params, err := json.Marshal(llmTaskParams{Task: llmTaskAssociateVerify, UnitIDs: order, Primary: primaries, Snapshot: snapshot})
 	if err != nil {
 		return "", fmt.Errorf("encode verify request params: %w", err)
 	}

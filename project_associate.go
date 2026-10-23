@@ -101,11 +101,10 @@ type associateUnit struct {
 	Events        []associateEvent `json:"events"`
 	PrimaryAnswer *associateAnswer `json:"primary_answer,omitempty"`
 
-	members        map[string]bool
-	linkUnitID     string
-	linkKind       string
-	linkSource     string
-	primaryProfile string
+	members    map[string]bool
+	linkUnitID string
+	linkKind   string
+	linkSource string
 }
 
 type associateEvent struct {
@@ -240,7 +239,7 @@ func AssociateWithLLM(config LLMAssociateConfig) (LLMAssociateResult, error) {
 	if err != nil {
 		return LLMAssociateResult{}, err
 	}
-	if err := run.apply(config, payload, response, "", nil, &result); err != nil {
+	if err := run.apply(config, payload, run.sentAs(payload), response, "", nil, &result); err != nil {
 		return LLMAssociateResult{}, err
 	}
 	lines := append([]string{"LLM associate complete"}, header...)
@@ -369,7 +368,11 @@ func (run associateRun) call(config LLMAssociateConfig, filtered llmOutboundFilt
 	return callLLMProfileContext(ctx, config.HTTPClient, run.profile, filtered.Messages)
 }
 
-func (run associateRun) apply(config LLMAssociateConfig, payload associatePayload, response string, requestID string, complete func(*sql.Tx, time.Time, ProjectLinkRunResult) error, result *LLMAssociateResult) error {
+func (run associateRun) sentAs(payload associatePayload) associateSent {
+	return associateSent{payload: payload, hosted: isHostedLLMProfile(run.profile)}
+}
+
+func (run associateRun) apply(config LLMAssociateConfig, payload associatePayload, sent associateSent, response string, requestID string, complete func(*sql.Tx, time.Time, ProjectLinkRunResult) error, result *LLMAssociateResult) error {
 	entries, err := parseAssociateResponse(response)
 	if err != nil {
 		return err
@@ -382,8 +385,8 @@ func (run associateRun) apply(config LLMAssociateConfig, payload associatePayloa
 	if run.hasVerifier {
 		result.verifier = run.verifierName
 	}
-	escalated := run.escalated(proposals)
-	primaries := escalationsFor(payload, proposals, escalated)
+	escalated := run.escalated(sent.payload, proposals)
+	primaries := escalationsFor(sent.payload, proposals, escalated)
 	result.Escalated = len(primaries)
 	if len(primaries) == 0 {
 		return run.write(config, payload, proposals, associateDeferral{}, requestID, complete, result)
@@ -396,16 +399,19 @@ func (run associateRun) apply(config LLMAssociateConfig, payload associatePayloa
 			kept = append(kept, proposal)
 		}
 	}
+	verify := associateSent{payload: verifyPayloadFor(sent.payload, primaries), hosted: sent.hosted}
 	if associateExecutesInBridge(run.verifier) {
-		return run.write(config, payload, kept, associateDeferral{primaries: primaries, fallback: uncertain}, requestID, complete, result)
+		base := associateSent{payload: verify.payload, hosted: sent.hosted}
+		return run.write(config, payload, kept, associateDeferral{primaries: primaries, fallback: uncertain, snapshot: snapshotOf(base)}, requestID, complete, result)
 	}
-	verified := run.verifyDirect(config, verifyPayloadFor(payload, primaries), uncertain, result)
+	verified := run.verifyDirect(config, verify, uncertain, result)
 	return run.write(config, payload, append(kept, verified...), associateDeferral{}, requestID, complete, result)
 }
 
 type associateDeferral struct {
 	primaries map[string]associateEscalation
 	fallback  []ProjectLinkProposal
+	snapshot  *associateSnapshot
 }
 
 func (run associateRun) write(config LLMAssociateConfig, payload associatePayload, proposals []ProjectLinkProposal, deferral associateDeferral, requestID string, complete func(*sql.Tx, time.Time, ProjectLinkRunResult) error, result *LLMAssociateResult) error {
@@ -447,7 +453,7 @@ func (run associateRun) write(config LLMAssociateConfig, payload associatePayloa
 			}
 		}
 		if len(deferral.primaries) > 0 {
-			if result.VerifyRequest, err = emitVerifyRequestTx(tx, now, deferral.primaries, escalationOrder(payload, deferral.primaries)); err != nil {
+			if result.VerifyRequest, err = emitVerifyRequestTx(tx, now, deferral.primaries, escalationOrder(payload, deferral.primaries), deferral.snapshot); err != nil {
 				return err
 			}
 			result.verifyRequestUnits = len(deferral.primaries)

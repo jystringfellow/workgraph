@@ -563,7 +563,10 @@ review --json` `auto_apply` object carry `window_days`, `paused` (any profile
 paused), `pause_reason` (the paused profiles' reasons joined by `; `), and
 `profiles`, one object per reported profile with `profile`,
 `required_accuracy`, `status`, `accuracy`, `sample_size`, `confirmed`,
-`corrected`, `undone`, `paused`, and `pause_reason`.
+`corrected`, `undone`, `paused`, and `pause_reason`. This replaces the
+earlier single-profile shape: the top-level `status`, `accuracy`,
+`sample_size`, `confirmed`, `corrected`, and `undone` fields are gone, and
+consumers read them from `profiles`.
 
 ### Verifier
 
@@ -585,10 +588,17 @@ workgraph llm use sonnet --for associate-verify
   associate profile received it, with the associate result added as
   `primary_answer` (`target`, `project`, `new_project`, `kind`, `summary`,
   `confidence`), plus the catalog entries those units offer and the same
-  recent decisions. It never receives more than the associate profile saw:
-  the request passes the hosted outbound filter when either profile is
-  hosted, and a unit whose permitted members changed since the associate pass
-  is not verified.
+  recent decisions. It never receives more than the associate profile saw.
+  The verifier payload is built from the associate's own payload, never
+  rebuilt from current data: a bridge claim stores the payload it sent, and a
+  verify request stores the escalated units, their catalog entries, the
+  recent decisions, and whether the associate request passed the hosted
+  outbound filter. Before that stored payload is reused, it is checked
+  against current permissions: a unit whose permitted members changed, or
+  that is no longer eligible, is not verified, a catalog entry no longer
+  offered to the unit is dropped, and a decision no longer permitted is
+  dropped. Nothing added after the associate pass is sent. The request passes
+  the hosted outbound filter when either profile is hosted.
 - The verifier answers in the associate result shape and is validated the
   same way. Its valid result becomes the unit's link, with `profile` set to
   the verifier, so auto-apply uses the verifier's threshold, recent
@@ -601,7 +611,10 @@ workgraph llm use sonnet --for associate-verify
   escalated unit keeps its associate result and the run report says why.
   Before the associate model is called, the verifier passes the same hosted
   opt-in and managed-provider checks as the associate profile, so a verifier
-  that is not allowed fails the run before anything is sent.
+  that is not allowed fails the run before anything is sent. The checks run
+  again immediately before every verifier call, so a route changed later to a
+  profile that is not allowed sends nothing and the escalated units keep
+  their associate results.
 - The verifier follows the execution rule of its own profile. A direct
   verifier is called in the same run as the associate pass, whether that pass
   ran directly or was submitted by the bridge, before any link is written. A
@@ -614,7 +627,14 @@ workgraph llm use sonnet --for associate-verify
   `llm associate` run with a bridge verifier refuses to start while any
   `llm.associate` request is active, printing it.
 - A verify request is claimed by the client of the verifier route and runs
-  with that profile's model and config directory. When the verifier route
+  with that profile's model and config directory. The claim transaction only
+  selects requests whose task this worker's client is routed to, so a worker
+  authorized for an associate request cannot claim a verify request that
+  replaced it, and preparing the task checks the claiming worker against the
+  task's profile again before any message is returned. The claim records the
+  profile it was prepared for; a submission after the route for that task
+  changed is refused and stores nothing, and the worker fails the request so
+  the routed profile claims it again. When the verifier route
   runs directly at claim time, the daemon runs the request; when the route is
   gone, the daemon completes it by storing the associate results.
 - `--dry-run` sends nothing and prints `Verifier: <profile>, confidence <floor>
