@@ -314,7 +314,7 @@ func TestBridgeMCPRejectedFinalSlackListChunkDiscardsStagedFragments(t *testing.
 
 func TestSlackListSnapshotRecordsReturnToEarlierStateAndDedupesReplays(t *testing.T) {
 	homeDir := configureSlackListDriftBridge(t)
-	now := time.Now().UTC().Add(-4 * time.Minute)
+	now := time.Now().UTC().Add(-7 * time.Minute)
 	ingest := func(at time.Time, done string) workgraph.BridgedIngestResult {
 		t.Helper()
 		requestID, token := claimSlackListSnapshot(t, homeDir, at)
@@ -331,16 +331,21 @@ func TestSlackListSnapshotRecordsReturnToEarlierStateAndDedupesReplays(t *testin
 	done := ingest(now.Add(time.Minute), "true")
 	reopened := ingest(now.Add(2*time.Minute), "false")
 	replay := ingest(now.Add(3*time.Minute), "false")
-	if open.EventsInserted != 1 || done.EventsInserted != 1 || reopened.EventsInserted != 1 || replay.EventsDuplicate != 1 {
-		t.Fatalf("expected open, done, and reopened revisions with the replay deduplicated: %#v %#v %#v %#v", open, done, reopened, replay)
+	doneAgain := ingest(now.Add(4*time.Minute), "true")
+	reopenedAgain := ingest(now.Add(5*time.Minute), "false")
+	replayAgain := ingest(now.Add(6*time.Minute), "false")
+	if open.EventsInserted != 1 || done.EventsInserted != 1 || reopened.EventsInserted != 1 || replay.EventsDuplicate != 1 ||
+		doneAgain.EventsInserted != 1 || reopenedAgain.EventsInserted != 1 || replayAgain.EventsDuplicate != 1 {
+		t.Fatalf("expected every transition across two cycles stored and replays deduplicated: %#v %#v %#v %#v %#v %#v %#v",
+			open, done, reopened, replay, doneAgain, reopenedAgain, replayAgain)
 	}
 	db := openBridgedCaptureDatabase(t, homeDir)
 	var latestDone bool
 	if err := db.QueryRow(`SELECT json_extract(payload_json, '$.done') FROM events WHERE type = 'slack.list_item' ORDER BY timestamp DESC LIMIT 1`).Scan(&latestDone); err != nil {
 		t.Fatalf("read latest revision: %v", err)
 	}
-	if latestDone || countSlackListEvents(t, homeDir) != 3 {
-		t.Fatalf("expected three revisions ending open, latestDone=%v", latestDone)
+	if latestDone || countSlackListEvents(t, homeDir) != 5 {
+		t.Fatalf("expected five revisions ending open, latestDone=%v", latestDone)
 	}
 }
 

@@ -1036,7 +1036,7 @@ func IngestBridgedCapture(config BridgedIngestConfig) (BridgedIngestResult, erro
 		Source:       source,
 		EventsRead:   len(prepared),
 	}
-	latestSlackListRevisions := map[string]string{}
+	latestSlackListRevisions := map[string]latestSlackListRevision{}
 	if len(snapshotKeys) > 0 {
 		listIDs := map[string]bool{}
 		for key := range snapshotKeys {
@@ -1055,13 +1055,13 @@ func IngestBridgedCapture(config BridgedIngestConfig) (BridgedIngestResult, erro
 	createdAt := now.Format(time.RFC3339Nano)
 	for _, event := range prepared {
 		if event.SnapshotKey != "" {
-			previous := latestSlackListRevisions[event.SnapshotKey]
-			if previous == event.SnapshotRevision {
+			previous, found := latestSlackListRevisions[event.SnapshotKey]
+			if found && previous.hash == event.SnapshotRevision {
 				result.EventsDuplicate++
 				continue
 			}
-			if previous != "" {
-				event.ID = slackListRevisionEventID(event.SnapshotExternalID + ":after:" + previous)
+			if found {
+				event.ID = slackListRevisionEventID(event.SnapshotExternalID + ":after:" + previous.eventID)
 			}
 		}
 		insert, err := tx.Exec(`INSERT OR IGNORE INTO events (

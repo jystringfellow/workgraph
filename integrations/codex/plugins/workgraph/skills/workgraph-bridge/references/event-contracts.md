@@ -78,7 +78,7 @@ containing `list_id` and a `fields` object, and omit `timestamp` and
 the first complete per-List row-key candidate, applies optional state and
 interest-column interpretation, assigns the request `until` as `observed_at`,
 hashes canonical JSON of the row's revision content, and derives
-`<list>:<row-key>:<content-hash>`. Revision content is the List id, `done`, and
+`<list>:<row-key>:<content-hash>` (first revision; later ones chain `:after:<previous-event-id>`). Revision content is the List id, `done`, and
 every non-empty single-line field with whitespace collapsed. Multi-line values
 such as a Details body stay in `fields` but do not create revisions, so relay
 drift in long text cannot duplicate an unchanged row. Field order and

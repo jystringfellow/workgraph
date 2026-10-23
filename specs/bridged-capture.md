@@ -648,9 +648,11 @@ is reported as deduplicated and not stored, including rows stored before this
 revision rule. "Most recent" orders stored revisions by the parsed timestamp
 instant, then capture time, then id, never by timestamp text. A changed row
 whose row key already has stored revisions takes the identity
-`<list>:<row-key>:<content-hash>:after:<previous-content-hash>`, so returning
-to an earlier state (open, done, open again) is stored as a new revision while
-an exact replay of the same transition still deduplicates. `today` and `resume` likewise hide a stored `slack.list_item`
+`<list>:<row-key>:<content-hash>:after:<previous-revision-event-id>`. The id
+chains through the predecessor event, so every return to an earlier state
+(open, done, open, done again) is stored as a new revision, while an exact
+replay or retry still deduplicates because the row already matches its latest
+revision. `today` and `resume` likewise hide a stored `slack.list_item`
 whose revision content repeats the preceding stored revision of the same row,
 so earlier transcription-drift duplicates do not reappear as new work. State is revision content, not identity:
 completed rows remain evidence but can be excluded from future next-work

@@ -249,7 +249,12 @@ type storedSlackListRevision struct {
 	payloadJSON string
 }
 
-func slackListRevisionHistory(db slackListRevisionQueryer, listIDs []string) (map[string]string, map[string]bool, error) {
+type latestSlackListRevision struct {
+	hash    string
+	eventID string
+}
+
+func slackListRevisionHistory(db slackListRevisionQueryer, listIDs []string) (map[string]latestSlackListRevision, map[string]bool, error) {
 	query := `SELECT id, timestamp, created_at, payload_json FROM events
 		WHERE type = 'slack.list_item' AND json_extract(payload_json, '$.capture_semantics') = 'complete_snapshot'`
 	args := make([]any, 0, len(listIDs))
@@ -287,7 +292,7 @@ func slackListRevisionHistory(db slackListRevisionQueryer, listIDs []string) (ma
 		}
 		return stored[i].id < stored[j].id
 	})
-	latest := map[string]string{}
+	latest := map[string]latestSlackListRevision{}
 	repeated := map[string]bool{}
 	for _, revision := range stored {
 		id, payloadJSON := revision.id, revision.payloadJSON
@@ -304,11 +309,11 @@ func slackListRevisionHistory(db slackListRevisionQueryer, listIDs []string) (ma
 		}
 		key := slackListRevisionKey(payload.ListID, payload.RowKey)
 		revision := slackListRevisionHash(payload.ListID, payload.Fields, payload.Done)
-		if previous, found := latest[key]; found && previous == revision {
+		if previous, found := latest[key]; found && previous.hash == revision {
 			repeated[id] = true
 			continue
 		}
-		latest[key] = revision
+		latest[key] = latestSlackListRevision{hash: revision, eventID: id}
 	}
 	return latest, repeated, nil
 }
