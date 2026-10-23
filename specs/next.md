@@ -171,7 +171,8 @@ the pause line when auto-apply is paused, and at most three items.
 ## Commands
 
 ```text
-workgraph next [--project <p>] [--reason <r>] [--ids | --json [--include-untrusted]]
+workgraph next [--project <p>] [--reason <r>] [--ids] [--team-reviews]
+workgraph next [--project <p>] [--reason <r>] --json [--include-untrusted]
 workgraph next --watch --json [--include-untrusted]
 workgraph next explain <item-id>
 workgraph next done <item-id>
@@ -222,6 +223,41 @@ Ready
   shows the freshness line. The `categorize` group follows either case and
   needs no connector.
 - `--project` and `--reason` are exact filters.
+
+#### Team review requests
+
+A `review_requested` item is a team-only review request when its request is
+not direct (`teams` is non-empty or `unresolved_team` is true), it is the
+only item on its pull request, and the pull request was not opened on the
+user's behalf. Large teams can request review on hundreds of pull requests,
+most of them bot dependency bumps, so text output summarizes these instead of
+listing them under `Waiting on you`:
+
+```text
+Team review requests via acme/all-engineers: 4 PRs (3 bot) across 2 repos
+  acme/widgets#12 Bump yaml [bot] — https://github.com/acme/widgets/pull/12
+    review requested via acme/all-engineers
+  acme/gadgets#8 Bump lodash [bot] — https://github.com/acme/gadgets/pull/8
+    review requested via acme/all-engineers
+  acme/widgets#11 Fix flaky test — https://github.com/acme/widgets/pull/11
+    review requested via acme/all-engineers
+  1 more: workgraph next --team-reviews
+```
+
+- Team summaries follow the `Waiting on you`, `Blocked`, and `Ready`
+  sections, one per team label, sorted by label. The label is the item's
+  teams joined by `, `, or `team (unresolved)`.
+- Each summary counts pull requests, bot-authored pull requests (omitted when
+  zero), and distinct repositories, then shows the three newest by `since`
+  and a `more` line when there are more.
+- `--team-reviews` lists every team-only pull request under its summary,
+  sorted by repository then number, with no `more` line. It is text-only;
+  with `--json` it is a usage error.
+- A review request that is direct, shares its pull request with another item,
+  or is on a pull request opened on the user's behalf stays listed under
+  `Waiting on you` as before.
+- JSON, `--watch`, MCP, `explain`, `done`, and `snooze` are unchanged and
+  still include team-only items, so `done` and `snooze` act on them by id.
 
 ### `workgraph next explain <item-id>`
 
@@ -295,12 +331,16 @@ into tool descriptions or instructions (`specs/llm-integration.md`).
   left off`, listing at most five pull requests in `next` order in the same
   grouped format as `next`, then `<n> more: workgraph next` with the number
   of remaining pull requests when more exist. `categorize` items are counted
-  as remaining decisions instead (see `specs/resume.md`). `resume <project>` shows that project's
+  as remaining decisions instead (see `specs/resume.md`). Team-only review
+  requests are not listed; one `<n> team review requests: workgraph next`
+  line counts them. `resume <project>` shows that project's
   items after `Recent activity`. Showing items does not advance the resume
   check-in beyond the existing rules.
 - **`today`**: stays a personal activity view. When items are open,
   including `categorize` items, it ends with `Waiting on you: <n> items
-  (workgraph next)`.
+  (workgraph next)`. Team-only review requests are not part of `<n>`; when
+  any are open the line reads `Waiting on you: <n> items + <m> team review
+  requests (workgraph next)`.
 - A failed next projection does not fail `today` or `resume`. They omit the
   waiting items and show one short `Waiting on you unavailable: <error class>`
   warning. `next` itself still reports the error.
@@ -374,5 +414,15 @@ only. No fact invokes `gh`.
   both roles renders one header labeled `on your behalf` with its reply and
   review request under it, while JSON keeps both items and their ids
   (`facts/github_pr_watch_reviewer_test.go`).
+- **N12. Team-only review requests are summarized per team.** With direct
+  items, a direct-plus-team request, an on-behalf bot PR with a team request,
+  four team-only requests from one team across two repositories (three by
+  bots), and one from another team, `next` lists the direct, direct-plus-team,
+  and on-behalf PRs under `Waiting on you` and not under a summary, prints one
+  summary per team with its counts, the three newest PRs, and a `more` line,
+  and omits the oldest team-only PR. `--team-reviews` lists all five in team
+  then repository order without a `more` line, and is a usage error with
+  `--json`. `--json` still returns every item. `today` counts the five
+  separately, and `resume` lists none of them and counts them.
 - **N8. MCP returns the same items read-only.** The `next_items` tool returns
   the same ids as `next --json` and has no write behavior.

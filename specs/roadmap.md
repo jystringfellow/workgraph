@@ -106,6 +106,10 @@ Priority labels used below:
   read-only `next_items` MCP tool; items appear in `resume`, with a count in
   `today`. [spec: `specs/next.md`]
 
+- [x] Team-only review requests in `next` are summarized per team with
+  counts and the newest three, expandable with `--team-reviews`, and counted
+  separately in `today` and `resume`. [spec: `specs/next.md` N12]
+
 - [x] GitHub pull request watch (`github.pr_watch`) as the first `next`
   source: open PRs the user authored or is asked to review (directly or
   through a team) via the existing `gh` login, read-only transition events,
