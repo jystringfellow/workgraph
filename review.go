@@ -80,15 +80,23 @@ type effectivenessReviewPayload struct {
 }
 
 type ProjectAutoApplyMetric struct {
-	Status      string   `json:"status"`
-	WindowDays  int      `json:"window_days"`
-	SampleSize  int      `json:"sample_size"`
-	Confirmed   int      `json:"confirmed"`
-	Corrected   int      `json:"corrected"`
-	Undone      int      `json:"undone"`
-	Accuracy    *float64 `json:"accuracy"`
-	Paused      bool     `json:"paused"`
-	PauseReason string   `json:"pause_reason,omitempty"`
+	WindowDays  int                             `json:"window_days"`
+	Paused      bool                            `json:"paused"`
+	PauseReason string                          `json:"pause_reason,omitempty"`
+	Profiles    []ProjectAutoApplyProfileMetric `json:"profiles"`
+}
+
+type ProjectAutoApplyProfileMetric struct {
+	Profile          string   `json:"profile"`
+	RequiredAccuracy float64  `json:"required_accuracy"`
+	Status           string   `json:"status"`
+	Accuracy         *float64 `json:"accuracy"`
+	SampleSize       int      `json:"sample_size"`
+	Confirmed        int      `json:"confirmed"`
+	Corrected        int      `json:"corrected"`
+	Undone           int      `json:"undone"`
+	Paused           bool     `json:"paused"`
+	PauseReason      string   `json:"pause_reason,omitempty"`
 }
 
 func EffectivenessReview(config EffectivenessReviewConfig) (EffectivenessReviewResult, error) {
@@ -122,7 +130,7 @@ func EffectivenessReview(config EffectivenessReviewConfig) (EffectivenessReviewR
 		return EffectivenessReviewResult{}, err
 	}
 	result.Connectors = collectReviewConnectorStates(connectorStatuses(runStatus.HomeDir, connectorRuntime), window.End)
-	if result.ProjectAutoApply, err = projectLinkAccuracy(db, window.End.UTC()); err != nil {
+	if result.ProjectAutoApply, err = projectLinkAccuracy(db, window.End.UTC(), loadAutoApplyThresholds(runStatus.HomeDir)); err != nil {
 		return EffectivenessReviewResult{}, err
 	}
 	if result.DismissalReasons == nil {
@@ -349,13 +357,20 @@ func reviewPayload(result EffectivenessReviewResult) effectivenessReviewPayload 
 
 func (report ProjectLinkAccuracyReport) Metric() ProjectAutoApplyMetric {
 	payload := ProjectAutoApplyMetric{
-		Status: report.Status, WindowDays: int(report.Window / (24 * time.Hour)), SampleSize: report.Decided,
-		Confirmed: report.Confirmed, Corrected: report.Corrected, Undone: report.Undone,
-		Paused: report.Paused, PauseReason: report.PauseReason,
+		WindowDays: int(report.Window / (24 * time.Hour)), Paused: report.Paused, PauseReason: report.PauseReason,
+		Profiles: []ProjectAutoApplyProfileMetric{},
 	}
-	if report.Status == "measured" {
-		accuracy := report.Accuracy
-		payload.Accuracy = &accuracy
+	for _, entry := range report.Profiles {
+		metric := ProjectAutoApplyProfileMetric{
+			Profile: entry.Profile, RequiredAccuracy: entry.Required, Status: entry.Status, SampleSize: entry.Decided,
+			Confirmed: entry.Confirmed, Corrected: entry.Corrected, Undone: entry.Undone,
+			Paused: entry.Paused, PauseReason: entry.PauseReason,
+		}
+		if entry.Status == "measured" {
+			accuracy := entry.Accuracy
+			metric.Accuracy = &accuracy
+		}
+		payload.Profiles = append(payload.Profiles, metric)
 	}
 	return payload
 }

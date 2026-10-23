@@ -93,6 +93,7 @@ workgraph llm add <profile> --provider bedrock --aws-profile <profile> --region 
 workgraph llm list
 workgraph llm use <profile>
 workgraph llm use <profile> --for summarize
+workgraph llm set <profile> --auto-apply-confidence <0.5-1.0> --verify-floor <0-1>
 workgraph llm test
 workgraph llm test --profile <profile>
 workgraph llm summarize today --dry-run
@@ -281,13 +282,17 @@ Persistence:
 
 - validated entries become `project_links` rows; invalid entries are discarded
   and counted
-- an entry is applied automatically only at confidence 0.95 or higher, for an
+- an entry is applied automatically only at or above the deciding profile's
+  auto-apply threshold (0.95 unless `auto_apply_confidence` is set), for an
   existing project or none, with no recent user rejection for that container
-  and project, and while auto-apply is not paused; everything else is
-  proposed for review
-- auto-apply pauses when measured accuracy over at least 20 decided auto
-  links is below 0.95; with fewer than 20 it stays on and every undecided
-  auto link is listed for review
+  and project, and while auto-apply is not paused for that profile;
+  everything else is proposed for review
+- auto-apply pauses for a profile when its measured accuracy over at least 20
+  decided auto links is below its threshold; with fewer than 20 it stays on
+  and every undecided auto link from it is listed for review
+- an optional `associate-verify` route sends results between the associate
+  profile's verify floor and its threshold to a second profile, whose result
+  becomes the link (see Verifier in `specs/projects.md`)
 - the daemon schedules categorization through the outbox; an `ai-client`
   profile with `"execution": "bridge"` is run by the bridge worker instead of
   workgraph (see Scheduling in `specs/projects.md`)

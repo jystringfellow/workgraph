@@ -98,6 +98,9 @@ type ProjectLinkProposal struct {
 	Evidence   []string
 	Rule       string
 	Apply      bool
+	Profile    string
+
+	verification *projectLinkVerification
 }
 
 type ProjectLinkRun struct {
@@ -166,7 +169,7 @@ func recordProjectLinkRunTx(tx *sql.Tx, now time.Time, run ProjectLinkRun) (Proj
 			Evidence:   proposal.Evidence,
 			State:      "proposed",
 			Rule:       proposal.Rule,
-			Profile:    run.Profile,
+			Profile:    firstNonEmpty(proposal.Profile, run.Profile),
 			RunID:      result.RunID,
 		}
 		if run.Source == "deterministic" {
@@ -185,6 +188,9 @@ func recordProjectLinkRunTx(tx *sql.Tx, now time.Time, run ProjectLinkRun) (Proj
 		}
 		written, err := insertProjectLink(tx, now, link)
 		if err != nil {
+			return ProjectLinkRunResult{}, err
+		}
+		if err := recordProjectLinkVerification(tx, written.ID, proposal.verification); err != nil {
 			return ProjectLinkRunResult{}, err
 		}
 		result.Written = append(result.Written, written)
@@ -387,7 +393,7 @@ func withProjectLinksTx(config ProjectLinkStoreConfig, apply func(*sql.Tx, time.
 	if err := apply(tx, now.UTC()); err != nil {
 		return err
 	}
-	if err := recordProjectAutoApplyState(tx, now.UTC()); err != nil {
+	if err := recordProjectAutoApplyState(tx, now.UTC(), loadAutoApplyThresholds(config.HomeDir)); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -398,7 +404,7 @@ func projectLinksWriteDSN(dbPath string) string {
 }
 
 func ensureProjectLinksSchema(tx *sql.Tx) error {
-	for _, statement := range []string{projectLinksSchema, projectLinksCurrentIndex} {
+	for _, statement := range []string{projectLinksSchema, projectLinksCurrentIndex, projectLinkVerificationsSchema} {
 		if _, err := tx.Exec(statement); err != nil {
 			return fmt.Errorf("ensure project_links schema: %w", err)
 		}

@@ -102,7 +102,9 @@ worker to categorize work, not to fetch provider data. It needs no provider
 preflight, and a claim without a kind never returns it. Only the client the
 `associate` profile routes to can claim it, with a worker name that starts
 with that client id, for example `claude-code-drain-…`; answer with the
-profile's model.
+profile's model. A task named `associate-verify` belongs to the
+`associate-verify` profile instead: its units carry a first model's
+`primary_answer`, and the reply uses the same JSON shape.
 
 1. Claim it with `capture_requests_claim` and `"kind": "llm_task"`.
 2. Answer the returned `task.messages` yourself, following the system and user

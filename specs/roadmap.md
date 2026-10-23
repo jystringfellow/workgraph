@@ -67,6 +67,12 @@ Priority labels used below:
 
 ## Recently Delivered
 
+- [x] Associate thresholds and verifier: per-profile auto-apply thresholds and
+  verify floors (`llm add --auto-apply-confidence`, `llm set`), a per-profile
+  accuracy gate whose required accuracy is the profile's threshold, and an
+  `associate-verify` route that sends floor-to-threshold units to a second
+  profile, directly or through the bridge. [spec: `specs/projects.md` D5]
+
 - [x] Bridge drain reliability: categorization alternates with claimable
   capture, `window_too_large` failures narrow bounded windows in place down to
   one hour, and Claude drains refuse to claim without every workgraph MCP

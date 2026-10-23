@@ -251,13 +251,15 @@ func TestAssociateAutoApplyGatesAndAccuracyPause(t *testing.T) {
 	assertAssociateLink(t, store, units[2].ID, "proposed", false)
 	assertAssociateLink(t, store, units[3].ID, "applied", true)
 	assertAssociateLink(t, store, rejecting[0].ID, "proposed", false)
-	accuracy, err := workgraph.ProjectLinkAccuracy(workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, Now: now})
+	report, err := workgraph.ProjectLinkAccuracy(workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, Now: now})
+	accuracy := report.For("local-associate")
 	if err != nil || accuracy.Status != "insufficient_data" || accuracy.Decided != 1 || accuracy.Paused {
 		t.Fatalf("expected auto-apply on with insufficient data, got %+v %v", accuracy, err)
 	}
 
 	seedDecidedAutoLinks(t, home, now.Add(-24*time.Hour), "low", 18, 2)
-	accuracy, err = workgraph.ProjectLinkAccuracy(workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, Now: now})
+	report, err = workgraph.ProjectLinkAccuracy(workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, Now: now})
+	accuracy = report.For("local-associate")
 	if err != nil || accuracy.Status != "measured" || accuracy.Decided != 21 || !accuracy.Paused {
 		t.Fatalf("expected measured accuracy below 0.95 to pause, got %+v %v", accuracy, err)
 	}
@@ -267,7 +269,7 @@ func TestAssociateAutoApplyGatesAndAccuracyPause(t *testing.T) {
 	if err != nil {
 		t.Fatalf("associate while paused: %v", err)
 	}
-	if result.Applied != 0 || result.Proposed != 1 || !strings.Contains(result.Message, "Auto-apply paused: accuracy 0.86 over 21 decided") {
+	if result.Applied != 0 || result.Proposed != 1 || !strings.Contains(result.Message, "Auto-apply paused: local-associate accuracy 0.86 over 21 decided") {
 		t.Fatalf("expected the paused run to propose and say why, got %+v", result)
 	}
 	assertAssociateLink(t, store, paused[0].ID, "proposed", false)
@@ -275,7 +277,7 @@ func TestAssociateAutoApplyGatesAndAccuracyPause(t *testing.T) {
 		t.Fatalf("expected one pause event, got %v", got)
 	}
 	review, err := workgraph.EffectivenessReview(workgraph.EffectivenessReviewConfig{HomeDir: home.HomeDir, Now: now})
-	if err != nil || !strings.Contains(review.Message, "Project auto-apply accuracy: 0.86 (18/21 decided auto links, 14 day window)") || !strings.Contains(review.Message, "Auto-apply paused: accuracy 0.86") {
+	if err != nil || !strings.Contains(review.Message, "Project auto-apply accuracy for local-associate: 0.86 (18/21 decided auto links, 14 day window, required 0.95)") || !strings.Contains(review.Message, "Auto-apply paused: local-associate accuracy 0.86") {
 		t.Fatalf("expected workgraph review to report the metric and pause, got %v\n%s", err, review.Message)
 	}
 
@@ -286,7 +288,7 @@ func TestAssociateAutoApplyGatesAndAccuracyPause(t *testing.T) {
 	if err != nil {
 		t.Fatalf("associate after the sample expired: %v", err)
 	}
-	if result.Applied != 0 || result.Proposed != 1 || result.Accuracy.Status != "insufficient_data" || !result.Accuracy.Paused {
+	if result.Applied != 0 || result.Proposed != 1 || result.Accuracy.For("local-associate").Status != "insufficient_data" || !result.Accuracy.For("local-associate").Paused {
 		t.Fatalf("expected the pause to survive a sample below 20, got %+v", result)
 	}
 
@@ -297,7 +299,7 @@ func TestAssociateAutoApplyGatesAndAccuracyPause(t *testing.T) {
 	if err != nil {
 		t.Fatalf("associate after accuracy recovered: %v", err)
 	}
-	if result.Applied != 1 || result.Accuracy.Paused {
+	if result.Applied != 1 || result.Accuracy.For("local-associate").Paused {
 		t.Fatalf("expected auto-apply to resume, got %+v", result)
 	}
 	if got := autoApplyPauseEvents(t, home.DatabasePath); !reflect.DeepEqual(got, []string{"projects.auto_apply_paused", "projects.auto_apply_resumed"}) {
@@ -319,15 +321,16 @@ func TestAssociateRecordsAMeasuredPauseWithoutAModelCall(t *testing.T) {
 	if err != nil || len(result.Sent) != 0 || fake.Calls() != 0 {
 		t.Fatalf("expected a run with no eligible units to call no model, got %+v %v calls=%d", result, err, fake.Calls())
 	}
-	accuracy, err := workgraph.ProjectLinkAccuracy(workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, Now: now.Add(20 * 24 * time.Hour)})
-	if err != nil || accuracy.Status != "insufficient_data" || !accuracy.Paused || !strings.Contains(accuracy.PauseReason, "accuracy 0.90 over 20 decided") {
+	report, err := workgraph.ProjectLinkAccuracy(workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, Now: now.Add(20 * 24 * time.Hour)})
+	accuracy := report.For("local-associate")
+	if err != nil || accuracy.Status != "insufficient_data" || !accuracy.Paused || !strings.Contains(accuracy.PauseReason, "local-associate accuracy 0.90 over 20 decided") {
 		t.Fatalf("expected the recorded pause to outlive its sample, got %+v %v", accuracy, err)
 	}
 
 	args := []string{"--home", home.HomeDir, "--memory", home.MemoryDir}
 	for _, mode := range [][]string{{"projects", "review"}, {"projects", "review", "--auto"}} {
 		output, err := runworkgraph(t, repoRoot(t), append(mode, args...)...)
-		if err != nil || !strings.Contains(string(output), "Auto-apply paused: accuracy 0.90 over 20 decided") {
+		if err != nil || !strings.Contains(string(output), "Auto-apply paused: local-associate accuracy 0.90 over 20 decided") {
 			t.Fatalf("expected %v to say auto-apply is paused and why: %v\n%s", mode, err, output)
 		}
 	}

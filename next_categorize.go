@@ -19,7 +19,7 @@ type nextCategorizeState struct {
 	PauseReason      string
 }
 
-func loadNextCategorizeItems(db projectLinkQueryer, now time.Time, includeUntrusted bool) ([]NextItem, nextCategorizeState, error) {
+func loadNextCategorizeItems(db projectLinkQueryer, now time.Time, includeUntrusted bool, thresholds autoApplyThresholds) ([]NextItem, nextCategorizeState, error) {
 	present, err := projectLinksTablePresent(db)
 	if err != nil || !present {
 		return nil, nextCategorizeState{}, err
@@ -28,7 +28,7 @@ func loadNextCategorizeItems(db projectLinkQueryer, now time.Time, includeUntrus
 	if err != nil {
 		return nil, nextCategorizeState{}, err
 	}
-	accuracy, err := projectLinkAccuracy(db, now.UTC())
+	accuracy, err := projectLinkAccuracy(db, now.UTC(), thresholds)
 	if err != nil {
 		return nil, nextCategorizeState{}, err
 	}
