@@ -206,7 +206,8 @@ never the PAT.
 A request moves through `pending`, `claimed`, `completed`, or `cancelled`.
 Claimed work has a short lease. The worker renews before the lease expires and
 submits one complete normalized batch. Empty results are valid only after an
-exhaustive bounded query or applicable control query proves emptiness.
+exhaustive bounded query or applicable control query proves emptiness, and the
+proof travels as `empty_proof` on the empty submission rather than as an event.
 
 For a human-driven diagnostic drain, use a private claim file. Never put the
 claim token in a command argument or log:

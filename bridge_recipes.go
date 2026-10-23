@@ -113,5 +113,5 @@ func ValidateBridgedEmptyProof(proof BridgedEmptyProof) error {
 	if proof.ExhaustiveQuery || proof.ControlQueryPassed {
 		return nil
 	}
-	return errors.New("empty bridged capture requires an exhaustive query or passed control query")
+	return errors.New(`empty bridged capture requires empty_proof {"exhaustive_query":true} or {"control_query_passed":true}; never submit the control query as an event`)
 }

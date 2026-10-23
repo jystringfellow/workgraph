@@ -427,6 +427,9 @@ func createSchema(db *sql.DB) error {
 		}
 	}
 
+	if err := backfillBridgedSummaries(db); err != nil {
+		return err
+	}
 	return backfillSlackEvents(db)
 }
 

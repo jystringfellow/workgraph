@@ -166,6 +166,11 @@ successful empty result: an empty batch is valid only after a complete provider
 query, including any required control query, proves the requested window
 contains no matching items. A zero-result search alone is not proof when the
 provider search is partial, indexed, capped, or otherwise non-exhaustive.
+Submit the proof with the empty submission, never as an event: over MCP call
+`capture_ingest` with the claim, no `events` (or `[]`), and `empty_proof`
+`{"exhaustive_query":true}` or `{"control_query_passed":true}`; over the CLI
+submit `{"events":[],"empty_proof":{...}}`. workgraph rejects any event whose
+type ends in `.control_query` or whose payload `control_query` is JSON `true`.
 
 ## Reference provider recipes
 

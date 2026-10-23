@@ -192,6 +192,7 @@ func loadAssociationCandidates(db *sql.DB, target AssociationEvent) ([]Associati
 		FROM events
 		WHERE id != ? AND source != ? AND timestamp >= ? AND timestamp <= ?
 			AND (type NOT GLOB 'github.pull_request.*' OR type = 'github.pull_request.observed')
+			AND `+notControlQueryEvent+`
 		ORDER BY ABS(julianday(timestamp) - julianday(?)) ASC, timestamp ASC, id ASC
 		LIMIT ?`, target.ID, target.Source, start, end, target.Timestamp.UTC().Format(time.RFC3339Nano), associationCandidateLimit)
 	if err != nil {
