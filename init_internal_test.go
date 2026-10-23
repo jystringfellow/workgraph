@@ -113,6 +113,8 @@ func TestSlackRepairReadsOnlyRowsThatNeedWork(t *testing.T) {
 		slackChannelAliasQuery:           "SEARCH events USING INDEX idx_events_slack_channel_id (<expr>=?)",
 		slackDistinctProjectsQuery:       "SEARCH events USING COVERING INDEX idx_events_project (project>?)",
 		slackEventsForProjectQuery:       "SEARCH events USING INDEX idx_events_project (project=?)",
+		slackKindPrefixedContainersQuery: "SCAN events USING INDEX idx_events_slack_kind_prefixed_container",
+		slackContainerStillUsedQuery:     "SEARCH events USING COVERING INDEX idx_events_project (project=?)",
 	} {
 		var args []any
 		if strings.Contains(query, "?") {

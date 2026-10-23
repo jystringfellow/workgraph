@@ -39,6 +39,9 @@ type LLMAddProfileConfig struct {
 	ModelARN   string
 	ConfigDir  string
 	Execution  string
+
+	AutoApplyConfidence *float64
+	VerifyFloor         *float64
 }
 
 type LLMConnectClientConfig struct {
@@ -113,6 +116,9 @@ type llmProfile struct {
 	ModelARN   string `json:"model_arn,omitempty"`
 	ConfigDir  string `json:"config_dir,omitempty"`
 	Execution  string `json:"execution,omitempty"`
+
+	AutoApplyConfidence *float64 `json:"auto_apply_confidence,omitempty"`
+	VerifyFloor         *float64 `json:"verify_floor,omitempty"`
 }
 
 type llmHostedConfig struct {
@@ -170,6 +176,9 @@ func AddLLMProfile(config LLMAddProfileConfig) (LLMResult, error) {
 		Region:     strings.TrimSpace(config.Region),
 		ModelARN:   strings.TrimSpace(config.ModelARN),
 		Execution:  strings.TrimSpace(config.Execution),
+
+		AutoApplyConfidence: config.AutoApplyConfidence,
+		VerifyFloor:         config.VerifyFloor,
 	}
 	if profile.Provider == "ai-client" {
 		profile.Client, err = normalizeAIClient(profile.Client)
@@ -211,6 +220,7 @@ func AddLLMProfile(config LLMAddProfileConfig) (LLMResult, error) {
 	if profile.Execution != "" {
 		lines = append(lines, "Execution: "+profile.Execution)
 	}
+	lines = append(lines, profile.thresholdLines()...)
 	lines = append(lines, "Config: "+configPath)
 	return LLMResult{ConfigPath: configPath, Message: strings.Join(lines, "\n")}, nil
 }
@@ -248,7 +258,7 @@ func ListLLMProfiles(config LLMListConfig) (LLMResult, error) {
 		if profile.Provider == llmProviderSystemOne {
 			line += " host " + systemOneDestination(profile.BaseURL)
 		}
-		lines = append(lines, line)
+		lines = append(lines, line+" "+profile.thresholdLabel())
 	}
 	if len(stored.TaskProfiles) > 0 {
 		lines = append(lines, "", "Task profiles")
@@ -320,6 +330,9 @@ func UseLLMProfile(config LLMUseProfileConfig) (LLMResult, error) {
 	}
 	configPath := llmConfigPath(homeDir)
 	task := strings.TrimSpace(config.Task)
+	if task == llmTaskAssociateVerify && stored.Profiles[config.Name].Provider == llmProviderSystemOne {
+		return LLMResult{}, errSystemOneCannotVerify
+	}
 	if task == "" {
 		stored.DefaultProfile = config.Name
 		if err := writeLLMConnectorConfig(configPath, stored); err != nil {
@@ -1231,6 +1244,9 @@ func resolveLLMProfile(config llmConnectorConfig, requestedProfile string, task 
 }
 
 func validateLLMProfile(profile llmProfile) error {
+	if err := validateLLMProfileThresholds(profile); err != nil {
+		return err
+	}
 	if profile.Provider != "ai-client" && profile.ConfigDir != "" {
 		return errors.New("config_dir is supported only for ai-client profiles")
 	}

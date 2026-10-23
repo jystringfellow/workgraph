@@ -93,6 +93,7 @@ workgraph llm add <profile> --provider bedrock --aws-profile <profile> --region 
 workgraph llm list
 workgraph llm use <profile>
 workgraph llm use <profile> --for summarize
+workgraph llm set <profile> --auto-apply-confidence <0.5-1.0> --verify-floor <0-1>
 workgraph llm test
 workgraph llm test --profile <profile>
 workgraph llm summarize today --dry-run
@@ -323,7 +324,22 @@ Association mapping, one request per unit:
   discarded with a reason.
 - Validated entries go through the same validation, auto-apply gates, and
   persistence as every other associate profile, including scheduled daemon
-  runs.
+  runs. Links are attributed to the `system-one` profile, so its
+  `--auto-apply-confidence` and `--verify-floor` (on `llm add` or `llm set`)
+  and its per-profile accuracy gate apply.
+- With an `associate-verify` route, units whose returned probability is at or
+  above the profile's verify floor and below its auto-apply threshold go to
+  the verifier exactly as on the chat path (`specs/projects.md`, Verifier).
+  The verifier payload is built from the units actually sent: the payload
+  restricted to them and their catalog entries, passed through the hosted
+  outbound filter when the `system-one` profile is hosted. Skipped units and
+  discarded answers are never escalated. A direct verifier is called in the
+  same run; a bridge verifier gets an `associate-verify` request, from both
+  direct and daemon runs.
+- A `system-one` profile cannot be the verifier: `llm use <profile> --for
+  associate-verify` is refused, and a hand-routed one is refused at run time,
+  so escalated units keep the associate result and the report says
+  `Verifier failed: system-one profiles cannot verify yet`.
 - `--dry-run` prints every request body that would be sent and makes no
   request.
 
@@ -424,13 +440,17 @@ Persistence:
 
 - validated entries become `project_links` rows; invalid entries are discarded
   and counted
-- an entry is applied automatically only at confidence 0.95 or higher, for an
+- an entry is applied automatically only at or above the deciding profile's
+  auto-apply threshold (0.95 unless `auto_apply_confidence` is set), for an
   existing project or none, with no recent user rejection for that container
-  and project, and while auto-apply is not paused; everything else is
-  proposed for review
-- auto-apply pauses when measured accuracy over at least 20 decided auto
-  links is below 0.95; with fewer than 20 it stays on and every undecided
-  auto link is listed for review
+  and project, and while auto-apply is not paused for that profile;
+  everything else is proposed for review
+- auto-apply pauses for a profile when its measured accuracy over at least 20
+  decided auto links is below its threshold; with fewer than 20 it stays on
+  and every undecided auto link from it is listed for review
+- an optional `associate-verify` route sends results between the associate
+  profile's verify floor and its threshold to a second profile, whose result
+  becomes the link (see Verifier in `specs/projects.md`)
 - the daemon schedules categorization through the outbox; an `ai-client`
   profile with `"execution": "bridge"` is run by the bridge worker instead of
   workgraph (see Scheduling in `specs/projects.md`)

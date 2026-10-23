@@ -864,15 +864,15 @@ func TestRunConservativeRootStopsAtFolderOnlyChildren(t *testing.T) {
 		t.Fatalf("init failed: %v", err)
 	}
 	writeInitSettings(t, initResult.SettingsPath, initSettingsFile{
-		WatchDirs:             []string{documentsDir},
-		ConservativeWatchDirs: []string{documentsDir},
-		IgnorePaths:           []string{homeDir},
-		IgnoreNames:           []string{".git", "node_modules"},
+		IgnorePaths: []string{homeDir},
+		IgnoreNames: []string{".git", "node_modules"},
 	})
 
 	capture, err := workgraph.StartRun(workgraph.RunConfig{
-		HomeDir:      homeDir,
-		DatabasePath: initResult.DatabasePath,
+		HomeDir:               homeDir,
+		DatabasePath:          initResult.DatabasePath,
+		WatchDirs:             []string{documentsDir},
+		ConservativeWatchDirs: []string{documentsDir},
 	})
 	if err != nil {
 		t.Fatalf("run start failed: %v", err)
@@ -910,15 +910,15 @@ func TestRunConservativeRootRecursesIntoWorkLikeChild(t *testing.T) {
 		t.Fatalf("init failed: %v", err)
 	}
 	writeInitSettings(t, initResult.SettingsPath, initSettingsFile{
-		WatchDirs:             []string{documentsDir},
-		ConservativeWatchDirs: []string{documentsDir},
-		IgnorePaths:           []string{homeDir},
-		IgnoreNames:           []string{".git", "node_modules"},
+		IgnorePaths: []string{homeDir},
+		IgnoreNames: []string{".git", "node_modules"},
 	})
 
 	capture, err := workgraph.StartRun(workgraph.RunConfig{
-		HomeDir:      homeDir,
-		DatabasePath: initResult.DatabasePath,
+		HomeDir:               homeDir,
+		DatabasePath:          initResult.DatabasePath,
+		WatchDirs:             []string{documentsDir},
+		ConservativeWatchDirs: []string{documentsDir},
 	})
 	if err != nil {
 		t.Fatalf("run start failed: %v", err)

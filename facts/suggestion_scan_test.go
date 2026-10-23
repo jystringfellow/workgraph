@@ -65,6 +65,9 @@ func TestSuggestionScanUsesRecentEventsForRepeatedGeneratedNames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init failed: %v", err)
 	}
+	if _, err := workgraph.AddWatchDir(workgraph.SettingsWatchConfig{HomeDir: homeDir, Path: watchRoot}); err != nil {
+		t.Fatalf("add watch root: %v", err)
+	}
 
 	var eventPaths []string
 	for i := 0; i < 3; i++ {
@@ -182,6 +185,9 @@ func initializedSuggestionScanTree(t *testing.T, childDirectories int) (string, 
 	result, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir, MemoryDir: filepath.Join(t.TempDir(), "memory")})
 	if err != nil {
 		t.Fatalf("init failed: %v", err)
+	}
+	if _, err := workgraph.AddWatchDir(workgraph.SettingsWatchConfig{HomeDir: homeDir, Path: watchRoot}); err != nil {
+		t.Fatalf("add watch root: %v", err)
 	}
 	return homeDir, result.DatabasePath, watchRoot, releasePath
 }

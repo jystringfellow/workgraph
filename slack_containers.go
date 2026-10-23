@@ -15,6 +15,7 @@ const (
 var (
 	slackConversationIDPattern = regexp.MustCompile(`^[CDG][A-Z0-9]{8,}$`)
 	slackMPDMSuffixPattern     = regexp.MustCompile(`-\d+$`)
+	slackKindPrefixedName      = regexp.MustCompile(`^[A-Z]{1,4}:([CDG][A-Z0-9]{8,}):(.+)$`)
 	slackDMLabelPrefixes       = []struct{ prefix, kind string }{
 		{"group direct message", slackKindMPIM},
 		{"group dm", slackKindMPIM},
@@ -77,8 +78,20 @@ func parseSlackDMLabel(name string) (string, string, bool) {
 	return "", "", false
 }
 
+func stripSlackChannelKindPrefix(name, channelID string) (string, bool) {
+	match := slackKindPrefixedName.FindStringSubmatch(name)
+	if match == nil || channelID == "" || match[1] != channelID {
+		return name, false
+	}
+	rest := strings.TrimSpace(match[2])
+	if rest == "" {
+		return name, false
+	}
+	return rest, true
+}
+
 func canonicalSlackContainer(name, channelID, kind string) string {
-	name = slackContainerName(name)
+	name, _ = stripSlackChannelKindPrefix(slackContainerName(name), channelID)
 	if name == channelID {
 		return ""
 	}

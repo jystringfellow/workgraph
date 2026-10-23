@@ -44,8 +44,11 @@ With the GitHub pull request watch (`specs/github-pr-watch.md`) and
 `workgraph next` (`specs/next.md`): of the `github.pull_request.*` transition events, only
 `author_replied` with `responder: author` and `review_submitted` count as
 personal activity; the rest are excluded like snapshots. When `workgraph next`
-has open items, `today` ends with one `Waiting on you: <n> items (workgraph
-next)` line.
+has open items other than `categorize`, `today` ends with one `Waiting on you:
+<n> items (workgraph next)` line counting only those items. When `categorize`
+items are open, it then shows `Project links to review: <n> (<p> project, <q>
+no project) (workgraph projects review)`. Each line is omitted when its count
+is zero.
 
 Both `workgraph today --actor <actor>` and `workgraph events today --actor
 <actor>` apply an exact actor filter to stored event metadata. This is a

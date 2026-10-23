@@ -3,6 +3,7 @@ package workgraph
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +28,8 @@ const (
 )
 
 var errSystemOneNotGenerative = errors.New("system-one profiles answer decision questions only; route them with workgraph llm use <profile> --for associate")
+
+var errSystemOneCannotVerify = errors.New("system-one profiles cannot verify yet")
 
 var errSystemOneDirectOnly = errors.New("system-one profiles run direct only; bridge execution is not supported")
 
@@ -132,7 +135,11 @@ func associateWithSystemOne(config LLMAssociateConfig, run associateRun) (LLMAss
 	if err != nil {
 		return LLMAssociateResult{}, err
 	}
-	if err := run.apply(config, payload, response, nil, &result); err != nil {
+	sent, err := run.systemOneSent(payload, plan)
+	if err != nil {
+		return LLMAssociateResult{}, err
+	}
+	if err := run.apply(config, payload, sent, response, "", nil, &result); err != nil {
 		return LLMAssociateResult{}, err
 	}
 	result.Discarded = append(discarded, result.Discarded...)
@@ -142,7 +149,7 @@ func associateWithSystemOne(config LLMAssociateConfig, run associateRun) (LLMAss
 	return result, nil
 }
 
-func executeSystemOneTask(config LLMAssociateConfig, run associateRun, claim ClaimedCaptureRequest, payload associatePayload, result LLMAssociateResult) (LLMAssociateResult, error) {
+func executeSystemOneTask(config LLMAssociateConfig, run associateRun, claim ClaimedCaptureRequest, payload associatePayload, completion func(*sql.Tx, time.Time, ProjectLinkRunResult) error, result LLMAssociateResult) (LLMAssociateResult, error) {
 	if err := validateLLMProfile(run.profile); err != nil {
 		return LLMAssociateResult{}, err
 	}
@@ -154,12 +161,45 @@ func executeSystemOneTask(config LLMAssociateConfig, run associateRun, claim Cla
 	if err != nil {
 		return LLMAssociateResult{}, err
 	}
-	if err := run.apply(config, payload, response, llmTaskCompletion(claim.Request.ID, claim.ClaimToken, payload), &result); err != nil {
+	sent, err := run.systemOneSent(payload, plan)
+	if err != nil {
+		return LLMAssociateResult{}, err
+	}
+	result.Sent = plan.sentUnitIDs()
+	if err := run.apply(config, payload, sent, response, claim.Request.ID, completion, &result); err != nil {
 		return LLMAssociateResult{}, err
 	}
 	result.Discarded = append(discarded, result.Discarded...)
 	result.Message = llmTaskMessage(run, claim.Request.ID, result)
 	return result, nil
+}
+
+func (run associateRun) systemOneSent(payload associatePayload, plan systemOnePlan) (associateSent, error) {
+	sentUnits := map[string]bool{}
+	for _, id := range plan.sentUnitIDs() {
+		sentUnits[id] = true
+	}
+	sent := associatePayload{Schema: payload.Schema, Projects: []associateProject{}, Units: []associateUnit{}, Decisions: payload.Decisions}
+	offered := map[string]bool{}
+	for _, unit := range payload.Units {
+		if !sentUnits[unit.UnitID] {
+			continue
+		}
+		for _, slug := range unit.Projects {
+			offered[slug] = true
+		}
+		sent.Units = append(sent.Units, unit)
+	}
+	for _, project := range payload.Projects {
+		if offered[project.Slug] {
+			sent.Projects = append(sent.Projects, project)
+		}
+	}
+	filtered, err := run.filteredMessages(sent)
+	if err != nil {
+		return associateSent{}, err
+	}
+	return run.sentFrom(sent, filtered), nil
 }
 
 func (run associateRun) decideWithSystemOne(config LLMAssociateConfig, plan systemOnePlan) (string, []AssociateDiscard, error) {

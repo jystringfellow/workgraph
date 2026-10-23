@@ -9,9 +9,8 @@ import (
 )
 
 const (
-	nextReasonCategorize    = "categorize"
-	nextGroupCategorize     = "categorize"
-	nextCategorizeTextLimit = 3
+	nextReasonCategorize = "categorize"
+	nextGroupCategorize  = "categorize"
 )
 
 type nextCategorizeState struct {
@@ -20,7 +19,7 @@ type nextCategorizeState struct {
 	PauseReason      string
 }
 
-func loadNextCategorizeItems(db projectLinkQueryer, now time.Time, includeUntrusted bool) ([]NextItem, nextCategorizeState, error) {
+func loadNextCategorizeItems(db projectLinkQueryer, now time.Time, includeUntrusted bool, thresholds autoApplyThresholds) ([]NextItem, nextCategorizeState, error) {
 	present, err := projectLinksTablePresent(db)
 	if err != nil || !present {
 		return nil, nextCategorizeState{}, err
@@ -29,7 +28,7 @@ func loadNextCategorizeItems(db projectLinkQueryer, now time.Time, includeUntrus
 	if err != nil {
 		return nil, nextCategorizeState{}, err
 	}
-	accuracy, err := projectLinkAccuracy(db, now.UTC())
+	accuracy, err := projectLinkAccuracy(db, now.UTC(), thresholds)
 	if err != nil {
 		return nil, nextCategorizeState{}, err
 	}
@@ -120,22 +119,40 @@ func nextCategorizeItems(items []NextItem) []NextItem {
 	return categorize
 }
 
-func nextCategorizeLines(items []NextItem, state nextCategorizeState, showIDs bool) []string {
+func nextCategorizeLines(items []NextItem, state nextCategorizeState, showIDs bool, listItems bool) []string {
 	categorize := nextCategorizeItems(items)
 	if len(categorize) == 0 && !state.Paused {
 		return nil
 	}
-	lines := []string{fmt.Sprintf("Categorize: %d awaiting a decision (workgraph projects review), %d auto-applied today (workgraph projects review --auto)", len(categorize), state.AutoAppliedToday)}
+	lines := []string{nextLinkReviewLine(categorize) + fmt.Sprintf(", %d auto-applied today (workgraph projects review --auto)", state.AutoAppliedToday)}
 	if state.Paused {
 		lines = append(lines, "Auto-apply paused: "+state.PauseReason)
 	}
-	if len(categorize) > nextCategorizeTextLimit {
-		categorize = categorize[:nextCategorizeTextLimit]
+	if !listItems {
+		return lines
 	}
 	for _, item := range categorize {
 		lines = append(lines, "  "+nextCategorizeLine(item, showIDs))
 	}
 	return lines
+}
+
+func nextLinkReviewSummary(items []NextItem) string {
+	categorize := nextCategorizeItems(items)
+	if len(categorize) == 0 {
+		return ""
+	}
+	return nextLinkReviewLine(categorize)
+}
+
+func nextLinkReviewLine(categorize []NextItem) string {
+	project := 0
+	for _, item := range categorize {
+		if target := item.Detail["target"]; target == "project" || target == "new_project" {
+			project++
+		}
+	}
+	return fmt.Sprintf("Project links to review: %d (%d project, %d no project) (workgraph projects review)", len(categorize), project, len(categorize)-project)
 }
 
 func nextCategorizeLine(item NextItem, showIDs bool) string {

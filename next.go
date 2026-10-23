@@ -23,6 +23,7 @@ type NextConfig struct {
 	Reason           string
 	IncludeUntrusted bool
 	ShowIDs          bool
+	TeamReviews      bool
 	Now              time.Time
 	Clock            func() time.Time
 	WatchInterval    time.Duration
@@ -150,7 +151,7 @@ func readNextSnapshot(config NextConfig) (nextSnapshot, error) {
 	if err != nil {
 		return snapshot, err
 	}
-	snapshot.categorize, snapshot.categorized, err = loadNextCategorizeItems(tx, snapshot.result.AsOf, config.IncludeUntrusted)
+	snapshot.categorize, snapshot.categorized, err = loadNextCategorizeItems(tx, snapshot.result.AsOf, config.IncludeUntrusted, loadAutoApplyThresholds(config.HomeDir))
 	if err != nil {
 		return snapshot, err
 	}
@@ -167,15 +168,20 @@ func readNextSnapshot(config NextConfig) (nextSnapshot, error) {
 	for _, observation := range snapshot.observations {
 		candidates = append(candidates, projectNextObservation(observation, snapshot.events, config, snapshot.result.AsOf, interval, entry.SetupState == "error")...)
 	}
+	active := []NextItem{}
 	for _, item := range candidates {
-		if (config.Project != "" && item.Project != config.Project) || (config.Reason != "" && item.Reason != config.Reason) {
-			continue
-		}
 		if nextHidden(item.ID, snapshot.events, snapshot.result.AsOf) != "" {
 			continue
 		}
 		if item.PullRequest.Author != nil {
 			item.PullRequest.Author.OnBehalf = onBehalf[item.PullRequest.NodeID]
+		}
+		active = append(active, item)
+	}
+	nextMarkTeamOnly(active)
+	for _, item := range active {
+		if (config.Project != "" && item.Project != config.Project) || (config.Reason != "" && item.Reason != config.Reason) {
+			continue
 		}
 		snapshot.result.Items = append(snapshot.result.Items, item)
 	}
@@ -199,8 +205,8 @@ func readNextSnapshot(config NextConfig) (nextSnapshot, error) {
 			capturedAt = verifiedAt
 		}
 	}
-	snapshot.result.Message = nextMessage(snapshot.result, entry.SetupState == "error", capturedAt, interval, config.ShowIDs)
-	if categorize := nextCategorizeLines(snapshot.result.Items, snapshot.categorized, config.ShowIDs); len(categorize) > 0 {
+	snapshot.result.Message = nextMessage(snapshot.result, entry.SetupState == "error", capturedAt, interval, config.ShowIDs, config.TeamReviews)
+	if categorize := nextCategorizeLines(snapshot.result.Items, snapshot.categorized, config.ShowIDs, config.Reason == nextReasonCategorize); len(categorize) > 0 {
 		snapshot.result.Message += "\n" + strings.Join(categorize, "\n")
 	}
 	return snapshot, nil
@@ -571,7 +577,7 @@ func nextHidden(id string, events []nextStoredEvent, now time.Time) string {
 	return ""
 }
 
-func nextMessage(result NextResult, setupError bool, capturedAt time.Time, interval time.Duration, showIDs bool) string {
+func nextMessage(result NextResult, setupError bool, capturedAt time.Time, interval time.Duration, showIDs, expandTeamReviews bool) string {
 	if !result.Enabled {
 		return "No enabled next sources. Connect GitHub pull requests: workgraph github prs connect"
 	}
@@ -591,18 +597,130 @@ func nextMessage(result NextResult, setupError bool, capturedAt time.Time, inter
 	if stale {
 		lines = append(lines, "Warning: github.pr_watch data is stale or unreachable; run workgraph github prs capture")
 	}
+	direct, teamOnly := nextSplitTeamReviews(nextNonCategorizeItems(result.Items))
 	section := ""
-	for _, group := range nextPullRequestGroups(nextNonCategorizeItems(result.Items)) {
+	for _, group := range nextPullRequestGroups(direct) {
 		if group[0].Group != section {
 			section = group[0].Group
 			lines = append(lines, map[string]string{"waiting_on_you": "Waiting on you", "blocked": "Blocked", "ready": "Ready"}[section])
 		}
 		lines = append(lines, nextPullRequestLines(group, showIDs)...)
 	}
+	lines = append(lines, nextTeamReviewLines(teamOnly, expandTeamReviews, showIDs)...)
 	if len(result.Items) == 0 {
 		lines = append(lines, "Nothing is waiting on you.")
 	}
 	return strings.Join(lines, "\n")
+}
+
+func nextMarkTeamOnly(items []NextItem) {
+	perPullRequest := map[string]int{}
+	for _, item := range items {
+		perPullRequest[item.Source+":"+item.PullRequest.NodeID]++
+	}
+	for i, item := range items {
+		items[i].teamOnly = nextTeamOnlyReview(item) && perPullRequest[item.Source+":"+item.PullRequest.NodeID] == 1
+	}
+}
+
+func nextSplitTeamReviews(items []NextItem) (direct, teamOnly []NextItem) {
+	for _, item := range items {
+		if item.teamOnly {
+			teamOnly = append(teamOnly, item)
+		} else {
+			direct = append(direct, item)
+		}
+	}
+	return direct, teamOnly
+}
+
+func nextTeamOnlyReview(item NextItem) bool {
+	request, ok := item.Detail["request"].(*githubPRReviewRequest)
+	if item.Reason != nextReasonReviewRequested || !ok || request.Direct || request.Incomplete || (len(request.Teams) == 0 && !request.UnresolvedTeam) {
+		return false
+	}
+	return item.PullRequest.Author == nil || !item.PullRequest.Author.OnBehalf
+}
+
+func nextTeamLabel(item NextItem) string {
+	request := item.Detail["request"].(*githubPRReviewRequest)
+	if len(request.Teams) == 0 {
+		return "team (unresolved)"
+	}
+	return strings.Join(request.Teams, ", ")
+}
+
+const nextTeamReviewPreview = 3
+
+func nextTeamReviewLines(items []NextItem, expand, showIDs bool) []string {
+	byTeam := map[string][]NextItem{}
+	labels := []string{}
+	for _, item := range items {
+		label := nextTeamLabel(item)
+		if _, ok := byTeam[label]; !ok {
+			labels = append(labels, label)
+		}
+		byTeam[label] = append(byTeam[label], item)
+	}
+	sort.Strings(labels)
+	lines := []string{}
+	for _, label := range labels {
+		team := byTeam[label]
+		repositories := map[string]bool{}
+		bots := 0
+		for _, item := range team {
+			repositories[item.PullRequest.Repository] = true
+			if item.PullRequest.Author != nil && item.PullRequest.Author.Kind == "bot" {
+				bots++
+			}
+		}
+		counts := nextCount(len(team), "PR")
+		if bots > 0 {
+			counts += fmt.Sprintf(" (%d bot)", bots)
+		}
+		lines = append(lines, fmt.Sprintf("Team review requests via %s: %s across %s", nextDisplayText(label), counts, nextCount(len(repositories), "repo")))
+		if expand {
+			sort.SliceStable(team, func(i, j int) bool {
+				a, b := team[i].PullRequest, team[j].PullRequest
+				if a.Repository != b.Repository {
+					return a.Repository < b.Repository
+				}
+				return a.Number < b.Number
+			})
+		} else {
+			sort.SliceStable(team, func(i, j int) bool { return team[i].Since.After(team[j].Since) })
+		}
+		shown := team
+		if !expand && len(shown) > nextTeamReviewPreview {
+			shown = shown[:nextTeamReviewPreview]
+		}
+		for _, item := range shown {
+			lines = append(lines, nextPullRequestLines([]NextItem{item}, showIDs)...)
+		}
+		if len(shown) < len(team) {
+			lines = append(lines, fmt.Sprintf("  %d more: workgraph next --team-reviews", len(team)-len(shown)))
+		}
+	}
+	return lines
+}
+
+func nextCount(n int, noun string) string {
+	if n == 1 {
+		return fmt.Sprintf("1 %s", noun)
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
+
+func nextWaitingCountMessage(items []NextItem) string {
+	direct, teamOnly := nextSplitTeamReviews(items)
+	if len(direct) == 0 && len(teamOnly) == 0 {
+		return ""
+	}
+	message := fmt.Sprintf("Waiting on you: %d items", len(direct))
+	if len(teamOnly) > 0 {
+		message += " + " + nextCount(len(teamOnly), "team review request")
+	}
+	return message + " (workgraph next)"
 }
 
 func nextPullRequestGroups(items []NextItem) [][]NextItem {
@@ -714,8 +832,8 @@ func nextUnavailableMessage(err error) string {
 }
 
 func nextWaitingMessage(items []NextItem, limit int) string {
-	items = nextNonCategorizeItems(items)
-	if len(items) == 0 {
+	items, teamOnly := nextSplitTeamReviews(nextNonCategorizeItems(items))
+	if len(items) == 0 && len(teamOnly) == 0 {
 		return ""
 	}
 	lines := []string{"Waiting on you"}
@@ -729,6 +847,9 @@ func nextWaitingMessage(items []NextItem, limit int) string {
 	}
 	if count < len(groups) {
 		lines = append(lines, fmt.Sprintf("%d more: workgraph next", len(groups)-count))
+	}
+	if len(teamOnly) > 0 {
+		lines = append(lines, nextCount(len(teamOnly), "team review request")+": workgraph next")
 	}
 	return strings.Join(lines, "\n")
 }

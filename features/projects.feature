@@ -117,6 +117,32 @@ Scenario: Pause auto-apply when accuracy drops
   Then every result is proposed for review
   And "workgraph projects review" says auto-apply is paused and why
 
+Scenario: Auto-apply at a profile's own threshold
+  Given the associate profile's auto-apply threshold is 0.9
+  When the model returns one unit at confidence 0.92
+  Then the unit is linked automatically and marked auto
+  And a profile with the default threshold would have proposed it
+
+Scenario: Pause auto-apply for one profile only
+  Given one profile at threshold 0.9 and another at 0.95 each have 18 of 20 recent auto links confirmed
+  When accuracy is measured
+  Then auto-apply is paused for the 0.95 profile and says so
+  And the 0.9 profile keeps auto-applying
+
+Scenario: Let a stronger model decide uncertain units
+  Given a verifier profile is routed for "associate-verify"
+  And the associate model returns one unit at 0.97, one at 0.80, and one at 0.40
+  When workgraph stores the results
+  Then only the unit at 0.80 is sent to the verifier, as the associate model saw it, with its answer
+  And the verifier's answer becomes that unit's link under the verifier profile
+  And "workgraph projects explain" shows both answers
+
+Scenario: Verify uncertain units in the signed-in client bridge
+  Given the verifier profile is an ai-client profile with bridge execution
+  When the associate request completes with escalated units
+  Then an "associate-verify" request is emitted on "llm.associate"
+  And only the verifier's client can claim it
+
 Scenario: Keep auto-apply paused while the sample is small
   Given auto-apply was paused for low accuracy
   And fewer than 20 automatic links were decided in the last 14 days
@@ -157,12 +183,13 @@ Scenario: Honor a source disabled after scheduling
 Scenario: Decide the uncertain items at the end of the day
   Given three units await a categorization decision
   When I run "workgraph next"
-  Then a Categorize line shows three awaiting a decision and the count auto-applied today
+  Then a project links line shows three to review split by project and no project, and the count auto-applied today
+  And the links are listed only with "workgraph next --reason categorize"
   When I approve one, reassign one, and reject one in "workgraph projects review"
-  Then the Categorize line is gone and no event was rewritten
+  Then the project links line is gone and no event was rewritten
 
 Scenario: Start the morning with overnight work sorted
   Given agents opened pull requests overnight and the nightly categorization ran
   When I run "workgraph resume"
   Then activity since my last check-in is grouped by workstream and project
-  And the remaining decisions are counted
+  And the project links to review are counted by project and no project

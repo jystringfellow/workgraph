@@ -66,6 +66,8 @@ type CaptureRequestClaimConfig struct {
 	Lease        time.Duration
 	MemoryDir    string
 	GitEmails    []string
+
+	llmTasks []string
 }
 
 type CaptureRequestListConfig struct {
@@ -514,8 +516,10 @@ func ClaimCaptureRequests(config CaptureRequestClaimConfig) ([]ClaimedCaptureReq
 	if err != nil {
 		return nil, err
 	}
-	if kind == captureRequestKindLLMTask && !llmTaskClaimAllowed(config) {
-		return []ClaimedCaptureRequest{}, nil
+	if kind == captureRequestKindLLMTask {
+		if config.llmTasks = bridgeClaimableLLMTasks(config); len(config.llmTasks) == 0 {
+			return []ClaimedCaptureRequest{}, nil
+		}
 	}
 	claimed, err := claimCaptureRequests(config)
 	if err != nil || kind != captureRequestKindLLMTask {
@@ -584,6 +588,12 @@ func claimCaptureRequests(config CaptureRequestClaimConfig) ([]ClaimedCaptureReq
 	if connectorID != "" {
 		query += ` AND connector_id = ?`
 		args = append(args, connectorID)
+	}
+	if len(config.llmTasks) > 0 {
+		query += ` AND COALESCE(json_extract(params_json, '$.task'), '') IN (?` + strings.Repeat(", ?", len(config.llmTasks)-1) + `)`
+		for _, task := range config.llmTasks {
+			args = append(args, task)
+		}
 	}
 	query += ` ORDER BY available_at, created_at, id LIMIT ?`
 	args = append(args, max)
@@ -1321,9 +1331,33 @@ func prepareBridgedEvent(source string, envelope bridgedEventEnvelope) (prepared
 	}
 	if source == "slack" {
 		event.Type = canonicalBridgedSlackType(eventType)
-		event.Project = storedSlackContainer(event.Project, payloadJSON)
+		if event.PayloadJSON, err = stripBridgedSlackChannelKindPrefix(payloadJSON); err != nil {
+			return preparedBridgedEvent{}, fmt.Errorf("payload: %w", err)
+		}
+		event.Project = storedSlackContainer(event.Project, event.PayloadJSON)
 	}
 	return event, nil
+}
+
+func stripBridgedSlackChannelKindPrefix(payloadJSON string) (string, error) {
+	channelID, channelName := slackResumeChannelIdentity(payloadJSON)
+	name, stripped := stripSlackChannelKindPrefix(channelName, channelID)
+	if !stripped {
+		return payloadJSON, nil
+	}
+	var payload map[string]any
+	decoder := json.NewDecoder(strings.NewReader(payloadJSON))
+	decoder.UseNumber()
+	if err := decoder.Decode(&payload); err != nil {
+		return "", err
+	}
+	payload["channel_name_raw"] = payload["channel_name"]
+	payload["channel_name"] = name
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("encode canonical JSON: %w", err)
+	}
+	return string(encoded), nil
 }
 
 func canonicalBridgedSlackType(eventType string) string {

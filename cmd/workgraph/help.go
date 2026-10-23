@@ -27,7 +27,7 @@ var helpDetails = map[string]string{
 }
 
 var helpTopics = map[string]helpTopic{
-	"next":                    {"workgraph next [--project <p>] [--reason <r>] [--ids | --json [--include-untrusted]] [--watch]", "List local attention items and their evidence."},
+	"next":                    {"workgraph next [--project <p>] [--reason <r>] [--ids] [--team-reviews] | --json [--include-untrusted] [--watch]", "List local attention items and their evidence."},
 	"next explain":            {"workgraph next explain <item-id> [options]", "Explain the rule and evidence for an open item."},
 	"next done":               {"workgraph next done <item-id> [options]", "Hide one item with a local bookkeeping event."},
 	"next snooze":             {"workgraph next snooze <item-id> --for <duration> [options]", "Hide one item locally until the duration expires."},
@@ -110,6 +110,7 @@ var helpTopics = map[string]helpTopic{
 	"llm sources":             {"workgraph llm sources --for associate [--enable <source>] [--disable <source>] [options]", "Show or change which capture sources an LLM task may read."},
 	"llm summarize":           {"workgraph llm summarize <target> [--dry-run] [--no-stream] [options]", "Summarize a supported target with the configured LLM."},
 	"llm test":                {"workgraph llm test [--profile <name>] [options]", "Verify that an LLM profile can reach and use its provider."},
+	"llm set":                 {"workgraph llm set <profile> [--auto-apply-confidence <0.5-1.0>] [--verify-floor <0-1>] [options]", "Change a profile's project auto-apply threshold or verify floor."},
 	"llm use":                 {"workgraph llm use <profile> [--for <task>] [options]", "Select an LLM profile as a default or for a task."},
 	"mail":                    {"workgraph mail <subcommand>", "Connect, capture, or disconnect mail providers."},
 	"mail capture":            {"workgraph mail capture [options]", "Capture normalized mail events from a connected provider."},
@@ -365,7 +366,7 @@ func helpOptionArgs(key string) []string {
 		placeholder = "google"
 	case "llm connect":
 		placeholder = "codex"
-	case "llm add", "llm remove", "llm use":
+	case "llm add", "llm remove", "llm set", "llm use":
 		placeholder = "profile"
 	case "llm summarize":
 		placeholder = "today"

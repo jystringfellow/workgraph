@@ -161,12 +161,23 @@ func Today(config TodayConfig) (TodayResult, error) {
 	next, err := Next(NextConfig{HomeDir: config.HomeDir, DatabasePath: dbPath, Now: now})
 	if err != nil {
 		result.Message += "\n\n" + nextUnavailableMessage(err)
-	} else if len(next.Items) > 0 {
-		result.Message += fmt.Sprintf("\n\nWaiting on you: %d items (workgraph next)", len(next.Items))
+	} else if lines := todayNextLines(next.Items); len(lines) > 0 {
+		result.Message += "\n\n" + strings.Join(lines, "\n")
 	}
 	result.Message += bridgeStallWarning(homeDir, dbPath, now)
 
 	return result, nil
+}
+
+func todayNextLines(items []NextItem) []string {
+	var lines []string
+	if waiting := nextWaitingCountMessage(nextNonCategorizeItems(items)); waiting != "" {
+		lines = append(lines, waiting)
+	}
+	if links := nextLinkReviewSummary(items); links != "" {
+		lines = append(lines, links)
+	}
+	return lines
 }
 
 func loadTodayEvents(db *sql.DB, now time.Time, actor string, involvement string, includeAllEvidence bool) ([]TodayEvent, error) {

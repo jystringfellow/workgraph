@@ -123,9 +123,19 @@ workgraph init --home "$tmpdir/.workgraph" --memory "$tmpdir/memory"
 
 ## Watch Settings
 
-The default settings watch existing common folders such as Desktop, Documents,
-Downloads, Code, Projects, Developer, Work, source, and repos. Paths are stored
-as resolved absolute paths.
+File watching is opt-in. A fresh install watches no directories, and
+`workgraph start` reports `File watching: off` until you add one. Git, GitHub,
+and other connectors capture your work without file watching: git capture finds
+local repositories by scanning `repo_dirs` in settings, which `init` fills with
+existing code folders such as Code, Projects, Developer, Work, source, and
+repos. Repository scan roots are walked on each poll and are never watched.
+Paths are stored as resolved absolute paths.
+
+Settings from older versions that listed automatic folders such as Desktop,
+Documents, Downloads, and Code in `conservative_watch_dirs` stop watching those
+folders; directories you added with `add-watch` keep being watched, and git
+capture keeps scanning the automatic folders for repositories. The settings file
+is not rewritten.
 
 Add the current directory to the watched roots:
 
@@ -150,8 +160,9 @@ The JSON form is intended for admin review and endpoint verification. It reports
 managed controls, provenance, and non-secret local settings counts without
 printing connector credentials or captured data.
 
-Added roots are treated as explicit and are placed before existing roots, so a
-project you care about does not get starved by broad default watches.
+Added roots are placed before existing roots and watched recursively, subject to
+ignore rules and the watch budget. Watched roots are also scanned for git
+repositories.
 
 On macOS, watching protected folders such as Documents, Desktop, and Downloads
 can trigger privacy prompts. To avoid approving each folder one by one, grant

@@ -87,6 +87,7 @@ var publicCommandPaths = []string{
 	"llm hosted status",
 	"llm list",
 	"llm remove",
+	"llm set",
 	"llm sources",
 	"llm summarize",
 	"llm test",

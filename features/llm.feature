@@ -18,6 +18,14 @@ Scenario: Route LLM tasks to profiles
   Then association tasks use "bedrock-work"
   And summarize tasks still use the default profile unless explicitly configured
 
+Scenario: Tune a profile's auto-apply threshold
+  Given a local LLM profile named "local-gemma"
+  When I run "workgraph llm set local-gemma --auto-apply-confidence 0.9 --verify-floor 0.5"
+  Then the profile keeps its provider and model
+  And "workgraph llm list" shows "auto-apply 0.90, verify-floor 0.50"
+  When I run "workgraph llm set local-gemma --auto-apply-confidence 0.4"
+  Then workgraph refuses the value and the profile is unchanged
+
 Scenario: Test an OpenAI-compatible LLM profile
   Given workgraph has an OpenAI-compatible LLM profile
   When I run "workgraph llm test --profile local-gemma"

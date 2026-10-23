@@ -4,11 +4,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 )
 
 const (
-	autoApplyConfidence      = 0.95
 	autoApplyAccuracyWindow  = 14 * 24 * time.Hour
 	autoApplyMinimumSample   = 20
 	autoApplyPausedEvent     = "projects.auto_apply_paused"
@@ -19,6 +20,16 @@ const (
 type ProjectLinkAccuracyReport struct {
 	Window      time.Duration
 	Since       time.Time
+	Profiles    []ProfileLinkAccuracy
+	Paused      bool
+	PauseReason string
+	thresholds  autoApplyThresholds
+	legacy      autoApplyPauseState
+}
+
+type ProfileLinkAccuracy struct {
+	Profile     string
+	Required    float64
 	Confirmed   int
 	Corrected   int
 	Undone      int
@@ -31,8 +42,9 @@ type ProjectLinkAccuracyReport struct {
 }
 
 type autoApplyPauseState struct {
-	Paused bool   `json:"paused"`
-	Reason string `json:"reason"`
+	Paused  bool    `json:"paused"`
+	Reason  string  `json:"reason"`
+	Profile *string `json:"profile"`
 }
 
 func ProjectLinkAccuracy(config ProjectLinkStoreConfig) (ProjectLinkAccuracyReport, error) {
@@ -49,67 +61,118 @@ func ProjectLinkAccuracy(config ProjectLinkStoreConfig) (ProjectLinkAccuracyRepo
 	if now.IsZero() {
 		now = time.Now()
 	}
-	return projectLinkAccuracy(db, now.UTC())
+	return projectLinkAccuracy(db, now.UTC(), loadAutoApplyThresholds(config.HomeDir))
+}
+
+func (report ProjectLinkAccuracyReport) For(profile string) ProfileLinkAccuracy {
+	for _, entry := range report.Profiles {
+		if entry.Profile == profile {
+			return entry
+		}
+	}
+	return ProfileLinkAccuracy{Profile: profile, Required: report.thresholds.of(profile), Status: "insufficient_data", Paused: report.legacy.Paused, PauseReason: report.legacy.Reason}
 }
 
 func (report ProjectLinkAccuracyReport) Summary() string {
-	line := fmt.Sprintf("Project auto-apply accuracy: insufficient_data (%d decided auto links, 14 day window)", report.Decided)
-	if report.Status == "measured" {
-		line = fmt.Sprintf("Project auto-apply accuracy: %.2f (%d/%d decided auto links, 14 day window)", report.Accuracy, report.Confirmed, report.Decided)
+	if len(report.Profiles) == 0 {
+		return "Project auto-apply accuracy: insufficient_data (0 decided auto links, 14 day window)"
 	}
-	if report.Paused {
-		line += "\nAuto-apply paused: " + report.PauseReason
+	var lines, paused []string
+	for _, entry := range report.Profiles {
+		line := fmt.Sprintf("Project auto-apply accuracy for %s: insufficient_data (%d decided auto links, 14 day window)", entry.Profile, entry.Decided)
+		if entry.Status == "measured" {
+			line = fmt.Sprintf("Project auto-apply accuracy for %s: %.2f (%d/%d decided auto links, 14 day window, required %.2f)", entry.Profile, entry.Accuracy, entry.Confirmed, entry.Decided, entry.Required)
+		}
+		lines = append(lines, line)
+		if entry.Paused {
+			paused = append(paused, "Auto-apply paused: "+entry.PauseReason)
+		}
 	}
-	return line
+	return strings.Join(append(lines, paused...), "\n")
 }
 
-func projectLinkAccuracy(db projectLinkQueryer, now time.Time) (ProjectLinkAccuracyReport, error) {
-	report := ProjectLinkAccuracyReport{Window: autoApplyAccuracyWindow, Since: now.Add(-autoApplyAccuracyWindow), Status: "insufficient_data"}
+func projectLinkAccuracy(db projectLinkQueryer, now time.Time, thresholds autoApplyThresholds, requested ...string) (ProjectLinkAccuracyReport, error) {
+	report := ProjectLinkAccuracyReport{Window: autoApplyAccuracyWindow, Since: now.Add(-autoApplyAccuracyWindow), thresholds: thresholds}
+	entries := map[string]*ProfileLinkAccuracy{}
+	entry := func(profile string) *ProfileLinkAccuracy {
+		if entries[profile] == nil {
+			entries[profile] = &ProfileLinkAccuracy{Profile: profile, Required: thresholds.of(profile), Status: "insufficient_data"}
+		}
+		return entries[profile]
+	}
+	for _, profile := range requested {
+		entry(profile)
+	}
 	exists, err := projectLinksTablePresent(db)
 	if err != nil {
 		return ProjectLinkAccuracyReport{}, err
 	}
 	if exists {
-		links, err := queryProjectLinks(db, `WHERE source = 'llm' AND auto = 1 AND decision IN ('confirmed', 'corrected', 'undone')`)
+		links, err := queryProjectLinks(db, `WHERE source = 'llm'`)
 		if err != nil {
 			return ProjectLinkAccuracyReport{}, err
 		}
 		for _, link := range links {
-			if link.DecidedAt.Before(report.Since) || link.DecidedAt.After(now) {
+			counted := entry(link.Profile)
+			if !link.Auto || link.DecidedAt.Before(report.Since) || link.DecidedAt.After(now) {
 				continue
 			}
 			switch link.Decision {
 			case "confirmed":
-				report.Confirmed++
+				counted.Confirmed++
 			case "corrected":
-				report.Corrected++
+				counted.Corrected++
 			case "undone":
-				report.Undone++
+				counted.Undone++
 			}
 		}
 	}
-	report.Decided = report.Confirmed + report.Corrected + report.Undone
-	recorded, err := latestAutoApplyPauseState(db)
+	recorded, legacy, err := latestAutoApplyPauseStates(db)
 	if err != nil {
 		return ProjectLinkAccuracyReport{}, err
 	}
-	report.Paused, report.PauseReason = recorded.Paused, recorded.Reason
-	if report.Decided >= autoApplyMinimumSample {
-		report.Status = "measured"
-		report.Accuracy = float64(report.Confirmed) / float64(report.Decided)
-		report.Paused = report.Accuracy < autoApplyConfidence
-		report.PauseReason = ""
-		if report.Paused {
-			report.PauseReason = fmt.Sprintf("accuracy %.2f over %d decided auto links in the last 14 days is below 0.95", report.Accuracy, report.Decided)
+	report.legacy = legacy
+	for profile := range recorded {
+		entry(profile)
+	}
+	for _, counted := range entries {
+		state, found := recorded[counted.Profile]
+		if !found {
+			state = legacy
+		}
+		measureProfileAccuracy(counted, state)
+		report.Profiles = append(report.Profiles, *counted)
+	}
+	sort.Slice(report.Profiles, func(i, j int) bool { return report.Profiles[i].Profile < report.Profiles[j].Profile })
+	var reasons []string
+	for _, counted := range report.Profiles {
+		if counted.Paused {
+			report.Paused = true
+			reasons = append(reasons, counted.PauseReason)
 		}
 	}
-	if report.Paused != recorded.Paused {
-		report.pauseEvent = autoApplyResumedEvent
-		if report.Paused {
-			report.pauseEvent = autoApplyPausedEvent
-		}
-	}
+	report.PauseReason = strings.Join(reasons, "; ")
 	return report, nil
+}
+
+func measureProfileAccuracy(entry *ProfileLinkAccuracy, recorded autoApplyPauseState) {
+	entry.Decided = entry.Confirmed + entry.Corrected + entry.Undone
+	entry.Paused, entry.PauseReason = recorded.Paused, recorded.Reason
+	if entry.Decided >= autoApplyMinimumSample {
+		entry.Status = "measured"
+		entry.Accuracy = float64(entry.Confirmed) / float64(entry.Decided)
+		entry.Paused = entry.Accuracy < entry.Required
+		entry.PauseReason = ""
+		if entry.Paused {
+			entry.PauseReason = fmt.Sprintf("%s accuracy %.2f over %d decided auto links in the last 14 days is below %.2f", entry.Profile, entry.Accuracy, entry.Decided, entry.Required)
+		}
+	}
+	if entry.Paused != recorded.Paused {
+		entry.pauseEvent = autoApplyResumedEvent
+		if entry.Paused {
+			entry.pauseEvent = autoApplyPausedEvent
+		}
+	}
 }
 
 func projectLinksTablePresent(db projectLinkQueryer) (bool, error) {
@@ -121,27 +184,39 @@ func projectLinksTablePresent(db projectLinkQueryer) (bool, error) {
 	return rows.Next(), rows.Err()
 }
 
-func latestAutoApplyPauseState(db projectLinkQueryer) (autoApplyPauseState, error) {
-	rows, err := db.Query(`SELECT payload_json FROM events WHERE type IN (?, ?) ORDER BY timestamp DESC, rowid DESC LIMIT 1`, autoApplyPausedEvent, autoApplyResumedEvent)
+func latestAutoApplyPauseStates(db projectLinkQueryer) (map[string]autoApplyPauseState, autoApplyPauseState, error) {
+	rows, err := db.Query(`SELECT payload_json FROM events WHERE type IN (?, ?) ORDER BY timestamp DESC, rowid DESC`, autoApplyPausedEvent, autoApplyResumedEvent)
 	if err != nil {
-		return autoApplyPauseState{}, fmt.Errorf("query auto-apply pause: %w", err)
+		return nil, autoApplyPauseState{}, fmt.Errorf("query auto-apply pause: %w", err)
 	}
 	defer rows.Close()
-	var state autoApplyPauseState
-	if rows.Next() {
+	states := map[string]autoApplyPauseState{}
+	var legacy autoApplyPauseState
+	legacyFound := false
+	for rows.Next() {
 		var payload string
 		if err := rows.Scan(&payload); err != nil {
-			return autoApplyPauseState{}, err
+			return nil, autoApplyPauseState{}, err
 		}
+		var state autoApplyPauseState
 		if err := json.Unmarshal([]byte(payload), &state); err != nil {
-			return autoApplyPauseState{}, fmt.Errorf("parse auto-apply pause: %w", err)
+			return nil, autoApplyPauseState{}, fmt.Errorf("parse auto-apply pause: %w", err)
+		}
+		if state.Profile == nil {
+			if !legacyFound {
+				legacy, legacyFound = state, true
+			}
+			continue
+		}
+		if _, seen := states[*state.Profile]; !seen {
+			states[*state.Profile] = state
 		}
 	}
-	return state, rows.Err()
+	return states, legacy, rows.Err()
 }
 
-func recordProjectAutoApplyState(tx *sql.Tx, now time.Time) error {
-	report, err := projectLinkAccuracy(tx, now)
+func recordProjectAutoApplyState(tx *sql.Tx, now time.Time, thresholds autoApplyThresholds) error {
+	report, err := projectLinkAccuracy(tx, now, thresholds)
 	if err != nil {
 		return err
 	}
@@ -149,20 +224,30 @@ func recordProjectAutoApplyState(tx *sql.Tx, now time.Time) error {
 }
 
 func recordAutoApplyPauseTransition(tx *sql.Tx, now time.Time, report ProjectLinkAccuracyReport) error {
-	if report.pauseEvent == "" {
+	for _, entry := range report.Profiles {
+		if err := recordProfilePauseTransition(tx, now, entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func recordProfilePauseTransition(tx *sql.Tx, now time.Time, entry ProfileLinkAccuracy) error {
+	if entry.pauseEvent == "" {
 		return nil
 	}
 	id, err := newEventID()
 	if err != nil {
 		return err
 	}
-	summary := "Project auto-apply resumed"
-	if report.Paused {
-		summary = "Project auto-apply paused: " + report.PauseReason
+	summary := "Project auto-apply resumed for " + entry.Profile
+	if entry.Paused {
+		summary = "Project auto-apply paused: " + entry.PauseReason
 	}
 	payload, err := json.Marshal(map[string]any{
-		"paused": report.Paused, "reason": report.PauseReason, "accuracy": report.Accuracy,
-		"confirmed": report.Confirmed, "corrected": report.Corrected, "undone": report.Undone, "decided": report.Decided,
+		"profile": entry.Profile, "required_accuracy": entry.Required,
+		"paused": entry.Paused, "reason": entry.PauseReason, "accuracy": entry.Accuracy,
+		"confirmed": entry.Confirmed, "corrected": entry.Corrected, "undone": entry.Undone, "decided": entry.Decided,
 		"window_days": int(autoApplyAccuracyWindow / (24 * time.Hour)),
 	})
 	if err != nil {
@@ -170,8 +255,8 @@ func recordAutoApplyPauseTransition(tx *sql.Tx, now time.Time, report ProjectLin
 	}
 	timestamp := now.UTC().Format(time.RFC3339Nano)
 	if _, err := tx.Exec(`INSERT INTO events (id, source, type, timestamp, payload_json, project, actor, summary, created_at)
-		VALUES (?, 'projects', ?, ?, ?, '', '', ?, ?)`, report.pauseEvent+":"+id, report.pauseEvent, timestamp, string(payload), summary, timestamp); err != nil {
-		return fmt.Errorf("record %s: %w", report.pauseEvent, err)
+		VALUES (?, 'projects', ?, ?, ?, '', '', ?, ?)`, entry.pauseEvent+":"+id, entry.pauseEvent, timestamp, string(payload), summary, timestamp); err != nil {
+		return fmt.Errorf("record %s: %w", entry.pauseEvent, err)
 	}
 	return nil
 }

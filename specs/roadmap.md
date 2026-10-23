@@ -67,6 +67,12 @@ Priority labels used below:
 
 ## Recently Delivered
 
+- [x] Associate thresholds and verifier: per-profile auto-apply thresholds and
+  verify floors (`llm add --auto-apply-confidence`, `llm set`), a per-profile
+  accuracy gate whose required accuracy is the profile's threshold, and an
+  `associate-verify` route that sends floor-to-threshold units to a second
+  profile, directly or through the bridge. [spec: `specs/projects.md` D5]
+
 - [x] System One decision-model profiles: `llm add --provider system-one`
   for Jev, Clef, Clef-flash, Microsoft-Decision-1, and local System One
   servers, used by `associate` with one choice question per unit, the
@@ -112,6 +118,10 @@ Priority labels used below:
   read-only `next_items` MCP tool; items appear in `resume`, with a count in
   `today`. [spec: `specs/next.md`]
 
+- [x] Team-only review requests in `next` are summarized per team with
+  counts and the newest three, expandable with `--team-reviews`, and counted
+  separately in `today` and `resume`. [spec: `specs/next.md` N12]
+
 - [x] GitHub pull request watch (`github.pr_watch`) as the first `next`
   source: open PRs the user authored or is asked to review (directly or
   through a team) via the existing `gh` login, read-only transition events,
@@ -134,6 +144,10 @@ Priority labels used below:
 
 - [x] Keep capture running when transient watched files disappear. [spec:
   `specs/capture-reliability.md`; #139]
+
+- [x] Opt-in file watching: a fresh install watches no directories, older
+  automatic watch roots stop being watched, and git repository discovery uses
+  its own `repo_dirs` scan roots. [spec: `specs/config.md`]
 
 - Signed-in client config-dir bindings shared by bridge workers and LLM
   profiles, with runtime enforcement and inspectable diagnostics. [spec:

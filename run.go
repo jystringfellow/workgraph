@@ -87,6 +87,7 @@ type RunStatus struct {
 	DatabasePath          string
 	WatchDirs             []string
 	ConservativeWatchDirs []string
+	RepoDirs              []string
 	IgnorePaths           []string
 	IgnoreNames           []string
 	WatchCount            int
@@ -1314,15 +1315,19 @@ func prepareRunStatus(config RunConfig) (RunStatus, error) {
 
 	watchDirsConfig := config.WatchDirs
 	conservativeWatchDirsConfig := config.ConservativeWatchDirs
-	if len(watchDirsConfig) == 0 && len(localSettings.WatchDirs) > 0 {
-		watchDirsConfig = localSettings.WatchDirs
-		conservativeWatchDirsConfig = localSettings.ConservativeWatchDirs
+	if len(watchDirsConfig) == 0 {
+		watchDirsConfig = userAddedWatchDirs(localSettings)
+		conservativeWatchDirsConfig = nil
 	}
 	watchDirs, err := resolveWatchDirs(watchDirsConfig)
 	if err != nil {
 		return RunStatus{}, err
 	}
 	conservativeWatchDirs, err := resolveIgnorePaths(conservativeWatchDirsConfig)
+	if err != nil {
+		return RunStatus{}, err
+	}
+	repoDirs, err := resolveRepoDirs(append(append([]string(nil), watchDirs...), settingsRepoDirs(localSettings)...))
 	if err != nil {
 		return RunStatus{}, err
 	}
@@ -1336,16 +1341,55 @@ func prepareRunStatus(config RunConfig) (RunStatus, error) {
 		DatabasePath:          dbPath,
 		WatchDirs:             watchDirs,
 		ConservativeWatchDirs: conservativeWatchDirs,
+		RepoDirs:              repoDirs,
 		IgnorePaths:           ignorePaths,
 		IgnoreNames:           append([]string(nil), localSettings.IgnoreNames...),
 	}, nil
 }
 
-func resolveWatchDirs(watchDirs []string) ([]string, error) {
-	if len(watchDirs) == 0 {
-		watchDirs = []string{"."}
+func userAddedWatchDirs(settings settingsFile) []string {
+	userAdded := []string{}
+	for _, watchDir := range settings.WatchDirs {
+		if !containsPath(settings.ConservativeWatchDirs, watchDir) {
+			userAdded = append(userAdded, watchDir)
+		}
 	}
+	return userAdded
+}
 
+func settingsRepoDirs(settings settingsFile) []string {
+	if settings.RepoDirs != nil {
+		return settings.RepoDirs
+	}
+	automatic := []string{}
+	for _, watchDir := range settings.WatchDirs {
+		if containsPath(settings.ConservativeWatchDirs, watchDir) {
+			automatic = append(automatic, watchDir)
+		}
+	}
+	return automatic
+}
+
+func resolveRepoDirs(repoDirs []string) ([]string, error) {
+	resolved := []string{}
+	for _, repoDir := range repoDirs {
+		absPath, err := filepath.Abs(repoDir)
+		if err != nil {
+			return nil, fmt.Errorf("resolve repository scan directory: %w", err)
+		}
+		if containsPath(resolved, absPath) {
+			continue
+		}
+		info, err := os.Stat(absPath)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		resolved = append(resolved, absPath)
+	}
+	return resolved, nil
+}
+
+func resolveWatchDirs(watchDirs []string) ([]string, error) {
 	resolved := make([]string, 0, len(watchDirs))
 	for _, watchDir := range watchDirs {
 		absPath, err := filepath.Abs(watchDir)
@@ -1760,7 +1804,7 @@ func runMessage(status RunStatus) string {
 		"Home: " + status.HomeDir,
 		"Database: " + status.DatabasePath,
 	}
-	lines = append(lines, watchSummaryLine(status))
+	lines = append(lines, watchSummaryLines(status.WatchDirs)...)
 	if len(status.MonitoredConnectors) > 0 {
 		lines = append(lines, "Monitoring: "+strings.Join(status.MonitoredConnectors, ", "))
 	}
@@ -1778,15 +1822,14 @@ func runMessage(status RunStatus) string {
 	return strings.Join(lines, "\n")
 }
 
-func watchSummaryLine(status RunStatus) string {
-	count := len(status.WatchDirs)
-	switch count {
+func watchSummaryLines(watchDirs []string) []string {
+	switch count := len(watchDirs); count {
 	case 0:
-		return "Watching: no configured directories"
+		return []string{"File watching: off", "Watch a directory with workgraph settings add-watch <path>."}
 	case 1:
-		return "Watching: 1 configured directory"
+		return []string{"Watching: 1 configured directory"}
 	default:
-		return fmt.Sprintf("Watching: %d configured directories", count)
+		return []string{fmt.Sprintf("Watching: %d configured directories", count)}
 	}
 }
 

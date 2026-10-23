@@ -46,6 +46,9 @@ or workgraph rejects the whole batch and names the event and missing field:
   the names cannot be resolved, send `DM` or `Group DM`: workgraph never uses
   a generic label as the container and names the conversation from the store,
   or `DM (<channel_id>)` or `Group DM (<channel_id>)` until a name is known.
+  Send the channel name exactly as Slack reports it. When Slack embeds a kind
+  prefix and the channel id, as in `ZC:<channel_id>:<name>`, workgraph uses
+  `<name>` and keeps the reported value as `channel_name_raw`.
 - `conversation_type`: `channel`, `private_channel`, `im`, or `mpim`.
 
 Read the name and type from Slack conversation info: the channel metadata a

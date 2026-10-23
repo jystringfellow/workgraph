@@ -453,64 +453,205 @@ the intended default. Existing `categorize` routes are read as `associate`.
 
 ## Auto-Apply
 
-An LLM result is applied automatically, with `auto = true`, only when all of
-these hold:
+Every LLM link records the profile that decided it in `profile`. An LLM result
+is applied automatically, with `auto = true`, only when all of these hold:
 
-- `confidence >= 0.95`
+- `confidence` is at or above the deciding profile's auto-apply threshold
 - the entry passed validation
 - `target` is `project` or `none`; new-project proposals are never
   auto-applied
 - the user has not rejected a link from this container to this project in
   the last 30 days
-- auto-apply is not paused
+- auto-apply is not paused for the deciding profile
 
 Every other valid result is stored as `proposed`. A rejection is a link
 from the same container with the same target and project that the user
 corrected or undid; for `target = none` the pair is the container and none.
+`none` results stay reviewable like any other proposal; nothing hides them.
 
 `workgraph projects undo <link-id>` and `workgraph projects undo --run
 <run-id>` undo auto-applied links, deterministic or LLM. Each unit gets a
 proposed replacement that waits for the user (see Project Links).
 
+### Thresholds
+
+Each profile carries its own auto-apply threshold, so a model whose
+confidences top out below 0.95 can still auto-apply without a code change:
+
+```text
+workgraph llm add haiku --provider ai-client --client claude-code --model <model> --auto-apply-confidence 0.9
+workgraph llm set haiku --auto-apply-confidence 0.9
+workgraph llm set haiku --verify-floor 0.6
+```
+
+- The threshold is stored as `auto_apply_confidence` on the profile in
+  `llm.json`. Without it the threshold is 0.95. It must be a number from 0.5
+  to 1.0.
+- `verify_floor` is the lowest confidence from this profile that is worth a
+  verifier call (see Verifier). Without it the floor is 0.6. It must be a
+  number from 0 to 1.
+- `llm set <profile>` changes only the settings it is given on an existing
+  profile and needs at least one. `llm add` replaces the whole profile, so
+  settings it is not given return to their defaults.
+- `llm list` prints each profile's threshold and floor, as `auto-apply 0.95,
+  verify-floor 0.60`.
+- A link whose profile is no longer configured is judged against 0.95. When
+  `llm.json` cannot be read, every profile is judged against 0.95.
+
 ### Accuracy Gate
 
-Auto-apply accuracy uses links with `auto = true` and `source = llm` whose
-`decided_at` falls in the last 14 days, up to now; later timestamps are not
-counted:
+The gate runs per deciding profile. A profile's auto-apply accuracy uses its
+links with `auto = true` and `source = llm` whose `decided_at` falls in the
+last 14 days, up to now; later timestamps are not counted:
 
 ```text
 accuracy = confirmed / (confirmed + corrected + undone)
 ```
 
-- Fewer than 20 decided links is `insufficient_data`; LLM auto-apply stays
-  on.
-- While the sample is `insufficient_data`, every undecided auto-applied LLM
-  link appears in `projects review` and in the `next` Categorize count beside
-  proposed links, so the evening review builds the sample. Deterministic
-  links never appear there: they come from rules and container mappings the
-  user set up and are not counted, so they stay available through `projects
-  review --auto`, `projects explain`, and `projects undo`.
-- When measured accuracy over at least 20 decided links is below 0.95,
-  auto-apply pauses and workgraph appends a `projects.auto_apply_paused`
-  event. New results are stored as `proposed`, and `projects review`, `next`,
-  and `workgraph review` say auto-apply is paused and why.
+The accuracy a profile must keep is its own auto-apply threshold. A
+confidence is the model's claim of how likely a link is to be right, so the
+links it auto-applied at or above the threshold should be right at least that
+often; one setting controls both, and lowering it is an explicit choice to
+trade precision for fewer reviews. A model that is worse than it claims still
+pauses.
+
+- Fewer than 20 decided links is `insufficient_data`; that profile's
+  auto-apply stays on.
+- While a profile's sample is `insufficient_data`, every undecided
+  auto-applied LLM link from that profile appears in `projects review` and in
+  the `next` Categorize count beside proposed links, so the evening review
+  builds the sample. Deterministic links never appear there: they come from
+  rules and container mappings the user set up and are not counted, so they
+  stay available through `projects review --auto`, `projects explain`, and
+  `projects undo`.
+- When measured accuracy over at least 20 decided links is below the
+  profile's threshold, auto-apply pauses for that profile and workgraph
+  appends a `projects.auto_apply_paused` event naming it. Its new results are
+  stored as `proposed`, and `projects review`, `next`, and `workgraph review`
+  say auto-apply is paused for it and why. A pause on one profile does not
+  stop another.
 - A pause lifts only when measured accuracy over at least 20 decided links is
-  back at or above 0.95, recorded as a `projects.auto_apply_resumed` event. A
-  sample that falls below 20 does not lift a pause.
-- After the sample reaches 20, undecided auto-applied LLM links leave the
-  default review and remain available through `projects review --auto`.
-- The pause state is the latest `projects.auto_apply_paused` or
+  back at or above the threshold, recorded as a `projects.auto_apply_resumed`
+  event naming the profile. A sample that falls below 20 does not lift a
+  pause.
+- After a profile's sample reaches 20, its undecided auto-applied LLM links
+  leave the default review and remain available through `projects review
+  --auto`.
+- A profile's pause state is its latest `projects.auto_apply_paused` or
   `projects.auto_apply_resumed` event, overridden by the measured result
-  whenever at least 20 links are decided. Reading the metric never writes.
-  Every write to `project_links`, including approve, assign, reject, and undo,
-  and every `llm associate` run that is not a dry run appends the event when
-  the state it computes differs from the latest event. `llm associate` does
-  so before it selects units or applies anything, so a pause is recorded even
+  whenever at least 20 links are decided. An event without a profile, written
+  before the gate was per profile, applies to every profile that has no event
+  of its own. Reading the metric never writes. Every write to
+  `project_links`, including approve, assign, reject, and undo, and every
+  `llm associate` run that is not a dry run appends an event for each profile
+  whose computed state differs from its latest event. `llm associate` does so
+  before it selects units or applies anything, so a pause is recorded even
   when no unit is eligible.
+- The gate reports every profile that has LLM links or a pause event, sorted
+  by name, one line each: `Project auto-apply accuracy for <profile>: <a>
+  (<confirmed>/<decided> decided auto links, 14 day window, required <t>)`, or
+  `Project auto-apply accuracy for <profile>: insufficient_data (<decided>
+  decided auto links, 14 day window)`, then `Auto-apply paused: <reason>` for
+  each paused profile. The reason starts with the profile name. With no such
+  profile the line is `Project auto-apply accuracy: insufficient_data (0
+  decided auto links, 14 day window)`.
 
 `workgraph review` reports this metric, its 14-day window, and its sample size
 beside the suggestion metrics in `specs/effectiveness-review.md`; it does not
-use that spec's windows.
+use that spec's windows. Its JSON `project_auto_apply` and the `projects
+review --json` `auto_apply` object carry `window_days`, `paused` (any profile
+paused), `pause_reason` (the paused profiles' reasons joined by `; `), and
+`profiles`, one object per reported profile with `profile`,
+`required_accuracy`, `status`, `accuracy`, `sample_size`, `confirmed`,
+`corrected`, `undone`, `paused`, and `pause_reason`. This replaces the
+earlier single-profile shape: the top-level `status`, `accuracy`,
+`sample_size`, `confirmed`, `corrected`, and `undone` fields are gone, and
+consumers read them from `profiles`.
+
+### Verifier
+
+A second, usually stronger, profile can decide the units the associate
+profile is unsure of:
+
+```text
+workgraph llm use sonnet --for associate-verify
+```
+
+- The route is `associate-verify`. It is used only when set; it never falls
+  back to the default profile. When it names the associate profile itself, no
+  unit is verified. Without the route, categorization is unchanged.
+- After the associate pass validates its results, a unit is escalated when
+  its valid result has confidence at or above the associate profile's verify
+  floor and below that profile's auto-apply threshold. Results at or above
+  the threshold, below the floor, and discarded entries are never escalated.
+- The verifier receives only the escalated units, each exactly as the
+  associate profile received it, with the associate result added as
+  `primary_answer` (`target`, `project`, `new_project`, `kind`, `summary`,
+  `confidence`), plus the catalog entries those units offer and the same
+  recent decisions. It never receives more than the associate profile saw.
+  The verifier payload is built from the payload the associate model
+  actually received, after its outbound filter, never rebuilt from current
+  data and never from an earlier attempt: a direct run uses what it just
+  sent, a bridge claim stores the filtered payload it returned, and a
+  verify request stores the escalated units, their catalog entries, the
+  recent decisions, and whether the associate request passed the hosted
+  outbound filter. Before that stored payload is reused, it is checked
+  against current permissions: a unit whose permitted members changed, or
+  that is no longer eligible, is not verified, a catalog entry no longer
+  offered to the unit is dropped, and a decision no longer permitted is
+  dropped. Nothing added after the associate pass is sent, and a redaction
+  made for the associate is never undone. The request passes the current
+  hosted outbound filter, on top of those redactions, when either profile is
+  hosted.
+- The verifier answers in the associate result shape and is validated the
+  same way. Its valid result becomes the unit's link, with `profile` set to
+  the verifier, so auto-apply uses the verifier's threshold, recent
+  rejections, and accuracy gate. Both results are stored in
+  `project_link_verifications` (link id, both profiles, and both results), and
+  `projects explain` prints them under the link.
+- When the verifier leaves a unit out or its entry is discarded, the
+  associate result is stored for that unit unchanged; discards are counted
+  with a `verifier:` prefix. When a direct verifier call fails, every
+  escalated unit keeps its associate result and the run report says why.
+  Before the associate model is called, the verifier passes the same hosted
+  opt-in and managed-provider checks as the associate profile, so a verifier
+  that is not allowed fails the run before anything is sent. The checks run
+  again immediately before every verifier call, with `llm.json` and the source
+  policy read again at that moment, so withdrawn hosted consent, a disabled
+  source, or a route changed to a profile that is not allowed sends nothing
+  for the affected units, and they keep their associate results.
+- The verifier follows the execution rule of its own profile. A direct
+  verifier is called in the same run as the associate pass, whether that pass
+  ran directly or was submitted by the bridge, before any link is written. A
+  bridge verifier gets an `llm_task` request on the same `llm.associate`
+  connector, with `params_json` `{"task": "associate-verify", "unit_ids":
+  [...], "primary": {...}}`, emitted in the transaction that writes the
+  associate links and completes the associate request; escalated units are not
+  linked until it completes. Because the connector has one active request, no
+  associate request is emitted while a verify request is active, and a direct
+  `llm associate` run with a bridge verifier refuses to start while any
+  `llm.associate` request is active, printing it.
+- A verify request is claimed by the client of the verifier route and runs
+  with that profile's model and config directory. The claim transaction only
+  selects requests whose task this worker's client is routed to, so a worker
+  authorized for an associate request cannot claim a verify request that
+  replaced it, and preparing the task checks the claiming worker against the
+  task's profile again before any message is returned. The claim records the
+  profile it was prepared for; a submission after the route for that task
+  changed is refused and stores nothing, and the worker fails the request so
+  the routed profile claims it again. When the verifier route
+  runs directly at claim time, the daemon runs the request; when the route is
+  gone, the daemon completes it by storing the associate results.
+- A `system-one` associate profile escalates the same way, using the returned
+  probability of the chosen option as the confidence; its verifier payload is
+  the filtered payload of the units it actually sent, and units it skipped or
+  discarded are not escalated. A `system-one` profile cannot be the verifier:
+  routing one is refused, and a hand-routed one fails as a verifier call (see
+  `specs/llm-integration.md`).
+- `--dry-run` sends nothing and prints `Verifier: <profile>, confidence <floor>
+  to below <threshold>`. A run report adds `Escalated: <n>`, and, when a
+  verifier ran, `Verified: <n> by <profile> (<changed> changed)`, or
+  `Verify request emitted: <id> (<n> units)` for a bridge verifier.
 
 ## Scheduling
 
@@ -625,17 +766,19 @@ workgraph projects explain <unit-id>
   From D2 each project shows its applied unit count for the last 7 days: its
   current applied links created, or approved, in that window.
 - Listing forms of `projects review` (default, `--auto`, and `--json`) start
-  with the auto-apply accuracy line from the Accuracy Gate and, when paused,
-  `Auto-apply paused: <reason>`; `--json` carries it as `auto_apply`.
+  with the auto-apply accuracy lines from the Accuracy Gate and, for each
+  paused profile, `Auto-apply paused: <reason>`; `--json` carries them as
+  `auto_apply`.
 - Interactive `projects review` shows each proposed unit, oldest first:
   container, time range, kind, summary, proposed target, confidence, and
   evidence ids. Keys: `a` approve, `r` reassign (prompts for a slug), `n` new
   project (prompts for a slug and optional workstream), `x` no project, `s`
   skip, `q` quit. EOF or empty input skips, so with no input the command
   prints every item once and changes nothing, which is the default list.
-- While the auto-apply sample is `insufficient_data`, the default review
-  also lists undecided auto-applied LLM links, oldest first, after the
-  proposed ones (see Accuracy Gate). Deterministic links are not listed.
+- While a profile's auto-apply sample is `insufficient_data`, the default
+  review also lists that profile's undecided auto-applied LLM links, oldest
+  first, after the proposed ones (see Accuracy Gate). Deterministic links are
+  not listed.
 - After the last item, the default review prints `Nothing left to decide.`
   when every listed link was decided, or `<n> left to decide (workgraph
   projects review).` when some were skipped or the review was quit.
@@ -673,14 +816,16 @@ workgraph projects explain <unit-id>
 These surfaces only read links; none runs a linking pass or writes a link.
 
 - **`next`** gains a `categorize` group after `ready`, with one item per link
-  that the default `projects review` lists. Text output starts the group with
-  one line `Categorize: <n> awaiting a decision (workgraph projects review),
-  <m> auto-applied today (workgraph projects review --auto)`, then
-  `Auto-apply paused: <reason>` when paused, then at most three items, oldest
-  first, as `<unit-ref> in <container>: <proposed|auto-applied> <target>
-  (confidence <c>)`, where `<unit-ref>` is the item's path-free unit
-  reference (`specs/next.md`). `<m>` counts undoable auto-applied links created since
-  local midnight. The group is shown while a link awaits a decision or
+  that the default `projects review` lists. Text output summarizes the group in
+  one line `Project links to review: <n> (<p> project, <q> no project)
+  (workgraph projects review), <m> auto-applied today (workgraph projects
+  review --auto)`, then `Auto-apply paused: <reason>` when paused. `<p>`
+  counts links targeting an existing or new project and `<q>` links targeting
+  no project. The items themselves are listed only with `--reason
+  categorize`, oldest first, as `<unit-ref> in <container>:
+  <proposed|auto-applied> <target> (confidence <c>)`, where `<unit-ref>` is
+  the item's path-free unit reference (`specs/next.md`). `<m>` counts undoable
+  auto-applied links created since local midnight. The group is shown while a link awaits a decision or
   auto-apply is paused. JSON items use reason `categorize`, id
   `projects:categorize:<link-id>`, and evidence from the link. The item
   closes when the link is decided. See `specs/next.md`.
@@ -689,7 +834,7 @@ These surfaces only read links; none runs a linking pass or writes a link.
   `specs/today.md`.
 - **`resume`** uses the same grouping. The morning overview shows activity
   since the last check-in per project, including PR units opened by agents
-  overnight, and the count of remaining decisions. See `specs/resume.md`.
+  overnight, and the `Project links to review` line. See `specs/resume.md`.
 - **`resume <project>`** selects the same activity the overview places under
   that project, and `resume <workstream>` shows its projects' activity grouped
   by project. Two exceptions to that parity are deliberate: a container whose
@@ -733,6 +878,9 @@ Grouping, shared by `today` and `resume`:
   requests, direct and bridge execution, and the `next`, `today`, and
   `resume` surfaces. Existing capture-only workers are unchanged. D4 depends
   on in-flight changes to those commands.
+- **D5 Thresholds and verifier**: per-profile auto-apply thresholds and verify
+  floors with `llm set`, the per-profile accuracy gate, and the
+  `associate-verify` route, direct and bridge.
 
 ## Deferred
 
@@ -774,9 +922,11 @@ Grouping, shared by `today` and `resume`:
 - **P6. Invalid results are discarded.** Unknown units, unknown projects,
   foreign evidence ids, bad kinds, and out-of-range confidence are discarded
   and counted; valid entries in the same response are stored.
-- **P7. Auto-apply gates hold.** Confidence 0.95 applies, 0.94 proposes, a new
+- **P7. Auto-apply gates hold.** With the default threshold, confidence 0.95
+  applies, 0.94 proposes, a new
   project proposes, a recent rejection for the pair proposes, and measured
-  accuracy below 0.95 over 20 decided links pauses auto-apply and says so;
+  accuracy below 0.95 over 20 decided links pauses auto-apply for that
+  profile and says so;
   the pause survives the sample dropping below 20; with fewer than 20
   decided links, auto-apply stays on and undecided LLM auto links, but not
   deterministic links, are listed in the default review and the `next` count;
@@ -804,3 +954,33 @@ Grouping, shared by `today` and `resume`:
   remaining decisions. `resume <project>` lists linked and mapped activity
   without units linked to `none` or another project, and `resume <workstream>`
   groups its projects' activity by project.
+- **P11. Thresholds are per profile.** `llm add --auto-apply-confidence 0.9`
+  and `llm set` store the threshold and verify floor, `llm set` keeps every
+  other setting, values outside their ranges are refused, and `llm list`
+  prints both; a 0.92 result applies for a 0.9 profile and proposes for a
+  default profile.
+- **P12. The accuracy gate is per profile.** A profile at threshold 0.9 with
+  18 of 20 decided links confirmed keeps auto-applying, while a default
+  profile with the same sample pauses; the pause names its profile, appears in
+  `projects review` and `workgraph review`, and does not stop the other
+  profile; a pause event without a profile still holds a profile with no
+  event of its own.
+- **P13. A direct verifier decides uncertain units.** With `associate-verify`
+  routed, only units in the floor-to-threshold band reach the verifier, with
+  the same unit payload plus `primary_answer` and nothing from other units;
+  the verifier's result is stored under its profile and auto-applies at its
+  threshold, both results appear in `projects explain`, a unit the verifier
+  leaves out keeps the associate result, and a verifier call failure keeps
+  every associate result and says so. Without the route no verifier is called.
+- **P14. A bridge verifier uses the outbox.** A bridge verifier gets an
+  `associate-verify` `llm_task` request in the transaction that completes the
+  associate request; no associate request is emitted while it is active; only
+  the verifier's client can claim it and the claim carries the verifier's
+  model; its submission writes the verifier's links and completes it.
+- **P15. A system-one associate profile works with a verifier.** Floor-to-
+  threshold units escalate to a direct verifier with the hosted-filtered
+  state, and the verifier's result is stored under its profile; a bridge
+  verifier gets an `associate-verify` request from direct and daemon runs;
+  discarded units are not escalated; a `system-one` verifier is refused at
+  `llm use` and, when hand-routed, at run time with the associate results
+  kept; `llm set` thresholds change what a `system-one` profile auto-applies.

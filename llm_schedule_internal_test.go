@@ -1,7 +1,9 @@
 package workgraph
 
 import (
+	"database/sql"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -48,5 +50,40 @@ func TestLLMAssociateCadenceRunsHourlyAndRepeatsTheDailyRun(t *testing.T) {
 	cadence.record(later, LLMAssociateScheduleResult{}, errors.New("model unavailable"))
 	if cadence.dailyRemaining != 0 {
 		t.Fatalf("expected a failed check to end the daily run")
+	}
+}
+
+func TestLLMTaskClaimHonorsTheTaskAllowedWhenAuthorized(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	home := filepath.Join(root, "state")
+	initialized, err := Init(InitConfig{HomeDir: home, MemoryDir: filepath.Join(root, "memory")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite3", initialized.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.Exec(`INSERT INTO capture_requests (id, connector_id, kind, since, until, params_json, status, attempts, available_at, created_at)
+		VALUES ('verify-request', ?, ?, ?, ?, '{"task":"associate-verify","unit_ids":[]}', 'pending', 0, ?, ?)`,
+		llmAssociateConnectorID, captureRequestKindLLMTask, now, now, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	claimed, err := claimCaptureRequests(CaptureRequestClaimConfig{HomeDir: home, ConnectorID: llmAssociateConnectorID, Kind: captureRequestKindLLMTask, Worker: "codex-drain-race", llmTasks: []string{""}})
+	if err != nil || len(claimed) != 0 {
+		t.Fatalf("a worker authorized only for associate tasks claimed a verify request: %+v %v", claimed, err)
+	}
+	var status string
+	var attempts int
+	if err := db.QueryRow(`SELECT status, attempts FROM capture_requests WHERE id = 'verify-request'`).Scan(&status, &attempts); err != nil || status != "pending" || attempts != 0 {
+		t.Fatalf("expected the verify request untouched, got %s %d %v", status, attempts, err)
+	}
+	claimed, err = claimCaptureRequests(CaptureRequestClaimConfig{HomeDir: home, ConnectorID: llmAssociateConnectorID, Kind: captureRequestKindLLMTask, Worker: "claude-code-drain-race", llmTasks: []string{llmTaskAssociateVerify}})
+	if err != nil || len(claimed) != 1 || claimed[0].Request.ID != "verify-request" {
+		t.Fatalf("expected the worker authorized for verify tasks to claim it, got %+v %v", claimed, err)
 	}
 }
