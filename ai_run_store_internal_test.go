@@ -16,8 +16,8 @@ type aiRunOpenTracker struct {
 	opened []*sql.DB
 }
 
-func (tracker *aiRunOpenTracker) open(databasePath string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite3", aiRunDatabaseDSN(databasePath))
+func (tracker *aiRunOpenTracker) open(databasePath string, busyTimeout time.Duration) (*sql.DB, error) {
+	db, err := sql.Open("sqlite3", aiRunDatabaseDSN(databasePath, busyTimeout))
 	if err == nil {
 		tracker.mu.Lock()
 		tracker.opened = append(tracker.opened, db)
@@ -136,7 +136,7 @@ func TestAIRunDatabaseOpenNeverCreatesAMissingDatabase(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(databasePath), 0o700); err != nil {
 		t.Fatalf("create database directory: %v", err)
 	}
-	err := withAIRunDatabase(databasePath, func(db *sql.DB) error { return db.Ping() })
+	err := withAIRunDatabase(databasePath, aiRunBusyTimeout, func(db *sql.DB) error { return db.Ping() })
 	if err == nil || !isAIRunDatabaseUnavailable(err) {
 		t.Fatalf("expected a retryable unavailable-database error, got %v", err)
 	}
@@ -148,10 +148,77 @@ func TestAIRunDatabaseOpenNeverCreatesAMissingDatabase(t *testing.T) {
 		t.Fatalf("init workgraph: %v", err)
 	}
 	var count int
-	err = withAIRunDatabase(databasePath, func(db *sql.DB) error {
+	err = withAIRunDatabase(databasePath, aiRunBusyTimeout, func(db *sql.DB) error {
 		return db.QueryRow(`SELECT COUNT(*) FROM events`).Scan(&count)
 	})
 	if err != nil {
 		t.Fatalf("open existing database through its file URI: %v", err)
+	}
+}
+
+func holdAIRunTestExclusiveLock(t *testing.T, databasePath string) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", databasePath)
+	if err != nil {
+		t.Fatalf("open event database: %v", err)
+	}
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`BEGIN EXCLUSIVE`); err != nil {
+		db.Close()
+		t.Fatalf("take exclusive database lock: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(`COMMIT`)
+		db.Close()
+	})
+}
+
+func initAIRunTestDatabase(t *testing.T) string {
+	t.Helper()
+	initialized, err := Init(InitConfig{HomeDir: filepath.Join(t.TempDir(), ".workgraph")})
+	if err != nil {
+		t.Fatalf("init workgraph: %v", err)
+	}
+	return initialized.DatabasePath
+}
+
+func countAIRunTestEvents(db *sql.DB) error {
+	var count int
+	return db.QueryRow(`SELECT COUNT(*) FROM events`).Scan(&count)
+}
+
+func TestAIRunDatabaseRetryGivesUpWithinItsDeadline(t *testing.T) {
+	databasePath := initAIRunTestDatabase(t)
+	holdAIRunTestExclusiveLock(t, databasePath)
+
+	budget := 1500 * time.Millisecond
+	began := time.Now()
+	err := retryAIRunDatabase(databasePath, began.Add(budget), countAIRunTestEvents)
+	elapsed := time.Since(began)
+	if err == nil || !isAIRunDatabaseUnavailable(err) {
+		t.Fatalf("expected an unavailable-database error, got %v", err)
+	}
+	if elapsed > budget+time.Second {
+		t.Fatalf("retry ran %v past a %v budget although each attempt may wait %v for the lock", elapsed, budget, aiRunBusyTimeout)
+	}
+}
+
+func TestAIRunStartRetryAfterChildExitGivesUpWithinItsBudget(t *testing.T) {
+	databasePath := initAIRunTestDatabase(t)
+	holdAIRunTestExclusiveLock(t, databasePath)
+	previousBudget := aiRunRetryBudget
+	aiRunRetryBudget = 1500 * time.Millisecond
+	t.Cleanup(func() { aiRunRetryBudget = previousBudget })
+
+	done := make(chan struct{})
+	exitedAt := time.Now()
+	close(done)
+	start := persistAIRunStart(databasePath, countAIRunTestEvents, aiRunChildExit{done: done, at: &exitedAt})
+	elapsed := time.Since(exitedAt)
+	if start.err == nil || !isAIRunDatabaseUnavailable(start.err) || !start.childExited {
+		t.Fatalf("expected an unavailable start after child exit, got %+v", start)
+	}
+	if elapsed > aiRunRetryBudget+time.Second {
+		t.Fatalf("start retry ran %v after child exit with a %v budget", elapsed, aiRunRetryBudget)
 	}
 }

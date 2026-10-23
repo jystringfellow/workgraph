@@ -5,32 +5,34 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
 
-const aiRunBusyTimeoutMillis = "5000"
-
 var (
+	aiRunBusyTimeout       = 5 * time.Second
 	aiRunRetryInitialDelay = 100 * time.Millisecond
 	aiRunRetryMaxDelay     = 2 * time.Second
 	aiRunRetryBudget       = 15 * time.Second
-	aiRunOpenDatabase      = func(databasePath string) (*sql.DB, error) {
-		return sql.Open("sqlite3", aiRunDatabaseDSN(databasePath))
+	aiRunBeforeChildStart  func()
+	aiRunOpenDatabase      = func(databasePath string, busyTimeout time.Duration) (*sql.DB, error) {
+		return sql.Open("sqlite3", aiRunDatabaseDSN(databasePath, busyTimeout))
 	}
 )
 
-func aiRunDatabaseDSN(databasePath string) string {
+func aiRunDatabaseDSN(databasePath string, busyTimeout time.Duration) string {
 	slashed := filepath.ToSlash(databasePath)
 	if !strings.HasPrefix(slashed, "/") {
 		slashed = "/" + slashed
 	}
-	location := url.URL{Scheme: "file", Path: slashed, RawQuery: "mode=rw&_busy_timeout=" + aiRunBusyTimeoutMillis}
+	millis := max(busyTimeout.Milliseconds(), 1)
+	location := url.URL{Scheme: "file", Path: slashed, RawQuery: "mode=rw&_busy_timeout=" + strconv.FormatInt(millis, 10)}
 	return location.String()
 }
 
-func withAIRunDatabase(databasePath string, use func(*sql.DB) error) error {
-	db, err := aiRunOpenDatabase(databasePath)
+func withAIRunDatabase(databasePath string, busyTimeout time.Duration, use func(*sql.DB) error) error {
+	db, err := aiRunOpenDatabase(databasePath, busyTimeout)
 	if err != nil {
 		return fmt.Errorf("open AI event database: %w", err)
 	}
@@ -39,16 +41,36 @@ func withAIRunDatabase(databasePath string, use func(*sql.DB) error) error {
 	return use(db)
 }
 
-func retryAIRunDatabase(attempt func() error, budget time.Duration) error {
-	deadline := time.Now().Add(budget)
+func retryAIRunDatabase(databasePath string, deadline time.Time, use func(*sql.DB) error) error {
 	delay := aiRunRetryInitialDelay
 	for {
-		err := attempt()
-		if err == nil || !isAIRunDatabaseUnavailable(err) || time.Now().Add(delay).After(deadline) {
+		err := withAIRunDatabase(databasePath, min(aiRunBusyTimeout, time.Until(deadline)), use)
+		if err == nil || !isAIRunDatabaseUnavailable(err) {
 			return err
 		}
-		time.Sleep(delay)
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return err
+		}
+		time.Sleep(min(delay, remaining))
+		if time.Until(deadline) <= 0 {
+			return err
+		}
 		delay = min(delay*2, aiRunRetryMaxDelay)
+	}
+}
+
+type aiRunChildExit struct {
+	done <-chan struct{}
+	at   *time.Time
+}
+
+func (exit aiRunChildExit) exited() bool {
+	select {
+	case <-exit.done:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -58,31 +80,32 @@ type aiRunStartResult struct {
 	childExited bool
 }
 
-func persistAIRunStart(write func() error, exited <-chan struct{}) aiRunStartResult {
+func persistAIRunStart(databasePath string, use func(*sql.DB) error, exit aiRunChildExit) aiRunStartResult {
 	delay := aiRunRetryInitialDelay
 	var firstUnavailable error
 	for {
-		err := write()
+		busyTimeout := aiRunBusyTimeout
+		if exit.exited() {
+			busyTimeout = min(busyTimeout, time.Until(exit.at.Add(aiRunRetryBudget)))
+		}
+		err := withAIRunDatabase(databasePath, busyTimeout, use)
 		if err == nil || !isAIRunDatabaseUnavailable(err) {
-			return aiRunStartResult{err: err, delayedBy: firstUnavailable, childExited: isAIRunChildExited(exited)}
+			return aiRunStartResult{err: err, delayedBy: firstUnavailable, childExited: exit.exited()}
 		}
 		if firstUnavailable == nil {
 			firstUnavailable = err
 		}
+		if exit.exited() {
+			deadline := exit.at.Add(aiRunRetryBudget)
+			if time.Until(deadline) > 0 {
+				err = retryAIRunDatabase(databasePath, deadline, use)
+			}
+			return aiRunStartResult{err: err, delayedBy: firstUnavailable, childExited: true}
+		}
 		select {
-		case <-exited:
-			return aiRunStartResult{err: retryAIRunDatabase(write, aiRunRetryBudget), delayedBy: firstUnavailable, childExited: true}
+		case <-exit.done:
 		case <-time.After(delay):
 		}
 		delay = min(delay*2, aiRunRetryMaxDelay)
-	}
-}
-
-func isAIRunChildExited(exited <-chan struct{}) bool {
-	select {
-	case <-exited:
-		return true
-	default:
-		return false
 	}
 }

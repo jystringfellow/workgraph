@@ -296,13 +296,11 @@ func runAISession(config AIRunConfig, permittedParentSessionID string) (AIRunRes
 	}
 	nativeSessionID := nativeLaunch.NativeSessionID
 	if predecessorSessionID == "" && nativeSessionID != "" {
-		err = retryAIRunDatabase(func() error {
-			return withAIRunDatabase(status.DatabasePath, func(db *sql.DB) error {
-				var lookupErr error
-				predecessorSessionID, lookupErr = findLatestAISessionByNativeID(db, tool, nativeSessionID, "")
-				return lookupErr
-			})
-		}, aiRunRetryBudget)
+		err = retryAIRunDatabase(status.DatabasePath, time.Now().Add(aiRunRetryBudget), func(db *sql.DB) error {
+			var lookupErr error
+			predecessorSessionID, lookupErr = findLatestAISessionByNativeID(db, tool, nativeSessionID, "")
+			return lookupErr
+		})
 		if err != nil {
 			return AIRunResult{}, fmt.Errorf("find resumed AI session: %w", err)
 		}
@@ -315,16 +313,23 @@ func runAISession(config AIRunConfig, permittedParentSessionID string) (AIRunRes
 	command.Stdout = config.Stdout
 	command.Stderr = config.Stderr
 	command.Env = aiChildEnvironment(os.Environ(), sessionID, status.HomeDir, status.DatabasePath, nativeLaunch.Environment)
+	attachSignalRelay, stopSignalRelay := startAIRunSignalRelay()
+	defer stopSignalRelay()
+	if aiRunBeforeChildStart != nil {
+		aiRunBeforeChildStart()
+	}
 	if err := command.Start(); err != nil {
 		return AIRunResult{}, fmt.Errorf("start AI tool %q: %w", tool, err)
 	}
-	stopSignalRelay := relayAIRunSignals(command.Process)
-	defer stopSignalRelay()
-	exited := make(chan struct{})
+	attachSignalRelay(command.Process)
+	exitDone := make(chan struct{})
+	var exitedAt time.Time
+	exit := aiRunChildExit{done: exitDone, at: &exitedAt}
 	var waitErr error
 	go func() {
 		waitErr = command.Wait()
-		close(exited)
+		exitedAt = time.Now()
+		close(exitDone)
 	}()
 
 	startedAt := time.Now().UTC()
@@ -341,18 +346,16 @@ func runAISession(config AIRunConfig, permittedParentSessionID string) (AIRunRes
 		ProcessStartIdentity: currentAIProcessStartIdentity(command.Process.Pid),
 		Observed:             observed,
 	}
-	start := persistAIRunStart(func() error {
-		return withAIRunDatabase(status.DatabasePath, func(db *sql.DB) error {
-			return insertAIEvent(db, "ai.session_started:"+sessionID, "ai.session_started", startedAt, project, "AI session started ("+tool+")", started)
-		})
-	}, exited)
+	start := persistAIRunStart(status.DatabasePath, func(db *sql.DB) error {
+		return insertAIEvent(db, "ai.session_started:"+sessionID, "ai.session_started", startedAt, project, "AI session started ("+tool+")", started)
+	}, exit)
 	if start.err != nil && (!start.childExited || !isAIRunDatabaseUnavailable(start.err)) {
 		_ = command.Process.Kill()
-		<-exited
+		<-exitDone
 		return AIRunResult{}, fmt.Errorf("persist AI session start: %w", start.err)
 	}
 
-	<-exited
+	<-exitDone
 	outcome, exitCode, outcomeErr := aiChildOutcome(command.ProcessState, waitErr)
 	if outcomeErr != nil {
 		return AIRunResult{}, outcomeErr
@@ -389,11 +392,9 @@ func runAISession(config AIRunConfig, permittedParentSessionID string) (AIRunRes
 		ended.Observed = &finalObserved
 	}
 	summary := aiEndedSummary(outcome)
-	err = retryAIRunDatabase(func() error {
-		return withAIRunDatabase(status.DatabasePath, func(db *sql.DB) error {
-			return insertAIEvent(db, "ai.session_ended:"+sessionID, "ai.session_ended", endedAt, project, summary, ended)
-		})
-	}, aiRunRetryBudget)
+	err = retryAIRunDatabase(status.DatabasePath, time.Now().Add(aiRunRetryBudget), func(db *sql.DB) error {
+		return insertAIEvent(db, "ai.session_ended:"+sessionID, "ai.session_ended", endedAt, project, summary, ended)
+	})
 	if err != nil && config.Stderr != nil {
 		fmt.Fprintf(config.Stderr, "workgraph ai run: persist AI session end: %v\n", err)
 	}

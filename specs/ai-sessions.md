@@ -331,9 +331,11 @@ Launch sequencing is normative:
 7. return the child's real exit outcome
 
 No start event is written if executable resolution or child start fails. If the
-child starts but the start event cannot be persisted, workgraph terminates and
-reaps the child, reports the persistence failure, and exits nonzero. It must not
-leave an untracked child running.
+child starts but the start event fails with a nonretryable persistence error,
+workgraph terminates and reaps the child, reports the persistence failure, and
+exits nonzero. It must not leave an untracked child running. An unavailable
+database is retryable and does not terminate the child; see
+[Database access during a wrapped session](#database-access-during-a-wrapped-session).
 
 End observation and end-event persistence are best-effort. Their failures are
 visible on stderr but never replace or suppress the child outcome. A normally
@@ -353,35 +355,41 @@ opens a fresh connection, does its one read or write, and closes it:
 - after the child exits, the end event is written
 
 Checkpoints and native lifecycle callbacks run in their own short-lived
-`workgraph` processes and follow the same rule. The wrapper does not poll,
-heartbeat, or tail transcripts. Its connections open the existing database in
+`workgraph` processes, each holding one connection only for the few statements
+of that command. The wrapper does not poll, heartbeat, or tail transcripts. Its connections open the existing database in
 read-write mode without creating it, wait up to five seconds for a lock, and
 never prepare or migrate the schema, so a short open mid-session cannot start a
 migration or recreate a database that maintenance has moved aside.
 
 A database that is locked, busy, or cannot be opened is unavailable, not
-failed:
+failed. Every retry window is a hard deadline: each attempt's lock wait is
+shortened to the time left in its window, so an operation gives up within its
+window rather than after a final full lock wait.
 
 - a native predecessor lookup retries for up to fifteen seconds and then
   aborts before launch
 - an unavailable start write never terminates the child. The wrapper retries
   with backoff, capped at two seconds between attempts, until the write lands.
-  If the child exits first, the wrapper retries for up to fifteen more seconds.
+  If the child exits first, the wrapper retries until fifteen seconds after the
+  child exited.
   After the child exits, stderr reports that the start was recorded late. If
   it never landed, stderr reports the start persistence failure, no end event
   is written, and the wrapper still returns the child outcome.
-- an unavailable end write retries for up to fifteen seconds before being
-  reported as an end persistence failure
+- an unavailable end write retries for up to fifteen seconds after the final
+  observation before being reported as an end persistence failure
 
-Any other start persistence failure still terminates and reaps the child.
+Any nonretryable start persistence failure still terminates and reaps the
+child.
 Native lifecycle callbacks wait only briefly for the start event, so a start
 that lands late may leave a native binding unrecorded; that callback reports
 its own failure.
 
 ### Wrapper signals
 
-While the child runs, the wrapper does not exit on SIGINT, SIGQUIT, SIGTERM, or
-SIGHUP. On Unix it forwards SIGTERM and SIGHUP to the child; SIGINT and SIGQUIT
+The wrapper starts handling SIGINT, SIGQUIT, SIGTERM, and SIGHUP before it
+launches the child and does not exit on them while the child runs. On Unix it
+forwards SIGTERM and SIGHUP to the child, queuing any that arrive before the
+child exists and forwarding them once it starts; SIGINT and SIGQUIT
 already reach the child from the terminal's foreground process group. The
 wrapper then waits for the child and records the end event through a fresh
 connection, as for any other exit.

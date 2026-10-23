@@ -47,7 +47,7 @@ Feature: Local AI coding session continuity
     Then workgraph launches the stored OpenCode executable with "--session <opencode-session-id>"
 
   Scenario: Fail safely when a started child cannot be recorded
-    Given the AI session start event cannot be persisted
+    Given the AI session start event fails with a nonretryable persistence error
     When I run "workgraph ai run -- codex"
     Then workgraph terminates and reaps the child
     And workgraph reports the persistence failure
@@ -79,6 +79,19 @@ Feature: Local AI coding session continuity
     Then the wrapper forwards SIGTERM to the agent
     And the end event records signal "SIGTERM"
     And the wrapper exits with status 143
+
+  Scenario: Forward a signal that arrives while the agent is launching
+    Given the wrapper receives SIGTERM before the agent process exists
+    When the agent starts
+    Then the wrapper forwards the queued SIGTERM to the agent
+    And the end event records signal "SIGTERM"
+    And the wrapper exits with status 143
+
+  Scenario: Give up on an unavailable database within the retry window
+    Given another process holds an exclusive lock longer than the retry window
+    When the wrapper retries a lifecycle write
+    Then it gives up within the window plus a small slack
+    And no single attempt waits past the window for the lock
 
   Scenario: Abort before launch when the required launch observation fails
     Given Git metadata collection fails for a reason other than "not a repository"
