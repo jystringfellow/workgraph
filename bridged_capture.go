@@ -1294,10 +1294,7 @@ func prepareBridgedEvent(source string, envelope bridgedEventEnvelope) (prepared
 	}
 	if source == "slack" {
 		event.Type = canonicalBridgedSlackType(eventType)
-		event.Project = slackContainerName(event.Project)
-		if event.Project == "" {
-			event.Project = slackPayloadContainer(payloadJSON)
-		}
+		event.Project = storedSlackContainer(event.Project, payloadJSON)
 	}
 	return event, nil
 }
@@ -1336,7 +1333,10 @@ func requireBridgedSlackChannel(db *sql.DB, event *preparedBridgedEvent, knownNa
 	}
 	name := names.For(event.PayloadJSON)
 	if name == "" {
-		return fmt.Errorf("slack payload channel_name is required for %s: set it to the conversation name from Slack conversation info without a leading #; DMs use \"DM: <user name>\" and group DMs \"Group DM: <names>\"", channelID)
+		name = slackConversationFallbackContainer(event.PayloadJSON, "")
+	}
+	if name == "" {
+		return fmt.Errorf("slack payload channel_name is required for %s: set it to the conversation name from Slack conversation info without a leading #", channelID)
 	}
 	if event.Project == "" {
 		event.Project = name

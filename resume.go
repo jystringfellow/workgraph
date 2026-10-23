@@ -534,9 +534,6 @@ func loadResumeEvents(db *sql.DB, location *time.Location) ([]ResumeEvent, error
 
 func canonicalizeSlackResumeProjects(events []ResumeEvent) {
 	aliases := slackResumeProjectAliases(events)
-	if len(aliases) == 0 {
-		return
-	}
 	for i := range events {
 		if resolved := slackResumeCanonicalProject(events[i], aliases); resolved != "" {
 			events[i].Project = resolved
@@ -617,10 +614,16 @@ func slackResumeCanonicalProject(event ResumeEvent, aliases map[string]slackChan
 		return container
 	}
 	channelID, _ := slackResumeChannelIdentity(event.Payload)
-	if channelID != "" {
-		return aliases[channelID].For(event.Payload)
+	if channelID == "" {
+		return ""
 	}
-	return ""
+	if name := aliases[channelID].For(event.Payload); name != "" {
+		return name
+	}
+	if container := canonicalSlackContainer(event.Project, channelID, slackPayloadConversationKind(event.Payload)); container != "" {
+		return container
+	}
+	return slackConversationFallbackContainer(event.Payload, event.Project)
 }
 
 func slackResumeChannelIdentity(payload string) (string, string) {
@@ -640,21 +643,15 @@ func slackContainerName(name string) string {
 
 func slackPayloadContainer(payload string) string {
 	channelID, channelName := slackResumeChannelIdentity(payload)
-	if channelName == "" || channelName == channelID {
-		return ""
-	}
-	return channelName
+	return canonicalSlackContainer(channelName, channelID, slackPayloadConversationKind(payload))
 }
 
 func unresolvedRawSlackProject(event ResumeEvent) bool {
-	channelID, channelName := slackResumeChannelIdentity(event.Payload)
-	if channelID == "" {
+	channelID, _ := slackResumeChannelIdentity(event.Payload)
+	if channelID == "" || slackPayloadContainer(event.Payload) != "" {
 		return false
 	}
-	if channelName != "" && channelName != channelID {
-		return false
-	}
-	return strings.TrimSpace(event.Project) == channelID
+	return slackIDOnlyContainer(event.Project, channelID)
 }
 
 func resumableProjects(events []ResumeEvent) []ResumeProject {

@@ -127,6 +127,14 @@ Feature: Bridged connector capture
     And that stored name becomes the container while the payload is stored as submitted
     But a name known only from an event treated as a DM never names a channel event
 
+  Scenario: Give each bridged DM conversation its own container
+    Given bridged Slack DM and group DM events with generic names such as "DM" or "Group DM"
+    When they are ingested
+    Then each conversation is named by the store's name for its channel_id
+    But a conversation with no known name is "DM (<channel_id>)" or "Group DM (<channel_id>)"
+    And legacy forms such as "DM (<names>)" or "Group DM with <names>" become "DM: <names>" or "Group DM: <names>"
+    And the payload is stored as submitted and DM privacy is unchanged
+
   Scenario: Treat bridged Slack replies as thread replies
     Given a bridged Slack reply submitted as slack.reply with a parent thread_ts
     When it is ingested
@@ -139,6 +147,7 @@ Feature: Bridged connector capture
     Then replies become slack.thread_reply
     And leading-hash containers lose the hash
     And empty containers take the channel_name or the name the store pairs with their channel_id
+    And generic or legacy DM containers take their conversation's canonical DM container
     And payloads, explicit containers, and never-named channel ids are unchanged
     And opening the store again changes nothing
 

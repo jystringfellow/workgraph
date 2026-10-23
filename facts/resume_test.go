@@ -269,6 +269,55 @@ func TestResumeCanonicalizesOlderSlackChannelIDsWhenResolvedNamesExist(t *testin
 	}
 }
 
+func TestResumeSeparatesSlackDMConversationsWithGenericNames(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	result, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	now := time.Date(2026, 6, 22, 11, 45, 0, 0, time.Local)
+	events := []storedEvent{
+		{ID: "named-group", Project: "Group DM: Lila, Omar", Payload: `{"channel_id":"C0DEMO031","channel_name":"Group DM: Lila, Omar","conversation_type":"mpim","text":"Named group","ts":"1782126000.000000"}`, Summary: "Named group"},
+		{ID: "generic-known-group", Project: "Group DM", Payload: `{"channel_id":"C0DEMO031","channel_name":"Group DM","conversation_type":"mpim","text":"Known group","ts":"1782126010.000000"}`, Summary: "Known group"},
+		{ID: "generic-unknown-group", Project: "Group DM", Payload: `{"channel_id":"C0DEMO032","channel_name":"Group DM","conversation_type":"mpim","text":"Unknown group","ts":"1782126020.000000"}`, Summary: "Unknown group"},
+		{ID: "generic-dm", Project: "DM", Payload: `{"channel_id":"D0DEMO033","conversation_type":"im","text":"Unknown DM","ts":"1782126030.000000"}`, Summary: "Unknown DM"},
+	}
+	for index, event := range events {
+		event.Source = "slack"
+		event.Type = "slack.message"
+		event.Timestamp = now.Add(-time.Duration(index+5) * time.Minute)
+		insertEvent(t, result.DatabasePath, event)
+	}
+
+	resume, err := workgraph.Resume(workgraph.ResumeConfig{HomeDir: homeDir, DatabasePath: result.DatabasePath, Now: now})
+	if err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+	if !strings.Contains(resume.Message, "- Group DM: Lila, Omar: 2 events") {
+		t.Fatalf("expected the generic event to join its named group DM, got:\n%s", resume.Message)
+	}
+	if strings.Contains(resume.Message, "C0DEMO032") || strings.Contains(resume.Message, "D0DEMO033") {
+		t.Fatalf("expected id-only DM containers hidden from the default list, got:\n%s", resume.Message)
+	}
+
+	for project, want := range map[string]string{"Group DM (C0DEMO032)": "Unknown group", "DM (D0DEMO033)": "Unknown DM"} {
+		exact, err := workgraph.Resume(workgraph.ResumeConfig{HomeDir: homeDir, DatabasePath: result.DatabasePath, Project: project, Now: now})
+		if err != nil {
+			t.Fatalf("resume %s failed: %v", project, err)
+		}
+		if !strings.Contains(exact.Message, "Resume "+project) || !strings.Contains(exact.Message, want) {
+			t.Fatalf("expected %s to resume only its own conversation, got:\n%s", project, exact.Message)
+		}
+		for _, other := range []string{"Named group", "Known group", "Unknown group", "Unknown DM"} {
+			if other != want && strings.Contains(exact.Message, other) {
+				t.Fatalf("expected %s not to merge %q, got:\n%s", project, other, exact.Message)
+			}
+		}
+	}
+}
+
 func TestResumeProjectListHidesUnresolvedRawSlackIDs(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")

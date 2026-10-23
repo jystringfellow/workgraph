@@ -28,6 +28,7 @@ type projectActivityGroup struct {
 	agentPRs  []string
 	kinds     map[string]bool
 	autoUnits map[string]bool
+	mappedTo  []string
 	children  []*projectActivityGroup
 }
 
@@ -127,7 +128,11 @@ func (activity *projectActivity) placement(unitID, container string) ([]*project
 	if workstreams := activity.mappings.Workstreams[container]; len(workstreams) == 1 {
 		workstream = workstreams[0]
 	}
-	return activity.path(workstream, container, ""), nil
+	path := activity.path(workstream, container, "")
+	if mapped := activity.catalog.mappedProjects(container, activity.mappings); len(mapped) >= 2 {
+		path[len(path)-1].mappedTo = mapped
+	}
+	return path, nil
 }
 
 func (activity *projectActivity) mappedProject(container string) string {
@@ -186,6 +191,9 @@ func (group *projectActivityGroup) render(indent string) []string {
 	}
 	if len(group.autoUnits) > 0 {
 		line += fmt.Sprintf("; %d auto-applied (%s)", len(group.autoUnits), projectActivityAutoHint)
+	}
+	if len(group.mappedTo) > 0 {
+		line += "; mapped to " + strings.Join(group.mappedTo, ", ")
 	}
 	lines := []string{line}
 	for _, pr := range group.agentPRs {

@@ -40,16 +40,21 @@ or workgraph rejects the whole batch and names the event and missing field:
 
 - `channel_id`: the Slack conversation id (`C…`, `G…`, or `D…`), not `channel`.
 - `channel_name`: the conversation name without a leading `#`. DMs use
-  `DM: <user name>` and group DMs `Group DM: <names>`.
+  `DM: <user name>` with the other person's name, and group DMs
+  `Group DM: <names>` with the participant names Slack lists. Use exactly
+  these forms, not `DM (<names>)`, `DM with <names>`, or `mpdm-` names. When
+  the names cannot be resolved, send `DM` or `Group DM`: workgraph never uses
+  a generic label as the container and names the conversation from the store,
+  or `DM (<channel_id>)` or `Group DM (<channel_id>)` until a name is known.
 - `conversation_type`: `channel`, `private_channel`, `im`, or `mpim`.
 
 Read the name and type from Slack conversation info: the channel metadata a
 read or search result returns, or a channel or user lookup by id with the
 approved read-only tools. Never guess a type from the id prefix alone, because
-`C…` ids can be public or private. A payload may omit `channel_name` only when
-workgraph already stores a name for that `channel_id`; if a rejection says the
-name is required, look it up and resubmit the corrected batch under the same
-claim, or report the request as failed so it retries.
+`C…` ids can be public or private. A channel payload may omit `channel_name`
+only when workgraph already stores a name for that `channel_id`; if a rejection
+says the name is required, look it up and resubmit the corrected batch under the
+same claim, or report the request as failed so it retries.
 
 For Microsoft mail, express the provider date filter in the mailbox-local time
 zone over a two-day pad on each side of the requested window. Filter the
