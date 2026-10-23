@@ -157,12 +157,13 @@ Scenario: Honor a source disabled after scheduling
 Scenario: Decide the uncertain items at the end of the day
   Given three units await a categorization decision
   When I run "workgraph next"
-  Then a Categorize line shows three awaiting a decision and the count auto-applied today
+  Then a project links line shows three to review split by project and no project, and the count auto-applied today
+  And the links are listed only with "workgraph next --reason categorize"
   When I approve one, reassign one, and reject one in "workgraph projects review"
-  Then the Categorize line is gone and no event was rewritten
+  Then the project links line is gone and no event was rewritten
 
 Scenario: Start the morning with overnight work sorted
   Given agents opened pull requests overnight and the nightly categorization ran
   When I run "workgraph resume"
   Then activity since my last check-in is grouped by workstream and project
-  And the remaining decisions are counted
+  And the project links to review are counted by project and no project

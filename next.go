@@ -206,7 +206,7 @@ func readNextSnapshot(config NextConfig) (nextSnapshot, error) {
 		}
 	}
 	snapshot.result.Message = nextMessage(snapshot.result, entry.SetupState == "error", capturedAt, interval, config.ShowIDs, config.TeamReviews)
-	if categorize := nextCategorizeLines(snapshot.result.Items, snapshot.categorized, config.ShowIDs); len(categorize) > 0 {
+	if categorize := nextCategorizeLines(snapshot.result.Items, snapshot.categorized, config.ShowIDs, config.Reason == nextReasonCategorize); len(categorize) > 0 {
 		snapshot.result.Message += "\n" + strings.Join(categorize, "\n")
 	}
 	return snapshot, nil

@@ -169,7 +169,7 @@ func Resume(config ResumeConfig) (ResumeResult, error) {
 				}
 				prefix += "\n\n" + activity
 			}
-			if decisions := resumeDecisionsMessage(result.NextItems); decisions != "" {
+			if decisions := nextLinkReviewSummary(result.NextItems); decisions != "" {
 				prefix += "\n\n" + decisions
 			}
 			result.Message = prefix + "\n\n" + result.Message
@@ -322,14 +322,6 @@ func resumeProjectActivityMessage(db *sql.DB, config ResumeConfig, events []Resu
 		lines = append(lines, "No new activity captured.")
 	}
 	return strings.Join(lines, "\n"), nil
-}
-
-func resumeDecisionsMessage(items []NextItem) string {
-	decisions := len(nextCategorizeItems(items))
-	if decisions == 0 {
-		return ""
-	}
-	return fmt.Sprintf("Categorize: %d decisions remaining (workgraph projects review)", decisions)
 }
 
 func resumeSinceMessage(result ResumeResult, location *time.Location) string {

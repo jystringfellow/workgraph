@@ -673,14 +673,16 @@ workgraph projects explain <unit-id>
 These surfaces only read links; none runs a linking pass or writes a link.
 
 - **`next`** gains a `categorize` group after `ready`, with one item per link
-  that the default `projects review` lists. Text output starts the group with
-  one line `Categorize: <n> awaiting a decision (workgraph projects review),
-  <m> auto-applied today (workgraph projects review --auto)`, then
-  `Auto-apply paused: <reason>` when paused, then at most three items, oldest
-  first, as `<unit-ref> in <container>: <proposed|auto-applied> <target>
-  (confidence <c>)`, where `<unit-ref>` is the item's path-free unit
-  reference (`specs/next.md`). `<m>` counts undoable auto-applied links created since
-  local midnight. The group is shown while a link awaits a decision or
+  that the default `projects review` lists. Text output summarizes the group in
+  one line `Project links to review: <n> (<p> project, <q> no project)
+  (workgraph projects review), <m> auto-applied today (workgraph projects
+  review --auto)`, then `Auto-apply paused: <reason>` when paused. `<p>`
+  counts links targeting an existing or new project and `<q>` links targeting
+  no project. The items themselves are listed only with `--reason
+  categorize`, oldest first, as `<unit-ref> in <container>:
+  <proposed|auto-applied> <target> (confidence <c>)`, where `<unit-ref>` is
+  the item's path-free unit reference (`specs/next.md`). `<m>` counts undoable
+  auto-applied links created since local midnight. The group is shown while a link awaits a decision or
   auto-apply is paused. JSON items use reason `categorize`, id
   `projects:categorize:<link-id>`, and evidence from the link. The item
   closes when the link is decided. See `specs/next.md`.
@@ -689,7 +691,7 @@ These surfaces only read links; none runs a linking pass or writes a link.
   `specs/today.md`.
 - **`resume`** uses the same grouping. The morning overview shows activity
   since the last check-in per project, including PR units opened by agents
-  overnight, and the count of remaining decisions. See `specs/resume.md`.
+  overnight, and the `Project links to review` line. See `specs/resume.md`.
 - **`resume <project>`** selects the same activity the overview places under
   that project, and `resume <workstream>` shows its projects' activity grouped
   by project. Two exceptions to that parity are deliberate: a container whose

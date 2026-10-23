@@ -43,17 +43,24 @@ func TestNextCategorizeGroupListsLinksAwaitingADecision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Message, "Categorize: 5 awaiting a decision (workgraph projects review), 2 auto-applied today (workgraph projects review --auto)") {
-		t.Fatalf("expected the categorize line, got:\n%s", result.Message)
+	if !strings.Contains(result.Message, "Project links to review: 5 (5 project, 0 no project) (workgraph projects review), 2 auto-applied today (workgraph projects review --auto)") {
+		t.Fatalf("expected the project links line, got:\n%s", result.Message)
 	}
-	if shown := strings.Count(result.Message, "\n  slack.thread:C1:"); shown != 3 {
-		t.Fatalf("expected at most three categorize units in text, got %d:\n%s", shown, result.Message)
+	if shown := strings.Count(result.Message, "slack.thread:C1:"); shown != 0 {
+		t.Fatalf("expected no categorize units in default text, got %d:\n%s", shown, result.Message)
 	}
-	if !strings.Contains(result.Message, "  "+units[0].ID+" in general: proposed project mpo-gtm-segments (confidence 0.80)") {
-		t.Fatalf("expected the oldest proposed unit first, got:\n%s", result.Message)
+	listed, err := workgraph.Next(workgraph.NextConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now, Reason: "categorize"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(result.Message, "SECRET SUMMARY") || strings.Contains(result.Message, "projects:categorize:") {
-		t.Fatalf("text output must not show summaries or item ids without --ids:\n%s", result.Message)
+	if shown := strings.Count(listed.Message, "\n  slack.thread:C1:"); shown != 5 {
+		t.Fatalf("expected --reason categorize to list every unit, got %d:\n%s", shown, listed.Message)
+	}
+	if !strings.Contains(listed.Message, "Project links to review: 5 (5 project, 0 no project) (workgraph projects review), 2 auto-applied today (workgraph projects review --auto)\n  "+units[0].ID+" in general: proposed project mpo-gtm-segments (confidence 0.80)") {
+		t.Fatalf("expected the oldest proposed unit first, got:\n%s", listed.Message)
+	}
+	if strings.Contains(listed.Message, "SECRET SUMMARY") || strings.Contains(listed.Message, "projects:categorize:") {
+		t.Fatalf("text output must not show summaries or item ids without --ids:\n%s", listed.Message)
 	}
 
 	items := surfaceNextItems(t, home, "next", "--json")
@@ -106,8 +113,8 @@ func TestNextCategorizeGroupListsLinksAwaitingADecision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(result.Message, "Categorize:") || len(result.Items) != 0 {
-		t.Fatalf("expected the categorize line to close once every link is decided or done, got %d items:\n%s", len(result.Items), result.Message)
+	if strings.Contains(result.Message, "Project links to review") || len(result.Items) != 0 {
+		t.Fatalf("expected the project links line to close once every link is decided or done, got %d items:\n%s", len(result.Items), result.Message)
 	}
 	if surfaceSlackEvents(t, home.DatabasePath) != slackBefore {
 		t.Fatal("deciding categorize items must not edit events")
@@ -217,7 +224,7 @@ func TestResumeGroupsOvernightActivityByProject(t *testing.T) {
 		"    - agent PR acme/gtm#7 Draft segment tracker (copilot-swe-agent, on your behalf)",
 		"- answer-bot project: 1 event",
 		"",
-		"Categorize: 3 decisions remaining (workgraph projects review)",
+		"Project links to review: 3 (3 project, 0 no project) (workgraph projects review)",
 	}, "\n")
 	if section != expected {
 		t.Fatalf("expected overnight activity grouped by project:\n%s\ngot:\n%s", expected, section)
@@ -287,7 +294,7 @@ func TestNextCategorizeItemsCarryNoLocalPaths(t *testing.T) {
 	if strings.Contains(string(structural), "/Users/") || !strings.Contains(string(untrusted), "Fixes imports under "+repoPath) || optIn[0].Untrusted["summary"] != proposal.Summary {
 		t.Fatalf("model-written text must appear only under untrusted:\n%s\n%s", structural, untrusted)
 	}
-	text, err := workgraph.Next(workgraph.NextConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now})
+	text, err := workgraph.Next(workgraph.NextConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now, Reason: "categorize"})
 	if err != nil || !strings.Contains(text.Message, ": proposed new project customer-import (confidence 0.80)") || strings.Contains(text.Message, "/Users/") {
 		t.Fatalf("expected the proposed slug in text without local paths: %v\n%s", err, text.Message)
 	}
@@ -495,4 +502,52 @@ func surfaceEventIDs(events []workgraph.ResumeEvent) string {
 		ids = append(ids, event.ID)
 	}
 	return strings.Join(ids, ",")
+}
+
+func TestProjectLinksToReviewAreCountedApartFromWaitingItems(t *testing.T) {
+	f := newNextFixture(t)
+	units := insertSurfaceThreads(t, projectLinkingHome{HomeDir: f.home, DatabasePath: f.db}, f.now.Add(-6*time.Hour), "C1", "general", 3)
+	noProject := surfaceProposal(units[2], "", "", false)
+	noProject.Target = "none"
+	store := workgraph.ProjectLinkStoreConfig{HomeDir: f.home, DatabasePath: f.db, Now: f.now}
+	if _, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "llm", Profile: "fake", Links: []workgraph.ProjectLinkProposal{
+		surfaceProposal(units[0], "answer-bot", "coordination", false),
+		surfaceProposal(units[1], "answer-bot", "review", false),
+		noProject,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	links := "Project links to review: 3 (2 project, 1 no project) (workgraph projects review)"
+
+	today, err := workgraph.Today(workgraph.TodayConfig{HomeDir: f.home, Now: f.now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(today.Message, "Waiting on you: 6 items (workgraph next)\n"+links) {
+		t.Fatalf("expected waiting items and project links counted apart:\n%s", today.Message)
+	}
+
+	resume, err := workgraph.Resume(workgraph.ResumeConfig{HomeDir: f.home, Now: f.now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resume.Message, "1 more: workgraph next") || !strings.Contains(resume.Message, links) {
+		t.Fatalf("expected resume to count project links apart:\n%s", resume.Message)
+	}
+
+	next, err := workgraph.Next(workgraph.NextConfig{HomeDir: f.home, Now: f.now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(next.Message, links+", 0 auto-applied today (workgraph projects review --auto)") {
+		t.Fatalf("expected one project links summary line:\n%s", next.Message)
+	}
+	for _, unit := range units {
+		if strings.Contains(next.Message, unit.ID) {
+			t.Fatalf("categorize units must not be listed in default next text:\n%s", next.Message)
+		}
+	}
+	if len(next.Items) != 9 || len(surfaceNextItems(t, projectLinkingHome{HomeDir: f.home, DatabasePath: f.db}, "next", "--json")) != 9 {
+		t.Fatalf("expected every item to stay in the result, got %d", len(next.Items))
+	}
 }
