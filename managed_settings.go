@@ -139,7 +139,7 @@ func enforceLLMManagedSettings(profile llmProfile, client *http.Client) error {
 	}
 	if len(settings.LLM.AllowedBaseURL.Value) > 0 && llmProviderHasBaseURL(profile.Provider) {
 		if !baseURLAllowed(profile.BaseURL, settings.LLM.AllowedBaseURL.Value) {
-			return fmt.Errorf("llm destination %q is not allowed by managed settings", redactedLLMBaseURL(profile.BaseURL))
+			return fmt.Errorf("llm destination %q is not allowed by managed settings", llmPolicyDestination(profile))
 		}
 	}
 	if len(settings.LLM.OpenAICompatible.AllowedModels.Value) > 0 && profile.Provider == "openai-compatible" {
@@ -316,6 +316,13 @@ func isLocalLLMBaseURL(baseURL string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+func llmPolicyDestination(profile llmProfile) string {
+	if profile.Provider == llmProviderSystemOne {
+		return systemOneDestination(profile.BaseURL)
+	}
+	return redactedLLMBaseURL(profile.BaseURL)
 }
 
 func redactedLLMBaseURL(baseURL string) string {

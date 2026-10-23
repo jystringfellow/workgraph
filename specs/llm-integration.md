@@ -238,12 +238,13 @@ Configuration:
   stored profile with an execution setting is refused before any request.
 - `llm list` and `llm doctor` show the provider, model, and base URL host, never
   the path, key, or key variable name. `llm doctor` makes no request.
-- Call errors name only `scheme://host`. Transport errors omit the URL, and a
-  non-2xx body is shortened to 200 characters, stripped of control
-  characters, and has the API key, URL password, query values, and outbound
-  filter patterns redacted. The managed allowlist rejection, for every
-  provider with a base URL, prints the base URL without userinfo and with its
-  query and fragment replaced by `REDACTED`.
+- Call errors never echo provider output or URL parts. They name only
+  `scheme://host` with a fixed message: the HTTP status and "request was not
+  accepted", "request failed before a response" (or "request timed out"), or
+  "is not System One JSON". A discarded answer reports the question and a fixed
+  reason, never the returned choice. The managed allowlist rejection prints
+  `scheme://host` for `system-one`; for `openai-compatible` it prints the base
+  URL without userinfo and with its query and fragment replaced by `REDACTED`.
 - `llm test` and `llm summarize today` refuse `system-one` profiles because they
   need generated text.
 
@@ -296,9 +297,11 @@ Association mapping, one request per unit:
   identifiers, events) and the recent decisions, as JSON text.
 - The `project` choice offers one opaque option id per candidate project
   (`p1`, `p2`, ... in slug order) plus `no_project`, and workgraph maps the
-  chosen id back to the slug locally. Slugs are never sent. Each option is
-  described by title, workstream, aliases, and description. The state carries
-  no candidate slug list. For hosted profiles the state and every option
+  chosen id back to the slug locally, so slugs are not used as option keys and
+  the state carries no candidate slug list. Each option is described by title,
+  workstream, aliases, and description, falling back to the slug when a
+  project has no title. Recent decisions in the state also name project slugs.
+  For hosted profiles the state, including those decisions, and every option
   description go through the outbound filter; instructions, option ids, and
   kind descriptions are static. A new-project proposal needs a generated slug
   and name, so it is not offered.

@@ -158,11 +158,11 @@ func TestSystemOneAssociateMapsOpaqueChoicesToLinksWithReturnedProbability(t *te
 		reasons[discard.UnitID] = discard.Reason
 	}
 	for index, expected := range map[int]string{
-		2: `project choice "atlas-bot" was not offered`,
+		2: `project choice was not offered`,
 		3: `project probability for choice "p1" is not a number in [0, 1]`,
 		4: `project probability for choice "p1" is not a number in [0, 1]`,
 		5: `project probability for choice "p1" is not a number in [0, 1]`,
-		6: `kind choice "gossip" was not offered`,
+		6: `kind choice was not offered`,
 		7: `kind probability for choice "build" is not a number in [0, 1]`,
 	} {
 		if reasons[units[index].ID] != expected {
@@ -348,43 +348,58 @@ func TestSystemOneErrorsDoNotDiscloseCredentialsOrURLSecrets(t *testing.T) {
 	home := initSystemOneHome(t, true)
 	fake := newSystemOneFake(t)
 	t.Setenv("WG_DECISION_KEY", "sk-live-secret-0123456789abcdef")
-	configureSystemOneProfile(t, home, "http://operator:pa55word-xyz@127.0.0.1:8000/v1?token=qsecret12345", "WG_DECISION_KEY", "slack")
-	insertAssociateThreads(t, home, time.Now().UTC().Add(-6*time.Hour), "C1", systemOneContainer, 1)
-	secrets := []string{"sk-live-secret-0123456789abcdef", "pa55word-xyz", "qsecret12345"}
+	configureSystemOneProfile(t, home, "http://operator:ab%2Bcd@127.0.0.1:8000/v1?token=abc", "WG_DECISION_KEY", "slack")
+	units := insertAssociateThreads(t, home, time.Now().UTC().Add(-6*time.Hour), "C1", systemOneContainer, 1)
+	secrets := []string{"sk-live-secret-0123456789abcdef", "operator", "ab%2Bcd", "ab+cd", "token", "abc"}
 	config := workgraph.LLMAssociateConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, HTTPClient: fake.client}
 
-	fake.failure = func() (*http.Response, error) {
-		recorder := httptest.NewRecorder()
-		recorder.WriteHeader(http.StatusUnauthorized)
-		_, _ = recorder.WriteString("invalid key sk-live-secret-0123456789abcdef for operator:pa55word-xyz at /v1/systemone?token=qsecret12345\x1b[2J")
-		return recorder.Result(), nil
+	fake.answer("thread 0 in C1", systemOneChoice("sk-live-secret-0123456789abcdef", 0.9, map[string]any{"sk-live-secret-0123456789abcdef": 0.9}), systemOneChoice("build", 1, map[string]any{"build": 1}))
+	result, err := workgraph.AssociateWithLLM(config)
+	if err != nil {
+		t.Fatalf("associate with an unoffered choice: %v", err)
 	}
-	_, err := workgraph.AssociateWithLLM(config)
-	if err == nil || !strings.Contains(err.Error(), "http://127.0.0.1:8000: status 401") || !strings.Contains(err.Error(), "[REDACTED]") {
-		t.Fatalf("expected a sanitized status error naming only the host, got %v", err)
+	if len(result.Discarded) != 1 || result.Discarded[0].UnitID != units[0].ID || result.Discarded[0].Reason != "project choice was not offered" {
+		t.Fatalf("expected the unoffered choice to be discarded without echoing it, got %+v", result.Discarded)
 	}
-	assertNoSystemOneSecrets(t, err.Error(), append(secrets, "\x1b")...)
-	if requests := fake.received(); len(requests) != 1 || requests[0].url != "http://operator:pa55word-xyz@127.0.0.1:8000/v1/systemone?token=qsecret12345" {
+	assertNoSystemOneSecrets(t, result.Message, secrets[0])
+	if requests := fake.received(); len(requests) != 1 || !strings.HasSuffix(requests[0].url, "@127.0.0.1:8000/v1/systemone?token=abc") {
 		t.Fatalf("expected the query to be kept on the endpoint, got %+v", requests)
 	}
 
 	fake.failure = func() (*http.Response, error) {
-		return nil, errors.New("connection reset by peer")
+		recorder := httptest.NewRecorder()
+		recorder.WriteHeader(http.StatusUnauthorized)
+		_, _ = recorder.WriteString("invalid key sk-live-secret-0123456789abcdef for operator:ab%2Bcd (ab+cd) at /v1/systemone?token=abc")
+		return recorder.Result(), nil
 	}
 	_, err = workgraph.AssociateWithLLM(config)
-	if err == nil || !strings.Contains(err.Error(), "call system-one profile at http://127.0.0.1:8000: connection reset by peer") {
-		t.Fatalf("expected a transport error naming only the host, got %v", err)
+	if err == nil || err.Error() != "call system-one profile at http://127.0.0.1:8000: status 401: request was not accepted" {
+		t.Fatalf("expected a fixed status error naming only the host, got %v", err)
+	}
+	assertNoSystemOneSecrets(t, err.Error(), secrets...)
+
+	fake.failure = func() (*http.Response, error) {
+		return nil, errors.New("dial failed for operator:ab%2Bcd at /v1/systemone?token=abc")
+	}
+	_, err = workgraph.AssociateWithLLM(config)
+	if err == nil || err.Error() != "call system-one profile at http://127.0.0.1:8000: request failed before a response" {
+		t.Fatalf("expected a fixed transport error naming only the host, got %v", err)
 	}
 	assertNoSystemOneSecrets(t, err.Error(), append(secrets, "/v1")...)
 
+	if _, err := workgraph.AddLLMProfile(workgraph.LLMAddProfileConfig{HomeDir: home.HomeDir, Name: "private", Provider: "system-one", BaseURL: "https://decisions.example.net/private-account/token-value", Model: "clef-flash"}); err != nil {
+		t.Fatal(err)
+	}
 	managedPath := filepath.Join(t.TempDir(), "managed-settings.json")
 	writeSystemOneManagedSettings(t, managedPath, `{"version":1,"llm":{"allowed_base_urls":{"value":["https://allowed.example.net"]}}}`)
 	defer workgraph.SetManagedSettingsPathForTest(managedPath)()
 	doctor, err := workgraph.DoctorLLMProfiles(workgraph.LLMDoctorConfig{HomeDir: home.HomeDir})
-	if err == nil || !strings.Contains(doctor.Message, "managed policy: blocked - llm destination \"http://127.0.0.1:8000/v1?REDACTED\" is not allowed by managed settings") {
-		t.Fatalf("expected the allowlist rejection to name the destination without secrets, got %v\n%s", err, doctor.Message)
+	for _, expected := range []string{`llm destination "http://127.0.0.1:8000" is not allowed by managed settings`, `llm destination "https://decisions.example.net" is not allowed by managed settings`} {
+		if err == nil || !strings.Contains(doctor.Message, "managed policy: blocked - "+expected) {
+			t.Fatalf("expected the allowlist rejection %q, got %v\n%s", expected, err, doctor.Message)
+		}
 	}
-	assertNoSystemOneSecrets(t, doctor.Message, secrets...)
+	assertNoSystemOneSecrets(t, doctor.Message, append(secrets, "private-account", "token-value", "/v1")...)
 }
 
 func TestSystemOneEndpointKeepsAnExplicitSystemOnePath(t *testing.T) {

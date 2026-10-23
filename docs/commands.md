@@ -894,10 +894,10 @@ workgraph llm hosted enable
 A loopback base URL is treated as local, like a local OpenAI-compatible
 endpoint. Every other base URL is hosted and needs `llm hosted enable`.
 Each unit becomes one request with a `project` choice (opaque ids `p1`,
-`p2`, ... for the unit's candidate projects, plus `no_project`; slugs are
-never sent) and a `kind` choice, and the link's confidence is
+`p2`, ... for the unit's candidate projects, plus `no_project`, so slugs
+are not option keys) and a `kind` choice, and the link's confidence is
 the returned probability of the chosen project. Redirects are refused, and errors name only
-the scheme and host. `system-one` profiles run
+the scheme and host with a fixed message, never provider output. `system-one` profiles run
 direct only, cannot use `--execution bridge`, and are refused by `llm test` and
 `llm summarize today`.
 

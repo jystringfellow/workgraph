@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -23,7 +24,6 @@ const (
 	systemOneProjectQuestion   = "project"
 	systemOneKindQuestion      = "kind"
 	systemOneSummaryLimit      = 120
-	systemOneDiagnosticLimit   = 200
 )
 
 var errSystemOneNotGenerative = errors.New("system-one profiles answer decision questions only; route them with workgraph llm use <profile> --for associate")
@@ -320,7 +320,7 @@ func systemOneChosen(answers map[string]systemOneAnswer, question string, offere
 		return "", 0, fmt.Sprintf("System One answer for the %s question is missing", question)
 	}
 	if _, ok := offered[answer.Choice]; !ok {
-		return "", 0, fmt.Sprintf("%s choice %q was not offered", question, answer.Choice)
+		return "", 0, fmt.Sprintf("%s choice was not offered", question)
 	}
 	probability, ok := systemOneProbability(answer.Probabilities[answer.Choice])
 	if !ok {
@@ -405,11 +405,12 @@ func callSystemOne(ctx context.Context, client *http.Client, profile llmProfile,
 	}
 	response, err := systemOneHTTPClient(client).Do(httpRequest)
 	if err != nil {
-		var urlErr *url.Error
-		if errors.As(err, &urlErr) {
-			err = urlErr.Err
+		reason := "request failed before a response"
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			reason = "request timed out"
 		}
-		return nil, fmt.Errorf("call system-one profile at %s: %s", destination, systemOneDiagnostic(err.Error(), systemOneSecrets(profile.BaseURL, key)))
+		return nil, fmt.Errorf("call system-one profile at %s: %s", destination, reason)
 	}
 	defer response.Body.Close()
 	if response.StatusCode >= 300 && response.StatusCode < 400 {
@@ -423,11 +424,11 @@ func callSystemOne(ctx context.Context, client *http.Client, profile llmProfile,
 		return nil, fmt.Errorf("system-one response from %s is larger than %d bytes", destination, associateResponseLimit)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, fmt.Errorf("call system-one profile at %s: status %d: %s", destination, response.StatusCode, systemOneDiagnostic(string(responseBody), systemOneSecrets(profile.BaseURL, key)))
+		return nil, fmt.Errorf("call system-one profile at %s: status %d: request was not accepted", destination, response.StatusCode)
 	}
 	var parsed systemOneResponse
 	if err := json.Unmarshal(responseBody, &parsed); err != nil {
-		return nil, fmt.Errorf("parse system-one response from %s: %w", destination, err)
+		return nil, fmt.Errorf("system-one response from %s is not System One JSON", destination)
 	}
 	if parsed.Answers == nil && parsed.Result != nil {
 		parsed.Answers = parsed.Result.Answers
@@ -447,35 +448,6 @@ func systemOneHTTPClient(client *http.Client) *http.Client {
 		return http.ErrUseLastResponse
 	}
 	return &refusing
-}
-
-func systemOneSecrets(baseURL string, key string) []string {
-	secrets := []string{key}
-	if parsed, err := url.Parse(baseURL); err == nil {
-		if password, set := parsed.User.Password(); set {
-			secrets = append(secrets, password)
-		}
-		for _, values := range parsed.Query() {
-			secrets = append(secrets, values...)
-		}
-	}
-	return secrets
-}
-
-func systemOneDiagnostic(text string, secrets []string) string {
-	sort.Slice(secrets, func(i, j int) bool { return len(secrets[i]) > len(secrets[j]) })
-	for _, secret := range secrets {
-		if len(secret) >= 4 {
-			text = strings.ReplaceAll(text, secret, "[REDACTED]")
-		}
-	}
-	if patterns, _, err := llmOutboundRedactionPatterns(); err == nil {
-		for _, pattern := range patterns {
-			text = pattern.Pattern.ReplaceAllString(text, "[REDACTED:"+pattern.Name+"]")
-		}
-	}
-	text = strings.Join(strings.Fields(sanitizeProjectLinkSummary(strings.Map(controlWhitespaceToSpace, text))), " ")
-	return truncateRunes(text, systemOneDiagnosticLimit)
 }
 
 func systemOneEndpoint(baseURL string) (string, error) {
