@@ -31,20 +31,21 @@ events -> units of work -> deterministic links -> LLM categorization
   column is not renamed or migrated; user-facing text calls the value a
   container or source.
 - **Project**: a body of work the user declares, backed by a project memory
-  file at `workgraph-memory/projects/<slug>.md`. Examples: `mpo-gtm-segments`,
-  `mpo-terms-and-phrases`, `mpo-harness`, `answer-bot`. A project spans many
+  file at `workgraph-memory/projects/<slug>.md`. Examples: `orbit-segments`,
+  `harbor-terms-and-phrases`, `harbor-harness`, `atlas-bot`. A project spans many
   containers and its slug is its identity.
-- **Workstream**: an optional parent of projects, such as `mpo` over the
-  `mpo-*` projects. It is declared by `workstream: <slug>` in project memory
-  frontmatter. There is no workstream table.
+- **Workstream**: an optional parent of projects, such as `harbor` over
+  `harbor-harness` and `orbit-segments`. It is declared by
+  `workstream: <slug>` in project memory frontmatter. There is no workstream
+  table.
 - **Unit of work** (unit): a deterministic group of related events, such as a
   Slack thread or a GitHub PR with its commits. Units, not containers or single
   events, are what get linked to projects.
 - **Project link**: a stored decision that one unit belongs to one project, to
   no project, or to a proposed new project.
 
-Memory doctor candidates based on a shared acronym, such as `MPO GTM Tracker ->
-Mercury.Platform.Orchestration (shared acronym MPO)`, are workstream
+Memory doctor candidates based on a shared acronym, such as `HPO Segment Tracker ->
+Helix.Platform.Operations (shared acronym HPO)`, are workstream
 signals. Doctor shows them as workstream suggestions (see
 `specs/memory.md`).
 
@@ -57,11 +58,11 @@ Optional frontmatter:
 
 ```markdown
 ---
-workstream: mpo
-aliases: [GTM segments, segment tracker]
-description: Go-to-market segment definitions for the MPO launch.
+workstream: harbor
+aliases: [orbit segments, segment tracker]
+description: Segment definitions for the Orbit launch.
 ---
-# MPO GTM Segments
+# Orbit Segments
 ```
 
 - `workstream` is a lowercase kebab-case slug.
@@ -195,7 +196,7 @@ container_mapping`, unless a stronger rule or a user link applies.
 A container may instead map to a workstream:
 
 ```text
-workgraph memory link --workstream mpo --source Mercury.Platform.Orchestration
+workgraph memory link --workstream harbor --source Helix.Platform.Operations
 ```
 
 A workstream mapping creates no link. It narrows the LLM catalog for that
@@ -305,7 +306,7 @@ The payload is one JSON document:
 ```json
 {
   "schema": "workgraph.associate_request.v1",
-  "projects": [{"slug": "mpo-harness", "title": "MPO Harness", "workstream": "mpo", "aliases": [], "description": "..."}],
+  "projects": [{"slug": "harbor-harness", "title": "Harbor Harness", "workstream": "harbor", "aliases": [], "description": "..."}],
   "units": [
     {
       "unit_id": "slack.thread:C123:1760000000.000100",
@@ -315,11 +316,11 @@ The payload is one JSON document:
       "end": "2026-10-20T09:20:00Z",
       "participants": ["Sam"],
       "identifiers": ["https://github.com/acme/harness/pull/42"],
-      "projects": ["mpo-harness"],
+      "projects": ["harbor-harness"],
       "events": [{"id": "slack.message:C123:1760000000.000100", "timestamp": "2026-10-20T09:00:00Z", "actor": "Sam", "summary": "..."}]
     }
   ],
-  "recent_decisions": [{"container": "harness-team", "decision": "chose", "target": "project", "project": "mpo-harness", "kind": "advice"}]
+  "recent_decisions": [{"container": "harness-team", "decision": "chose", "target": "project", "project": "harbor-harness", "kind": "advice"}]
 }
 ```
 
@@ -354,7 +355,7 @@ from the instructions. Outbound filtering runs before any hosted call.
     {
       "unit_id": "slack.thread:C123:1760000000.000100",
       "target": "project",
-      "project": "mpo-harness",
+      "project": "harbor-harness",
       "new_project": null,
       "kind": "advice",
       "summary": "Advised Sam on agentic tooling over GraphQL for the harness",
@@ -907,10 +908,10 @@ Grouping, shared by `today` and `resume`:
   mapped to another, and the link is applied immediately with `auto = true`
   and a run id; an identifier in two projects produces no link; an identifier
   seen only in an auto-applied or proposed link seeds nothing.
-- **P4. Workstream mappings narrow the catalog.** A container mapped to `mpo`
-  sends only `mpo` projects in the dry-run payload and creates no link.
+- **P4. Workstream mappings narrow the catalog.** A container mapped to `harbor`
+  sends only `harbor` projects in the dry-run payload and creates no link.
 - **P4a. Several-project mappings narrow the catalog.** A container mapped to
-  `data-apis` and `mpo-terms-and-phrases` sends only those projects in the
+  `data-apis` and `harbor-terms-and-phrases` sends only those projects in the
   dry-run payload and creates no link; adding a workstream mapping sends the
   union of both; `projects list` shows the container under each project,
   `today` marks its line with both projects, and `memory doctor` does not
