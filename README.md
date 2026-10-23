@@ -212,13 +212,13 @@ workgraph memory init "workgraph"
 Thematic memory projects can include evidence from multiple captured projects:
 
 ```sh
-workgraph memory init "MMO Harness"
-workgraph memory link --source Mindbody.Modernization.Orchestration --source mmo-ui "MMO Harness"
-workgraph memory suggest "MMO Harness"
-workgraph memory links "MMO Harness"
+workgraph memory init "MPO Harness"
+workgraph memory link --source Mercury.Platform.Orchestration --source widgets-ui "MPO Harness"
+workgraph memory suggest "MPO Harness"
+workgraph memory links "MPO Harness"
 ```
 
-`memory unlink --source mmo-ui "MMO Harness"` removes a mapping. Linking and
+`memory unlink --source widgets-ui "MPO Harness"` removes a mapping. Linking and
 unlinking preserve authored memory, raw events, and existing promoted evidence.
 
 Use `workgraph memory doctor` to inspect possible name or acronym matches, or

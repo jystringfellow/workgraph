@@ -16,30 +16,30 @@ func TestDeterministicProjectLinksResolveInOrder(t *testing.T) {
 	now := time.Now().UTC()
 	base := now.Add(-6 * time.Hour)
 	home := initProjectLinkingHome(t)
-	writeProjectMemory(t, home.MemoryDir, "ask-kai", "# Ask Kai\n\nShipping https://github.com/Acme/Kai/pull/7 under AB#1563394.\nFix landed in https://github.com/acme/kai/commit/abcdef1234567890.\nSpec: https://www.notion.so/acme/Roadmap-0123456789abcdef0123456789abcdef\nSign in at https://www.notion.so/login\n")
-	writeProjectMemory(t, home.MemoryDir, "mmo-gtm-segments", "---\nworkstream: mmo\n---\n# MMO GTM Segments\n\nTracked as AB#1563394.\n")
-	writeProjectMemory(t, home.MemoryDir, "mmo-harness", "# MMO Harness\n")
+	writeProjectMemory(t, home.MemoryDir, "answer-bot", "# Answer Bot\n\nShipping https://github.com/Acme/Answers/pull/7 under AB#1234567.\nFix landed in https://github.com/acme/answers/commit/abcdef1234567890.\nSpec: https://www.notion.so/acme/Roadmap-0123456789abcdef0123456789abcdef\nSign in at https://www.notion.so/login\n")
+	writeProjectMemory(t, home.MemoryDir, "mpo-gtm-segments", "---\nworkstream: mpo\n---\n# MPO GTM Segments\n\nTracked as AB#1234567.\n")
+	writeProjectMemory(t, home.MemoryDir, "mpo-harness", "# MPO Harness\n")
 
 	events := []storedEvent{
-		slackLinkEvent("C123", "1000.000100", "1000.000100", "can you look at https://github.com/acme/kai/pull/7/files", base, "harness-team"),
+		slackLinkEvent("C123", "1000.000100", "1000.000100", "can you look at https://github.com/acme/answers/pull/7/files", base, "harness-team"),
 		slackLinkEvent("C123", "1000.000200", "1000.000100", "sure", base.Add(5*time.Minute), "harness-team"),
 		slackLinkEvent("C123", "2000.000100", "", "lunch?", base.Add(time.Hour), "harness-team"),
-		slackLinkEvent("C123", "3000.000100", "3000.000100", "status of AB#1563394?", base.Add(90*time.Minute), "harness-team"),
+		slackLinkEvent("C123", "3000.000100", "3000.000100", "status of AB#1234567?", base.Add(90*time.Minute), "harness-team"),
 		slackLinkEvent("C999", "4000.000100", "4000.000100", "acme/other#5 is flaky", base.Add(2*time.Hour), "random"),
 		slackLinkEvent("C999", "5000.000100", "5000.000100", "still acme/other#5", base.Add(2*time.Hour+time.Minute), "random"),
 		slackLinkEvent("C999", "6000.000100", "6000.000100", "acme/other#5 again", base.Add(2*time.Hour+2*time.Minute), "random"),
-		slackLinkEvent("C999", "7000.000100", "7000.000100", "reverted https://github.com/acme/kai/commit/abcdef1", base.Add(2*time.Hour+3*time.Minute), "random"),
+		slackLinkEvent("C999", "7000.000100", "7000.000100", "reverted https://github.com/acme/answers/commit/abcdef1", base.Add(2*time.Hour+3*time.Minute), "random"),
 		slackLinkEvent("C999", "9000.000100", "9000.000100", "log in at https://www.notion.so/login", base.Add(2*time.Hour+5*time.Minute), "random"),
 		{ID: "notion.page_updated:0123:1", Source: "notion", Type: "notion.page_updated", Timestamp: base.Add(3 * time.Hour), Payload: `{"object":"page","id":"01234567-89ab-cdef-0123-456789abcdef"}`},
 		{ID: "github.pull_request:acme/a:1", Source: "github", Type: "github.pull_request", Timestamp: base.Add(3 * time.Hour), Project: "a", Payload: `{"repository":"acme/a","number":1,"head_ref":"feature","title":"Fix","body":"relates to https://github.com/acme/b/issues/9"}`},
 		{ID: "github.pull_request:acme/a:3", Source: "github", Type: "github.pull_request", Timestamp: base.Add(3 * time.Hour), Project: "a", Payload: `{"repository":"acme/a","number":3,"head_ref":"feature","title":"Follow-up"}`},
 		{ID: "github.pull_request:acme/b:2", Source: "github", Type: "github.pull_request", Timestamp: base.Add(3 * time.Hour), Project: "b", Payload: `{"repository":"acme/b","number":2,"head_ref":"feature","title":"Unrelated"}`},
-		{ID: "slack.message:C999:8000.000100", Source: "slack", Type: "slack.message", Timestamp: base.Add(2*time.Hour + 4*time.Minute), Project: "random", Payload: `{"channel_id":"C999","ts":"8000.000100","thread_ts":"8000.000100","text":"see attachment","untrusted":{"text":"https://github.com/acme/kai/pull/7"}}`},
+		{ID: "slack.message:C999:8000.000100", Source: "slack", Type: "slack.message", Timestamp: base.Add(2*time.Hour + 4*time.Minute), Project: "random", Payload: `{"channel_id":"C999","ts":"8000.000100","thread_ts":"8000.000100","text":"see attachment","untrusted":{"text":"https://github.com/acme/answers/pull/7"}}`},
 	}
 	for _, event := range events {
 		insertProjectUnitEvent(t, home.DatabasePath, event)
 	}
-	if output, err := runworkgraph(t, repoRoot(t), "memory", "link", "--home", home.HomeDir, "--memory", home.MemoryDir, "--source", "harness-team", "mmo-harness"); err != nil {
+	if output, err := runworkgraph(t, repoRoot(t), "memory", "link", "--home", home.HomeDir, "--memory", home.MemoryDir, "--source", "harness-team", "mpo-harness"); err != nil {
 		t.Fatalf("map container: %v %s", err, output)
 	}
 
@@ -48,15 +48,15 @@ func TestDeterministicProjectLinksResolveInOrder(t *testing.T) {
 		Source:  "llm",
 		Profile: "hosted-mini",
 		Links: []workgraph.ProjectLinkProposal{
-			{UnitID: "slack.thread:C999:4000.000100", UnitKind: "slack.thread", Container: "random", Target: "project", Project: "ask-kai", Kind: "fyi", Summary: "Flaky test", Confidence: 0.97, Evidence: []string{"slack.message:C999:4000.000100"}, Apply: true},
-			{UnitID: "slack.thread:C999:5000.000100", UnitKind: "slack.thread", Container: "random", Target: "project", Project: "ask-kai", Kind: "fyi", Summary: "Flaky test", Confidence: 0.80, Evidence: []string{"slack.message:C999:5000.000100"}},
+			{UnitID: "slack.thread:C999:4000.000100", UnitKind: "slack.thread", Container: "random", Target: "project", Project: "answer-bot", Kind: "fyi", Summary: "Flaky test", Confidence: 0.97, Evidence: []string{"slack.message:C999:4000.000100"}, Apply: true},
+			{UnitID: "slack.thread:C999:5000.000100", UnitKind: "slack.thread", Container: "random", Target: "project", Project: "answer-bot", Kind: "fyi", Summary: "Flaky test", Confidence: 0.80, Evidence: []string{"slack.message:C999:5000.000100"}},
 		},
 	})
 	if err != nil {
 		t.Fatalf("seed llm links: %v", err)
 	}
 
-	if _, err := workgraph.AssignProjectLink(store, workgraph.ProjectLinkAssignment{UnitID: "github.pr:acme/a#1", UnitKind: "github.pr", Container: "a", Evidence: []string{"github.pull_request:acme/a:1"}, Target: "project", Project: "ask-kai"}); err != nil {
+	if _, err := workgraph.AssignProjectLink(store, workgraph.ProjectLinkAssignment{UnitID: "github.pr:acme/a#1", UnitKind: "github.pr", Container: "a", Evidence: []string{"github.pull_request:acme/a:1"}, Target: "project", Project: "answer-bot"}); err != nil {
 		t.Fatalf("seed user link: %v", err)
 	}
 
@@ -67,11 +67,11 @@ func TestDeterministicProjectLinksResolveInOrder(t *testing.T) {
 	}
 	got := projectLinksByUnit(first.Written)
 	expected := map[string][2]string{
-		"slack.thread:C123:1000.000100": {"ask-kai", "shared_identifier"},
-		"slack.burst:C123:2000.000100":  {"mmo-harness", "container_mapping"},
-		"slack.thread:C999:7000.000100": {"ask-kai", "shared_identifier"},
-		"github.pr:acme/a#3":            {"ask-kai", "shared_identifier"},
-		"notion.page:01234567-89ab-cdef-0123-456789abcdef:" + base.Add(3*time.Hour).Local().Format(time.DateOnly): {"ask-kai", "shared_identifier"},
+		"slack.thread:C123:1000.000100": {"answer-bot", "shared_identifier"},
+		"slack.burst:C123:2000.000100":  {"mpo-harness", "container_mapping"},
+		"slack.thread:C999:7000.000100": {"answer-bot", "shared_identifier"},
+		"github.pr:acme/a#3":            {"answer-bot", "shared_identifier"},
+		"notion.page:01234567-89ab-cdef-0123-456789abcdef:" + base.Add(3*time.Hour).Local().Format(time.DateOnly): {"answer-bot", "shared_identifier"},
 	}
 	if len(got) != len(expected) {
 		t.Fatalf("expected links for %v, got %+v", expected, first.Written)
@@ -101,7 +101,7 @@ func TestDeterministicProjectLinksResolveInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second pass: %v", err)
 	}
-	if len(second.Written) != 1 || second.Written[0].UnitID != "slack.thread:C999:6000.000100" || second.Written[0].Project != "ask-kai" || second.Written[0].Rule != "shared_identifier" || second.RunID == first.RunID {
+	if len(second.Written) != 1 || second.Written[0].UnitID != "slack.thread:C999:6000.000100" || second.Written[0].Project != "answer-bot" || second.Written[0].Rule != "shared_identifier" || second.RunID == first.RunID {
 		t.Fatalf("expected an approved link to seed the shared identifier in a new run, got %+v", second)
 	}
 
@@ -172,7 +172,7 @@ func TestProjectsDefaultReviewListsAutoLinksUntilTwentyDecided(t *testing.T) {
 	now := time.Now().UTC()
 	home := initProjectLinkingHome(t)
 	store := workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now}
-	if _, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "deterministic", Links: []workgraph.ProjectLinkProposal{projectLinkProposal("unit-det", "mmo-harness", "container_mapping", true)}}); err != nil {
+	if _, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "deterministic", Links: []workgraph.ProjectLinkProposal{projectLinkProposal("unit-det", "mpo-harness", "container_mapping", true)}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "llm", Profile: "hosted-mini", Links: []workgraph.ProjectLinkProposal{
@@ -204,7 +204,7 @@ func TestProjectsDefaultReviewListsAutoLinksUntilTwentyDecided(t *testing.T) {
 		}
 	}
 	for _, link := range run.Written[15:18] {
-		if _, err := workgraph.AssignProjectLink(store, workgraph.ProjectLinkAssignment{UnitID: link.UnitID, Target: "project", Project: "ask-kai"}); err != nil {
+		if _, err := workgraph.AssignProjectLink(store, workgraph.ProjectLinkAssignment{UnitID: link.UnitID, Target: "project", Project: "answer-bot"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -269,7 +269,7 @@ func TestProjectsDefaultReviewListsAutoLinksUntilTwentyDecided(t *testing.T) {
 }
 
 func reviewLLMProposal(unitID string, confidence float64, apply bool) workgraph.ProjectLinkProposal {
-	return workgraph.ProjectLinkProposal{UnitID: unitID, UnitKind: "slack.thread", Container: "harness-team", Target: "project", Project: "mmo-harness", Kind: "build", Summary: "Built " + unitID, Confidence: confidence, Evidence: []string{"slack.message:C123:" + unitID}, Apply: apply}
+	return workgraph.ProjectLinkProposal{UnitID: unitID, UnitKind: "slack.thread", Container: "harness-team", Target: "project", Project: "mpo-harness", Kind: "build", Summary: "Built " + unitID, Confidence: confidence, Evidence: []string{"slack.message:C123:" + unitID}, Apply: apply}
 }
 
 func assertReviewUnits(t *testing.T, config workgraph.ProjectReviewConfig, expected ...string) {
@@ -291,10 +291,10 @@ func TestProjectsReviewCommandsRecordDecisions(t *testing.T) {
 	now := time.Now().UTC()
 	base := now.Add(-6 * time.Hour)
 	home := initProjectLinkingHome(t)
-	writeProjectMemory(t, home.MemoryDir, "ask-kai", "# Ask Kai\n\nShips https://github.com/acme/kai/pull/7.\n")
-	writeProjectMemory(t, home.MemoryDir, "mmo-harness", "# MMO Harness\n")
+	writeProjectMemory(t, home.MemoryDir, "answer-bot", "# Answer Bot\n\nShips https://github.com/acme/answers/pull/7.\n")
+	writeProjectMemory(t, home.MemoryDir, "mpo-harness", "# MPO Harness\n")
 	for _, event := range []storedEvent{
-		slackLinkEvent("C123", "1000.000100", "1000.000100", "review https://github.com/acme/kai/pull/7", base, "harness-team"),
+		slackLinkEvent("C123", "1000.000100", "1000.000100", "review https://github.com/acme/answers/pull/7", base, "harness-team"),
 		slackLinkEvent("C123", "2000.000100", "", "lunch?", base.Add(time.Hour), "harness-team"),
 		slackLinkEvent("C123", "3000.000100", "3000.000100", "harness flake", base.Add(90*time.Minute), "harness-team"),
 		slackLinkEvent("C999", "4000.000100", "4000.000100", "agent tooling over GraphQL", base.Add(2*time.Hour), "random"),
@@ -312,16 +312,16 @@ func TestProjectsReviewCommandsRecordDecisions(t *testing.T) {
 		}
 		return string(output)
 	}
-	if output, err := runworkgraph(t, repoRoot(t), append([]string{"memory", "link"}, append(args, "--source", "harness-team", "mmo-harness")...)...); err != nil {
+	if output, err := runworkgraph(t, repoRoot(t), append([]string{"memory", "link"}, append(args, "--source", "harness-team", "mpo-harness")...)...); err != nil {
 		t.Fatalf("map container: %v %s", err, output)
 	}
 	eventsBefore := projectUnitEventsSnapshot(t, home.DatabasePath)
 
 	store := workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath}
 	llm, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "llm", Profile: "hosted-mini", Links: []workgraph.ProjectLinkProposal{
-		{UnitID: "slack.thread:C999:4000.000100", UnitKind: "slack.thread", Container: "random", Target: "project", Project: "mmo-harness", Kind: "advice", Summary: "Advised on agent tooling", Confidence: 0.97, Evidence: []string{"slack.message:C999:4000.000100"}, Apply: true},
-		{UnitID: "slack.thread:C999:5000.000100", UnitKind: "slack.thread", Container: "random", Target: "project", Project: "ask-kai", Kind: "build", Summary: "Sketched an idea", Confidence: 0.80, Evidence: []string{"slack.message:C999:5000.000100"}},
-		{UnitID: "slack.thread:C999:6000.000100", UnitKind: "slack.thread", Container: "random", Target: "new_project", NewProject: &workgraph.ProposedProject{Slug: "graphql-gateway", Name: "GraphQL Gateway", Workstream: "mmo"}, Kind: "build", Summary: "Sketched a gateway", Confidence: 0.90, Evidence: []string{"slack.message:C999:6000.000100"}},
+		{UnitID: "slack.thread:C999:4000.000100", UnitKind: "slack.thread", Container: "random", Target: "project", Project: "mpo-harness", Kind: "advice", Summary: "Advised on agent tooling", Confidence: 0.97, Evidence: []string{"slack.message:C999:4000.000100"}, Apply: true},
+		{UnitID: "slack.thread:C999:5000.000100", UnitKind: "slack.thread", Container: "random", Target: "project", Project: "answer-bot", Kind: "build", Summary: "Sketched an idea", Confidence: 0.80, Evidence: []string{"slack.message:C999:5000.000100"}},
+		{UnitID: "slack.thread:C999:6000.000100", UnitKind: "slack.thread", Container: "random", Target: "new_project", NewProject: &workgraph.ProposedProject{Slug: "graphql-gateway", Name: "GraphQL Gateway", Workstream: "mpo"}, Kind: "build", Summary: "Sketched a gateway", Confidence: 0.90, Evidence: []string{"slack.message:C999:6000.000100"}},
 	}})
 	if err != nil {
 		t.Fatalf("record llm run: %v", err)
@@ -357,10 +357,10 @@ func TestProjectsReviewCommandsRecordDecisions(t *testing.T) {
 	if strings.Index(autoList, fmt.Sprintf("Link %d", mapped.ID)) > strings.Index(autoList, fmt.Sprintf("Link %d", llmAuto.ID)) {
 		t.Fatalf("expected review --auto newest first:\n%s", autoList)
 	}
-	projects("s\ns\ns\nr\nask-kai\n", "review", "--auto")
+	projects("s\ns\ns\nr\nanswer-bot\n", "review", "--auto")
 	assertProjectLinkRow(t, store, llmAuto.ID, "rejected", "corrected")
-	if current := currentProjectLink(t, store, llmAuto.UnitID); current.Source != "user" || current.Project != "ask-kai" || current.State != "applied" {
-		t.Fatalf("expected r to reassign the LLM link to ask-kai, got %+v", current)
+	if current := currentProjectLink(t, store, llmAuto.UnitID); current.Source != "user" || current.Project != "answer-bot" || current.State != "applied" {
+		t.Fatalf("expected r to reassign the LLM link to answer-bot, got %+v", current)
 	}
 
 	if quit := projects("x\nq\n", "review"); !strings.Contains(quit, "1 left to decide (workgraph projects review).") {
@@ -388,7 +388,7 @@ func TestProjectsReviewCommandsRecordDecisions(t *testing.T) {
 		t.Fatalf("undo output: %s", out)
 	}
 	replacement := currentProjectLink(t, store, shared.UnitID)
-	if replacement.State != "proposed" || replacement.Project != "ask-kai" || replacement.Source != "deterministic" {
+	if replacement.State != "proposed" || replacement.Project != "answer-bot" || replacement.Source != "deterministic" {
 		t.Fatalf("expected a proposed replacement after undo, got %+v", replacement)
 	}
 	projects("", "review", "--approve", fmt.Sprint(replacement.ID))
@@ -404,31 +404,31 @@ func TestProjectsReviewCommandsRecordDecisions(t *testing.T) {
 
 	projects("", "review", "--reject", fmt.Sprint(burst.ID))
 	assertProjectLinkRow(t, store, burst.ID, "rejected", "corrected")
-	projects("", "review", "--assign", burst.UnitID, "--project", "ask-kai")
-	if current := currentProjectLink(t, store, burst.UnitID); current.Source != "user" || current.Project != "ask-kai" {
+	projects("", "review", "--assign", burst.UnitID, "--project", "answer-bot")
+	if current := currentProjectLink(t, store, burst.UnitID); current.Source != "user" || current.Project != "answer-bot" {
 		t.Fatalf("expected --assign to apply a user link, got %+v", current)
 	}
 	if output, err := runworkgraph(t, repoRoot(t), append([]string{"projects", "review", "--assign", burst.UnitID, "--project", "missing"}, args...)...); err == nil {
 		t.Fatalf("expected an unknown project to be refused: %s", output)
 	}
 
-	projects("", "review", "--assign", llmProposed.UnitID, "--new", "agent-tooling", "--workstream", "mmo")
+	projects("", "review", "--assign", llmProposed.UnitID, "--new", "agent-tooling", "--workstream", "mpo")
 	catalog, err := workgraph.LoadProjectCatalog(home.MemoryDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	created, approvedNew := false, false
 	for _, entry := range catalog.Projects {
-		created = created || (entry.Slug == "agent-tooling" && entry.Workstream == "mmo")
-		approvedNew = approvedNew || (entry.Slug == "graphql-gateway" && entry.Workstream == "mmo")
+		created = created || (entry.Slug == "agent-tooling" && entry.Workstream == "mpo")
+		approvedNew = approvedNew || (entry.Slug == "graphql-gateway" && entry.Workstream == "mpo")
 	}
 	if !created || !approvedNew || len(catalog.Problems) != 0 {
-		t.Fatalf("expected --new to create project memory in workstream mmo, got %+v", catalog)
+		t.Fatalf("expected --new to create project memory in workstream mpo, got %+v", catalog)
 	}
 	if current := currentProjectLink(t, store, llmProposed.UnitID); current.Source != "user" || current.Project != "agent-tooling" {
 		t.Fatalf("expected --new to apply a user link, got %+v", current)
 	}
-	if output, err := runworkgraph(t, repoRoot(t), append([]string{"projects", "review", "--assign", llmProposed.UnitID, "--new", "ask-kai"}, args...)...); err == nil {
+	if output, err := runworkgraph(t, repoRoot(t), append([]string{"projects", "review", "--assign", llmProposed.UnitID, "--new", "answer-bot"}, args...)...); err == nil {
 		t.Fatalf("expected --new to refuse an existing project: %s", output)
 	}
 	userExplained := projects("", "explain", llmProposed.UnitID)
@@ -463,7 +463,7 @@ func TestProjectsReviewCommandsRecordDecisions(t *testing.T) {
 	}
 
 	list := projects("", "list")
-	if !strings.Contains(list, "- ask-kai: Ask Kai") || !strings.Contains(list, "3 units linked in the last 7 days") || !strings.Contains(list, "0 units linked in the last 7 days") || !strings.Contains(list, "- graphql-gateway: graphql-gateway (1 unit linked in the last 7 days)") {
+	if !strings.Contains(list, "- answer-bot: Answer Bot") || !strings.Contains(list, "3 units linked in the last 7 days") || !strings.Contains(list, "0 units linked in the last 7 days") || !strings.Contains(list, "- graphql-gateway: graphql-gateway (1 unit linked in the last 7 days)") {
 		t.Fatalf("expected projects list to show applied unit counts:\n%s", list)
 	}
 	decidedAll := projects("a\n", "review")
@@ -497,11 +497,11 @@ func TestConcurrentDeterministicPassesBothSucceed(t *testing.T) {
 	now := time.Now().UTC()
 	for trial := 0; trial < 10; trial++ {
 		home := initProjectLinkingHome(t)
-		writeProjectMemory(t, home.MemoryDir, "ask-kai", "# Ask Kai\n\nShips https://github.com/acme/kai/pull/7.\n")
+		writeProjectMemory(t, home.MemoryDir, "answer-bot", "# Answer Bot\n\nShips https://github.com/acme/answers/pull/7.\n")
 		for i := 0; i < 30; i++ {
-			insertProjectUnitEvent(t, home.DatabasePath, slackLinkEvent("C123", fmt.Sprintf("%d.000100", 1000+i), fmt.Sprintf("%d.000100", 1000+i), "see acme/kai#7", now.Add(-time.Hour), "harness-team"))
+			insertProjectUnitEvent(t, home.DatabasePath, slackLinkEvent("C123", fmt.Sprintf("%d.000100", 1000+i), fmt.Sprintf("%d.000100", 1000+i), "see acme/answers#7", now.Add(-time.Hour), "harness-team"))
 		}
-		if _, err := workgraph.RecordProjectLinkRun(workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath}, workgraph.ProjectLinkRun{Source: "deterministic", Links: []workgraph.ProjectLinkProposal{projectLinkProposal("unit-existing", "ask-kai", "container_mapping", true)}}); err != nil {
+		if _, err := workgraph.RecordProjectLinkRun(workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath}, workgraph.ProjectLinkRun{Source: "deterministic", Links: []workgraph.ProjectLinkProposal{projectLinkProposal("unit-existing", "answer-bot", "container_mapping", true)}}); err != nil {
 			t.Fatal(err)
 		}
 		results := make(chan error, 2)
@@ -529,12 +529,12 @@ func TestConcurrentDeterministicPassesBothSucceed(t *testing.T) {
 func TestPrintedFixCommandsKeepTheRequestedCatalog(t *testing.T) {
 	now := time.Now().UTC()
 	home := initProjectLinkingHome(t)
-	writeProjectMemory(t, home.MemoryDir, "mmo-harness", "# MMO Harness\n")
+	writeProjectMemory(t, home.MemoryDir, "mpo-harness", "# MPO Harness\n")
 	defaultMemory := filepath.Join(os.Getenv("HOME"), "workgraph-memory")
-	writeProjectMemory(t, defaultMemory, "decoy", "# Decoy\n\nShips https://github.com/acme/kai/pull/7.\n")
+	writeProjectMemory(t, defaultMemory, "decoy", "# Decoy\n\nShips https://github.com/acme/answers/pull/7.\n")
 	insertProjectUnitEvent(t, home.DatabasePath, slackLinkEvent("C123", "1000.000100", "1000.000100", "harness flake", now.Add(-3*time.Hour), "harness-team"))
-	insertProjectUnitEvent(t, home.DatabasePath, slackLinkEvent("C999", "2000.000100", "2000.000100", "see acme/kai#7", now.Add(-3*time.Hour), "random"))
-	if output, err := runworkgraph(t, repoRoot(t), "memory", "link", "--home", home.HomeDir, "--memory", home.MemoryDir, "--source", "harness-team", "mmo-harness"); err != nil {
+	insertProjectUnitEvent(t, home.DatabasePath, slackLinkEvent("C999", "2000.000100", "2000.000100", "see acme/answers#7", now.Add(-3*time.Hour), "random"))
+	if output, err := runworkgraph(t, repoRoot(t), "memory", "link", "--home", home.HomeDir, "--memory", home.MemoryDir, "--source", "harness-team", "mpo-harness"); err != nil {
 		t.Fatalf("map container: %v %s", err, output)
 	}
 	runPrinted := func(command string) string {

@@ -301,9 +301,9 @@ Inspect and optionally accept project evidence mappings:
 ```sh
 workgraph memory doctor
 workgraph memory doctor --interactive
-workgraph memory link --source Mindbody.Modernization.Orchestration --source mmo-ui "MMO Harness"
-workgraph memory links "MMO Harness"
-workgraph memory unlink --source mmo-ui "MMO Harness"
+workgraph memory link --source Mercury.Platform.Orchestration --source widgets-ui "MPO Harness"
+workgraph memory links "MPO Harness"
+workgraph memory unlink --source widgets-ui "MPO Harness"
 ```
 
 Create the memory project before linking. Mappings include captured evidence in
