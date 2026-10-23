@@ -342,6 +342,50 @@ stored with its normalized signal name and the wrapper returns `128 + signal
 number`. An absent end event is handled by derived status and does not
 invalidate prior session evidence.
 
+### Database access during a wrapped session
+
+The wrapper holds no database handle while the child runs. Each database use
+opens a fresh connection, does its one read or write, and closes it:
+
+- before launch, only a native resume selection reads prior events to find its
+  predecessor
+- after launch, the start event is written
+- after the child exits, the end event is written
+
+Checkpoints and native lifecycle callbacks run in their own short-lived
+`workgraph` processes and follow the same rule. The wrapper does not poll,
+heartbeat, or tail transcripts. Its connections open the existing database in
+read-write mode without creating it, wait up to five seconds for a lock, and
+never prepare or migrate the schema, so a short open mid-session cannot start a
+migration or recreate a database that maintenance has moved aside.
+
+A database that is locked, busy, or cannot be opened is unavailable, not
+failed:
+
+- a native predecessor lookup retries for up to fifteen seconds and then
+  aborts before launch
+- an unavailable start write never terminates the child. The wrapper retries
+  with backoff, capped at two seconds between attempts, until the write lands.
+  If the child exits first, the wrapper retries for up to fifteen more seconds.
+  After the child exits, stderr reports that the start was recorded late. If
+  it never landed, stderr reports the start persistence failure, no end event
+  is written, and the wrapper still returns the child outcome.
+- an unavailable end write retries for up to fifteen seconds before being
+  reported as an end persistence failure
+
+Any other start persistence failure still terminates and reaps the child.
+Native lifecycle callbacks wait only briefly for the start event, so a start
+that lands late may leave a native binding unrecorded; that callback reports
+its own failure.
+
+### Wrapper signals
+
+While the child runs, the wrapper does not exit on SIGINT, SIGQUIT, SIGTERM, or
+SIGHUP. On Unix it forwards SIGTERM and SIGHUP to the child; SIGINT and SIGQUIT
+already reach the child from the terminal's foreground process group. The
+wrapper then waits for the child and records the end event through a fresh
+connection, as for any other exit.
+
 When `ai run` recognizes an adapter's exact native resume selection, it stores
 that native ID in the new start event. If prior workgraph events contain the
 same tool and native ID, the new start event links to the matching session with

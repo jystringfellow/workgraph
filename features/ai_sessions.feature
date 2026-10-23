@@ -53,6 +53,33 @@ Feature: Local AI coding session continuity
     And workgraph reports the persistence failure
     And no untracked child remains running
 
+  Scenario: Hold no database handle while the wrapped agent runs
+    Given a wrapped agent is running and its start event is recorded
+    When the database file is moved aside and replaced while the agent is idle
+    And the agent exits
+    Then the end event is written to the database at the configured path
+    And every database connection the wrapper opened is closed while the agent is idle
+
+  Scenario: Keep the agent running while the database is locked at start
+    Given another process holds an exclusive lock on the workgraph database
+    When I run "workgraph ai run -- codex"
+    Then the agent keeps running and the wrapper does not exit
+    And the start event is recorded once the lock clears
+    And after the agent exits, stderr reports that the start was recorded late
+
+  Scenario: Retry the end event while the database is locked
+    Given a wrapped agent exits while another process holds an exclusive lock
+    When the lock clears within the retry window
+    Then the wrapper records the end event
+    And the wrapper returns the agent's exit status
+
+  Scenario: Record the end event when the wrapper is signaled
+    Given a wrapped agent is running
+    When the wrapper receives SIGTERM
+    Then the wrapper forwards SIGTERM to the agent
+    And the end event records signal "SIGTERM"
+    And the wrapper exits with status 143
+
   Scenario: Abort before launch when the required launch observation fails
     Given Git metadata collection fails for a reason other than "not a repository"
     When I run "workgraph ai run -- codex"

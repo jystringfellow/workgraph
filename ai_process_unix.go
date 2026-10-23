@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
 	"syscall"
 )
@@ -70,5 +71,28 @@ func isolateProcessGroup(command *exec.Cmd) {
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	command.Cancel = func() error {
 		return syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+	}
+}
+
+func relayAIRunSignals(process *os.Process) func() {
+	received := make(chan os.Signal, 4)
+	signal.Notify(received, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP)
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case value := <-received:
+				// The terminal already delivers SIGINT and SIGQUIT to the child's process group.
+				if value == syscall.SIGTERM || value == syscall.SIGHUP {
+					_ = process.Signal(value)
+				}
+			}
+		}
+	}()
+	return func() {
+		signal.Stop(received)
+		close(done)
 	}
 }

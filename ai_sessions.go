@@ -289,14 +289,6 @@ func runAISession(config AIRunConfig, permittedParentSessionID string) (AIRunRes
 		return AIRunResult{}, fmt.Errorf("create AI session id: %w", err)
 	}
 
-	db, err := sql.Open("sqlite3", status.DatabasePath)
-	if err != nil {
-		return AIRunResult{}, fmt.Errorf("open AI event database: %w", err)
-	}
-	defer db.Close()
-	if err := db.Ping(); err != nil {
-		return AIRunResult{}, fmt.Errorf("open AI event database: %w", err)
-	}
 	predecessorSessionID := strings.TrimSpace(config.PredecessorSessionID)
 	nativeLaunch, err := aiPrepareNativeLaunch(tool, config.Command[1:], status.HomeDir)
 	if err != nil {
@@ -304,7 +296,13 @@ func runAISession(config AIRunConfig, permittedParentSessionID string) (AIRunRes
 	}
 	nativeSessionID := nativeLaunch.NativeSessionID
 	if predecessorSessionID == "" && nativeSessionID != "" {
-		predecessorSessionID, err = findLatestAISessionByNativeID(db, tool, nativeSessionID, "")
+		err = retryAIRunDatabase(func() error {
+			return withAIRunDatabase(status.DatabasePath, func(db *sql.DB) error {
+				var lookupErr error
+				predecessorSessionID, lookupErr = findLatestAISessionByNativeID(db, tool, nativeSessionID, "")
+				return lookupErr
+			})
+		}, aiRunRetryBudget)
 		if err != nil {
 			return AIRunResult{}, fmt.Errorf("find resumed AI session: %w", err)
 		}
@@ -320,6 +318,14 @@ func runAISession(config AIRunConfig, permittedParentSessionID string) (AIRunRes
 	if err := command.Start(); err != nil {
 		return AIRunResult{}, fmt.Errorf("start AI tool %q: %w", tool, err)
 	}
+	stopSignalRelay := relayAIRunSignals(command.Process)
+	defer stopSignalRelay()
+	exited := make(chan struct{})
+	var waitErr error
+	go func() {
+		waitErr = command.Wait()
+		close(exited)
+	}()
 
 	startedAt := time.Now().UTC()
 	started := aiStartedPayload{
@@ -335,16 +341,30 @@ func runAISession(config AIRunConfig, permittedParentSessionID string) (AIRunRes
 		ProcessStartIdentity: currentAIProcessStartIdentity(command.Process.Pid),
 		Observed:             observed,
 	}
-	if err := insertAIEvent(db, "ai.session_started:"+sessionID, "ai.session_started", startedAt, project, "AI session started ("+tool+")", started); err != nil {
+	start := persistAIRunStart(func() error {
+		return withAIRunDatabase(status.DatabasePath, func(db *sql.DB) error {
+			return insertAIEvent(db, "ai.session_started:"+sessionID, "ai.session_started", startedAt, project, "AI session started ("+tool+")", started)
+		})
+	}, exited)
+	if start.err != nil && (!start.childExited || !isAIRunDatabaseUnavailable(start.err)) {
 		_ = command.Process.Kill()
-		_, _ = command.Process.Wait()
-		return AIRunResult{}, fmt.Errorf("persist AI session start: %w", err)
+		<-exited
+		return AIRunResult{}, fmt.Errorf("persist AI session start: %w", start.err)
 	}
 
-	waitErr := command.Wait()
+	<-exited
 	outcome, exitCode, outcomeErr := aiChildOutcome(command.ProcessState, waitErr)
 	if outcomeErr != nil {
 		return AIRunResult{}, outcomeErr
+	}
+	if start.err != nil {
+		if config.Stderr != nil {
+			fmt.Fprintf(config.Stderr, "workgraph ai run: persist AI session start: %v\n", start.err)
+		}
+		return AIRunResult{SessionID: sessionID, ExitCode: exitCode}, nil
+	}
+	if start.delayedBy != nil && config.Stderr != nil {
+		fmt.Fprintf(config.Stderr, "workgraph ai run: AI session start was recorded late because the database was unavailable: %v\n", start.delayedBy)
 	}
 	endedAt := time.Now().UTC()
 	ended := aiEndedPayload{
@@ -369,7 +389,12 @@ func runAISession(config AIRunConfig, permittedParentSessionID string) (AIRunRes
 		ended.Observed = &finalObserved
 	}
 	summary := aiEndedSummary(outcome)
-	if err := insertAIEvent(db, "ai.session_ended:"+sessionID, "ai.session_ended", endedAt, project, summary, ended); err != nil && config.Stderr != nil {
+	err = retryAIRunDatabase(func() error {
+		return withAIRunDatabase(status.DatabasePath, func(db *sql.DB) error {
+			return insertAIEvent(db, "ai.session_ended:"+sessionID, "ai.session_ended", endedAt, project, summary, ended)
+		})
+	}, aiRunRetryBudget)
+	if err != nil && config.Stderr != nil {
 		fmt.Fprintf(config.Stderr, "workgraph ai run: persist AI session end: %v\n", err)
 	}
 
