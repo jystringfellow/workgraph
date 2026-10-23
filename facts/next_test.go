@@ -54,7 +54,7 @@ func newNextFixture(t *testing.T) *nextFixture {
 			o["is_cross_repository"] = true
 		case 1:
 			o["role"] = "reviewer"
-			o["review_request"] = map[string]any{"direct": false, "teams": []string{"acme/platform"}, "unresolved_team": false}
+			o["review_request"] = map[string]any{"direct": true, "teams": []string{"acme/platform"}, "unresolved_team": false}
 			discriminator = at
 			o["head_repository"] = nil
 		case 2:
@@ -724,5 +724,161 @@ func TestNextCloseReasonsDoNotOverclaim(t *testing.T) {
 				t.Fatalf("close: %+v", line)
 			}
 		})
+	}
+}
+
+func (f *nextFixture) teamReview(t *testing.T, node, repository string, number int, team, author string, age time.Duration) {
+	t.Helper()
+	at := f.now.Add(-age).Format(time.RFC3339Nano)
+	kind := "user"
+	if strings.HasSuffix(author, "[bot]") {
+		kind = "bot"
+	}
+	o := map[string]any{"node_id": node, "repository": repository, "number": number, "role": "reviewer", "state": "OPEN", "url": fmt.Sprintf("https://github.com/%s/pull/%d", repository, number), "title": fmt.Sprintf("Change %d", number), "head_ref": "feature", "base_ref": "main", "head_sha": "abc123", "author_login": author, "author_kind": kind, "baseline_at": at, "observed_at": f.now.Format(time.RFC3339Nano), "verified_at": f.now.Format(time.RFC3339Nano), "access": "ok", "review_request": map[string]any{"direct": false, "teams": []string{team}, "unresolved_team": false}}
+	f.event(t, "github.pull_request.review_requested:"+node+":"+at, "review_requested", at, map[string]any{"node_id": node, "role": "reviewer", "head_sha": "abc123", "triage": map[string]any{"needs_user": true}, "actor_kind": "user"})
+	f.observations = append(f.observations, o)
+	f.save(t, o)
+}
+
+func TestNextSummarizesTeamOnlyReviewRequestsPerTeam(t *testing.T) {
+	f := newNextFixture(t)
+	f.teamReview(t, "TEAM10", "acme/widgets", 10, "acme/all-engineers", "dependabot[bot]", 60*time.Minute)
+	f.teamReview(t, "TEAM11", "acme/widgets", 11, "acme/all-engineers", "carol", 50*time.Minute)
+	f.teamReview(t, "TEAM12", "acme/widgets", 12, "acme/all-engineers", "dependabot[bot]", 40*time.Minute)
+	f.teamReview(t, "TEAM8", "acme/gadgets", 8, "acme/all-engineers", "renovate[bot]", 30*time.Minute)
+	f.teamReview(t, "TEAM3", "acme/apps", 3, "acme/mobile", "dave", 20*time.Minute)
+	f.teamReview(t, "BEHALF", "acme/widgets", 20, "acme/all-engineers", "copilot-swe-agent[bot]", 15*time.Minute)
+	f.authoredPR(t, "BEHALF", "acme/widgets", 20, "copilot-swe-agent[bot]", 15*time.Minute, nil)
+	f.teamReview(t, "MIXED", "acme/widgets", 30, "acme/all-engineers", "erin", 14*time.Minute)
+	f.authoredPR(t, "MIXED", "acme/widgets", 30, "erin", 14*time.Minute, func(o map[string]any) { o["mergeable"] = "CONFLICTING" })
+
+	if items := f.items(t); len(items) != 14 {
+		t.Fatalf("JSON must keep every item, got %d", len(items))
+	}
+	header := func(repository string, number int) string {
+		return fmt.Sprintf("  %s#%d Change %d", repository, number, number)
+	}
+	text := f.cli(t, "next")
+	engineers := "\nTeam review requests via acme/all-engineers: 4 PRs (3 bot) across 2 repos\n"
+	mobile := "\nTeam review requests via acme/mobile: 1 PR across 1 repo\n"
+	summary := strings.Index(text, engineers)
+	if summary < 0 || strings.Index(text, mobile) < summary {
+		t.Fatalf("expected one summary per team in label order: %s", text)
+	}
+	for _, direct := range []string{"  acme/demo#1 Work 1", "  acme/demo#2 Work 2", header("acme/widgets", 20), header("acme/widgets", 30)} {
+		if at := strings.Index(text, direct); at < 0 || at > summary {
+			t.Fatalf("expected %q listed before team summaries: %s", direct, text)
+		}
+	}
+	if strings.Index(text, "\nWaiting on you\n") > strings.Index(text, "  acme/demo#2 Work 2") || !strings.Contains(text, "review requested via acme/platform") {
+		t.Fatalf("direct-plus-team request must stay under Waiting on you: %s", text)
+	}
+	newest := []int{strings.Index(text, header("acme/gadgets", 8)), strings.Index(text, header("acme/widgets", 12)), strings.Index(text, header("acme/widgets", 11)), strings.Index(text, mobile)}
+	for i := 1; i < len(newest); i++ {
+		if newest[i-1] < summary || newest[i-1] > newest[i] {
+			t.Fatalf("expected the three newest team PRs under their summary, newest first: %s", text)
+		}
+	}
+	if strings.Contains(text, header("acme/widgets", 10)) || strings.Count(text, "\n  1 more: workgraph next --team-reviews") != 1 {
+		t.Fatalf("expected the oldest team PR folded into a more line: %s", text)
+	}
+	if !strings.Contains(text[strings.Index(text, mobile):], header("acme/apps", 3)) {
+		t.Fatalf("expected the mobile team PR under its summary: %s", text)
+	}
+
+	expanded := f.cli(t, "next", "--team-reviews")
+	order := []string{engineers, header("acme/gadgets", 8), header("acme/widgets", 10), header("acme/widgets", 11), header("acme/widgets", 12), mobile, header("acme/apps", 3)}
+	last := -1
+	for _, want := range order {
+		at := strings.Index(expanded, want)
+		if at <= last {
+			t.Fatalf("expected %q after the previous team line in team then repository order: %s", want, expanded)
+		}
+		last = at
+	}
+	if strings.Contains(expanded, "more: workgraph next --team-reviews") {
+		t.Fatalf("expanded output must not fold: %s", expanded)
+	}
+	command := exec.Command(workgraphFactsBinary, "next", "--team-reviews", "--json", "--home", f.home)
+	if err := command.Run(); err == nil {
+		t.Fatal("--team-reviews with --json succeeded")
+	} else if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 2 {
+		t.Fatalf("usage error: %v", err)
+	}
+
+	today, err := workgraph.Today(workgraph.TodayConfig{HomeDir: f.home, Now: f.now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(today.Message, "Waiting on you: 9 items + 5 team review requests (workgraph next)") {
+		t.Fatalf("today: %s", today.Message)
+	}
+	resume, err := workgraph.Resume(workgraph.ResumeConfig{HomeDir: f.home, Now: f.now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, team := range []string{header("acme/widgets", 10), header("acme/widgets", 11), header("acme/widgets", 12), header("acme/gadgets", 8), header("acme/apps", 3)} {
+		if strings.Contains(resume.Message, strings.TrimSpace(team)) {
+			t.Fatalf("resume listed team-only %q: %s", team, resume.Message)
+		}
+	}
+	if !strings.Contains(resume.Message, "\n5 team review requests: workgraph next") {
+		t.Fatalf("resume must count team-only requests: %s", resume.Message)
+	}
+
+	snoozed := ""
+	for _, item := range f.items(t, "--project", "demo", "--reason", "review_requested") {
+		if item.PullRequest.NodeID == "TEAM3" {
+			snoozed = item.ID
+		}
+	}
+	if snoozed == "" {
+		t.Fatal("team-only item missing from JSON")
+	}
+	if out := f.cli(t, "next", "snooze", snoozed, "--for", "1h"); !strings.Contains(out, "Snoozed: "+snoozed) {
+		t.Fatalf("snooze: %s", out)
+	}
+	if out := f.cli(t, "next", "--team-reviews"); strings.Contains(out, mobile) || strings.Contains(out, header("acme/apps", 3)) {
+		t.Fatalf("snoozed team-only item still listed: %s", out)
+	}
+	today, err = workgraph.Today(workgraph.TodayConfig{HomeDir: f.home, Now: f.now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(today.Message, "Waiting on you: 9 items + 4 team review requests (workgraph next)") {
+		t.Fatalf("today after snooze: %s", today.Message)
+	}
+}
+
+func (f *nextFixture) authoredPR(t *testing.T, node, repository string, number int, author string, age time.Duration, mutate func(map[string]any)) {
+	t.Helper()
+	at := f.now.Add(-age).Format(time.RFC3339Nano)
+	kind := "user"
+	if strings.HasSuffix(author, "[bot]") {
+		kind = "bot"
+	}
+	o := map[string]any{"node_id": node, "repository": repository, "number": number, "role": "author", "state": "OPEN", "url": fmt.Sprintf("https://github.com/%s/pull/%d", repository, number), "title": fmt.Sprintf("Change %d", number), "head_ref": "feature", "base_ref": "main", "head_sha": "abc123", "author_login": author, "author_kind": kind, "baseline_at": at, "observed_at": f.now.Format(time.RFC3339Nano), "verified_at": f.now.Format(time.RFC3339Nano), "detail_fetched_at": f.now.Format(time.RFC3339Nano), "access": "ok", "threads": []any{}, "opinionated_reviews": []any{}, "checks_state": "none", "mergeable": "MERGEABLE", "ready": "false"}
+	if mutate != nil {
+		mutate(o)
+	}
+	if o["mergeable"] == "CONFLICTING" {
+		f.event(t, "github.pull_request.merge_conflict:"+node+":abc123:"+at, "merge_conflict", at, map[string]any{"node_id": node, "role": "author", "head_sha": "abc123", "triage": map[string]any{"needs_user": true}, "actor_kind": "user"})
+	}
+	f.observations = append(f.observations, o)
+	f.save(t, o)
+}
+
+func TestNextClassifiesTeamOnlyRequestsBeforeFilters(t *testing.T) {
+	f := newNextFixture(t)
+	f.teamReview(t, "MIXED", "acme/widgets", 30, "acme/all-engineers", "erin", 14*time.Minute)
+	f.authoredPR(t, "MIXED", "acme/widgets", 30, "erin", 14*time.Minute, func(o map[string]any) { o["mergeable"] = "CONFLICTING" })
+	f.teamReview(t, "TEAM8", "acme/gadgets", 8, "acme/all-engineers", "renovate[bot]", 30*time.Minute)
+	for _, args := range [][]string{{"next", "--reason", "review_requested"}, {"next", "--project", "demo", "--reason", "review_requested"}} {
+		out := f.cli(t, args...)
+		mixed := strings.Index(out, "\n  acme/widgets#30 Change 30")
+		summary := strings.Index(out, "\nTeam review requests via acme/all-engineers: 1 PR (1 bot) across 1 repo\n")
+		if mixed < 0 || summary < 0 || mixed > summary || strings.Index(out, "\nWaiting on you\n") > mixed {
+			t.Fatalf("%v: a team request on a PR with other items must stay under Waiting on you: %s", args, out)
+		}
 	}
 }

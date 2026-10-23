@@ -65,6 +65,17 @@ Scenario: Resume and today point at what is next
   When I run "workgraph today"
   Then today ends with the number of items waiting on me and still shows only my own activity
 
+Scenario: Team-only review requests do not bury direct work
+  Given a large team I belong to has review requests open on many pull requests
+  And other pull requests request my review directly or need my reply
+  When I run "workgraph next"
+  Then the direct items are listed under "Waiting on you" as before
+  And each team's requests are summarized on one line with pull request, bot, and repository counts and the newest three pull requests
+  When I run "workgraph next --team-reviews"
+  Then every team-only request is listed under its team, ordered by repository
+  When I run "workgraph today"
+  Then the waiting count excludes team-only requests and reports them separately
+
 Scenario: Agents read the same items through MCP
   Given workgraph has items waiting on me
   When an agent calls the workgraph MCP next_items tool

@@ -419,7 +419,10 @@ previous teams and successful refresh timestamp, and retries on the next poll.
 Rate limits use the normal retry-after deadline before another refresh. It is used only to label a request: a request whose `requestedReviewer`
 is a team in the cache is `via <org>/<slug>`. A PR returned by the search whose
 requests match no cached team is labeled `via team (unresolved)` rather than
-dropped, because GitHub's search already decided it matches.
+dropped, because GitHub's search already decided it matches. When the user is
+not among the returned requests and `reviewRequests.totalCount` exceeds the
+returned nodes, the request is recorded with `incomplete: true`, because an
+omitted request could be direct; `incomplete` is absent otherwise.
 
 ### Detail query (author role, changed PRs only)
 
@@ -537,7 +540,7 @@ ready                  true | false | unknown
 timeline_since, timeline_cursor, detail_fetched_at
 
 reviewer role:
-review_request         {direct, teams, unresolved_team} | none
+review_request         {direct, teams, unresolved_team, incomplete?} | none
 viewer_review          {id, state, submitted_at, commit} | none
 
 both:

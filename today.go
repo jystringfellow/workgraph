@@ -161,8 +161,8 @@ func Today(config TodayConfig) (TodayResult, error) {
 	next, err := Next(NextConfig{HomeDir: config.HomeDir, DatabasePath: dbPath, Now: now})
 	if err != nil {
 		result.Message += "\n\n" + nextUnavailableMessage(err)
-	} else if len(next.Items) > 0 {
-		result.Message += fmt.Sprintf("\n\nWaiting on you: %d items (workgraph next)", len(next.Items))
+	} else if waiting := nextWaitingCountMessage(next.Items); waiting != "" {
+		result.Message += "\n\n" + waiting
 	}
 	result.Message += bridgeStallWarning(homeDir, dbPath, now)
 

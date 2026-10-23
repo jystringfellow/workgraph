@@ -186,6 +186,7 @@ type githubPRReviewRequest struct {
 	Direct         bool     `json:"direct"`
 	Teams          []string `json:"teams"`
 	UnresolvedTeam bool     `json:"unresolved_team"`
+	Incomplete     bool     `json:"incomplete,omitempty"`
 }
 
 type githubPRViewerReview struct {
@@ -213,6 +214,7 @@ type NextItem struct {
 	Triage      map[string]any    `json:"triage"`
 	Freshness   NextItemFreshness `json:"freshness"`
 	Untrusted   map[string]any    `json:"untrusted,omitempty"`
+	teamOnly    bool
 }
 
 type NextItemSubject struct {
