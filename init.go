@@ -425,6 +425,7 @@ func createSchema(db *sql.DB) error {
 	for _, statement := range []string{
 		`CREATE INDEX IF NOT EXISTS idx_events_slack_channel_id ON events (json_extract(payload_json, '$.channel_id')) WHERE source = 'slack'`,
 		`CREATE INDEX IF NOT EXISTS idx_events_slack_without_container ON events (id) WHERE source = 'slack' AND (project IS NULL OR project = '')`,
+		`CREATE INDEX IF NOT EXISTS idx_events_slack_kind_prefixed_container ON events (id) WHERE source = 'slack' AND project GLOB '[A-Z]*:[CDG]*:*'`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			return err
@@ -485,6 +486,7 @@ const (
 	slackEventsWithoutContainerQuery = `SELECT id, '', payload_json FROM events INDEXED BY idx_events_slack_without_container WHERE source = 'slack' AND (project IS NULL OR project = '')`
 	slackDistinctProjectsQuery       = `SELECT DISTINCT project FROM events INDEXED BY idx_events_project WHERE project IS NOT NULL AND project <> ''`
 	slackEventsForProjectQuery       = `SELECT id, project, payload_json FROM events INDEXED BY idx_events_project WHERE project = ? AND source = 'slack'`
+	slackKindPrefixedContainersQuery = `SELECT id, project, payload_json FROM events INDEXED BY idx_events_slack_kind_prefixed_container WHERE source = 'slack' AND project GLOB '[A-Z]*:[CDG]*:*'`
 )
 
 func backfillSlackEvents(db *sql.DB) error {
@@ -501,6 +503,13 @@ func backfillSlackEvents(db *sql.DB) error {
 		return err
 	}
 	if err := updateSlackEventProjects(db, hashed, `project GLOB '#*'`); err != nil {
+		return err
+	}
+	kindPrefixed, err := slackContainerRepairs(db, slackKindPrefixedContainersQuery)
+	if err != nil {
+		return err
+	}
+	if err := updateSlackEventContainerRepairs(db, kindPrefixed); err != nil {
 		return err
 	}
 	dmLabels := map[string]slackContainerRepair{}
@@ -527,8 +536,8 @@ func backfillSlackEvents(db *sql.DB) error {
 	if err := updateSlackEventContainerRepairs(db, named); err != nil {
 		return err
 	}
-	if replyCount > 0 || len(hashed) > 0 || len(dmLabels) > 0 || len(named) > 0 {
-		log.Printf("workgraph store backfilled slack events: replies=%d hash_containers=%d dm_containers=%d containers=%d", replyCount, len(hashed), len(dmLabels), len(named))
+	if replyCount > 0 || len(hashed) > 0 || len(kindPrefixed) > 0 || len(dmLabels) > 0 || len(named) > 0 {
+		log.Printf("workgraph store backfilled slack events: replies=%d hash_containers=%d kind_prefix_containers=%d dm_containers=%d containers=%d", replyCount, len(hashed), len(kindPrefixed), len(dmLabels), len(named))
 	}
 	return nil
 }

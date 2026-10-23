@@ -192,6 +192,63 @@ func TestStoreBackfillsEmptySlackContainersFromChannelName(t *testing.T) {
 	}
 }
 
+func TestStoreRepairsKindPrefixedSlackChannelContainers(t *testing.T) {
+	root := t.TempDir()
+	home, memory := filepath.Join(root, "state"), filepath.Join(root, "memory")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: home, MemoryDir: memory})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type row struct{ project, payload, want string }
+	rows := map[string]row{
+		"prefixed-message": {"ZC:C0123ABCDEF:Team Channel", `{"channel_id":"C0123ABCDEF","channel_name":"ZC:C0123ABCDEF:Team Channel","conversation_type":"channel","ts":"1789300800.000100","text":"Prefixed"}`, "Team Channel"},
+		"prefixed-reply":   {"ZC:C0123ABCDEF:Team Channel", `{"channel_id":"C0123ABCDEF","channel_name":"ZC:C0123ABCDEF:Team Channel","conversation_type":"channel","ts":"1789300801.000100","thread_ts":"1789300800.000100","text":"Prefixed reply"}`, "Team Channel"},
+		"plain":            {"Team Channel", `{"channel_id":"C0123ABCDEF","channel_name":"Team Channel","conversation_type":"channel","ts":"1789300802.000100","text":"Plain"}`, "Team Channel"},
+		"mismatched-id":    {"ZC:C0123ABCDEF:Team Channel", `{"channel_id":"C0123ABCDEF:1789300803.000100","channel_name":"ZC:C0123ABCDEF:Team Channel","conversation_type":"channel","ts":"1789300803.000100","text":"Malformed channel id"}`, "ZC:C0123ABCDEF:Team Channel"},
+		"other-channel":    {"ZC:C0123ABCDEF:Elsewhere", `{"channel_id":"C0DEMO0099","channel_name":"ZC:C0123ABCDEF:Elsewhere","conversation_type":"channel","ts":"1789300804.000100","text":"Different channel"}`, "ZC:C0123ABCDEF:Elsewhere"},
+		"lowercase-kind":   {"zc:C0DEMO0098:quiet", `{"channel_id":"C0DEMO0098","channel_name":"zc:C0DEMO0098:quiet","conversation_type":"channel","ts":"1789300805.000100","text":"Not a kind prefix"}`, "zc:C0DEMO0098:quiet"},
+	}
+	now := time.Now()
+	for id, row := range rows {
+		insertEvent(t, initialized.DatabasePath, storedEvent{ID: id, Source: "slack", Type: "slack.message", Timestamp: now, Project: row.project, Payload: row.payload})
+	}
+	db, err := sql.Open("sqlite3", initialized.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	var logs strings.Builder
+	log.SetOutput(&logs)
+	defer log.SetOutput(os.Stderr)
+	for open := 1; open <= 2; open++ {
+		logs.Reset()
+		if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: home, MemoryDir: memory}); err != nil {
+			t.Fatal(err)
+		}
+		repaired := strings.Contains(logs.String(), "backfilled slack")
+		if open == 1 && !strings.Contains(logs.String(), "kind_prefix_containers=2") {
+			t.Fatalf("expected the first open to report two kind-prefix repairs, got %q", logs.String())
+		}
+		if open == 2 && repaired {
+			t.Fatalf("expected a repaired store to need no work on reopen, got %q", logs.String())
+		}
+		for id, want := range rows {
+			var project sql.NullString
+			var payloadJSON string
+			if err := db.QueryRow(`SELECT project, payload_json FROM events WHERE id = ?`, id).Scan(&project, &payloadJSON); err != nil {
+				t.Fatal(err)
+			}
+			if project.String != want.want {
+				t.Fatalf("open %d: expected %s container %q, got %q", open, id, want.want, project.String)
+			}
+			if payloadJSON != want.payload {
+				t.Fatalf("open %d: backfill rewrote %s payload: %s", open, id, payloadJSON)
+			}
+		}
+	}
+}
+
 func TestStoreGivesEachSlackDMConversationItsOwnContainer(t *testing.T) {
 	root := t.TempDir()
 	home, memory := filepath.Join(root, "state"), filepath.Join(root, "memory")

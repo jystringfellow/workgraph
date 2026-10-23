@@ -932,6 +932,54 @@ func TestBridgedSlackIngestDerivesContainerFromChannelName(t *testing.T) {
 	}
 }
 
+func TestBridgedSlackIngestStripsChannelKindPrefix(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	repoRoot := repoRoot(t)
+	connectBridgedConnector(t, repoRoot, homeDir, "slack")
+
+	input := strings.Join([]string{
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:00Z","external_id":"C0123ABCDEF:1789300800.000100","payload":{"channel_id":"C0123ABCDEF","channel_name":"ZC:C0123ABCDEF:Team Channel","conversation_type":"channel","ts":"1789300800.000100","text":"Prefixed name"}}`,
+		`{"type":"slack.thread_reply","timestamp":"2026-09-13T12:00:01Z","external_id":"C0123ABCDEF:1789300801.000100","project":"ZC:C0123ABCDEF:Team Channel","payload":{"channel_id":"C0123ABCDEF","channel_name":"ZC:C0123ABCDEF:Team Channel","conversation_type":"channel","ts":"1789300801.000100","thread_ts":"1789300800.000100","text":"Prefixed project"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:02Z","external_id":"C0123ABCDEF:1789300802.000100","payload":{"channel_id":"C0123ABCDEF","channel_name":"Team Channel","conversation_type":"channel","ts":"1789300802.000100","text":"Plain name"}}`,
+		`{"type":"slack.message","timestamp":"2026-09-13T12:00:03Z","external_id":"C0DEMO0099:1789300803.000100","payload":{"channel_id":"C0DEMO0099","channel_name":"ZC:C0123ABCDEF:Other Channel","conversation_type":"channel","ts":"1789300803.000100","text":"Mismatched id"}}`,
+	}, "\n") + "\n"
+	if output, err := runworkgraphInput(t, repoRoot, input, "capture", "ingest", "--home", homeDir, "--source", "slack", "--json", "-"); err != nil {
+		t.Fatalf("bridged ingest: %v\n%s", err, output)
+	}
+
+	db := openBridgedCaptureDatabase(t, homeDir)
+	expected := map[string]struct{ project, channelName, raw string }{
+		"1789300800.000100": {"Team Channel", "Team Channel", "ZC:C0123ABCDEF:Team Channel"},
+		"1789300801.000100": {"Team Channel", "Team Channel", "ZC:C0123ABCDEF:Team Channel"},
+		"1789300802.000100": {"Team Channel", "Team Channel", ""},
+		"1789300803.000100": {"ZC:C0123ABCDEF:Other Channel", "ZC:C0123ABCDEF:Other Channel", ""},
+	}
+	for ts, want := range expected {
+		var project sql.NullString
+		var payloadJSON string
+		if err := db.QueryRow(`SELECT project, payload_json FROM events WHERE source = 'slack' AND json_extract(payload_json, '$.ts') = ?`, ts).Scan(&project, &payloadJSON); err != nil {
+			t.Fatalf("read bridged Slack event %s: %v", ts, err)
+		}
+		if project.String != want.project {
+			t.Fatalf("expected %s container %q, got %q", ts, want.project, project.String)
+		}
+		var payload struct {
+			ChannelName      string `json:"channel_name"`
+			ChannelNameRaw   string `json:"channel_name_raw"`
+			ConversationType string `json:"conversation_type"`
+		}
+		if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+			t.Fatalf("decode %s payload: %v", ts, err)
+		}
+		if payload.ChannelName != want.channelName || payload.ChannelNameRaw != want.raw || payload.ConversationType != "channel" {
+			t.Fatalf("expected %s payload channel_name %q and channel_name_raw %q, got %s", ts, want.channelName, want.raw, payloadJSON)
+		}
+		if workgraph.SlackPrivacySource(payloadJSON) != "slack" {
+			t.Fatalf("expected %s to keep channel privacy, got %s", ts, payloadJSON)
+		}
+	}
+}
+
 func TestBridgedSlackIngestGivesEachDMConversationItsOwnContainer(t *testing.T) {
 	homeDir := initBridgedCaptureHome(t)
 	repoRoot := repoRoot(t)

@@ -1129,6 +1129,17 @@ themselves treated as DMs, so a restricted name never becomes the container of
 an event that categorization may send. Ingest, the store repair, and readers
 share this rule.
 
+Slack reports some channel kinds with a kind prefix and the channel id
+embedded in the name, as `<KIND>:<channel_id>:<name>` (for example
+`ZC:C0123ABCDEF:Team Channel`). When `<KIND>` is one to four uppercase letters
+and the embedded id equals the payload `channel_id`, the channel's name is
+`<name>`: ingest stores `<name>` as the payload `channel_name` and keeps the
+submitted value under `channel_name_raw`, and ingest, the store repair, and
+readers derive the container from `<name>`, so the channel shares one
+container with events that carry the plain name. A name whose embedded id
+differs from `channel_id` is kept as submitted. `conversation_type` handling
+is unchanged.
+
 When a Slack envelope omits `project`, ingest stores the payload
 `channel_name` as the container, trimmed and without a leading `#`, matching
 native Slack capture. An explicit Slack `project` is stored without a leading
@@ -1186,6 +1197,9 @@ payload:
 
 - `slack.reply` events become `slack.thread_reply`.
 - A container with a leading `#` is stored without it.
+- A container in the kind-prefixed form `<KIND>:<channel_id>:<name>` whose
+  embedded id equals the payload `channel_id` becomes `<name>`. The payload
+  keeps the stored `channel_name`.
 - An empty container takes the payload `channel_name`, or, when the payload has
   only `channel_id`, the name the store pairs with that id, using the same
   derivation readers use for channel aliases. A DM or group DM that is still
@@ -1197,8 +1211,10 @@ payload:
   containers alone, like removing a leading `#`.
 
 Every other non-empty `project` is unchanged. Each open reads only rows that
-may still need repair, through narrow indexes: empty containers, and rows whose
-container is a raw conversation id of a DM or group DM, known only from an
+may still need repair, through narrow indexes: empty containers,
+kind-prefixed containers through a partial index that holds only rows still in
+that form, and rows whose container is a raw conversation id of a DM or group
+DM, known only from an
 explicit DM type or an untyped `D…` id and never from the name (a raw id on a
 `channel`, `private_channel`, or otherwise untyped event is kept), or any DM
 label the rule above parses,
