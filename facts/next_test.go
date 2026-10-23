@@ -748,12 +748,11 @@ func TestNextSummarizesTeamOnlyReviewRequestsPerTeam(t *testing.T) {
 	f.teamReview(t, "TEAM8", "acme/gadgets", 8, "acme/all-engineers", "renovate[bot]", 30*time.Minute)
 	f.teamReview(t, "TEAM3", "acme/apps", 3, "acme/mobile", "dave", 20*time.Minute)
 	f.teamReview(t, "BEHALF", "acme/widgets", 20, "acme/all-engineers", "copilot-swe-agent[bot]", 15*time.Minute)
-	behalfAt := f.now.Add(-15 * time.Minute).Format(time.RFC3339Nano)
-	behalf := map[string]any{"node_id": "BEHALF", "repository": "acme/widgets", "number": 20, "role": "author", "state": "OPEN", "url": "https://github.com/acme/widgets/pull/20", "title": "Change 20", "head_ref": "feature", "base_ref": "main", "head_sha": "abc123", "author_login": "copilot-swe-agent[bot]", "author_kind": "bot", "baseline_at": behalfAt, "observed_at": f.now.Format(time.RFC3339Nano), "verified_at": f.now.Format(time.RFC3339Nano), "detail_fetched_at": f.now.Format(time.RFC3339Nano), "access": "ok", "threads": []any{}, "opinionated_reviews": []any{}, "checks_state": "none", "mergeable": "MERGEABLE", "ready": "true", "merge_state_status": "CLEAN"}
-	f.event(t, "github.pull_request.ready_to_merge:BEHALF:abc123:"+behalfAt, "ready_to_merge", behalfAt, map[string]any{"node_id": "BEHALF", "role": "author", "head_sha": "abc123", "triage": map[string]any{"needs_user": true}, "actor_kind": "user"})
-	f.save(t, behalf)
+	f.authoredPR(t, "BEHALF", "acme/widgets", 20, "copilot-swe-agent[bot]", 15*time.Minute, nil)
+	f.teamReview(t, "MIXED", "acme/widgets", 30, "acme/all-engineers", "erin", 14*time.Minute)
+	f.authoredPR(t, "MIXED", "acme/widgets", 30, "erin", 14*time.Minute, func(o map[string]any) { o["mergeable"] = "CONFLICTING" })
 
-	if items := f.items(t); len(items) != 13 {
+	if items := f.items(t); len(items) != 14 {
 		t.Fatalf("JSON must keep every item, got %d", len(items))
 	}
 	header := func(repository string, number int) string {
@@ -766,7 +765,7 @@ func TestNextSummarizesTeamOnlyReviewRequestsPerTeam(t *testing.T) {
 	if summary < 0 || strings.Index(text, mobile) < summary {
 		t.Fatalf("expected one summary per team in label order: %s", text)
 	}
-	for _, direct := range []string{"  acme/demo#1 Work 1", "  acme/demo#2 Work 2", header("acme/widgets", 20)} {
+	for _, direct := range []string{"  acme/demo#1 Work 1", "  acme/demo#2 Work 2", header("acme/widgets", 20), header("acme/widgets", 30)} {
 		if at := strings.Index(text, direct); at < 0 || at > summary {
 			t.Fatalf("expected %q listed before team summaries: %s", direct, text)
 		}
@@ -811,7 +810,7 @@ func TestNextSummarizesTeamOnlyReviewRequestsPerTeam(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(today.Message, "Waiting on you: 8 items + 5 team review requests (workgraph next)") {
+	if !strings.HasSuffix(today.Message, "Waiting on you: 9 items + 5 team review requests (workgraph next)") {
 		t.Fatalf("today: %s", today.Message)
 	}
 	resume, err := workgraph.Resume(workgraph.ResumeConfig{HomeDir: f.home, Now: f.now})
@@ -825,5 +824,61 @@ func TestNextSummarizesTeamOnlyReviewRequestsPerTeam(t *testing.T) {
 	}
 	if !strings.Contains(resume.Message, "\n5 team review requests: workgraph next") {
 		t.Fatalf("resume must count team-only requests: %s", resume.Message)
+	}
+
+	snoozed := ""
+	for _, item := range f.items(t, "--project", "demo", "--reason", "review_requested") {
+		if item.PullRequest.NodeID == "TEAM3" {
+			snoozed = item.ID
+		}
+	}
+	if snoozed == "" {
+		t.Fatal("team-only item missing from JSON")
+	}
+	if out := f.cli(t, "next", "snooze", snoozed, "--for", "1h"); !strings.Contains(out, "Snoozed: "+snoozed) {
+		t.Fatalf("snooze: %s", out)
+	}
+	if out := f.cli(t, "next", "--team-reviews"); strings.Contains(out, mobile) || strings.Contains(out, header("acme/apps", 3)) {
+		t.Fatalf("snoozed team-only item still listed: %s", out)
+	}
+	today, err = workgraph.Today(workgraph.TodayConfig{HomeDir: f.home, Now: f.now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(today.Message, "Waiting on you: 9 items + 4 team review requests (workgraph next)") {
+		t.Fatalf("today after snooze: %s", today.Message)
+	}
+}
+
+func (f *nextFixture) authoredPR(t *testing.T, node, repository string, number int, author string, age time.Duration, mutate func(map[string]any)) {
+	t.Helper()
+	at := f.now.Add(-age).Format(time.RFC3339Nano)
+	kind := "user"
+	if strings.HasSuffix(author, "[bot]") {
+		kind = "bot"
+	}
+	o := map[string]any{"node_id": node, "repository": repository, "number": number, "role": "author", "state": "OPEN", "url": fmt.Sprintf("https://github.com/%s/pull/%d", repository, number), "title": fmt.Sprintf("Change %d", number), "head_ref": "feature", "base_ref": "main", "head_sha": "abc123", "author_login": author, "author_kind": kind, "baseline_at": at, "observed_at": f.now.Format(time.RFC3339Nano), "verified_at": f.now.Format(time.RFC3339Nano), "detail_fetched_at": f.now.Format(time.RFC3339Nano), "access": "ok", "threads": []any{}, "opinionated_reviews": []any{}, "checks_state": "none", "mergeable": "MERGEABLE", "ready": "false"}
+	if mutate != nil {
+		mutate(o)
+	}
+	if o["mergeable"] == "CONFLICTING" {
+		f.event(t, "github.pull_request.merge_conflict:"+node+":abc123:"+at, "merge_conflict", at, map[string]any{"node_id": node, "role": "author", "head_sha": "abc123", "triage": map[string]any{"needs_user": true}, "actor_kind": "user"})
+	}
+	f.observations = append(f.observations, o)
+	f.save(t, o)
+}
+
+func TestNextClassifiesTeamOnlyRequestsBeforeFilters(t *testing.T) {
+	f := newNextFixture(t)
+	f.teamReview(t, "MIXED", "acme/widgets", 30, "acme/all-engineers", "erin", 14*time.Minute)
+	f.authoredPR(t, "MIXED", "acme/widgets", 30, "erin", 14*time.Minute, func(o map[string]any) { o["mergeable"] = "CONFLICTING" })
+	f.teamReview(t, "TEAM8", "acme/gadgets", 8, "acme/all-engineers", "renovate[bot]", 30*time.Minute)
+	for _, args := range [][]string{{"next", "--reason", "review_requested"}, {"next", "--project", "demo", "--reason", "review_requested"}} {
+		out := f.cli(t, args...)
+		mixed := strings.Index(out, "\n  acme/widgets#30 Change 30")
+		summary := strings.Index(out, "\nTeam review requests via acme/all-engineers: 1 PR (1 bot) across 1 repo\n")
+		if mixed < 0 || summary < 0 || mixed > summary || strings.Index(out, "\nWaiting on you\n") > mixed {
+			t.Fatalf("%v: a team request on a PR with other items must stay under Waiting on you: %s", args, out)
+		}
 	}
 }

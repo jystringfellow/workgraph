@@ -165,6 +165,7 @@ func (poll *githubPRWatchPoll) reviewRequest(status githubPRReviewerStatus, inSe
 	if !request.Direct && len(request.Teams) == 0 && !request.UnresolvedTeam {
 		return nil
 	}
+	request.Incomplete = !request.Direct && status.ReviewRequests.TotalCount > len(status.ReviewRequests.Nodes)
 	return request
 }
 

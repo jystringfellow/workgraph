@@ -168,15 +168,20 @@ func readNextSnapshot(config NextConfig) (nextSnapshot, error) {
 	for _, observation := range snapshot.observations {
 		candidates = append(candidates, projectNextObservation(observation, snapshot.events, config, snapshot.result.AsOf, interval, entry.SetupState == "error")...)
 	}
+	active := []NextItem{}
 	for _, item := range candidates {
-		if (config.Project != "" && item.Project != config.Project) || (config.Reason != "" && item.Reason != config.Reason) {
-			continue
-		}
 		if nextHidden(item.ID, snapshot.events, snapshot.result.AsOf) != "" {
 			continue
 		}
 		if item.PullRequest.Author != nil {
 			item.PullRequest.Author.OnBehalf = onBehalf[item.PullRequest.NodeID]
+		}
+		active = append(active, item)
+	}
+	nextMarkTeamOnly(active)
+	for _, item := range active {
+		if (config.Project != "" && item.Project != config.Project) || (config.Reason != "" && item.Reason != config.Reason) {
+			continue
 		}
 		snapshot.result.Items = append(snapshot.result.Items, item)
 	}
@@ -608,13 +613,19 @@ func nextMessage(result NextResult, setupError bool, capturedAt time.Time, inter
 	return strings.Join(lines, "\n")
 }
 
-func nextSplitTeamReviews(items []NextItem) (direct, teamOnly []NextItem) {
+func nextMarkTeamOnly(items []NextItem) {
 	perPullRequest := map[string]int{}
 	for _, item := range items {
 		perPullRequest[item.Source+":"+item.PullRequest.NodeID]++
 	}
+	for i, item := range items {
+		items[i].teamOnly = nextTeamOnlyReview(item) && perPullRequest[item.Source+":"+item.PullRequest.NodeID] == 1
+	}
+}
+
+func nextSplitTeamReviews(items []NextItem) (direct, teamOnly []NextItem) {
 	for _, item := range items {
-		if nextTeamOnlyReview(item) && perPullRequest[item.Source+":"+item.PullRequest.NodeID] == 1 {
+		if item.teamOnly {
 			teamOnly = append(teamOnly, item)
 		} else {
 			direct = append(direct, item)
@@ -625,7 +636,7 @@ func nextSplitTeamReviews(items []NextItem) (direct, teamOnly []NextItem) {
 
 func nextTeamOnlyReview(item NextItem) bool {
 	request, ok := item.Detail["request"].(*githubPRReviewRequest)
-	if item.Reason != nextReasonReviewRequested || !ok || request.Direct || (len(request.Teams) == 0 && !request.UnresolvedTeam) {
+	if item.Reason != nextReasonReviewRequested || !ok || request.Direct || request.Incomplete || (len(request.Teams) == 0 && !request.UnresolvedTeam) {
 		return false
 	}
 	return item.PullRequest.Author == nil || !item.PullRequest.Author.OnBehalf

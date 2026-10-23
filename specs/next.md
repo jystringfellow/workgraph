@@ -136,7 +136,7 @@ the pause line when auto-apply is paused, and at most three items.
 
   | Reason | `detail` |
   |---|---|
-  | `review_requested` | `{"request": {"direct", "teams", "unresolved_team"}}` |
+  | `review_requested` | `{"request": {"direct", "teams", "unresolved_team", "incomplete"?}}` |
   | `checks_failed` | `{"run_fingerprint", "failed_checks": [{"name", "conclusion", "details_url"}]}` |
   | `changes_requested` | `{"review_id", "reviewer"}` |
   | `reply` | `{}` (the thread or comment is in `subject`) |
@@ -227,9 +227,11 @@ Ready
 #### Team review requests
 
 A `review_requested` item is a team-only review request when its request is
-not direct (`teams` is non-empty or `unresolved_team` is true), it is the
-only item on its pull request, and the pull request was not opened on the
-user's behalf. Large teams can request review on hundreds of pull requests,
+not direct (`teams` is non-empty or `unresolved_team` is true) and not
+`incomplete`, it is the only open item on its pull request, and the pull
+request was not opened on the user's behalf. Classification counts every open
+item before `--project` and `--reason` filters, so filtering never folds a
+request whose pull request has other items. Large teams can request review on hundreds of pull requests,
 most of them bot dependency bumps, so text output summarizes these instead of
 listing them under `Waiting on you`:
 
@@ -253,9 +255,9 @@ Team review requests via acme/all-engineers: 4 PRs (3 bot) across 2 repos
 - `--team-reviews` lists every team-only pull request under its summary,
   sorted by repository then number, with no `more` line. It is text-only;
   with `--json` it is a usage error.
-- A review request that is direct, shares its pull request with another item,
-  or is on a pull request opened on the user's behalf stays listed under
-  `Waiting on you` as before.
+- A review request that is direct, `incomplete`, shares its pull request with
+  another open item, or is on a pull request opened on the user's behalf
+  stays listed under `Waiting on you` as before.
 - JSON, `--watch`, MCP, `explain`, `done`, and `snooze` are unchanged and
   still include team-only items, so `done` and `snooze` act on them by id.
 
@@ -415,7 +417,8 @@ only. No fact invokes `gh`.
   review request under it, while JSON keeps both items and their ids
   (`facts/github_pr_watch_reviewer_test.go`).
 - **N12. Team-only review requests are summarized per team.** With direct
-  items, a direct-plus-team request, an on-behalf bot PR with a team request,
+  items, a direct-plus-team request, an on-behalf bot PR whose only item is a
+  team request, an ordinary PR with a team request and a conflict,
   four team-only requests from one team across two repositories (three by
   bots), and one from another team, `next` lists the direct, direct-plus-team,
   and on-behalf PRs under `Waiting on you` and not under a summary, prints one
@@ -423,6 +426,12 @@ only. No fact invokes `gh`.
   and omits the oldest team-only PR. `--team-reviews` lists all five in team
   then repository order without a `more` line, and is a usage error with
   `--json`. `--json` still returns every item. `today` counts the five
-  separately, and `resume` lists none of them and counts them.
+  separately, and `resume` lists none of them and counts them. Snoozing one
+  team-only item by id removes it from `--team-reviews` and the `today`
+  count. With `--reason review_requested`, alone or with `--project`, a team
+  request on a PR that also has a conflict stays under `Waiting on you`. A
+  team request whose captured request list is truncated without the user is
+  `incomplete` and stays listed, while a complete one is summarized
+  (`facts/github_pr_watch_reviewer_test.go`).
 - **N8. MCP returns the same items read-only.** The `next_items` tool returns
   the same ids as `next --json` and has no write behavior.
