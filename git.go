@@ -67,7 +67,7 @@ func CaptureGitCommits(config GitCaptureConfig) (GitCaptureResult, error) {
 		return GitCaptureResult{}, fmt.Errorf("open database: %w", err)
 	}
 
-	repos, err := findGitRepositories(status.WatchDirs, status.HomeDir, status.DatabasePath, status.IgnorePaths, status.IgnoreNames)
+	repos, err := findGitRepositories(status.RepoDirs, status.HomeDir, status.DatabasePath, status.IgnorePaths, status.IgnoreNames)
 	if err != nil {
 		return GitCaptureResult{}, err
 	}

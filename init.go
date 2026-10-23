@@ -31,6 +31,7 @@ type InitResult struct {
 type settingsFile struct {
 	WatchDirs             []string `json:"watch_dirs"`
 	ConservativeWatchDirs []string `json:"conservative_watch_dirs,omitempty"`
+	RepoDirs              []string `json:"repo_dirs,omitempty"`
 	IgnorePaths           []string `json:"ignore_paths"`
 	IgnoreNames           []string `json:"ignore_names"`
 }
@@ -93,7 +94,11 @@ func Init(config InitConfig) (InitResult, error) {
 		MemoryDir:    memoryDir,
 		SettingsPath: settingsPath,
 	}
-	result.Message = initMessage(result)
+	settings, err := readSettings(settingsPath)
+	if err != nil {
+		return InitResult{}, err
+	}
+	result.Message = initMessage(result, len(userAddedWatchDirs(settings)) == 0)
 
 	return result, nil
 }
@@ -146,16 +151,16 @@ func createDefaultSettings(settingsPath string, homeDir string, force bool) erro
 		return fmt.Errorf("resolve user home: %w", err)
 	}
 
-	watchDirs, err := defaultWatchDirs(userHome)
+	repoDirs, err := defaultRepoDirs(userHome)
 	if err != nil {
 		return err
 	}
 
 	config := settingsFile{
-		WatchDirs:             watchDirs,
-		ConservativeWatchDirs: append([]string(nil), watchDirs...),
-		IgnorePaths:           []string{workgraphHome},
-		IgnoreNames:           defaultIgnoreNames(),
+		WatchDirs:   []string{},
+		RepoDirs:    repoDirs,
+		IgnorePaths: []string{workgraphHome},
+		IgnoreNames: defaultIgnoreNames(),
 	}
 
 	contents, err := json.MarshalIndent(config, "", "  ")
@@ -198,11 +203,8 @@ func defaultIgnoreNames() []string {
 	return []string{".git", "node_modules", "DerivedData", ".noindex", "xcuserdata", "bin", "obj", "dist", "build", "target", ".build", ".gradle"}
 }
 
-func defaultWatchDirs(userHome string) ([]string, error) {
+func defaultRepoDirs(userHome string) ([]string, error) {
 	candidates := []string{
-		"Desktop",
-		"Documents",
-		"Downloads",
 		"Code",
 		"Projects",
 		"Developer",
@@ -211,7 +213,7 @@ func defaultWatchDirs(userHome string) ([]string, error) {
 		"repos",
 	}
 
-	watchDirs := []string{}
+	repoDirs := []string{}
 	for _, name := range candidates {
 		path := filepath.Join(userHome, name)
 		info, err := os.Stat(path)
@@ -219,25 +221,21 @@ func defaultWatchDirs(userHome string) ([]string, error) {
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, fmt.Errorf("check default watch directory %q: %w", path, err)
+			return nil, fmt.Errorf("check default repository scan directory %q: %w", path, err)
 		}
 		if !info.IsDir() {
 			continue
 		}
 		path, err = filepath.Abs(path)
 		if err != nil {
-			return nil, fmt.Errorf("resolve default watch directory: %w", err)
+			return nil, fmt.Errorf("resolve default repository scan directory: %w", err)
 		}
-		watchDirs = append(watchDirs, path)
+		repoDirs = append(repoDirs, path)
 	}
-
-	if len(watchDirs) == 0 {
-		return []string{userHome}, nil
-	}
-	return watchDirs, nil
+	return repoDirs, nil
 }
 
-func initMessage(result InitResult) string {
+func initMessage(result InitResult, fileWatchingOff bool) string {
 	lines := []string{
 		"workgraph initialized",
 		"Home: " + result.HomeDir,
@@ -246,10 +244,15 @@ func initMessage(result InitResult) string {
 		"Project memory: " + projectMemoryDir(result.MemoryDir),
 		"Settings: " + result.SettingsPath,
 	}
+	if fileWatchingOff || runtime.GOOS == "darwin" {
+		lines = append(lines, "")
+	}
+	if fileWatchingOff {
+		lines = append(lines, "File watching is off until you add a directory with workgraph settings add-watch <path>.")
+	}
 	if runtime.GOOS == "darwin" {
 		lines = append(lines,
-			"",
-			"macOS note: workgraph watches common folders such as Desktop, Documents, and Downloads by default. macOS may prompt for access to protected folders.",
+			"macOS note: macOS may prompt for access to protected folders such as Desktop, Documents, and Downloads if you watch them.",
 			"To avoid repeated prompts, grant Full Disk Access once to your terminal app or installed workgraph binary in System Settings > Privacy & Security > Full Disk Access.",
 		)
 	}

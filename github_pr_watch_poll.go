@@ -147,7 +147,7 @@ func CaptureGitHubPRWatch(config GitHubPRWatchCaptureConfig) (GitHubPRWatchCaptu
 	if config.Now != nil {
 		now = config.Now
 	}
-	remoteProjects := githubRemoteProjects(ctx, status.WatchDirs, status.HomeDir, status.DatabasePath, status.IgnorePaths, status.IgnoreNames)
+	remoteProjects := githubRemoteProjects(ctx, status.RepoDirs, status.HomeDir, status.DatabasePath, status.IgnorePaths, status.IgnoreNames)
 
 	result := GitHubPRWatchCaptureResult{HomeDir: status.HomeDir, DatabasePath: status.DatabasePath}
 	var hints githubPRWatchHints

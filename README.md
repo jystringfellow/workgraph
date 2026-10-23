@@ -133,7 +133,8 @@ Start local capture:
 workgraph start
 ```
 
-`workgraph start` uses the configured watch folders, connected accounts, and
+`workgraph start` uses connected accounts, the watch folders you added with
+`workgraph settings add-watch` (none by default; file watching is opt-in), and
 connector polling settings. Capture is explicit: `init` never starts background
 capture silently.
 

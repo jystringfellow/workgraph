@@ -108,8 +108,8 @@ func TestMacOSBackgroundCaptureWorkerRetainsSupervisorParent(t *testing.T) {
 	}
 }
 
-func TestStartUsesDefaultSaneWatchRootsAfterInit(t *testing.T) {
-	userHome := fakeUserHomeWithDirs(t, "Desktop", "Documents")
+func TestStartAfterInitReportsFileWatchingOff(t *testing.T) {
+	userHome := fakeUserHomeWithDirs(t, "Desktop", "Documents", "Code")
 	env := []string{"HOME=" + userHome, "USERPROFILE=" + userHome}
 	homeDir := filepath.Join(userHome, ".workgraph")
 	dbPath := filepath.Join(homeDir, "workgraph.db")
@@ -118,11 +118,15 @@ func TestStartUsesDefaultSaneWatchRootsAfterInit(t *testing.T) {
 	output := runWorkgraphCommand(t, env, "start", "--home", homeDir)
 	defer runWorkgraphCommand(t, env, "stop", "--home", homeDir)
 
-	if !strings.Contains(output, "Watching: 2 configured directories") {
-		t.Fatalf("expected capture to summarize default watch roots, got:\n%s", output)
+	for _, expected := range []string{"File watching: off", "Watch a directory with workgraph settings add-watch <path>."} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("expected start output to include %q, got:\n%s", expected, output)
+		}
 	}
-	if strings.Contains(output, "Watching: "+userHome+"\n") {
-		t.Fatalf("expected capture not to watch broad user home %q, got:\n%s", userHome, output)
+	for _, unexpected := range []string{"Watching:", "Watch limit reached"} {
+		if strings.Contains(output, unexpected) {
+			t.Fatalf("expected start output not to include %q, got:\n%s", unexpected, output)
+		}
 	}
 	if _, err := os.Stat(dbPath); err != nil {
 		t.Fatalf("expected init to create database %q: %v", dbPath, err)

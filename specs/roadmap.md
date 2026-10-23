@@ -129,6 +129,10 @@ Priority labels used below:
 - [x] Keep capture running when transient watched files disappear. [spec:
   `specs/capture-reliability.md`; #139]
 
+- [x] Opt-in file watching: a fresh install watches no directories, older
+  automatic watch roots stop being watched, and git repository discovery uses
+  its own `repo_dirs` scan roots. [spec: `specs/config.md`]
+
 - Signed-in client config-dir bindings shared by bridge workers and LLM
   profiles, with runtime enforcement and inspectable diagnostics. [spec:
   `specs/signed-in-client-binding.md`]

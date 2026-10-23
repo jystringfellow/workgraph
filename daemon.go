@@ -470,7 +470,7 @@ func daemonStartedMessage(status DaemonStatus) string {
 		"Database: " + status.DatabasePath,
 	}
 	appendProcessRuntimeLines(&lines, status.Runtime)
-	lines = append(lines, daemonWatchSummaryLine(status))
+	lines = append(lines, watchSummaryLines(status.WatchDirs)...)
 	if len(status.MonitoredConnectors) > 0 {
 		lines = append(lines, "Monitoring: "+strings.Join(status.MonitoredConnectors, ", "))
 	}
@@ -486,7 +486,7 @@ func daemonRunningMessage(status DaemonStatus) string {
 		"Database: " + status.DatabasePath,
 	}
 	appendProcessRuntimeLines(&lines, status.Runtime)
-	lines = append(lines, daemonWatchSummaryLine(status))
+	lines = append(lines, watchSummaryLines(status.WatchDirs)...)
 	if len(status.MonitoredConnectors) > 0 {
 		lines = append(lines, "Monitoring: "+strings.Join(status.MonitoredConnectors, ", "))
 	}
@@ -559,18 +559,6 @@ func appendDaemonWatchLimitLine(lines *[]string, status DaemonStatus) {
 			*lines = append(*lines, "Next unwatched directory: "+status.WatchLimitPath)
 		}
 		*lines = append(*lines, "Prioritize important directories with workgraph settings add-watch.")
-	}
-}
-
-func daemonWatchSummaryLine(status DaemonStatus) string {
-	count := len(status.WatchDirs)
-	switch count {
-	case 0:
-		return "Watching: no configured directories"
-	case 1:
-		return "Watching: 1 configured directory"
-	default:
-		return fmt.Sprintf("Watching: %d configured directories", count)
 	}
 }
 
