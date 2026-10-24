@@ -2,8 +2,10 @@ package workgraph
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -12,6 +14,7 @@ import (
 const (
 	databaseMigrationLockSuffix     = "-migration.lock"
 	databaseUpgradeInProgressNotice = "Database upgrade in progress; capture status refreshes when it finishes."
+	captureStatusUpgrading          = "unknown (database upgrade in progress)"
 )
 
 var (
@@ -20,6 +23,8 @@ var (
 )
 
 var databaseSidecarSuffixes = []string{"-wal", "-shm", "-journal", databaseMigrationLockSuffix}
+
+var ErrDatabaseUpgradeInProgress = errors.New("database upgrade in progress; try again when it finishes")
 
 func createSchema(db *sql.DB) error {
 	path, err := mainDatabaseFile(db)
@@ -31,15 +36,44 @@ func createSchema(db *sql.DB) error {
 		return err
 	}
 	defer release()
+	return prepareSchemaLocked(db, path)
+}
+
+func createSchemaUnlessUpgrading(db *sql.DB) error {
+	path, err := mainDatabaseFile(db)
+	if err != nil {
+		return err
+	}
+	release, acquired, err := tryLockDatabaseMigration(path)
+	if err != nil {
+		return err
+	}
+	if !acquired {
+		return ErrDatabaseUpgradeInProgress
+	}
+	defer release()
+	return prepareSchemaLocked(db, path)
+}
+
+func prepareSchemaLocked(db *sql.DB, path string) error {
+	secureDatabaseFiles(path)
 	enableWriteAheadLog(db)
 	return migrateSchema(db)
 }
 
-func createSchemaUnlessUpgrading(db *sql.DB, databasePath string) error {
-	if databaseMigrationInProgress(databasePath) {
-		return nil
+func secureDatabaseFiles(path string) {
+	if path == "" {
+		return
 	}
-	return createSchema(db)
+	for _, file := range []string{path, path + "-wal", path + "-shm", path + "-journal"} {
+		info, err := os.Stat(file)
+		if err != nil || info.Mode().Perm()&0o077 == 0 {
+			continue
+		}
+		if err := ensureUserOnlyFile(file); err != nil {
+			log.Printf("workgraph store could not restrict %s permissions: %v", file, err)
+		}
+	}
 }
 
 func mainDatabaseFile(db *sql.DB) (string, error) {
@@ -96,8 +130,4 @@ func isDatabaseFile(path string, databasePath string) bool {
 		}
 	}
 	return false
-}
-
-func errDatabaseUpgradeInProgress() error {
-	return fmt.Errorf("database upgrade in progress; try again when it finishes")
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -134,6 +135,11 @@ func TestWaitForDaemonReadyReportsStillStartingWhileWorkerUpgradesDatabase(t *te
 		t.Fatalf("hold migration lock: %v", err)
 	}
 	defer release()
+	originalList := listDaemonProcesses
+	listDaemonProcesses = func() ([]daemonProcess, error) {
+		return []daemonProcess{{PID: os.Getpid(), Command: "workgraph __capture-worker --home " + homeDir + " --database " + databasePath}}, nil
+	}
+	t.Cleanup(func() { listDaemonProcesses = originalList })
 	endStartup := beginDaemonStartup(homeDir, databasePath)
 	defer endStartup()
 
@@ -158,5 +164,76 @@ func TestWaitForDaemonReadyReportsStillStartingWhileWorkerUpgradesDatabase(t *te
 	}
 	if progress.String() != "Upgrading database…\n" {
 		t.Fatalf("expected one upgrade progress line, got %q", progress.String())
+	}
+}
+
+func TestStartingWorkerIdentityIsValidatedBeforeItIsTrusted(t *testing.T) {
+	homeDir := t.TempDir()
+	databasePath := filepath.Join(homeDir, "workgraph.db")
+	original := listDaemonProcesses
+	listDaemonProcesses = func() ([]daemonProcess, error) {
+		return []daemonProcess{{PID: os.Getpid(), Command: "/usr/bin/unrelated --serve"}}, nil
+	}
+	t.Cleanup(func() { listDaemonProcesses = original })
+	if err := writeDaemonStartup(homeDir, daemonStartup{PID: os.Getpid(), DatabasePath: databasePath, UpdatedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("write startup: %v", err)
+	}
+
+	status, err := DaemonStatusForHome(homeDir)
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if status.Starting || status.Running {
+		t.Fatalf("expected a reused PID not to be reported as a starting worker, got %+v", status)
+	}
+	stopped, err := StopDaemon(DaemonConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if !strings.Contains(stopped.Message, "not running") {
+		t.Fatalf("expected stop not to signal the unrelated process, got %q", stopped.Message)
+	}
+	_, err = waitForDaemonReady(daemonReadyWait{homeDir: homeDir, databasePath: databasePath})
+	if err == nil || !strings.Contains(err.Error(), "did not become ready") {
+		t.Fatalf("expected readiness to reject the unrelated process, got %v", err)
+	}
+}
+
+func TestDiscoveryDoesNotRecordStateForWorkerThatIsNotReady(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("readiness locks need flock")
+	}
+	homeDir := t.TempDir()
+	databasePath := filepath.Join(homeDir, "workgraph.db")
+	original := listDaemonProcesses
+	listDaemonProcesses = func() ([]daemonProcess, error) {
+		return []daemonProcess{{PID: os.Getpid(), Command: "workgraph __capture-worker --home " + homeDir + " --database " + databasePath}}, nil
+	}
+	t.Cleanup(func() { listDaemonProcesses = original })
+
+	status, err := DaemonStatusForHome(homeDir)
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if status.Running || !status.Starting {
+		t.Fatalf("expected a worker without readiness to be reported as starting, got %+v", status)
+	}
+	for _, path := range []string{daemonStatePath(homeDir), daemonPIDPath(homeDir)} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("expected discovery not to write %s, got %v", path, err)
+		}
+	}
+
+	releaseReady, err := lockDaemonReady(homeDir)
+	if err != nil {
+		t.Fatalf("hold ready lock: %v", err)
+	}
+	defer releaseReady()
+	status, err = DaemonStatusForHome(homeDir)
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if !status.Running {
+		t.Fatalf("expected a ready worker to be recovered, got %+v", status)
 	}
 }

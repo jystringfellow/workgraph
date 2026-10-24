@@ -30,10 +30,28 @@ func lockDatabaseMigration(databasePath string) (func(), error) {
 		}
 		if time.Now().After(deadline) {
 			file.Close()
-			return nil, errDatabaseUpgradeInProgress()
+			return nil, ErrDatabaseUpgradeInProgress
 		}
 		time.Sleep(databaseMigrationLockPoll)
 	}
+}
+
+func tryLockDatabaseMigration(databasePath string) (func(), bool, error) {
+	if databasePath == "" {
+		return func() {}, true, nil
+	}
+	file, err := os.OpenFile(databaseMigrationLockPath(databasePath), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, false, fmt.Errorf("open database migration lock: %w", err)
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		file.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("lock database migration: %w", err)
+	}
+	return func() { file.Close() }, true, nil
 }
 
 func databaseMigrationInProgress(databasePath string) bool {

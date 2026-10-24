@@ -1328,13 +1328,15 @@ func connectorStatuses(homeDir string, state connectorRuntimeFile) []ConnectorSt
 	statuses := make([]ConnectorStatus, 0, len(connectorRegistry))
 	now := time.Now()
 	activeRequests := map[string]CaptureRequest{}
-	if requests, err := ListCaptureRequests(CaptureRequestListConfig{HomeDir: homeDir}); err == nil {
+	requests, requestsErr := ListCaptureRequests(CaptureRequestListConfig{HomeDir: homeDir})
+	if requestsErr == nil {
 		for _, request := range requests {
 			if request.Status == "pending" || request.Status == "claimed" {
 				activeRequests[request.ConnectorID] = request
 			}
 		}
 	}
+	requestsUpgrading := errors.Is(requestsErr, ErrDatabaseUpgradeInProgress)
 	for _, definition := range connectorRegistry {
 		id := definition.ID
 		connected := connectorConnected(homeDir, state, id)
@@ -1378,6 +1380,9 @@ func connectorStatuses(homeDir string, state connectorRuntimeFile) []ConnectorSt
 			CaptureAvailableAt:  request.AvailableAt,
 			BridgeStall:         stall.Detail,
 		})
+		if requestsUpgrading && connected && captureMode == "bridged" {
+			statuses[len(statuses)-1].CaptureStatus = captureStatusUpgrading
+		}
 	}
 	return statuses
 }

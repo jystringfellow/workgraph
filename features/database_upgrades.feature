@@ -24,10 +24,22 @@ Scenario: Start fails promptly when the worker exits
   Then start fails at once with "daemon did not become ready"
   And the error points at the daemon log
 
+Scenario: Concurrent starts share one worker
+  Given another workgraph process is migrating the database
+  When two "workgraph start" commands run at the same time
+  Then both succeed and report the same capture worker
+
+Scenario: Starting state is never trusted from an unrelated process
+  Given the startup heartbeat names a PID that is not a capture worker
+  When I run "workgraph status" or "workgraph stop"
+  Then capture is reported as not running
+  And the unrelated process is not signalled
+
 Scenario: Short commands do not fail during a migration
   Given another workgraph process is migrating the database
-  When I run "workgraph today"
+  When I run "workgraph today" or "workgraph resume"
   Then it reads without waiting and reports the upgrade in progress
+  And "workgraph connectors status" says bridged capture state is unknown
   When a connector poll runs
   Then it waits for the migration and then succeeds
 
@@ -42,6 +54,11 @@ Scenario: The database uses write-ahead logging
   Then the database is in WAL mode
   And doctor reports the journal mode
   And read-only access still works
+
+Scenario: Database files stay user-only
+  Given an existing database and WAL files with broad permissions
+  When workgraph opens the database
+  Then the database and its WAL files are readable only by the user
 
 Scenario: File capture ignores database files
   Given the database lives under a watched directory

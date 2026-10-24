@@ -20,6 +20,7 @@ var (
 	daemonStartupHeartbeat   = time.Second
 	daemonUpgradeReportAfter = 500 * time.Millisecond
 	daemonReadyPollInterval  = 20 * time.Millisecond
+	daemonLaunchedExitGrace  = 300 * time.Millisecond
 )
 
 const daemonUpgradingProgress = "Upgrading database…"
@@ -92,6 +93,14 @@ func liveDaemonStartup(homeDir string) (daemonStartup, bool) {
 	return startup, true
 }
 
+func verifiedDaemonStartup(homeDir string) (daemonStartup, bool) {
+	startup, ok := liveDaemonStartup(homeDir)
+	if !ok || !processMatchesCaptureWorker(startup.PID, homeDir, startup.DatabasePath) {
+		return daemonStartup{}, false
+	}
+	return startup, true
+}
+
 func removeDaemonStartup(homeDir string, pid int) {
 	if startup, ok := readDaemonStartup(homeDir); ok && startup.PID != pid {
 		return
@@ -154,36 +163,60 @@ func daemonStartingMessage(status DaemonStatus) string {
 	return fmt.Sprintf("%s\nPID: %d\nHome: %s", headline, status.PID, status.HomeDir)
 }
 
+func readyDaemonStatus(homeDir string) (DaemonStatus, bool) {
+	status, err := readDaemonState(homeDir)
+	if err != nil || status.PID <= 0 || !processRunning(status.PID) || !daemonPIDMatches(homeDir, status.PID) {
+		return status, false
+	}
+	status.Running = true
+	return status, true
+}
+
 func waitForDaemonReady(wait daemonReadyWait) (DaemonStatus, error) {
 	started := time.Now()
+	exited := wait.exited
+	var launchedExitedAt time.Time
 	var lastStatus DaemonStatus
 	var upgradingSince time.Time
+	verifiedPID := 0
 	upgradeReported := false
 	for {
-		status, err := readDaemonState(wait.homeDir)
-		if err == nil {
-			lastStatus = status
-			if status.PID > 0 && processRunning(status.PID) && daemonPIDMatches(wait.homeDir, status.PID) {
-				status.Running = true
-				return status, nil
-			}
+		status, ready := readyDaemonStatus(wait.homeDir)
+		if ready {
+			return status, nil
 		}
-		if wait.exited != nil {
+		if status.PID != 0 {
+			lastStatus = status
+		}
+		if exited != nil {
 			select {
-			case <-wait.exited:
-				if status, err := readDaemonState(wait.homeDir); err == nil && status.PID > 0 && processRunning(status.PID) && daemonPIDMatches(wait.homeDir, status.PID) {
-					status.Running = true
-					return status, nil
-				}
-				return DaemonStatus{}, fmt.Errorf("daemon did not become ready: capture worker exited during startup; see %s", daemonLogPath(wait.homeDir))
+			case <-exited:
+				exited = nil
+				launchedExitedAt = time.Now()
 			default:
 			}
 		}
 
-		elapsed := time.Since(started)
 		startup, alive := liveDaemonStartup(wait.homeDir)
+		if alive && startup.PID != verifiedPID {
+			if processMatchesCaptureWorker(startup.PID, wait.homeDir, startup.DatabasePath) {
+				verifiedPID = startup.PID
+			} else {
+				alive = false
+			}
+		}
 		if !alive {
-			if elapsed < daemonReadyGrace {
+			if status, ready := readyDaemonStatus(wait.homeDir); ready {
+				return status, nil
+			}
+			if !launchedExitedAt.IsZero() {
+				if time.Since(launchedExitedAt) < daemonLaunchedExitGrace {
+					time.Sleep(daemonReadyPollInterval)
+					continue
+				}
+				return DaemonStatus{}, fmt.Errorf("daemon did not become ready: capture worker exited during startup; see %s", daemonLogPath(wait.homeDir))
+			}
+			if time.Since(started) < daemonReadyGrace {
 				time.Sleep(daemonReadyPollInterval)
 				continue
 			}
@@ -212,7 +245,7 @@ func waitForDaemonReady(wait daemonReadyWait) (DaemonStatus, error) {
 				fmt.Fprintln(wait.progress, daemonUpgradingProgress)
 			}
 		}
-		if elapsed >= daemonStartupMaxWait {
+		if time.Since(started) >= daemonStartupMaxWait {
 			return DaemonStatus{}, &DaemonStillStartingError{PID: startup.PID, UpgradingDatabase: upgrading}
 		}
 		time.Sleep(daemonReadyPollInterval)

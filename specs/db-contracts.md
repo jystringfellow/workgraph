@@ -42,10 +42,17 @@ persists.
 - Older binaries: every workgraph release links a SQLite build with WAL
   support, so an older binary opens a WAL database normally and does not switch
   it back.
-- Durability: connections keep SQLite's default `synchronous=FULL`.
-  `synchronous=NORMAL` would be safe with WAL (a power loss can drop the last
-  transactions but cannot corrupt the database), but the write volume does not
-  need it.
+- Durability: connections run with `synchronous=NORMAL`, which the
+  `mattn/go-sqlite3` driver sets on every connection by default. With WAL this
+  is the standard pairing: the database cannot be corrupted by a crash or power
+  loss, but a power loss (not a process crash) can drop the most recently
+  committed transactions. workgraph accepts that: captured events are
+  re-derivable from their sources on the next poll, and `FULL` would add an
+  fsync to every commit on the capture hot path.
+- Permissions: schema preparation restricts the database and any existing
+  `-wal`, `-shm` and `-journal` files to `0600` before it enables WAL, so new
+  sidecar files inherit user-only permissions and broader ones left by an
+  older binary or an interrupted open are repaired.
 - Busy timeout: every connection retries a locked database for 5 seconds (the
   `mattn/go-sqlite3` default `_busy_timeout=5000`, applied on every open);
   project link writes use 10 seconds with `_txlock=immediate`. Short contention
@@ -72,13 +79,19 @@ locked`, then find the work done. The lock is released automatically if the
 holder exits. On platforms without `flock` (Windows), preparation is not
 coordinated and relies on the busy timeout.
 
-Read commands do not wait behind a migration:
+Read commands do not wait behind a migration. They try the migration lock
+without blocking; when another process holds it they skip preparation and say
+so instead of reading a schema that may still be old:
 
-- `today` and `resume` read the current snapshot and print `Database upgrade in
-  progress; capture status refreshes when it finishes.` in place of the bridge
-  stall check.
-- `status` and other capture-request listings skip schema preparation while
-  another process holds the migration lock.
+- capture-request listings return `ErrDatabaseUpgradeInProgress`
+  (`database upgrade in progress; try again when it finishes`) instead of
+  partial or empty request state.
+- `connectors status` shows `capture unknown (database upgrade in progress)`
+  for connected bridged connectors.
+- `today` and `resume` read the current snapshot and print `Database upgrade
+  in progress; capture status refreshes when it finishes.` in place of the
+  bridge stall check. `resume` skips recording its overview check-in during the
+  upgrade, so the next `resume` still reports work since the previous one.
 - `status` and `doctor` report the upgrade; `doctor` also reports the journal
   mode as `Database: ok (journal mode: wal)`.
 

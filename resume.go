@@ -242,6 +242,14 @@ func RecordResumeCheckIn(config ResumeConfig, at time.Time) error {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
+	release, acquired, err := tryLockDatabaseMigration(dbPath)
+	if err != nil {
+		return err
+	}
+	if !acquired {
+		return nil
+	}
+	defer release()
 	if _, err := db.Exec(resumeCheckInSchema); err != nil {
 		return fmt.Errorf("create resume check-in storage: %w", err)
 	}

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -50,8 +51,48 @@ func TestStartWaitsWhileAnotherProcessUpgradesTheDatabase(t *testing.T) {
 	if err := syscall.Kill(pid, 0); err != nil {
 		t.Fatalf("expected capture worker %d to be running: %v", pid, err)
 	}
-	if _, err := os.Stat(filepath.Join(homeDir, "daemon.starting.json")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("expected startup progress file to be removed once ready, got %v", err)
+	startupPath := filepath.Join(homeDir, "daemon.starting.json")
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(startupPath); errors.Is(err, os.ErrNotExist) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("expected startup progress file to be removed once ready")
+}
+
+func TestConcurrentStartsDuringDatabaseUpgradeShareOneWorker(t *testing.T) {
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	released := holdDatabaseMigration(t, initResult.DatabasePath, 4*time.Second)
+
+	type result struct {
+		output string
+		err    error
+	}
+	results := make(chan result, 2)
+	for range 2 {
+		go func() {
+			output, err := runWorkgraphCommandWithTimeout(nil, 60*time.Second, "start", "--home", homeDir, "--database", initResult.DatabasePath)
+			results <- result{output, err}
+		}()
+	}
+	defer runWorkgraphCommand(t, nil, "stop", "--home", homeDir)
+	first, second := <-results, <-results
+	<-released
+
+	pid := captureDaemonPID(t, homeDir)
+	for _, started := range []result{first, second} {
+		if started.err != nil {
+			t.Fatalf("expected both starts to succeed, got %v:\n%s", started.err, started.output)
+		}
+		if !strings.Contains(started.output, "PID: "+strconv.Itoa(pid)) {
+			t.Fatalf("expected both starts to report worker %d, got:\n%s", pid, started.output)
+		}
 	}
 }
 
@@ -81,6 +122,11 @@ func TestStatusReportsCaptureStartingDuringDatabaseUpgrade(t *testing.T) {
 	}
 	if !strings.Contains(status, "workgraph capture is starting (upgrading database)") {
 		t.Fatalf("expected status to report the upgrade in progress, got:\n%s", status)
+	}
+	for _, name := range []string{"daemon.json", "daemon.pid"} {
+		if _, err := os.Stat(filepath.Join(homeDir, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("expected status not to record %s for a worker that is still starting, got %v", name, err)
+		}
 	}
 	<-released
 	if output := <-startDone; !strings.Contains(output, "workgraph capture started") {
@@ -198,6 +244,20 @@ func TestShortCommandsWaitForAnotherProcessDatabaseUpgrade(t *testing.T) {
 	if !strings.Contains(string(today), "Database upgrade in progress") {
 		t.Fatalf("expected today to report the upgrade in progress, got:\n%s", today)
 	}
+	resume, err := runworkgraph(t, repoRoot(t), "resume", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("expected resume to succeed during the upgrade, got %v:\n%s", err, resume)
+	}
+	if elapsed := time.Since(started); elapsed > hold-3*time.Second {
+		t.Fatalf("expected resume not to wait for the upgrade, took %s", elapsed)
+	}
+	connectors, err := runworkgraph(t, repoRoot(t), "connectors", "status", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("connectors status failed during the upgrade: %v\n%s", err, connectors)
+	}
+	if !strings.Contains(string(connectors), "capture unknown (database upgrade in progress)") {
+		t.Fatalf("expected connector status to say capture state is unknown during the upgrade, got:\n%s", connectors)
+	}
 	poll, err := runworkgraph(t, repoRoot(t), "connectors", "poll", "--home", homeDir, "--once", "--connector", "slack")
 	if err != nil {
 		t.Fatalf("expected connector poll to wait for the upgrade, got %v:\n%s", err, poll)
@@ -302,6 +362,44 @@ func TestNewAndUpgradedDatabasesUseWriteAheadLogging(t *testing.T) {
 	var tables int
 	if err := readOnly.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'events'`).Scan(&tables); err != nil || tables != 1 {
 		t.Fatalf("expected read-only access to the WAL database, got %d tables, err %v", tables, err)
+	}
+}
+
+func TestOpeningRepairsBroadDatabaseFilePermissions(t *testing.T) {
+	root := t.TempDir()
+	homeDir := filepath.Join(root, "home")
+	dbPath := filepath.Join(root, "shared", "events.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer legacy.Close()
+	if _, err := legacy.Exec(`PRAGMA journal_mode = WAL`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Exec(`CREATE TABLE fact_marker (id INTEGER)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+		if err := os.Chmod(file, 0o644); err != nil {
+			t.Fatalf("make %s broadly readable: %v", file, err)
+		}
+	}
+
+	if output, err := runworkgraph(t, repoRoot(t), "init", "--home", homeDir, "--database", dbPath); err != nil {
+		t.Fatalf("init with existing database: %v\n%s", err, output)
+	}
+	for _, file := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+		info, err := os.Stat(file)
+		if err != nil {
+			t.Fatalf("stat %s: %v", file, err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("expected %s permissions 0600, got %v", file, got)
+		}
 	}
 }
 

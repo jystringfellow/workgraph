@@ -112,7 +112,7 @@ func ListCaptureRequests(config CaptureRequestListConfig) ([]CaptureRequest, err
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
-	if err := createSchemaUnlessUpgrading(db, status.DatabasePath); err != nil {
+	if err := createSchemaUnlessUpgrading(db); err != nil {
 		return nil, fmt.Errorf("prepare capture outbox: %w", err)
 	}
 	query := `SELECT ` + captureRequestColumns + ` FROM capture_requests`

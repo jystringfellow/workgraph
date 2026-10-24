@@ -196,6 +196,18 @@ func RunDaemon(config DaemonConfig) error {
 	}
 	endStartup := beginDaemonStartup(home, databasePath)
 	defer endStartup()
+	startupSignals := make(chan os.Signal, 1)
+	signal.Notify(startupSignals, os.Interrupt, syscall.SIGTERM)
+	startupFinished := make(chan struct{})
+	go func() {
+		select {
+		case <-startupSignals:
+			endStartup()
+			release()
+			os.Exit(0)
+		case <-startupFinished:
+		}
+	}()
 
 	capture, err := StartRun(RunConfig{
 		HomeDir:         config.HomeDir,
@@ -212,6 +224,14 @@ func RunDaemon(config DaemonConfig) error {
 	}
 	ctx, stop := signalContext()
 	defer stop()
+	close(startupFinished)
+	signal.Stop(startupSignals)
+	releaseReady, err := lockDaemonReady(home)
+	if err != nil {
+		capture.Close()
+		return err
+	}
+	defer releaseReady()
 	status := daemonStatusFromRun(capture.Status, os.Getpid(), len(config.WatchDirs) > 0)
 	if err := writeDaemonState(status); err != nil {
 		capture.Close()
@@ -252,7 +272,7 @@ func DaemonStatusForHome(homeDir string) (DaemonStatus, error) {
 		return DaemonStatus{}, fmt.Errorf("resolve workgraph home: %w", err)
 	}
 
-	if startup, starting := liveDaemonStartup(resolvedHome); starting {
+	if startup, starting := verifiedDaemonStartup(resolvedHome); starting {
 		return startingDaemonStatus(resolvedHome, startup), nil
 	}
 	status, err := readDaemonState(resolvedHome)
@@ -327,7 +347,7 @@ func StopDaemon(config DaemonConfig) (DaemonStatus, error) {
 	if err != nil {
 		return DaemonStatus{}, err
 	}
-	if len(processes) == 0 && status.PID > 0 {
+	if len(processes) == 0 && status.PID > 0 && status.Running {
 		processes = []daemonProcess{{PID: status.PID}}
 	}
 	for _, process := range processes {
@@ -667,6 +687,13 @@ func findRunningDaemonStatus(homeDir string, databasePath string, prior DaemonSt
 	matches := matchingCaptureWorkerProcesses(homeDir, databasePath, processes)
 	if len(matches) == 0 {
 		return DaemonStatus{}, false, nil
+	}
+	if !daemonReadyLockHeld(homeDir) {
+		processDB := cleanProcessPath(flagValue(strings.Fields(matches[0].Command), "--database"))
+		if processDB == "" {
+			processDB = cleanProcessPath(databasePath)
+		}
+		return startingDaemonStatus(cleanProcessPath(homeDir), daemonStartup{PID: matches[0].PID, DatabasePath: processDB}), true, nil
 	}
 	status := prior
 	status.Running = true

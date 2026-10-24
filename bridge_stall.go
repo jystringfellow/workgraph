@@ -1,6 +1,7 @@
 package workgraph
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -61,14 +62,14 @@ func detectBridgeStall(homeDir string, state connectorRuntimeFile, id string, re
 }
 
 func bridgeStallWarning(homeDir string, databasePath string, now time.Time) string {
-	if databaseMigrationInProgress(databasePath) {
-		return "\n\n" + databaseUpgradeInProgressNotice
-	}
 	state, err := readConnectorRuntimeFile(homeDir)
 	if err != nil {
 		return ""
 	}
 	requests, err := ListCaptureRequests(CaptureRequestListConfig{HomeDir: homeDir, DatabasePath: databasePath, Now: now})
+	if errors.Is(err, ErrDatabaseUpgradeInProgress) {
+		return "\n\n" + databaseUpgradeInProgressNotice
+	}
 	if err != nil {
 		return ""
 	}
