@@ -49,10 +49,15 @@ persists.
   committed transactions. workgraph accepts that: captured events are
   re-derivable from their sources on the next poll, and `FULL` would add an
   fsync to every commit on the capture hot path.
-- Permissions: schema preparation restricts the database and any existing
-  `-wal`, `-shm` and `-journal` files to `0600` before it enables WAL, so new
-  sidecar files inherit user-only permissions and broader ones left by an
-  older binary or an interrupted open are repaired.
+- Permissions: `init` and the capture worker create a missing database file
+  as `0600` before SQLite opens it, so WAL sidecars, which SQLite creates with
+  the main file's permissions, start user-only. Before opening an existing
+  database they also repair broader permissions on the database and any
+  existing `-wal`, `-shm` and `-journal` files. The repair skips symlinks,
+  non-regular files and files not owned by the current user, and changes
+  permissions through a descriptor opened with `O_NOFOLLOW` after checking it
+  is the same file. It runs before this process opens the database, because
+  closing another descriptor for a database file would drop SQLite's locks.
 - Busy timeout: every connection retries a locked database for 5 seconds (the
   `mattn/go-sqlite3` default `_busy_timeout=5000`, applied on every open);
   project link writes use 10 seconds with `_txlock=immediate`. Short contention
@@ -80,20 +85,24 @@ holder exits. On platforms without `flock` (Windows), preparation is not
 coordinated and relies on the busy timeout.
 
 Read commands do not wait behind a migration. They try the migration lock
-without blocking; when another process holds it they skip preparation and say
-so instead of reading a schema that may still be old:
+without blocking. When another process holds it, they skip preparation and
+read the schema that is already there. If that read works, the result is
+normal: brief preparation by another process never turns into an error. Only
+when the existing schema cannot answer the read (an older shape mid-upgrade)
+do they report the upgrade explicitly instead of partial or empty state:
 
 - capture-request listings return `ErrDatabaseUpgradeInProgress`
-  (`database upgrade in progress; try again when it finishes`) instead of
-  partial or empty request state.
+  (`database upgrade in progress; try again when it finishes`).
 - `connectors status` shows `capture unknown (database upgrade in progress)`
   for connected bridged connectors.
-- `today` and `resume` read the current snapshot and print `Database upgrade
-  in progress; capture status refreshes when it finishes.` in place of the
-  bridge stall check. `resume` skips recording its overview check-in during the
-  upgrade, so the next `resume` still reports work since the previous one.
-- `status` and `doctor` report the upgrade; `doctor` also reports the journal
-  mode as `Database: ok (journal mode: wal)`.
+- `today` and `resume` print `Database upgrade in progress; capture status
+  refreshes when it finishes.` in place of the bridge stall check.
+
+`resume` skips recording its overview check-in while the migration lock is
+held, so the next `resume` still reports work since the previous check-in;
+otherwise the check-in is an ordinary write with the busy timeout. `status`
+reports a held migration lock, and `doctor` reports it with the journal mode as
+`Database: ok (journal mode: wal)`.
 
 `start` waits through a migration as described in
 [capture controls](capture-controls.md#waiting-for-readiness).

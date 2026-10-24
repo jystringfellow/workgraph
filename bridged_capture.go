@@ -7,6 +7,7 @@ import (
 	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -112,8 +113,9 @@ func ListCaptureRequests(config CaptureRequestListConfig) ([]CaptureRequest, err
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
-	if err := createSchemaUnlessUpgrading(db); err != nil {
-		return nil, fmt.Errorf("prepare capture outbox: %w", err)
+	preparing := createSchemaUnlessUpgrading(db)
+	if preparing != nil && !errors.Is(preparing, ErrDatabaseUpgradeInProgress) {
+		return nil, fmt.Errorf("prepare capture outbox: %w", preparing)
 	}
 	query := `SELECT ` + captureRequestColumns + ` FROM capture_requests`
 	args := []any{}
@@ -127,6 +129,9 @@ func ListCaptureRequests(config CaptureRequestListConfig) ([]CaptureRequest, err
 	}
 	query += ` ORDER BY created_at, id`
 	rows, err := db.Query(query, args...)
+	if err != nil && preparing != nil {
+		return nil, fmt.Errorf("list capture requests: %w: %v", ErrDatabaseUpgradeInProgress, err)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("list capture requests: %w", err)
 	}

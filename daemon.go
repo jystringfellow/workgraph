@@ -178,6 +178,8 @@ func StartDaemon(config DaemonConfig) (DaemonStatus, error) {
 }
 
 func RunDaemon(config DaemonConfig) error {
+	ctx, stop := signalContext()
+	defer stop()
 	home, err := resolveHomeDir(config.HomeDir)
 	if err != nil {
 		return err
@@ -196,20 +198,9 @@ func RunDaemon(config DaemonConfig) error {
 	}
 	endStartup := beginDaemonStartup(home, databasePath)
 	defer endStartup()
-	startupSignals := make(chan os.Signal, 1)
-	signal.Notify(startupSignals, os.Interrupt, syscall.SIGTERM)
-	startupFinished := make(chan struct{})
-	go func() {
-		select {
-		case <-startupSignals:
-			endStartup()
-			release()
-			os.Exit(0)
-		case <-startupFinished:
-		}
-	}()
 
 	capture, err := StartRun(RunConfig{
+		Context:         ctx,
 		HomeDir:         config.HomeDir,
 		DatabasePath:    config.DatabasePath,
 		WatchDirs:       config.WatchDirs,
@@ -219,13 +210,15 @@ func RunDaemon(config DaemonConfig) error {
 		SlackIncludeDMs: config.SlackIncludeDMs,
 		SlackAPIBaseURL: config.SlackAPIBaseURL,
 	})
+	if ctx.Err() != nil {
+		if err == nil {
+			capture.Close()
+		}
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	ctx, stop := signalContext()
-	defer stop()
-	close(startupFinished)
-	signal.Stop(startupSignals)
 	releaseReady, err := lockDaemonReady(home)
 	if err != nil {
 		capture.Close()
@@ -272,8 +265,10 @@ func DaemonStatusForHome(homeDir string) (DaemonStatus, error) {
 		return DaemonStatus{}, fmt.Errorf("resolve workgraph home: %w", err)
 	}
 
-	if startup, starting := verifiedDaemonStartup(resolvedHome); starting {
-		return startingDaemonStatus(resolvedHome, startup), nil
+	if _, ready := readyDaemonStatus(resolvedHome); !ready {
+		if startup, starting := verifiedDaemonStartup(resolvedHome); starting {
+			return startingDaemonStatus(resolvedHome, startup), nil
+		}
 	}
 	status, err := readDaemonState(resolvedHome)
 	if err != nil {
@@ -729,16 +724,21 @@ func matchingCaptureWorkerProcessesForStatus(status DaemonStatus) ([]daemonProce
 }
 
 func processMatchesCaptureWorker(pid int, homeDir string, databasePath string) bool {
+	matches, err := captureWorkerIdentityMatches(pid, homeDir, databasePath)
+	return matches || err != nil
+}
+
+func captureWorkerIdentityMatches(pid int, homeDir string, databasePath string) (bool, error) {
 	processes, err := listDaemonProcesses()
 	if err != nil {
-		return true
+		return false, err
 	}
 	for _, process := range matchingCaptureWorkerProcesses(homeDir, databasePath, processes) {
 		if process.PID == pid {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func matchingCaptureWorkerProcesses(homeDir string, databasePath string, processes []daemonProcess) []daemonProcess {

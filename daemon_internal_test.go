@@ -1,6 +1,7 @@
 package workgraph
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -130,7 +131,7 @@ func TestWaitForDaemonReadyReportsStillStartingWhileWorkerUpgradesDatabase(t *te
 	if err := os.WriteFile(databasePath, nil, 0o600); err != nil {
 		t.Fatalf("create database file: %v", err)
 	}
-	release, err := lockDatabaseMigration(databasePath)
+	release, err := lockDatabaseMigration(context.Background(), databasePath)
 	if err != nil {
 		t.Fatalf("hold migration lock: %v", err)
 	}
@@ -235,5 +236,55 @@ func TestDiscoveryDoesNotRecordStateForWorkerThatIsNotReady(t *testing.T) {
 	}
 	if !status.Running {
 		t.Fatalf("expected a ready worker to be recovered, got %+v", status)
+	}
+}
+
+func TestWaitForDaemonReadyJoinsWorkerHoldingCaptureLockAfterLaunchedWorkerExits(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("capture home locks need flock")
+	}
+	homeDir := t.TempDir()
+	releaseCapture, err := lockCaptureHome(homeDir)
+	if err != nil {
+		t.Fatalf("hold capture lock: %v", err)
+	}
+	defer releaseCapture()
+	exited := make(chan struct{})
+	close(exited)
+
+	ready := make(chan error, 1)
+	go func() {
+		_, err := waitForDaemonReady(daemonReadyWait{homeDir: homeDir, exited: exited})
+		ready <- err
+	}()
+	select {
+	case err := <-ready:
+		t.Fatalf("expected start to keep waiting for the worker holding the capture lock, got %v", err)
+	case <-time.After(daemonReadyGrace + 500*time.Millisecond):
+	}
+	if err := writeDaemonState(DaemonStatus{Running: true, PID: os.Getpid(), HomeDir: homeDir}); err != nil {
+		t.Fatalf("publish readiness: %v", err)
+	}
+	select {
+	case err := <-ready:
+		if err != nil {
+			t.Fatalf("expected readiness once the winner published it, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("readiness was not observed")
+	}
+}
+
+func TestWaitForDaemonReadyFailsWhenLaunchedWorkerExitsAndNoWorkerHoldsCaptureLock(t *testing.T) {
+	homeDir := t.TempDir()
+	exited := make(chan struct{})
+	close(exited)
+	started := time.Now()
+	_, err := waitForDaemonReady(daemonReadyWait{homeDir: homeDir, exited: exited})
+	if err == nil || !strings.Contains(err.Error(), "capture worker exited during startup") {
+		t.Fatalf("expected the exited-worker failure, got %v", err)
+	}
+	if elapsed := time.Since(started); elapsed >= daemonReadyGrace {
+		t.Fatalf("expected an immediate failure, took %s", elapsed)
 	}
 }

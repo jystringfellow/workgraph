@@ -36,12 +36,17 @@ Scenario: Starting state is never trusted from an unrelated process
   And the unrelated process is not signalled
 
 Scenario: Short commands do not fail during a migration
-  Given another workgraph process is migrating the database
+  Given another workgraph process is migrating a database with an older capture request shape
   When I run "workgraph today" or "workgraph resume"
   Then it reads without waiting and reports the upgrade in progress
   And "workgraph connectors status" says bridged capture state is unknown
   When a connector poll runs
   Then it waits for the migration and then succeeds
+
+Scenario: Listings read a current schema while another process prepares it
+  Given another process holds the migration lock on a current database
+  When I list capture requests
+  Then the pending requests are listed normally
 
 Scenario: Brief write contention retries
   Given another process holds a short write transaction

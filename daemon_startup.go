@@ -20,7 +20,6 @@ var (
 	daemonStartupHeartbeat   = time.Second
 	daemonUpgradeReportAfter = 500 * time.Millisecond
 	daemonReadyPollInterval  = 20 * time.Millisecond
-	daemonLaunchedExitGrace  = 300 * time.Millisecond
 )
 
 const daemonUpgradingProgress = "Upgrading database…"
@@ -175,10 +174,11 @@ func readyDaemonStatus(homeDir string) (DaemonStatus, bool) {
 func waitForDaemonReady(wait daemonReadyWait) (DaemonStatus, error) {
 	started := time.Now()
 	exited := wait.exited
-	var launchedExitedAt time.Time
+	launchedExited := false
+	var lockHolderSince time.Time
 	var lastStatus DaemonStatus
 	var upgradingSince time.Time
-	verifiedPID := 0
+	var verified daemonStartup
 	upgradeReported := false
 	for {
 		status, ready := readyDaemonStatus(wait.homeDir)
@@ -192,16 +192,18 @@ func waitForDaemonReady(wait daemonReadyWait) (DaemonStatus, error) {
 			select {
 			case <-exited:
 				exited = nil
-				launchedExitedAt = time.Now()
+				launchedExited = true
 			default:
 			}
 		}
 
 		startup, alive := liveDaemonStartup(wait.homeDir)
-		if alive && startup.PID != verifiedPID {
-			if processMatchesCaptureWorker(startup.PID, wait.homeDir, startup.DatabasePath) {
-				verifiedPID = startup.PID
-			} else {
+		if alive && startup != verified {
+			matches, err := captureWorkerIdentityMatches(startup.PID, wait.homeDir, startup.DatabasePath)
+			switch {
+			case err == nil && matches:
+				verified = startup
+			case err == nil:
 				alive = false
 			}
 		}
@@ -209,12 +211,18 @@ func waitForDaemonReady(wait daemonReadyWait) (DaemonStatus, error) {
 			if status, ready := readyDaemonStatus(wait.homeDir); ready {
 				return status, nil
 			}
-			if !launchedExitedAt.IsZero() {
-				if time.Since(launchedExitedAt) < daemonLaunchedExitGrace {
-					time.Sleep(daemonReadyPollInterval)
-					continue
+			if launchedExited {
+				if !captureHomeLocked(wait.homeDir) {
+					return DaemonStatus{}, fmt.Errorf("daemon did not become ready: capture worker exited during startup; see %s", daemonLogPath(wait.homeDir))
 				}
-				return DaemonStatus{}, fmt.Errorf("daemon did not become ready: capture worker exited during startup; see %s", daemonLogPath(wait.homeDir))
+				if lockHolderSince.IsZero() {
+					lockHolderSince = time.Now()
+				}
+				if time.Since(lockHolderSince) >= daemonStartupStaleAfter {
+					return DaemonStatus{}, fmt.Errorf("daemon did not become ready: the capture worker holding %s reported no startup progress; see %s", filepath.Join(wait.homeDir, "capture.lock"), daemonLogPath(wait.homeDir))
+				}
+				time.Sleep(daemonReadyPollInterval)
+				continue
 			}
 			if time.Since(started) < daemonReadyGrace {
 				time.Sleep(daemonReadyPollInterval)

@@ -63,8 +63,12 @@ From the moment it holds the capture home lock until it is ready, the worker
 keeps `daemon.starting.json` under the workgraph home up to date. The file
 records the worker PID, database path and a heartbeat refreshed every second.
 It is removed once `daemon.json` and `daemon.pid` are written, or when the
-worker exits normally or on `SIGTERM`/`SIGINT` during startup. A worker killed
-outright can leave the file behind; readers ignore a heartbeat whose PID is not
+worker exits. The worker registers its single `SIGTERM`/`SIGINT` handler before
+it takes the capture lock and uses it for its whole life: a signal during
+startup cancels the wait for another process's migration and the worker exits
+cleanly; a signal while this worker is itself migrating takes effect when the
+current migration step finishes. A worker killed outright can leave the file
+behind; readers ignore a heartbeat whose PID is not
 running, is not a capture worker for this home or database, or has not updated
 for 15 seconds, so a stale file or a reused PID is never trusted or signalled.
 
@@ -80,8 +84,7 @@ readiness before startup is complete.
 - ready: the worker wrote `daemon.json` and `daemon.pid` for the same live PID;
   start prints the started message and exits 0.
 - worker exited: the process start launched exited before becoming ready and
-  no other live worker is starting or ready; start fails within 0.3 seconds
-  with `daemon did not become ready: capture worker exited during
+  no process holds the capture home lock; start fails at once with `daemon did not become ready: capture worker exited during
   startup; see <home>/daemon.log` and exits 1.
 - no sign of life: neither readiness nor a live heartbeat appeared within two
   seconds; start fails with the existing `daemon did not become ready` error
@@ -102,9 +105,9 @@ and failure. The worker keeps starting in the background.
 
 Running `start` again while a worker is starting joins the wait instead of
 launching a second worker. If two starts race and both launch workers, the
-loser exits on the capture home lock; its start then joins the winner's wait
-when the winner has a live heartbeat or is already ready, and fails only when
-no live worker exists. Installed capture services use the same heartbeat
+loser exits on the capture home lock. Its start then keeps waiting while any
+process holds `capture.lock` (the winner), and fails only once nobody holds it,
+or when the holder publishes neither readiness nor a heartbeat for 15 seconds. Installed capture services use the same heartbeat
 rules; start has no child process to watch in that case, so a dead worker shows
 up as a missing or stale heartbeat.
 

@@ -1,11 +1,11 @@
 package workgraph
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -27,11 +27,15 @@ var databaseSidecarSuffixes = []string{"-wal", "-shm", "-journal", databaseMigra
 var ErrDatabaseUpgradeInProgress = errors.New("database upgrade in progress; try again when it finishes")
 
 func createSchema(db *sql.DB) error {
+	return createSchemaContext(context.Background(), db)
+}
+
+func createSchemaContext(ctx context.Context, db *sql.DB) error {
 	path, err := mainDatabaseFile(db)
 	if err != nil {
 		return err
 	}
-	release, err := lockDatabaseMigration(path)
+	release, err := lockDatabaseMigration(ctx, path)
 	if err != nil {
 		return err
 	}
@@ -56,24 +60,8 @@ func createSchemaUnlessUpgrading(db *sql.DB) error {
 }
 
 func prepareSchemaLocked(db *sql.DB, path string) error {
-	secureDatabaseFiles(path)
 	enableWriteAheadLog(db)
 	return migrateSchema(db)
-}
-
-func secureDatabaseFiles(path string) {
-	if path == "" {
-		return
-	}
-	for _, file := range []string{path, path + "-wal", path + "-shm", path + "-journal"} {
-		info, err := os.Stat(file)
-		if err != nil || info.Mode().Perm()&0o077 == 0 {
-			continue
-		}
-		if err := ensureUserOnlyFile(file); err != nil {
-			log.Printf("workgraph store could not restrict %s permissions: %v", file, err)
-		}
-	}
 }
 
 func mainDatabaseFile(db *sql.DB) (string, error) {

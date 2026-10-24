@@ -2,7 +2,9 @@
 
 package workgraph
 
-func lockDatabaseMigration(databasePath string) (func(), error) {
+import "context"
+
+func lockDatabaseMigration(ctx context.Context, databasePath string) (func(), error) {
 	return func() {}, nil
 }
 
@@ -12,4 +14,8 @@ func tryLockDatabaseMigration(databasePath string) (func(), bool, error) {
 
 func databaseMigrationInProgress(databasePath string) bool {
 	return false
+}
+
+func secureDatabaseFiles(databasePath string) error {
+	return nil
 }

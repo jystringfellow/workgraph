@@ -48,6 +48,7 @@ const (
 type RunConfig struct {
 	// Capture closes a supplied Watcher, including when watcher setup fails.
 	Watcher                    *fsnotify.Watcher
+	Context                    context.Context
 	HomeDir                    string
 	DatabasePath               string
 	WatchDirs                  []string
@@ -176,6 +177,9 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 		return nil, err
 	}
 
+	if err := secureDatabaseFiles(status.DatabasePath); err != nil {
+		return nil, fmt.Errorf("secure database: %w", err)
+	}
 	db, err := sql.Open("sqlite3", status.DatabasePath)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
@@ -185,7 +189,11 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 		db.Close()
 		return nil, fmt.Errorf("open database: %w", err)
 	}
-	if err := createSchema(db); err != nil {
+	schemaContext := config.Context
+	if schemaContext == nil {
+		schemaContext = context.Background()
+	}
+	if err := createSchemaContext(schemaContext, db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("prepare database schema: %w", err)
 	}

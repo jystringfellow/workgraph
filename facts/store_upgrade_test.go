@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -199,13 +200,8 @@ func TestStartFailsPromptlyWhenWorkerExitsDuringStartup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init failed: %v", err)
 	}
-	captureLock, err := os.OpenFile(filepath.Join(homeDir, "capture.lock"), os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		t.Fatalf("open capture lock: %v", err)
-	}
-	defer captureLock.Close()
-	if err := syscall.Flock(int(captureLock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		t.Fatalf("hold capture lock: %v", err)
+	if err := os.WriteFile(initResult.DatabasePath, []byte("this is not a sqlite database, only text"), 0o600); err != nil {
+		t.Fatalf("corrupt database: %v", err)
 	}
 
 	started := time.Now()
@@ -230,44 +226,71 @@ func TestShortCommandsWaitForAnotherProcessDatabaseUpgrade(t *testing.T) {
 	homeDir := initBridgedCaptureHome(t)
 	connectBridgedConnector(t, repoRoot(t), homeDir, "slack")
 	dbPath := filepath.Join(homeDir, "workgraph.db")
-	hold := 7 * time.Second
-	started := time.Now()
-	released := holdDatabaseMigration(t, dbPath, hold)
+	legacy := openBridgedCaptureDatabase(t, homeDir)
+	for _, statement := range []string{
+		`DROP TABLE capture_requests`,
+		`CREATE TABLE capture_requests (
+			id TEXT PRIMARY KEY,
+			connector_id TEXT NOT NULL,
+			since TEXT NOT NULL,
+			until TEXT NOT NULL,
+			params_json TEXT NOT NULL CHECK (json_valid(params_json)),
+			status TEXT NOT NULL CHECK (status IN ('pending', 'claimed', 'completed', 'cancelled')),
+			attempts INTEGER NOT NULL DEFAULT 0,
+			available_at TEXT NOT NULL,
+			last_error TEXT,
+			created_at TEXT NOT NULL,
+			claim_token TEXT,
+			claimed_by TEXT,
+			claimed_at TEXT,
+			lease_expires_at TEXT,
+			completed_at TEXT,
+			cancelled_at TEXT
+		)`,
+	} {
+		if _, err := legacy.Exec(statement); err != nil {
+			t.Fatalf("shape capture_requests like an older release: %v", err)
+		}
+	}
+	release := beginDatabaseMigration(t, dbPath)
 
-	today, err := runworkgraph(t, repoRoot(t), "today", "--home", homeDir)
+	today, err := runWorkgraphCommandWithTimeout(nil, 20*time.Second, "today", "--home", homeDir)
 	if err != nil {
-		t.Fatalf("expected today to read during the upgrade, got %v:\n%s", err, today)
+		t.Fatalf("expected today to read while the upgrade holds the database, got %v:\n%s", err, today)
 	}
-	if elapsed := time.Since(started); elapsed > hold-3*time.Second {
-		t.Fatalf("expected today to read without waiting for the upgrade to release the database, took %s", elapsed)
-	}
-	if !strings.Contains(string(today), "Database upgrade in progress") {
+	if !strings.Contains(today, "Database upgrade in progress") {
 		t.Fatalf("expected today to report the upgrade in progress, got:\n%s", today)
 	}
-	resume, err := runworkgraph(t, repoRoot(t), "resume", "--home", homeDir)
+	resume, err := runWorkgraphCommandWithTimeout(nil, 20*time.Second, "resume", "--home", homeDir)
 	if err != nil {
-		t.Fatalf("expected resume to succeed during the upgrade, got %v:\n%s", err, resume)
+		t.Fatalf("expected resume to succeed while the upgrade holds the database, got %v:\n%s", err, resume)
 	}
-	if elapsed := time.Since(started); elapsed > hold-3*time.Second {
-		t.Fatalf("expected resume not to wait for the upgrade, took %s", elapsed)
-	}
-	connectors, err := runworkgraph(t, repoRoot(t), "connectors", "status", "--home", homeDir)
+	connectors, err := runWorkgraphCommandWithTimeout(nil, 20*time.Second, "connectors", "status", "--home", homeDir)
 	if err != nil {
 		t.Fatalf("connectors status failed during the upgrade: %v\n%s", err, connectors)
 	}
-	if !strings.Contains(string(connectors), "capture unknown (database upgrade in progress)") {
+	if !strings.Contains(connectors, "capture unknown (database upgrade in progress)") {
 		t.Fatalf("expected connector status to say capture state is unknown during the upgrade, got:\n%s", connectors)
 	}
-	poll, err := runworkgraph(t, repoRoot(t), "connectors", "poll", "--home", homeDir, "--once", "--connector", "slack")
-	if err != nil {
-		t.Fatalf("expected connector poll to wait for the upgrade, got %v:\n%s", err, poll)
+
+	type result struct {
+		output string
+		err    error
 	}
-	if elapsed := time.Since(started); elapsed < hold-time.Second {
-		t.Fatalf("expected the connector poll to finish only after the upgrade released the database, took %s", elapsed)
+	polled := make(chan result, 1)
+	go func() {
+		output, err := runWorkgraphCommandWithTimeout(nil, 60*time.Second, "connectors", "poll", "--home", homeDir, "--once", "--connector", "slack")
+		polled <- result{output, err}
+	}()
+	select {
+	case poll := <-polled:
+		t.Fatalf("expected the connector poll to wait for the upgrade, it finished first: %v\n%s", poll.err, poll.output)
+	case <-time.After(time.Second):
 	}
-	<-released
-	if strings.Contains(string(poll), "database is locked") {
-		t.Fatalf("expected no lock error, got:\n%s", poll)
+	release()
+	poll := <-polled
+	if poll.err != nil || strings.Contains(poll.output, "database is locked") {
+		t.Fatalf("expected connector poll to succeed after the upgrade, got %v:\n%s", poll.err, poll.output)
 	}
 	db := openBridgedCaptureDatabase(t, homeDir)
 	var requests int
@@ -276,6 +299,23 @@ func TestShortCommandsWaitForAnotherProcessDatabaseUpgrade(t *testing.T) {
 	}
 	if requests != 1 {
 		t.Fatalf("expected the poll to emit one slack capture request after waiting, got %d", requests)
+	}
+}
+
+func TestCaptureRequestListingReadsCurrentSchemaWhileAnotherProcessPrepares(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	connectBridgedConnector(t, repoRoot(t), homeDir, "slack")
+	if output, err := runworkgraph(t, repoRoot(t), "connectors", "poll", "--home", homeDir, "--once", "--connector", "slack"); err != nil {
+		t.Fatalf("emit capture request: %v\n%s", err, output)
+	}
+	holdMigrationLock(t, filepath.Join(homeDir, "workgraph.db"))
+
+	output, err := runWorkgraphCommandWithTimeout(nil, 20*time.Second, "capture", "requests", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("expected listing to read the current schema, got %v:\n%s", err, output)
+	}
+	if !strings.Contains(output, "slack") || strings.Contains(output, "upgrade in progress") {
+		t.Fatalf("expected the pending slack request, got:\n%s", output)
 	}
 }
 
@@ -443,17 +483,20 @@ func TestBackgroundCaptureIgnoresDatabaseSidecarFiles(t *testing.T) {
 
 func holdDatabaseMigration(t *testing.T, dbPath string, hold time.Duration) <-chan struct{} {
 	t.Helper()
-	resolved, err := filepath.EvalSymlinks(dbPath)
-	if err != nil {
-		t.Fatalf("resolve database path: %v", err)
-	}
-	lock, err := os.OpenFile(resolved+"-migration.lock", os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		t.Fatalf("open migration lock: %v", err)
-	}
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		t.Fatalf("hold migration lock: %v", err)
-	}
+	release := beginDatabaseMigration(t, dbPath)
+	released := make(chan struct{})
+	go func() {
+		defer close(released)
+		time.Sleep(hold)
+		release()
+	}()
+	t.Cleanup(func() { <-released })
+	return released
+}
+
+func beginDatabaseMigration(t *testing.T, dbPath string) func() {
+	t.Helper()
+	lock := holdMigrationLock(t, dbPath)
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		t.Fatalf("open database: %v", err)
@@ -468,17 +511,36 @@ func holdDatabaseMigration(t *testing.T, dbPath string, hold time.Duration) <-ch
 	if _, err := conn.ExecContext(context.Background(), `CREATE TABLE fact_migration_marker (id INTEGER)`); err != nil {
 		t.Fatalf("write during migration: %v", err)
 	}
-	released := make(chan struct{})
-	go func() {
-		defer close(released)
-		time.Sleep(hold)
-		_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
-		_ = conn.Close()
-		_ = db.Close()
-		_ = lock.Close()
-	}()
-	t.Cleanup(func() { <-released })
-	return released
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+			_ = conn.Close()
+			_ = db.Close()
+			lock()
+		})
+	}
+	t.Cleanup(release)
+	return release
+}
+
+func holdMigrationLock(t *testing.T, dbPath string) func() {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(dbPath)
+	if err != nil {
+		t.Fatalf("resolve database path: %v", err)
+	}
+	lock, err := os.OpenFile(resolved+"-migration.lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatalf("open migration lock: %v", err)
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatalf("hold migration lock: %v", err)
+	}
+	var once sync.Once
+	release := func() { once.Do(func() { _ = lock.Close() }) }
+	t.Cleanup(release)
+	return release
 }
 
 func journalMode(t *testing.T, dbPath string) string {

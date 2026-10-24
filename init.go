@@ -61,6 +61,9 @@ func Init(config InitConfig) (InitResult, error) {
 		return InitResult{}, fmt.Errorf("create database directory: %w", err)
 	}
 
+	if err := secureDatabaseFiles(dbPath); err != nil {
+		return InitResult{}, fmt.Errorf("secure database: %w", err)
+	}
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		return InitResult{}, fmt.Errorf("open database: %w", err)
