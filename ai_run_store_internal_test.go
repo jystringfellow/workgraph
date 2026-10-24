@@ -136,7 +136,7 @@ func TestAIRunDatabaseOpenNeverCreatesAMissingDatabase(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(databasePath), 0o700); err != nil {
 		t.Fatalf("create database directory: %v", err)
 	}
-	err := withAIRunDatabase(databasePath, time.Now().Add(aiRunBusyTimeout), func(aiRunConnection) error { return nil })
+	err := withAIRunDatabase(databasePath, time.Now().Add(aiRunLockWaitSlice), func(aiRunConnection) error { return nil })
 	if err == nil || !isAIRunDatabaseUnavailable(err) {
 		t.Fatalf("expected a retryable unavailable-database error, got %v", err)
 	}
@@ -148,7 +148,7 @@ func TestAIRunDatabaseOpenNeverCreatesAMissingDatabase(t *testing.T) {
 		t.Fatalf("init workgraph: %v", err)
 	}
 	var count int
-	err = withAIRunDatabase(databasePath, time.Now().Add(aiRunBusyTimeout), func(db aiRunConnection) error {
+	err = withAIRunDatabase(databasePath, time.Now().Add(aiRunLockWaitSlice), func(db aiRunConnection) error {
 		return db.QueryRow(`SELECT COUNT(*) FROM events`).Scan(&count)
 	})
 	if err != nil {
@@ -207,8 +207,8 @@ func TestAIRunDatabaseRetryGivesUpWithinItsDeadline(t *testing.T) {
 	if err == nil || !isAIRunDatabaseUnavailable(err) {
 		t.Fatalf("expected an unavailable-database error, got %v", err)
 	}
-	if elapsed > budget+time.Second {
-		t.Fatalf("retry ran %v past a %v budget although each attempt may wait %v for the lock", elapsed, budget, aiRunBusyTimeout)
+	if elapsed < budget-aiRunLockWaitSlice || elapsed > budget+time.Second {
+		t.Fatalf("retry ran %v; expected it to keep retrying until its %v deadline and stop there", elapsed, budget)
 	}
 }
 
@@ -227,8 +227,8 @@ func TestAIRunStartRetryAfterChildExitGivesUpWithinItsBudget(t *testing.T) {
 	if start.err == nil || !isAIRunDatabaseUnavailable(start.err) || !start.childExited {
 		t.Fatalf("expected an unavailable start after child exit, got %+v", start)
 	}
-	if elapsed > aiRunRetryBudget+time.Second {
-		t.Fatalf("start retry ran %v after child exit with a %v budget", elapsed, aiRunRetryBudget)
+	if elapsed < aiRunRetryBudget-aiRunLockWaitSlice || elapsed > aiRunRetryBudget+time.Second {
+		t.Fatalf("start retry ran %v after child exit; expected it to retry until its %v window ended and stop there", elapsed, aiRunRetryBudget)
 	}
 }
 
@@ -255,14 +255,14 @@ func TestAIRunDatabaseDeadlineCoversLocksTakenAfterConnecting(t *testing.T) {
 func TestAIRunStartWindowCountsFromChildExitDuringABlockedAttempt(t *testing.T) {
 	databasePath := initAIRunTestDatabase(t)
 	holdAIRunTestExclusiveLock(t, databasePath)
-	previousBusyTimeout, previousBudget := aiRunBusyTimeout, aiRunRetryBudget
-	aiRunBusyTimeout, aiRunRetryBudget = 2*time.Second, 2500*time.Millisecond
-	t.Cleanup(func() { aiRunBusyTimeout, aiRunRetryBudget = previousBusyTimeout, previousBudget })
+	previousBudget := aiRunRetryBudget
+	aiRunRetryBudget = 1500 * time.Millisecond
+	t.Cleanup(func() { aiRunRetryBudget = previousBudget })
 
 	done := make(chan struct{})
 	var exitedAt time.Time
 	go func() {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(aiRunLockWaitSlice / 2)
 		exitedAt = time.Now()
 		close(done)
 	}()

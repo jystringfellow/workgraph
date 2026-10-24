@@ -356,24 +356,24 @@ opens a fresh connection, does its one read or write, and closes it:
 
 Checkpoints and native lifecycle callbacks run in their own short-lived
 `workgraph` processes, each holding one connection only for the few statements
-of that command. The wrapper does not poll, heartbeat, or tail transcripts. Its connections open the existing database in
-read-write mode without creating it, wait up to five seconds for a lock, and
-never prepare or migrate the schema, so a short open mid-session cannot start a
-migration or recreate a database that maintenance has moved aside.
+of that command. The wrapper does not poll, heartbeat, or tail transcripts. Its
+connections open the existing database in read-write mode without creating it
+and never prepare or migrate the schema, so a short open mid-session cannot
+start a migration or recreate a database that maintenance has moved aside.
 
 A database that is locked, busy, or cannot be opened is unavailable, not
-failed. Every retry window is a hard deadline. Opening a connection waits for
-a lock no longer than the time left in the window, each statement's lock wait
-is reset to the time then left, and statements run under the window's
-deadline, so an operation gives up within its window rather than after a
-final full lock wait.
+failed. Every retry window is a hard wall-clock deadline. SQLite's own lock
+wait counts requested sleeps rather than elapsed time and can run well past
+its nominal timeout on a loaded machine, so each connection setup and each
+statement waits at most 250 milliseconds, or the time left if less, for a lock.
+Statements run under the window's deadline, and workgraph retries with short
+backoff until the write lands or the window ends.
 
 - a native predecessor lookup retries for up to fifteen seconds and then
   aborts before launch
 - an unavailable start write never terminates the child. The wrapper retries
-  with backoff, capped at two seconds between attempts, until the write lands.
-  If the child exits first, the wrapper retries until fifteen seconds after the
-  child exited.
+  with short lock waits and backoff until the write lands. If the child exits
+  first, the wrapper retries until fifteen seconds after the child exited.
   After the child exits, stderr reports that the start was recorded late. If
   it never landed, stderr reports the start persistence failure, no end event
   is written, and the wrapper still returns the child outcome.

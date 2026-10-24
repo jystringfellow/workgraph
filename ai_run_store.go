@@ -12,9 +12,11 @@ import (
 )
 
 var (
-	aiRunBusyTimeout       = 5 * time.Second
-	aiRunRetryInitialDelay = 100 * time.Millisecond
-	aiRunRetryMaxDelay     = 2 * time.Second
+	// SQLite's busy handler counts requested sleeps rather than elapsed time, so
+	// each lock wait stays short and retries are judged against a wall-clock deadline.
+	aiRunLockWaitSlice     = 250 * time.Millisecond
+	aiRunRetryInitialDelay = 50 * time.Millisecond
+	aiRunRetryMaxDelay     = 500 * time.Millisecond
 	aiRunRetryBudget       = 15 * time.Second
 	aiRunBeforeChildStart  func()
 	aiRunAfterConnect      func()
@@ -45,7 +47,8 @@ func (connection aiRunConnection) boundLockWait() error {
 	if remaining <= 0 {
 		return fmt.Errorf("AI event database retry window: %w", context.DeadlineExceeded)
 	}
-	_, err := connection.conn.ExecContext(connection.ctx, "PRAGMA busy_timeout = "+strconv.FormatInt(max(remaining.Milliseconds(), 1), 10))
+	lockWait := min(remaining, aiRunLockWaitSlice)
+	_, err := connection.conn.ExecContext(connection.ctx, "PRAGMA busy_timeout = "+strconv.FormatInt(max(lockWait.Milliseconds(), 1), 10))
 	return err
 }
 
@@ -71,7 +74,7 @@ func (connection aiRunConnection) QueryRow(query string, args ...any) *sql.Row {
 func withAIRunDatabase(databasePath string, deadline time.Time, use func(aiRunConnection) error) error {
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
-	db, err := aiRunOpenDatabase(databasePath, min(aiRunBusyTimeout, time.Until(deadline)))
+	db, err := aiRunOpenDatabase(databasePath, min(aiRunLockWaitSlice, time.Until(deadline)))
 	if err != nil {
 		return fmt.Errorf("open AI event database: %w", err)
 	}
@@ -131,7 +134,7 @@ func persistAIRunStart(databasePath string, use func(aiRunConnection) error, exi
 	delay := aiRunRetryInitialDelay
 	var firstUnavailable error
 	for {
-		deadline := time.Now().Add(aiRunBusyTimeout)
+		deadline := time.Now().Add(aiRunRetryBudget)
 		if exit.exited() {
 			deadline = exit.at.Add(aiRunRetryBudget)
 		}
