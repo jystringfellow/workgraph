@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
 	"syscall"
 )
@@ -71,4 +72,45 @@ func isolateProcessGroup(command *exec.Cmd) {
 	command.Cancel = func() error {
 		return syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
 	}
+}
+
+func startAIRunSignalRelay() (attach func(*os.Process), stop func()) {
+	received := make(chan os.Signal, 4)
+	signal.Notify(received, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP)
+	children := make(chan *os.Process, 1)
+	done := make(chan struct{})
+	go func() {
+		var child *os.Process
+		var pending []os.Signal
+		for {
+			select {
+			case <-done:
+				return
+			case child = <-children:
+				for _, value := range pending {
+					_ = child.Signal(value)
+				}
+				pending = nil
+			case value := <-received:
+				// The terminal already delivers SIGINT and SIGQUIT to the child's process group.
+				if value != syscall.SIGTERM && value != syscall.SIGHUP {
+					continue
+				}
+				if child == nil {
+					pending = append(pending, value)
+					if aiRunSignalQueued != nil {
+						aiRunSignalQueued()
+					}
+				} else {
+					_ = child.Signal(value)
+				}
+			}
+		}
+	}()
+	attach = func(process *os.Process) { children <- process }
+	stop = func() {
+		signal.Stop(received)
+		close(done)
+	}
+	return attach, stop
 }

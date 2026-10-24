@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 )
 
 func inspectLocalAIProcess(int) (AIProcessInspection, error) {
@@ -29,3 +30,9 @@ func openAIControllingTerminal() (*os.File, error) {
 }
 
 func isolateProcessGroup(*exec.Cmd) {}
+
+func startAIRunSignalRelay() (attach func(*os.Process), stop func()) {
+	received := make(chan os.Signal, 1)
+	signal.Notify(received, os.Interrupt)
+	return func(*os.Process) {}, func() { signal.Stop(received) }
+}
