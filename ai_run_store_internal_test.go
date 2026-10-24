@@ -136,7 +136,7 @@ func TestAIRunDatabaseOpenNeverCreatesAMissingDatabase(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(databasePath), 0o700); err != nil {
 		t.Fatalf("create database directory: %v", err)
 	}
-	err := withAIRunDatabase(databasePath, time.Now().Add(aiRunLockWaitSlice), func(aiRunConnection) error { return nil })
+	err := withAIRunDatabase(databasePath, time.Now().Add(10*time.Second), func(aiRunConnection) error { return nil })
 	if err == nil || !isAIRunDatabaseUnavailable(err) {
 		t.Fatalf("expected a retryable unavailable-database error, got %v", err)
 	}
@@ -148,7 +148,7 @@ func TestAIRunDatabaseOpenNeverCreatesAMissingDatabase(t *testing.T) {
 		t.Fatalf("init workgraph: %v", err)
 	}
 	var count int
-	err = withAIRunDatabase(databasePath, time.Now().Add(aiRunLockWaitSlice), func(db aiRunConnection) error {
+	err = withAIRunDatabase(databasePath, time.Now().Add(10*time.Second), func(db aiRunConnection) error {
 		return db.QueryRow(`SELECT COUNT(*) FROM events`).Scan(&count)
 	})
 	if err != nil {
