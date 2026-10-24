@@ -327,7 +327,7 @@ func CaptureSlackEvents(config SlackCaptureConfig) (SlackCaptureResult, error) {
 		return SlackCaptureResult{}, fmt.Errorf("parse events file: %w", err)
 	}
 
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return SlackCaptureResult{}, fmt.Errorf("open database: %w", err)
 	}
@@ -394,7 +394,7 @@ func CaptureSlackList(config SlackListCaptureConfig) (SlackCaptureResult, error)
 	if err != nil {
 		return SlackCaptureResult{}, err
 	}
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return SlackCaptureResult{}, err
 	}
@@ -904,7 +904,7 @@ func CaptureSlackFromAPI(config SlackAPICaptureConfig) (SlackAPICaptureResult, e
 		return SlackAPICaptureResult{}, err
 	}
 
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return SlackAPICaptureResult{}, fmt.Errorf("open database: %w", err)
 	}

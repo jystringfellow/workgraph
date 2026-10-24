@@ -755,6 +755,26 @@ For a one-off schema check:
 sqlite3 ~/.workgraph/workgraph.db ".schema"
 ```
 
+The database uses write-ahead logging, so `workgraph.db-wal` and
+`workgraph.db-shm` sit next to it while workgraph is running. Keep them with
+the database, and back up a live database with SQLite's backup command rather
+than copying the file:
+
+```sh
+sqlite3 ~/.workgraph/workgraph.db ".backup ~/workgraph-backup.db"
+```
+
+Read-only inspection works while capture runs:
+
+```sh
+sqlite3 -readonly ~/.workgraph/workgraph.db "SELECT COUNT(*) FROM events;"
+```
+
+After an upgrade, the first `workgraph start` may print `Upgrading database…`
+while it migrates a large database. If it is still upgrading after five
+minutes, start says so, exits 75, and capture keeps starting; check
+`workgraph status`.
+
 ## LLM Summaries
 
 For an OpenAI-compatible local endpoint, add the exact model name workgraph

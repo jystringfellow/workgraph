@@ -48,6 +48,7 @@ const (
 type RunConfig struct {
 	// Capture closes a supplied Watcher, including when watcher setup fails.
 	Watcher                    *fsnotify.Watcher
+	Context                    context.Context
 	HomeDir                    string
 	DatabasePath               string
 	WatchDirs                  []string
@@ -176,7 +177,10 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 		return nil, err
 	}
 
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	if err := secureDatabaseFilesOnce(status.DatabasePath); err != nil {
+		return nil, fmt.Errorf("secure database: %w", err)
+	}
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -184,6 +188,14 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 	if err := db.Ping(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("open database: %w", err)
+	}
+	schemaContext := config.Context
+	if schemaContext == nil {
+		schemaContext = context.Background()
+	}
+	if err := createSchemaContext(schemaContext, db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("prepare database schema: %w", err)
 	}
 
 	watcher := config.Watcher
@@ -1733,7 +1745,7 @@ func shouldIgnorePath(path, homeDir, dbPath string, ignorePaths []string, ignore
 	if sameOrChild(path, homeDir) {
 		return true
 	}
-	if path == dbPath {
+	if isDatabaseFile(path, dbPath) {
 		return true
 	}
 	for _, ignorePath := range ignorePaths {

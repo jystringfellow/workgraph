@@ -1,6 +1,7 @@
 package workgraph
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -66,6 +67,9 @@ func bridgeStallWarning(homeDir string, databasePath string, now time.Time) stri
 		return ""
 	}
 	requests, err := ListCaptureRequests(CaptureRequestListConfig{HomeDir: homeDir, DatabasePath: databasePath, Now: now})
+	if errors.Is(err, ErrDatabaseUpgradeInProgress) {
+		return "\n\n" + databaseUpgradeInProgressNotice
+	}
 	if err != nil {
 		return ""
 	}

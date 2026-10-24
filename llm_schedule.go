@@ -177,7 +177,7 @@ func emitLLMTaskRequest(config LLMAssociateConfig, unitIDs []string, now time.Ti
 	if err != nil {
 		return LLMAssociateScheduleResult{}, err
 	}
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return LLMAssociateScheduleResult{}, fmt.Errorf("open database: %w", err)
 	}
@@ -339,7 +339,7 @@ func verifyLLMTaskClaim(config LLMAssociateConfig, requestID string, claimToken 
 	if err != nil {
 		return err
 	}
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
@@ -457,7 +457,7 @@ func recordSentLLMTaskMembers(config LLMAssociateConfig, claim ClaimedCaptureReq
 	if err != nil {
 		return err
 	}
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
@@ -477,7 +477,7 @@ func activeAssociateCooldowns(config LLMAssociateConfig, now time.Time) (map[str
 	if err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -544,7 +544,7 @@ func storedLLMTaskParams(config LLMAssociateConfig, requestID string) (llmTaskPa
 	if err != nil {
 		return llmTaskParams{}, err
 	}
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		return llmTaskParams{}, fmt.Errorf("open database: %w", err)
 	}
@@ -568,7 +568,7 @@ func activeLLMAssociateRequest(config LLMAssociateConfig) (string, bool, error) 
 	if err != nil {
 		return "", false, err
 	}
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		return "", false, fmt.Errorf("open database: %w", err)
 	}

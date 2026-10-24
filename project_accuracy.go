@@ -52,7 +52,7 @@ func ProjectLinkAccuracy(config ProjectLinkStoreConfig) (ProjectLinkAccuracyRepo
 	if err != nil {
 		return ProjectLinkAccuracyReport{}, err
 	}
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		return ProjectLinkAccuracyReport{}, fmt.Errorf("open database: %w", err)
 	}

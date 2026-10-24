@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -33,6 +34,7 @@ type DaemonConfig struct {
 	SlackListIDs    []string
 	SlackIncludeDMs bool
 	SlackAPIBaseURL string
+	Progress        io.Writer
 }
 
 type DaemonStatus struct {
@@ -52,6 +54,8 @@ type DaemonStatus struct {
 	MonitoredConnectors []string                 `json:"monitored_connectors,omitempty"`
 	Runtime             ProcessRuntimeStatus     `json:"runtime,omitempty"`
 	ConnectorErrors     []ConnectorHealthFinding `json:"-"`
+	Starting            bool                     `json:"-"`
+	UpgradingDatabase   bool                     `json:"-"`
 	LastError           string                   `json:"last_error,omitempty"`
 	Message             string                   `json:"-"`
 }
@@ -77,7 +81,12 @@ func StartDaemon(config DaemonConfig) (DaemonStatus, error) {
 		if err := service.start(); err != nil {
 			return DaemonStatus{}, err
 		}
-		return waitForDaemonReady(runStatus.HomeDir)
+		status, err := waitForDaemonReady(daemonReadyWait{homeDir: runStatus.HomeDir, databasePath: runStatus.DatabasePath, progress: config.Progress})
+		if err != nil {
+			return DaemonStatus{}, err
+		}
+		status.Message = daemonStartedMessage(status)
+		return status, nil
 	}
 
 	existing, err := DaemonStatusForHome(runStatus.HomeDir)
@@ -87,6 +96,14 @@ func StartDaemon(config DaemonConfig) (DaemonStatus, error) {
 	if existing.Running {
 		existing.Message = daemonRunningMessage(existing)
 		return existing, nil
+	}
+	if existing.Starting {
+		status, err := waitForDaemonReady(daemonReadyWait{homeDir: runStatus.HomeDir, databasePath: existing.DatabasePath, progress: config.Progress})
+		if err != nil {
+			return DaemonStatus{}, err
+		}
+		status.Message = daemonStartedMessage(status)
+		return status, nil
 	}
 
 	if err := ensureWorkgraphHomeDir(runStatus.HomeDir); err != nil {
@@ -145,11 +162,13 @@ func StartDaemon(config DaemonConfig) (DaemonStatus, error) {
 	if err != nil {
 		return DaemonStatus{}, fmt.Errorf("start daemon process: %w", err)
 	}
-	if err := process.Release(); err != nil {
-		return DaemonStatus{}, fmt.Errorf("release daemon process: %w", err)
-	}
+	exited := make(chan struct{})
+	go func() {
+		defer close(exited)
+		_, _ = process.Wait()
+	}()
 
-	status, err := waitForDaemonReady(runStatus.HomeDir)
+	status, err := waitForDaemonReady(daemonReadyWait{homeDir: runStatus.HomeDir, databasePath: runStatus.DatabasePath, exited: exited, progress: config.Progress})
 	if err != nil {
 		return DaemonStatus{}, err
 	}
@@ -159,6 +178,8 @@ func StartDaemon(config DaemonConfig) (DaemonStatus, error) {
 }
 
 func RunDaemon(config DaemonConfig) error {
+	ctx, stop := signalContext()
+	defer stop()
 	home, err := resolveHomeDir(config.HomeDir)
 	if err != nil {
 		return err
@@ -168,10 +189,18 @@ func RunDaemon(config DaemonConfig) error {
 		return err
 	}
 	defer release()
-	ctx, stop := signalContext()
-	defer stop()
+	databasePath := config.DatabasePath
+	if databasePath == "" {
+		databasePath = filepath.Join(home, "workgraph.db")
+	}
+	if resolved, err := filepath.Abs(databasePath); err == nil {
+		databasePath = resolved
+	}
+	endStartup := beginDaemonStartup(home, databasePath)
+	defer endStartup()
 
 	capture, err := StartRun(RunConfig{
+		Context:         ctx,
 		HomeDir:         config.HomeDir,
 		DatabasePath:    config.DatabasePath,
 		WatchDirs:       config.WatchDirs,
@@ -181,14 +210,27 @@ func RunDaemon(config DaemonConfig) error {
 		SlackIncludeDMs: config.SlackIncludeDMs,
 		SlackAPIBaseURL: config.SlackAPIBaseURL,
 	})
+	if ctx.Err() != nil {
+		if err == nil {
+			capture.Close()
+		}
+		return nil
+	}
 	if err != nil {
 		return err
 	}
+	releaseReady, err := lockDaemonReady(home)
+	if err != nil {
+		capture.Close()
+		return err
+	}
+	defer releaseReady()
 	status := daemonStatusFromRun(capture.Status, os.Getpid(), len(config.WatchDirs) > 0)
 	if err := writeDaemonState(status); err != nil {
 		capture.Close()
 		return err
 	}
+	endStartup()
 
 	eventsDrained := make(chan struct{})
 	go func() {
@@ -223,6 +265,11 @@ func DaemonStatusForHome(homeDir string) (DaemonStatus, error) {
 		return DaemonStatus{}, fmt.Errorf("resolve workgraph home: %w", err)
 	}
 
+	if _, ready := readyDaemonStatus(resolvedHome); !ready {
+		if startup, starting := verifiedDaemonStartup(resolvedHome); starting {
+			return startingDaemonStatus(resolvedHome, startup), nil
+		}
+	}
 	status, err := readDaemonState(resolvedHome)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -286,7 +333,7 @@ func StopDaemon(config DaemonConfig) (DaemonStatus, error) {
 	if err != nil {
 		return DaemonStatus{}, err
 	}
-	if !status.Running {
+	if !status.Running && !status.Starting {
 		status.Message = daemonStoppedMessage(status.HomeDir)
 		return status, nil
 	}
@@ -295,7 +342,7 @@ func StopDaemon(config DaemonConfig) (DaemonStatus, error) {
 	if err != nil {
 		return DaemonStatus{}, err
 	}
-	if len(processes) == 0 && status.PID > 0 {
+	if len(processes) == 0 && status.PID > 0 && status.Running {
 		processes = []daemonProcess{{PID: status.PID}}
 	}
 	for _, process := range processes {
@@ -323,7 +370,11 @@ func StopDaemon(config DaemonConfig) (DaemonStatus, error) {
 	if err := removeDaemonState(status.HomeDir); err != nil {
 		return DaemonStatus{}, err
 	}
+	if status.Starting {
+		removeDaemonStartup(status.HomeDir, status.PID)
+	}
 	status.Running = false
+	status.Starting = false
 	status.Message = daemonStopMessage(status.HomeDir)
 
 	return status, nil
@@ -413,26 +464,6 @@ func writeDaemonStateUnlessReplaced(status DaemonStatus) error {
 	return writeDaemonState(status)
 }
 
-func waitForDaemonReady(homeDir string) (DaemonStatus, error) {
-	deadline := time.Now().Add(2 * time.Second)
-	var lastStatus DaemonStatus
-	for time.Now().Before(deadline) {
-		status, err := readDaemonState(homeDir)
-		if err == nil {
-			lastStatus = status
-			if status.PID > 0 && processRunning(status.PID) && daemonPIDMatches(homeDir, status.PID) {
-				status.Running = true
-				return status, nil
-			}
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if lastStatus.PID != 0 {
-		return DaemonStatus{}, fmt.Errorf("daemon did not become ready with pid %d", lastStatus.PID)
-	}
-	return DaemonStatus{}, fmt.Errorf("daemon did not become ready")
-}
-
 func daemonPIDMatches(homeDir string, expectedPID int) bool {
 	contents, err := os.ReadFile(daemonPIDPath(homeDir))
 	if err != nil {
@@ -503,6 +534,9 @@ func daemonRunningMessage(status DaemonStatus) string {
 	lines = append(lines, watchSummaryLines(status.WatchDirs)...)
 	if len(status.MonitoredConnectors) > 0 {
 		lines = append(lines, "Monitoring: "+strings.Join(status.MonitoredConnectors, ", "))
+	}
+	if databaseMigrationInProgress(status.DatabasePath) {
+		lines = append(lines, databaseUpgradeInProgressNotice)
 	}
 	appendDaemonConnectorErrors(&lines, status.ConnectorErrors)
 	for _, ignorePath := range status.IgnorePaths {
@@ -649,6 +683,13 @@ func findRunningDaemonStatus(homeDir string, databasePath string, prior DaemonSt
 	if len(matches) == 0 {
 		return DaemonStatus{}, false, nil
 	}
+	if !daemonReadyLockHeld(homeDir) {
+		processDB := cleanProcessPath(flagValue(strings.Fields(matches[0].Command), "--database"))
+		if processDB == "" {
+			processDB = cleanProcessPath(databasePath)
+		}
+		return startingDaemonStatus(cleanProcessPath(homeDir), daemonStartup{PID: matches[0].PID, DatabasePath: processDB}), true, nil
+	}
 	status := prior
 	status.Running = true
 	status.PID = matches[0].PID
@@ -683,16 +724,21 @@ func matchingCaptureWorkerProcessesForStatus(status DaemonStatus) ([]daemonProce
 }
 
 func processMatchesCaptureWorker(pid int, homeDir string, databasePath string) bool {
+	matches, err := captureWorkerIdentityMatches(pid, homeDir, databasePath)
+	return matches || err != nil
+}
+
+func captureWorkerIdentityMatches(pid int, homeDir string, databasePath string) (bool, error) {
 	processes, err := listDaemonProcesses()
 	if err != nil {
-		return true
+		return false, err
 	}
 	for _, process := range matchingCaptureWorkerProcesses(homeDir, databasePath, processes) {
 		if process.PID == pid {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func matchingCaptureWorkerProcesses(homeDir string, databasePath string, processes []daemonProcess) []daemonProcess {

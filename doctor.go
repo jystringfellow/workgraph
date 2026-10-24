@@ -52,10 +52,31 @@ func Doctor(config DoctorConfig) (DoctorResult, error) {
 
 func doctorDatabaseLine(homeDir string) string {
 	dbPath := filepath.Join(homeDir, "workgraph.db")
-	if info, err := os.Stat(dbPath); err == nil && !info.IsDir() {
-		return "Database: ok"
+	info, err := os.Stat(dbPath)
+	if err != nil || info.IsDir() {
+		return "Database: missing - run workgraph init"
 	}
-	return "Database: missing - run workgraph init"
+	line := "Database: ok"
+	if mode := databaseJournalMode(dbPath); mode != "" {
+		line += " (journal mode: " + mode + ")"
+	}
+	if databaseMigrationInProgress(dbPath) {
+		line += " - upgrade in progress"
+	}
+	return line
+}
+
+func databaseJournalMode(dbPath string) string {
+	db, err := openDatabase(dbPath)
+	if err != nil {
+		return ""
+	}
+	defer db.Close()
+	var mode string
+	if err := db.QueryRow(`PRAGMA journal_mode`).Scan(&mode); err != nil {
+		return ""
+	}
+	return mode
 }
 
 func doctorDaemonLine(homeDir string) string {
@@ -65,6 +86,9 @@ func doctorDaemonLine(homeDir string) string {
 	}
 	if status.Running {
 		return fmt.Sprintf("Daemon: running PID %d", status.PID)
+	}
+	if status.Starting {
+		return fmt.Sprintf("Daemon: starting PID %d", status.PID)
 	}
 	return "Daemon: not running"
 }

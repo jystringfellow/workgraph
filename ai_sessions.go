@@ -431,7 +431,7 @@ func CheckpointAISession(config AICheckpointConfig) (AICheckpointResult, error) 
 	if err != nil {
 		return AICheckpointResult{}, err
 	}
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return AICheckpointResult{}, fmt.Errorf("open AI event database: %w", err)
 	}
@@ -652,7 +652,7 @@ func updateAIArchiveStates(config AIArchiveBatchConfig, archived bool) (AIArchiv
 	if err != nil {
 		return AIArchiveBatchResult{}, err
 	}
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return AIArchiveBatchResult{}, fmt.Errorf("open AI event database: %w", err)
 	}
@@ -795,7 +795,7 @@ func loadAISessionProjections(homeDir string, databasePath string, inspector AIP
 	if err != nil {
 		return nil, nil, err
 	}
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open AI event database: %w", err)
 	}

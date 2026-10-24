@@ -191,9 +191,12 @@ func initAIRunTestDatabase(t *testing.T) string {
 	return initialized.DatabasePath
 }
 
-func countAIRunTestEvents(db aiRunConnection) error {
-	var count int
-	return db.QueryRow(`SELECT COUNT(*) FROM events`).Scan(&count)
+func takeAIRunTestWriteLock(db aiRunConnection) error {
+	if _, err := db.Exec(`BEGIN IMMEDIATE`); err != nil {
+		return err
+	}
+	_, err := db.Exec(`ROLLBACK`)
+	return err
 }
 
 func TestAIRunDatabaseRetryGivesUpWithinItsDeadline(t *testing.T) {
@@ -202,7 +205,7 @@ func TestAIRunDatabaseRetryGivesUpWithinItsDeadline(t *testing.T) {
 
 	budget := 1500 * time.Millisecond
 	began := time.Now()
-	err := retryAIRunDatabase(databasePath, began.Add(budget), countAIRunTestEvents)
+	err := retryAIRunDatabase(databasePath, began.Add(budget), takeAIRunTestWriteLock)
 	elapsed := time.Since(began)
 	if err == nil || !isAIRunDatabaseUnavailable(err) {
 		t.Fatalf("expected an unavailable-database error, got %v", err)
@@ -222,7 +225,7 @@ func TestAIRunStartRetryAfterChildExitGivesUpWithinItsBudget(t *testing.T) {
 	done := make(chan struct{})
 	exitedAt := time.Now()
 	close(done)
-	start := persistAIRunStart(databasePath, countAIRunTestEvents, aiRunChildExit{done: done, at: &exitedAt})
+	start := persistAIRunStart(databasePath, takeAIRunTestWriteLock, aiRunChildExit{done: done, at: &exitedAt})
 	elapsed := time.Since(exitedAt)
 	if start.err == nil || !isAIRunDatabaseUnavailable(start.err) || !start.childExited {
 		t.Fatalf("expected an unavailable start after child exit, got %+v", start)
@@ -242,7 +245,7 @@ func TestAIRunDatabaseDeadlineCoversLocksTakenAfterConnecting(t *testing.T) {
 	}
 	t.Cleanup(func() { aiRunAfterConnect = nil })
 
-	err := withAIRunDatabase(databasePath, began.Add(budget), countAIRunTestEvents)
+	err := withAIRunDatabase(databasePath, began.Add(budget), takeAIRunTestWriteLock)
 	elapsed := time.Since(began)
 	if err == nil || !isAIRunDatabaseUnavailable(err) {
 		t.Fatalf("expected an unavailable-database error, got %v", err)
@@ -266,7 +269,7 @@ func TestAIRunStartWindowCountsFromChildExitDuringABlockedAttempt(t *testing.T) 
 		exitedAt = time.Now()
 		close(done)
 	}()
-	start := persistAIRunStart(databasePath, countAIRunTestEvents, aiRunChildExit{done: done, at: &exitedAt})
+	start := persistAIRunStart(databasePath, takeAIRunTestWriteLock, aiRunChildExit{done: done, at: &exitedAt})
 	<-done
 	sinceExit := time.Since(exitedAt)
 	if start.err == nil || !isAIRunDatabaseUnavailable(start.err) || !start.childExited {

@@ -1,7 +1,6 @@
 package workgraph
 
 import (
-	"database/sql"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -87,7 +86,7 @@ func capturedGitRepositories(config LocalGitIdentityConfig) []string {
 	if _, err := os.Stat(dbPath); err != nil {
 		return nil
 	}
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		return nil
 	}

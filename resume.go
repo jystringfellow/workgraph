@@ -100,7 +100,7 @@ func Resume(config ResumeConfig) (ResumeResult, error) {
 		return ResumeResult{}, err
 	}
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		return ResumeResult{}, fmt.Errorf("open database: %w", err)
 	}
@@ -237,11 +237,19 @@ func RecordResumeCheckIn(config ResumeConfig, at time.Time) error {
 	if err != nil {
 		return err
 	}
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
+	release, acquired, err := tryLockDatabaseMigration(dbPath)
+	if err != nil {
+		return err
+	}
+	if !acquired {
+		return nil
+	}
+	defer release()
 	if _, err := db.Exec(resumeCheckInSchema); err != nil {
 		return fmt.Errorf("create resume check-in storage: %w", err)
 	}

@@ -7,6 +7,7 @@ import (
 	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -107,13 +108,14 @@ func ListCaptureRequests(config CaptureRequestListConfig) ([]CaptureRequest, err
 	if err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
-	if err := createSchema(db); err != nil {
-		return nil, fmt.Errorf("prepare capture outbox: %w", err)
+	preparing := createSchemaUnlessUpgrading(db)
+	if preparing != nil && !errors.Is(preparing, ErrDatabaseUpgradeInProgress) {
+		return nil, fmt.Errorf("prepare capture outbox: %w", preparing)
 	}
 	query := `SELECT ` + captureRequestColumns + ` FROM capture_requests`
 	args := []any{}
@@ -127,6 +129,9 @@ func ListCaptureRequests(config CaptureRequestListConfig) ([]CaptureRequest, err
 	}
 	query += ` ORDER BY created_at, id`
 	rows, err := db.Query(query, args...)
+	if err != nil && preparing != nil {
+		return nil, fmt.Errorf("list capture requests: %w: %v", ErrDatabaseUpgradeInProgress, err)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("list capture requests: %w", err)
 	}
@@ -170,7 +175,7 @@ func CaptureWatermark(config CaptureRequestListConfig) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return "", fmt.Errorf("open database: %w", err)
 	}
@@ -200,7 +205,7 @@ func RenewCaptureRequest(config CaptureRequestCapabilityConfig) (CaptureRequest,
 	if lease <= 0 {
 		lease = bridgedClaimLease
 	}
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return CaptureRequest{}, fmt.Errorf("open database: %w", err)
 	}
@@ -247,7 +252,7 @@ func CancelCaptureRequest(config CaptureRequestCancelConfig) error {
 	if reason == "" {
 		reason = "cancelled by operator"
 	}
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
@@ -304,7 +309,7 @@ func FailCaptureRequest(config CaptureRequestCapabilityConfig) error {
 	if err := validateCaptureFailureReason(config.Reason); err != nil {
 		return err
 	}
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
@@ -355,7 +360,7 @@ func FailCaptureRequest(config CaptureRequestCapabilityConfig) error {
 }
 
 func releaseWorkerCaptureClaims(homeDir string, worker string, reason string, now time.Time) error {
-	db, err := sql.Open("sqlite3", bridgedDefaultDatabasePath(homeDir))
+	db, err := openDatabase(bridgedDefaultDatabasePath(homeDir))
 	if err != nil {
 		return fmt.Errorf("open capture outbox: %w", err)
 	}
@@ -432,7 +437,7 @@ func EmitBridgedCaptureRequest(config CaptureRequestEmitConfig) (CaptureRequestE
 	}
 	now = now.UTC()
 
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return CaptureRequestEmitResult{}, fmt.Errorf("open database: %w", err)
 	}
@@ -565,7 +570,7 @@ func claimCaptureRequests(config CaptureRequestClaimConfig) ([]ClaimedCaptureReq
 		return nil, err
 	}
 
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -763,7 +768,7 @@ func capturesBoundedWindow(connectorID string) bool {
 }
 
 func cancelConnectorCaptureRequest(homeDir string, connectorID string, reason string, when time.Time) (CaptureRequest, bool, error) {
-	db, err := sql.Open("sqlite3", bridgedDefaultDatabasePath(homeDir))
+	db, err := openDatabase(bridgedDefaultDatabasePath(homeDir))
 	if err != nil {
 		return CaptureRequest{}, false, fmt.Errorf("open capture outbox: %w", err)
 	}
@@ -794,7 +799,7 @@ func cancelConnectorCaptureRequest(homeDir string, connectorID string, reason st
 }
 
 func cancelActiveCaptureRequests(homeDir string, connectorID string, when time.Time) error {
-	db, err := sql.Open("sqlite3", bridgedDefaultDatabasePath(homeDir))
+	db, err := openDatabase(bridgedDefaultDatabasePath(homeDir))
 	if err != nil {
 		return fmt.Errorf("open capture outbox: %w", err)
 	}
@@ -910,7 +915,7 @@ func IngestBridgedCapture(config BridgedIngestConfig) (BridgedIngestResult, erro
 	if config.Input == nil {
 		return BridgedIngestResult{}, fmt.Errorf("capture input is required")
 	}
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return BridgedIngestResult{}, fmt.Errorf("open database: %w", err)
 	}

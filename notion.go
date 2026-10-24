@@ -262,7 +262,7 @@ func CaptureNotion(config NotionCaptureConfig) (NotionCaptureResult, error) {
 		return NotionCaptureResult{}, errors.New("notion token is required")
 	}
 
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return NotionCaptureResult{}, fmt.Errorf("open database: %w", err)
 	}
@@ -1276,7 +1276,7 @@ func openNotionIndexDatabase(homeDir string, databasePath string) (*sql.DB, erro
 	if err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}

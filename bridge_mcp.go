@@ -3,7 +3,6 @@ package workgraph
 import (
 	"bufio"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -438,7 +437,7 @@ func RecordBridgeWorkerHeartbeat(homeDir string, databasePath string, worker str
 	if err != nil {
 		return "", err
 	}
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return "", fmt.Errorf("open bridge heartbeat database: %w", err)
 	}

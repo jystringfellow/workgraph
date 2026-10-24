@@ -32,6 +32,12 @@ Capture control is responsible for:
 - registering configured watch roots before recursively descending into any one root
 - preserving events already written when capture stops
 
+When the worker first has to upgrade the database, start waits, prints
+`Upgrading database…`, and returns when capture is ready. A worker that exits
+during startup fails start immediately; one still upgrading after five minutes
+is reported as still starting with exit code 75. See
+`specs/capture-controls.md` for the readiness contract.
+
 Background start output reports the configured paths and returns:
 
 ```text

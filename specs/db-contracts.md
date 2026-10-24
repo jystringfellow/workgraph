@@ -19,6 +19,98 @@ Domain entity contracts are defined in `specs/domain-entities.md`. This document
 
 For Phase 0, `workgraph init` creates active tables as empty schema. It does not populate `events`, `sessions`, or `memory_docs`.
 
+## Storage Mode
+
+The database uses SQLite write-ahead logging (`journal_mode=WAL`), so readers
+do not block the writer and the writer does not block readers. Schema
+preparation enables WAL; the mode is stored in the database file, so it is set
+once on `init` or on the first open by a binary that has this contract, and it
+persists.
+
+- Files: a WAL database is the main file plus `workgraph.db-wal` and
+  `workgraph.db-shm` next to it while any connection is open. SQLite creates
+  them with the main file's permissions. Back up, move, or inspect the three
+  together. `workgraph.db-migration.lock` is the migration lock described below;
+  it holds no data.
+- Copies: never copy only the main file of a database that is open. Use
+  `sqlite3 ~/.workgraph/workgraph.db ".backup copy.db"` (the online backup API),
+  or run `PRAGMA wal_checkpoint(TRUNCATE)` with capture stopped before copying.
+  workgraph has no code path that copies the database file.
+- Read-only access: `sqlite3 -readonly ~/.workgraph/workgraph.db` and
+  `file:...?mode=ro` connections keep working, because the workgraph home stays
+  writable so SQLite can use the `-shm` file.
+- Older binaries: every workgraph release links a SQLite build with WAL
+  support, so an older binary opens a WAL database normally and does not switch
+  it back.
+- Durability: connections run with `synchronous=NORMAL`, which the
+  `mattn/go-sqlite3` driver sets on every connection by default. With WAL this
+  is the standard pairing: the database cannot be corrupted by a crash or power
+  loss, but a power loss (not a process crash) can drop the most recently
+  committed transactions. workgraph accepts that: captured events are
+  re-derivable from their sources on the next poll, and `FULL` would add an
+  fsync to every commit on the capture hot path.
+- Permissions: the first time a process opens a given database file (every
+  workgraph open goes through one helper, once per resolved path per
+  process), it creates a missing database file as `0600` before SQLite opens
+  it, so WAL sidecars, which SQLite creates with
+  the main file's permissions, start user-only. Before opening an existing
+  database they also repair broader permissions on the database and any
+  existing `-wal`, `-shm` and `-journal` files. The repair skips symlinks,
+  non-regular files and files not owned by the current user, and changes
+  permissions through a descriptor opened with `O_NOFOLLOW` after checking it
+  is the same file. It runs only before this process has SQLite open on that
+  file, because closing another descriptor for a database file would drop
+  SQLite's locks.
+- Busy timeout: every connection retries a locked database for 5 seconds (the
+  `mattn/go-sqlite3` default `_busy_timeout=5000`, applied on every open);
+  project link writes use 10 seconds with `_txlock=immediate`. Short contention
+  between the daemon, bridge drains, and CLI commands retries instead of
+  failing with `database is locked`.
+- File capture never records the database or its `-wal`, `-shm`, `-journal`,
+  or `-migration.lock` files, even when the database lives under a watched
+  directory.
+
+## Schema Migrations
+
+Schema preparation (create tables, add columns, build indexes, run backfills)
+runs whenever a workgraph process opens the store for writing, including the
+capture worker before it reports ready. It is idempotent and quick once the
+database is current, but the first open by a newer binary can hold the write
+lock for a long time on a large database.
+
+Preparation is a single coordinated step. Each process takes an exclusive
+`flock` on `<database>-migration.lock` before it prepares the schema and holds
+it until preparation finishes. Other processes that need to prepare the schema
+wait for the lock (up to ten minutes, then fail with `database upgrade in
+progress; try again when it finishes`) instead of failing with `database is
+locked`, then find the work done. The lock is released automatically if the
+holder exits. On platforms without `flock` (Windows), preparation is not
+coordinated and relies on the busy timeout.
+
+Read commands do not wait behind a migration. They try the migration lock
+without blocking. When another process holds it, they skip preparation and
+read the schema that is already there. If that read works, the result is
+normal: brief preparation by another process never turns into an error. Only
+when the existing schema cannot answer the read (an older shape mid-upgrade)
+do they report the upgrade explicitly instead of partial or empty state:
+
+- capture-request listings return `ErrDatabaseUpgradeInProgress`
+  (`database upgrade in progress; try again when it finishes`).
+- `connectors status` shows `capture unknown (database upgrade in progress)`
+  for connected bridged connectors.
+- `today` and `resume` print `Database upgrade in progress; capture status
+  refreshes when it finishes.` in place of the bridge stall check.
+
+`resume` records its overview check-in while holding the migration lock,
+taken without blocking; if another process holds it, the check-in is skipped
+and `resume` still succeeds, so the next `resume` reports work since the
+previous check-in. `status`
+reports a held migration lock, and `doctor` reports it with the journal mode as
+`Database: ok (journal mode: wal)`.
+
+`start` waits through a migration as described in
+[capture controls](capture-controls.md#waiting-for-readiness).
+
 ## Tables
 
 ### events

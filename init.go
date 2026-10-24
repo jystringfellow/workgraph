@@ -61,7 +61,10 @@ func Init(config InitConfig) (InitResult, error) {
 		return InitResult{}, fmt.Errorf("create database directory: %w", err)
 	}
 
-	db, err := sql.Open("sqlite3", dbPath)
+	if err := secureDatabaseFilesOnce(dbPath); err != nil {
+		return InitResult{}, fmt.Errorf("secure database: %w", err)
+	}
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		return InitResult{}, fmt.Errorf("open database: %w", err)
 	}
@@ -261,7 +264,7 @@ func initMessage(result InitResult, fileWatchingOff bool) string {
 	return strings.Join(lines, "\n")
 }
 
-func createSchema(db *sql.DB) error {
+func migrateSchema(db *sql.DB) error {
 	statements := []string{
 		`CREATE TABLE IF NOT EXISTS events (
 			id TEXT PRIMARY KEY,

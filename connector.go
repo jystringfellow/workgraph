@@ -3,7 +3,6 @@ package workgraph
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -657,7 +656,7 @@ func configureGitHubCaptureParams(homeDir string, raw json.RawMessage) (json.Raw
 }
 
 func resetCaptureCursor(homeDir string, connectorID string) error {
-	db, err := sql.Open("sqlite3", bridgedDefaultDatabasePath(homeDir))
+	db, err := openDatabase(bridgedDefaultDatabasePath(homeDir))
 	if err != nil {
 		return fmt.Errorf("open capture outbox: %w", err)
 	}
@@ -1328,13 +1327,15 @@ func connectorStatuses(homeDir string, state connectorRuntimeFile) []ConnectorSt
 	statuses := make([]ConnectorStatus, 0, len(connectorRegistry))
 	now := time.Now()
 	activeRequests := map[string]CaptureRequest{}
-	if requests, err := ListCaptureRequests(CaptureRequestListConfig{HomeDir: homeDir}); err == nil {
+	requests, requestsErr := ListCaptureRequests(CaptureRequestListConfig{HomeDir: homeDir})
+	if requestsErr == nil {
 		for _, request := range requests {
 			if request.Status == "pending" || request.Status == "claimed" {
 				activeRequests[request.ConnectorID] = request
 			}
 		}
 	}
+	requestsUpgrading := errors.Is(requestsErr, ErrDatabaseUpgradeInProgress)
 	for _, definition := range connectorRegistry {
 		id := definition.ID
 		connected := connectorConnected(homeDir, state, id)
@@ -1378,6 +1379,9 @@ func connectorStatuses(homeDir string, state connectorRuntimeFile) []ConnectorSt
 			CaptureAvailableAt:  request.AvailableAt,
 			BridgeStall:         stall.Detail,
 		})
+		if requestsUpgrading && connected && captureMode == "bridged" {
+			statuses[len(statuses)-1].CaptureStatus = captureStatusUpgrading
+		}
 	}
 	return statuses
 }
