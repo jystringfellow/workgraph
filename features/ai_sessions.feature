@@ -47,11 +47,51 @@ Feature: Local AI coding session continuity
     Then workgraph launches the stored OpenCode executable with "--session <opencode-session-id>"
 
   Scenario: Fail safely when a started child cannot be recorded
-    Given the AI session start event cannot be persisted
+    Given the AI session start event fails with a nonretryable persistence error
     When I run "workgraph ai run -- codex"
     Then workgraph terminates and reaps the child
     And workgraph reports the persistence failure
     And no untracked child remains running
+
+  Scenario: Hold no database handle while the wrapped agent runs
+    Given a wrapped agent is running and its start event is recorded
+    When the database file is moved aside and replaced while the agent is idle
+    And the agent exits
+    Then the end event is written to the database at the configured path
+    And every database connection the wrapper opened is closed while the agent is idle
+
+  Scenario: Keep the agent running while the database is locked at start
+    Given another process holds an exclusive lock on the workgraph database
+    When I run "workgraph ai run -- codex"
+    Then the agent keeps running and the wrapper does not exit
+    And the start event is recorded once the lock clears
+    And after the agent exits, stderr reports that the start was recorded late
+
+  Scenario: Retry the end event while the database is locked
+    Given a wrapped agent exits while another process holds an exclusive lock
+    When the lock clears within the retry window
+    Then the wrapper records the end event
+    And the wrapper returns the agent's exit status
+
+  Scenario: Record the end event when the wrapper is signaled
+    Given a wrapped agent is running
+    When the wrapper receives SIGTERM
+    Then the wrapper forwards SIGTERM to the agent
+    And the end event records signal "SIGTERM"
+    And the wrapper exits with status 143
+
+  Scenario: Forward a signal that arrives while the agent is launching
+    Given the wrapper receives SIGTERM before the agent process exists
+    When the agent starts
+    Then the wrapper forwards the queued SIGTERM to the agent
+    And the end event records signal "SIGTERM"
+    And the wrapper exits with status 143
+
+  Scenario: Give up on an unavailable database within the retry window
+    Given another process holds an exclusive lock longer than the retry window
+    When the wrapper retries a lifecycle write
+    Then it gives up within the window plus a small slack
+    And no single attempt waits past the window for the lock
 
   Scenario: Abort before launch when the required launch observation fails
     Given Git metadata collection fails for a reason other than "not a repository"

@@ -17,7 +17,7 @@ func TestMemoryDiscoveryOffersAndConfirmsAcronymMapping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	doc, err := workgraph.InitProjectMemory(workgraph.ProjectMemoryInitConfig{HomeDir: home, MemoryDir: memory, Project: "MPO Harness"})
+	doc, err := workgraph.InitProjectMemory(workgraph.ProjectMemoryInitConfig{HomeDir: home, MemoryDir: memory, Project: "HPO Harness"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,12 +25,12 @@ func TestMemoryDiscoveryOffersAndConfirmsAcronymMapping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := "Mercury.Platform.Orchestration"
-	insertEvent(t, initialized.DatabasePath, storedEvent{ID: "mpo-event", Type: "file.modified", Timestamp: time.Now(), Project: source, Payload: `{"path":"/tmp/work/notes.md"}`})
+	source := "Helix.Platform.Operations"
+	insertEvent(t, initialized.DatabasePath, storedEvent{ID: "harbor-event", Type: "file.modified", Timestamp: time.Now(), Project: source, Payload: `{"path":"/tmp/work/notes.md"}`})
 	for _, command := range [][]string{{"memory", "doctor"}, {"memory", "suggest"}, {"resume"}, {"today"}} {
 		args := append(append([]string{}, command...), "--home", home, "--memory", memory)
 		if command[0] != "today" {
-			args = append(args, "MPO Harness")
+			args = append(args, "HPO Harness")
 		}
 		output, err := runworkgraph(t, repoRoot(t), args...)
 		if err != nil {
@@ -42,7 +42,7 @@ func TestMemoryDiscoveryOffersAndConfirmsAcronymMapping(t *testing.T) {
 			}
 		}
 	}
-	args := []string{"memory", "doctor", "--home", home, "--memory", memory, "--interactive", "MPO Harness"}
+	args := []string{"memory", "doctor", "--home", home, "--memory", memory, "--interactive", "HPO Harness"}
 	if output, err := runworkgraphInput(t, repoRoot(t), "", args...); err != nil {
 		t.Fatalf("EOF: %v %s", err, output)
 	}
@@ -50,7 +50,7 @@ func TestMemoryDiscoveryOffersAndConfirmsAcronymMapping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decline: %v %s", err, output)
 	}
-	suggestions, err := workgraph.SuggestMemoryUpdates(workgraph.MemorySuggestConfig{HomeDir: home, MemoryDir: memory, Project: "MPO Harness"})
+	suggestions, err := workgraph.SuggestMemoryUpdates(workgraph.MemorySuggestConfig{HomeDir: home, MemoryDir: memory, Project: "HPO Harness"})
 	if err != nil || len(suggestions.Suggestions) != 0 {
 		t.Fatal("declined mapping changed evidence")
 	}
@@ -58,7 +58,7 @@ func TestMemoryDiscoveryOffersAndConfirmsAcronymMapping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("accept: %v %s", err, output)
 	}
-	suggestions, err = workgraph.SuggestMemoryUpdates(workgraph.MemorySuggestConfig{HomeDir: home, MemoryDir: memory, Project: "MPO Harness"})
+	suggestions, err = workgraph.SuggestMemoryUpdates(workgraph.MemorySuggestConfig{HomeDir: home, MemoryDir: memory, Project: "HPO Harness"})
 	if err != nil || len(suggestions.Suggestions) != 1 {
 		t.Fatalf("accepted mapping missing: %+v %v", suggestions, err)
 	}
@@ -66,7 +66,7 @@ func TestMemoryDiscoveryOffersAndConfirmsAcronymMapping(t *testing.T) {
 	if err != nil || string(contents) != string(original) {
 		t.Fatal("discovery rewrote memory")
 	}
-	output, err = runworkgraph(t, repoRoot(t), "memory", "doctor", "--home", home, "--memory", memory, "MPO Harness")
+	output, err = runworkgraph(t, repoRoot(t), "memory", "doctor", "--home", home, "--memory", memory, "HPO Harness")
 	if err != nil || strings.Contains(string(output), "acronym") {
 		t.Fatalf("already linked candidate offered again: %v %s", err, output)
 	}
@@ -83,10 +83,10 @@ func TestMemoryDiscoveryUsesTitleWithoutChangingFilenameIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(doc.Path, []byte("# MPO Harness\n\nAuthored context.\n"), 0o600); err != nil {
+	if err := os.WriteFile(doc.Path, []byte("# HPO Harness\n\nAuthored context.\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	insertEvent(t, initialized.DatabasePath, storedEvent{ID: "repo", Type: "file.modified", Timestamp: time.Now(), Project: "Mercury.Platform.Orchestration", Payload: `{}`})
+	insertEvent(t, initialized.DatabasePath, storedEvent{ID: "repo", Type: "file.modified", Timestamp: time.Now(), Project: "Helix.Platform.Operations", Payload: `{}`})
 	output, err := runworkgraphInput(t, repoRoot(t), "yes\n", "memory", "doctor", "--home", home, "--memory", memory, "--interactive")
 	if err != nil || !strings.Contains(string(output), "'delivery'") {
 		t.Fatalf("title discovery: %v %s", err, output)
@@ -95,7 +95,7 @@ func TestMemoryDiscoveryUsesTitleWithoutChangingFilenameIdentity(t *testing.T) {
 	if err != nil || len(result.Suggestions) != 1 {
 		t.Fatalf("linked wrong document: %+v %v", result, err)
 	}
-	if _, err := os.Stat(filepath.Join(memory, "projects", "mpo-harness.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(memory, "projects", "hpo-harness.md")); !os.IsNotExist(err) {
 		t.Fatal("created document from display title")
 	}
 }

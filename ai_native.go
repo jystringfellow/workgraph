@@ -679,7 +679,11 @@ func mergeAIOpenCodeInlineConfig(existing, pluginPath string) (string, error) {
 	return string(encoded), nil
 }
 
-func findLatestAISessionByNativeID(db *sql.DB, tool, nativeSessionID, excludedSessionID string) (string, error) {
+type aiEventQuerier interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
+func findLatestAISessionByNativeID(db aiEventQuerier, tool, nativeSessionID, excludedSessionID string) (string, error) {
 	rows, err := db.Query(`SELECT type, timestamp, payload_json FROM events WHERE source = 'ai'`)
 	if err != nil {
 		return "", err

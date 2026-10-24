@@ -331,9 +331,11 @@ Launch sequencing is normative:
 7. return the child's real exit outcome
 
 No start event is written if executable resolution or child start fails. If the
-child starts but the start event cannot be persisted, workgraph terminates and
-reaps the child, reports the persistence failure, and exits nonzero. It must not
-leave an untracked child running.
+child starts but the start event fails with a nonretryable persistence error,
+workgraph terminates and reaps the child, reports the persistence failure, and
+exits nonzero. It must not leave an untracked child running. An unavailable
+database is retryable and does not terminate the child; see
+[Database access during a wrapped session](#database-access-during-a-wrapped-session).
 
 End observation and end-event persistence are best-effort. Their failures are
 visible on stderr but never replace or suppress the child outcome. A normally
@@ -341,6 +343,58 @@ exited child returns its exact exit code. On Unix, a signal-terminated child is
 stored with its normalized signal name and the wrapper returns `128 + signal
 number`. An absent end event is handled by derived status and does not
 invalidate prior session evidence.
+
+### Database access during a wrapped session
+
+The wrapper holds no database handle while the child runs. Each database use
+opens a fresh connection, does its one read or write, and closes it:
+
+- before launch, only a native resume selection reads prior events to find its
+  predecessor
+- after launch, the start event is written
+- after the child exits, the end event is written
+
+Checkpoints and native lifecycle callbacks run in their own short-lived
+`workgraph` processes, each holding one connection only for the few statements
+of that command. The wrapper does not poll, heartbeat, or tail transcripts. Its
+connections open the existing database in read-write mode without creating it
+and never prepare or migrate the schema, so a short open mid-session cannot
+start a migration or recreate a database that maintenance has moved aside.
+
+A database that is locked, busy, or cannot be opened is unavailable, not
+failed. Every retry window is a hard wall-clock deadline. SQLite's own lock
+wait counts requested sleeps rather than elapsed time and can run well past
+its nominal timeout on a loaded machine, so each connection setup and each
+statement waits at most 250 milliseconds, or the time left if less, for a lock.
+Statements run under the window's deadline, and workgraph retries with short
+backoff until the write lands or the window ends.
+
+- a native predecessor lookup retries for up to fifteen seconds and then
+  aborts before launch
+- an unavailable start write never terminates the child. The wrapper retries
+  with short lock waits and backoff until the write lands. If the child exits
+  first, the wrapper retries until fifteen seconds after the child exited.
+  After the child exits, stderr reports that the start was recorded late. If
+  it never landed, stderr reports the start persistence failure, no end event
+  is written, and the wrapper still returns the child outcome.
+- an unavailable end write retries for up to fifteen seconds after the final
+  observation before being reported as an end persistence failure
+
+Any nonretryable start persistence failure still terminates and reaps the
+child.
+Native lifecycle callbacks wait only briefly for the start event, so a start
+that lands late may leave a native binding unrecorded; that callback reports
+its own failure.
+
+### Wrapper signals
+
+The wrapper starts handling SIGINT, SIGQUIT, SIGTERM, and SIGHUP before it
+launches the child and does not exit on them while the child runs. On Unix it
+forwards SIGTERM and SIGHUP to the child, queuing any that arrive before the
+child exists and forwarding them once it starts; SIGINT and SIGQUIT
+already reach the child from the terminal's foreground process group. The
+wrapper then waits for the child and records the end event through a fresh
+connection, as for any other exit.
 
 When `ai run` recognizes an adapter's exact native resume selection, it stores
 that native ID in the new start event. If prior workgraph events contain the
