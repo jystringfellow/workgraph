@@ -98,6 +98,9 @@ func startAIRunSignalRelay() (attach func(*os.Process), stop func()) {
 				}
 				if child == nil {
 					pending = append(pending, value)
+					if aiRunSignalQueued != nil {
+						aiRunSignalQueued()
+					}
 				} else {
 					_ = child.Signal(value)
 				}

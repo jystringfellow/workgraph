@@ -136,7 +136,7 @@ func TestAIRunDatabaseOpenNeverCreatesAMissingDatabase(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(databasePath), 0o700); err != nil {
 		t.Fatalf("create database directory: %v", err)
 	}
-	err := withAIRunDatabase(databasePath, aiRunBusyTimeout, func(db *sql.DB) error { return db.Ping() })
+	err := withAIRunDatabase(databasePath, time.Now().Add(aiRunBusyTimeout), func(aiRunConnection) error { return nil })
 	if err == nil || !isAIRunDatabaseUnavailable(err) {
 		t.Fatalf("expected a retryable unavailable-database error, got %v", err)
 	}
@@ -148,7 +148,7 @@ func TestAIRunDatabaseOpenNeverCreatesAMissingDatabase(t *testing.T) {
 		t.Fatalf("init workgraph: %v", err)
 	}
 	var count int
-	err = withAIRunDatabase(databasePath, aiRunBusyTimeout, func(db *sql.DB) error {
+	err = withAIRunDatabase(databasePath, time.Now().Add(aiRunBusyTimeout), func(db aiRunConnection) error {
 		return db.QueryRow(`SELECT COUNT(*) FROM events`).Scan(&count)
 	})
 	if err != nil {
@@ -157,6 +157,12 @@ func TestAIRunDatabaseOpenNeverCreatesAMissingDatabase(t *testing.T) {
 }
 
 func holdAIRunTestExclusiveLock(t *testing.T, databasePath string) {
+	t.Helper()
+	release := takeAIRunTestExclusiveLock(t, databasePath)
+	t.Cleanup(release)
+}
+
+func takeAIRunTestExclusiveLock(t *testing.T, databasePath string) func() {
 	t.Helper()
 	db, err := sql.Open("sqlite3", databasePath)
 	if err != nil {
@@ -167,10 +173,13 @@ func holdAIRunTestExclusiveLock(t *testing.T, databasePath string) {
 		db.Close()
 		t.Fatalf("take exclusive database lock: %v", err)
 	}
-	t.Cleanup(func() {
-		_, _ = db.Exec(`COMMIT`)
-		db.Close()
-	})
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			_, _ = db.Exec(`COMMIT`)
+			db.Close()
+		})
+	}
 }
 
 func initAIRunTestDatabase(t *testing.T) string {
@@ -182,7 +191,7 @@ func initAIRunTestDatabase(t *testing.T) string {
 	return initialized.DatabasePath
 }
 
-func countAIRunTestEvents(db *sql.DB) error {
+func countAIRunTestEvents(db aiRunConnection) error {
 	var count int
 	return db.QueryRow(`SELECT COUNT(*) FROM events`).Scan(&count)
 }
@@ -220,5 +229,50 @@ func TestAIRunStartRetryAfterChildExitGivesUpWithinItsBudget(t *testing.T) {
 	}
 	if elapsed > aiRunRetryBudget+time.Second {
 		t.Fatalf("start retry ran %v after child exit with a %v budget", elapsed, aiRunRetryBudget)
+	}
+}
+
+func TestAIRunDatabaseDeadlineCoversLocksTakenAfterConnecting(t *testing.T) {
+	databasePath := initAIRunTestDatabase(t)
+	budget := 3 * time.Second
+	began := time.Now()
+	aiRunAfterConnect = func() {
+		time.Sleep(2 * time.Second)
+		t.Cleanup(takeAIRunTestExclusiveLock(t, databasePath))
+	}
+	t.Cleanup(func() { aiRunAfterConnect = nil })
+
+	err := withAIRunDatabase(databasePath, began.Add(budget), countAIRunTestEvents)
+	elapsed := time.Since(began)
+	if err == nil || !isAIRunDatabaseUnavailable(err) {
+		t.Fatalf("expected an unavailable-database error, got %v", err)
+	}
+	if elapsed > budget+time.Second {
+		t.Fatalf("statement waited %v against a %v deadline after connecting", elapsed, budget)
+	}
+}
+
+func TestAIRunStartWindowCountsFromChildExitDuringABlockedAttempt(t *testing.T) {
+	databasePath := initAIRunTestDatabase(t)
+	holdAIRunTestExclusiveLock(t, databasePath)
+	previousBusyTimeout, previousBudget := aiRunBusyTimeout, aiRunRetryBudget
+	aiRunBusyTimeout, aiRunRetryBudget = 2*time.Second, 2500*time.Millisecond
+	t.Cleanup(func() { aiRunBusyTimeout, aiRunRetryBudget = previousBusyTimeout, previousBudget })
+
+	done := make(chan struct{})
+	var exitedAt time.Time
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		exitedAt = time.Now()
+		close(done)
+	}()
+	start := persistAIRunStart(databasePath, countAIRunTestEvents, aiRunChildExit{done: done, at: &exitedAt})
+	<-done
+	sinceExit := time.Since(exitedAt)
+	if start.err == nil || !isAIRunDatabaseUnavailable(start.err) || !start.childExited {
+		t.Fatalf("expected an unavailable start after child exit, got %+v", start)
+	}
+	if sinceExit > aiRunRetryBudget+time.Second {
+		t.Fatalf("start retry ran %v after the child exited mid-attempt with a %v window", sinceExit, aiRunRetryBudget)
 	}
 }

@@ -362,9 +362,11 @@ never prepare or migrate the schema, so a short open mid-session cannot start a
 migration or recreate a database that maintenance has moved aside.
 
 A database that is locked, busy, or cannot be opened is unavailable, not
-failed. Every retry window is a hard deadline: each attempt's lock wait is
-shortened to the time left in its window, so an operation gives up within its
-window rather than after a final full lock wait.
+failed. Every retry window is a hard deadline. Opening a connection waits for
+a lock no longer than the time left in the window, each statement's lock wait
+is reset to the time then left, and statements run under the window's
+deadline, so an operation gives up within its window rather than after a
+final full lock wait.
 
 - a native predecessor lookup retries for up to fifteen seconds and then
   aborts before launch

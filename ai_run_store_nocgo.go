@@ -2,6 +2,11 @@
 
 package workgraph
 
-func isAIRunDatabaseUnavailable(error) bool {
-	return false
+import (
+	"context"
+	"errors"
+)
+
+func isAIRunDatabaseUnavailable(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded)
 }

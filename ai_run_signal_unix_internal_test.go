@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestAIRunForwardsSignalReceivedBeforeChildStarts(t *testing.T) {
@@ -19,12 +20,23 @@ func TestAIRunForwardsSignalReceivedBeforeChildStarts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init workgraph: %v", err)
 	}
+	queued := make(chan struct{})
+	aiRunSignalQueued = func() { close(queued) }
 	aiRunBeforeChildStart = func() {
 		if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
 			t.Errorf("signal wrapper before child start: %v", err)
+			return
+		}
+		select {
+		case <-queued:
+		case <-time.After(10 * time.Second):
+			t.Errorf("SIGTERM was not queued before the child started")
 		}
 	}
-	t.Cleanup(func() { aiRunBeforeChildStart = nil })
+	t.Cleanup(func() {
+		aiRunBeforeChildStart = nil
+		aiRunSignalQueued = nil
+	})
 
 	markers := t.TempDir()
 	var stderr strings.Builder

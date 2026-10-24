@@ -1,6 +1,7 @@
 package workgraph
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net/url"
@@ -16,6 +17,8 @@ var (
 	aiRunRetryMaxDelay     = 2 * time.Second
 	aiRunRetryBudget       = 15 * time.Second
 	aiRunBeforeChildStart  func()
+	aiRunAfterConnect      func()
+	aiRunSignalQueued      func()
 	aiRunOpenDatabase      = func(databasePath string, busyTimeout time.Duration) (*sql.DB, error) {
 		return sql.Open("sqlite3", aiRunDatabaseDSN(databasePath, busyTimeout))
 	}
@@ -31,20 +34,64 @@ func aiRunDatabaseDSN(databasePath string, busyTimeout time.Duration) string {
 	return location.String()
 }
 
-func withAIRunDatabase(databasePath string, busyTimeout time.Duration, use func(*sql.DB) error) error {
-	db, err := aiRunOpenDatabase(databasePath, busyTimeout)
+type aiRunConnection struct {
+	ctx      context.Context
+	conn     *sql.Conn
+	deadline time.Time
+}
+
+func (connection aiRunConnection) boundLockWait() error {
+	remaining := time.Until(connection.deadline)
+	if remaining <= 0 {
+		return fmt.Errorf("AI event database retry window: %w", context.DeadlineExceeded)
+	}
+	_, err := connection.conn.ExecContext(connection.ctx, "PRAGMA busy_timeout = "+strconv.FormatInt(max(remaining.Milliseconds(), 1), 10))
+	return err
+}
+
+func (connection aiRunConnection) Exec(query string, args ...any) (sql.Result, error) {
+	if err := connection.boundLockWait(); err != nil {
+		return nil, err
+	}
+	return connection.conn.ExecContext(connection.ctx, query, args...)
+}
+
+func (connection aiRunConnection) Query(query string, args ...any) (*sql.Rows, error) {
+	if err := connection.boundLockWait(); err != nil {
+		return nil, err
+	}
+	return connection.conn.QueryContext(connection.ctx, query, args...)
+}
+
+func (connection aiRunConnection) QueryRow(query string, args ...any) *sql.Row {
+	_ = connection.boundLockWait()
+	return connection.conn.QueryRowContext(connection.ctx, query, args...)
+}
+
+func withAIRunDatabase(databasePath string, deadline time.Time, use func(aiRunConnection) error) error {
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	db, err := aiRunOpenDatabase(databasePath, min(aiRunBusyTimeout, time.Until(deadline)))
 	if err != nil {
 		return fmt.Errorf("open AI event database: %w", err)
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(1)
-	return use(db)
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("open AI event database: %w", err)
+	}
+	defer conn.Close()
+	if aiRunAfterConnect != nil {
+		aiRunAfterConnect()
+	}
+	return use(aiRunConnection{ctx: ctx, conn: conn, deadline: deadline})
 }
 
-func retryAIRunDatabase(databasePath string, deadline time.Time, use func(*sql.DB) error) error {
+func retryAIRunDatabase(databasePath string, deadline time.Time, use func(aiRunConnection) error) error {
 	delay := aiRunRetryInitialDelay
 	for {
-		err := withAIRunDatabase(databasePath, min(aiRunBusyTimeout, time.Until(deadline)), use)
+		err := withAIRunDatabase(databasePath, deadline, use)
 		if err == nil || !isAIRunDatabaseUnavailable(err) {
 			return err
 		}
@@ -80,15 +127,15 @@ type aiRunStartResult struct {
 	childExited bool
 }
 
-func persistAIRunStart(databasePath string, use func(*sql.DB) error, exit aiRunChildExit) aiRunStartResult {
+func persistAIRunStart(databasePath string, use func(aiRunConnection) error, exit aiRunChildExit) aiRunStartResult {
 	delay := aiRunRetryInitialDelay
 	var firstUnavailable error
 	for {
-		busyTimeout := aiRunBusyTimeout
+		deadline := time.Now().Add(aiRunBusyTimeout)
 		if exit.exited() {
-			busyTimeout = min(busyTimeout, time.Until(exit.at.Add(aiRunRetryBudget)))
+			deadline = exit.at.Add(aiRunRetryBudget)
 		}
-		err := withAIRunDatabase(databasePath, busyTimeout, use)
+		err := withAIRunDatabase(databasePath, deadline, use)
 		if err == nil || !isAIRunDatabaseUnavailable(err) {
 			return aiRunStartResult{err: err, delayedBy: firstUnavailable, childExited: exit.exited()}
 		}

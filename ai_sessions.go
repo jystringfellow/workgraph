@@ -296,7 +296,7 @@ func runAISession(config AIRunConfig, permittedParentSessionID string) (AIRunRes
 	}
 	nativeSessionID := nativeLaunch.NativeSessionID
 	if predecessorSessionID == "" && nativeSessionID != "" {
-		err = retryAIRunDatabase(status.DatabasePath, time.Now().Add(aiRunRetryBudget), func(db *sql.DB) error {
+		err = retryAIRunDatabase(status.DatabasePath, time.Now().Add(aiRunRetryBudget), func(db aiRunConnection) error {
 			var lookupErr error
 			predecessorSessionID, lookupErr = findLatestAISessionByNativeID(db, tool, nativeSessionID, "")
 			return lookupErr
@@ -346,7 +346,7 @@ func runAISession(config AIRunConfig, permittedParentSessionID string) (AIRunRes
 		ProcessStartIdentity: currentAIProcessStartIdentity(command.Process.Pid),
 		Observed:             observed,
 	}
-	start := persistAIRunStart(status.DatabasePath, func(db *sql.DB) error {
+	start := persistAIRunStart(status.DatabasePath, func(db aiRunConnection) error {
 		return insertAIEvent(db, "ai.session_started:"+sessionID, "ai.session_started", startedAt, project, "AI session started ("+tool+")", started)
 	}, exit)
 	if start.err != nil && (!start.childExited || !isAIRunDatabaseUnavailable(start.err)) {
@@ -392,7 +392,7 @@ func runAISession(config AIRunConfig, permittedParentSessionID string) (AIRunRes
 		ended.Observed = &finalObserved
 	}
 	summary := aiEndedSummary(outcome)
-	err = retryAIRunDatabase(status.DatabasePath, time.Now().Add(aiRunRetryBudget), func(db *sql.DB) error {
+	err = retryAIRunDatabase(status.DatabasePath, time.Now().Add(aiRunRetryBudget), func(db aiRunConnection) error {
 		return insertAIEvent(db, "ai.session_ended:"+sessionID, "ai.session_ended", endedAt, project, summary, ended)
 	})
 	if err != nil && config.Stderr != nil {
