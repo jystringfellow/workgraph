@@ -149,6 +149,11 @@ Priority labels used below:
   automatic watch roots stop being watched, and git repository discovery uses
   its own `repo_dirs` scan roots. [spec: `specs/config.md`]
 
+- [x] `start` waits through database upgrades and reports progress, failing
+  only when the worker exits or stalls; schema migrations are coordinated
+  across processes; the store uses WAL. [specs:
+  `specs/capture-controls.md` and `specs/db-contracts.md`]
+
 - Signed-in client config-dir bindings shared by bridge workers and LLM
   profiles, with runtime enforcement and inspectable diagnostics. [spec:
   `specs/signed-in-client-binding.md`]

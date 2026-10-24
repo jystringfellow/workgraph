@@ -47,7 +47,7 @@ func TestWaitForDaemonReadyWaitsForMatchingPIDFile(t *testing.T) {
 
 	ready := make(chan error, 1)
 	go func() {
-		_, err := waitForDaemonReady(homeDir)
+		_, err := waitForDaemonReady(daemonReadyWait{homeDir: homeDir})
 		ready <- err
 	}()
 	select {
@@ -120,5 +120,43 @@ func TestMatchingCaptureWorkerProcessesForHomeAndDatabase(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("expected matching worker PIDs %#v, got %#v", want, got)
 		}
+	}
+}
+
+func TestWaitForDaemonReadyReportsStillStartingWhileWorkerUpgradesDatabase(t *testing.T) {
+	homeDir := t.TempDir()
+	databasePath := filepath.Join(homeDir, "workgraph.db")
+	if err := os.WriteFile(databasePath, nil, 0o600); err != nil {
+		t.Fatalf("create database file: %v", err)
+	}
+	release, err := lockDatabaseMigration(databasePath)
+	if err != nil {
+		t.Fatalf("hold migration lock: %v", err)
+	}
+	defer release()
+	endStartup := beginDaemonStartup(homeDir, databasePath)
+	defer endStartup()
+
+	originalMaxWait, originalReportAfter := daemonStartupMaxWait, daemonUpgradeReportAfter
+	daemonStartupMaxWait, daemonUpgradeReportAfter = 300*time.Millisecond, 50*time.Millisecond
+	t.Cleanup(func() { daemonStartupMaxWait, daemonUpgradeReportAfter = originalMaxWait, originalReportAfter })
+
+	var progress strings.Builder
+	_, err = waitForDaemonReady(daemonReadyWait{homeDir: homeDir, databasePath: databasePath, progress: &progress})
+	var stillStarting *DaemonStillStartingError
+	if !errors.As(err, &stillStarting) {
+		t.Fatalf("expected a still-starting outcome, got %v", err)
+	}
+	if !stillStarting.UpgradingDatabase || stillStarting.PID != os.Getpid() {
+		t.Fatalf("expected the live worker to be reported as upgrading, got %+v", stillStarting)
+	}
+	if got, want := err.Error(), "workgraph capture is still starting (upgrading database); check workgraph status"; got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+	if strings.Contains(err.Error(), "did not become ready") || strings.Contains(err.Error(), "fail") {
+		t.Fatalf("expected the outcome not to claim start failed, got %q", err.Error())
+	}
+	if progress.String() != "Upgrading database…\n" {
+		t.Fatalf("expected one upgrade progress line, got %q", progress.String())
 	}
 }

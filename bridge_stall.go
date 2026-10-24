@@ -61,6 +61,9 @@ func detectBridgeStall(homeDir string, state connectorRuntimeFile, id string, re
 }
 
 func bridgeStallWarning(homeDir string, databasePath string, now time.Time) string {
+	if databaseMigrationInProgress(databasePath) {
+		return "\n\n" + databaseUpgradeInProgressNotice
+	}
 	state, err := readConnectorRuntimeFile(homeDir)
 	if err != nil {
 		return ""

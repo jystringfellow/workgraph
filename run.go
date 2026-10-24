@@ -185,6 +185,10 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 		db.Close()
 		return nil, fmt.Errorf("open database: %w", err)
 	}
+	if err := createSchema(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("prepare database schema: %w", err)
+	}
 
 	watcher := config.Watcher
 	if watcher == nil {
@@ -1733,7 +1737,7 @@ func shouldIgnorePath(path, homeDir, dbPath string, ignorePaths []string, ignore
 	if sameOrChild(path, homeDir) {
 		return true
 	}
-	if path == dbPath {
+	if isDatabaseFile(path, dbPath) {
 		return true
 	}
 	for _, ignorePath := range ignorePaths {

@@ -3433,7 +3433,13 @@ func runCaptureStart(args []string, stdout io.Writer, stderr io.Writer) int {
 			SlackListIDs:    slackListIDs,
 			SlackIncludeDMs: *slackIncludeDMs,
 			SlackAPIBaseURL: *slackAPIBaseURL,
+			Progress:        stdout,
 		})
+		var stillStarting *workgraph.DaemonStillStartingError
+		if errors.As(err, &stillStarting) {
+			fmt.Fprintln(stdout, stillStarting.Error())
+			return workgraph.ExitDaemonStillStarting
+		}
 		if err != nil {
 			fmt.Fprintf(stderr, "workgraph start: %v\n", err)
 			return 1

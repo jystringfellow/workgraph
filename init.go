@@ -261,7 +261,7 @@ func initMessage(result InitResult, fileWatchingOff bool) string {
 	return strings.Join(lines, "\n")
 }
 
-func createSchema(db *sql.DB) error {
+func migrateSchema(db *sql.DB) error {
 	statements := []string{
 		`CREATE TABLE IF NOT EXISTS events (
 			id TEXT PRIMARY KEY,
