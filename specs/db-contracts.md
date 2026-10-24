@@ -49,15 +49,18 @@ persists.
   committed transactions. workgraph accepts that: captured events are
   re-derivable from their sources on the next poll, and `FULL` would add an
   fsync to every commit on the capture hot path.
-- Permissions: `init` and the capture worker create a missing database file
-  as `0600` before SQLite opens it, so WAL sidecars, which SQLite creates with
+- Permissions: the first time a process opens a given database file (every
+  workgraph open goes through one helper, once per resolved path per
+  process), it creates a missing database file as `0600` before SQLite opens
+  it, so WAL sidecars, which SQLite creates with
   the main file's permissions, start user-only. Before opening an existing
   database they also repair broader permissions on the database and any
   existing `-wal`, `-shm` and `-journal` files. The repair skips symlinks,
   non-regular files and files not owned by the current user, and changes
   permissions through a descriptor opened with `O_NOFOLLOW` after checking it
-  is the same file. It runs before this process opens the database, because
-  closing another descriptor for a database file would drop SQLite's locks.
+  is the same file. It runs only before this process has SQLite open on that
+  file, because closing another descriptor for a database file would drop
+  SQLite's locks.
 - Busy timeout: every connection retries a locked database for 5 seconds (the
   `mattn/go-sqlite3` default `_busy_timeout=5000`, applied on every open);
   project link writes use 10 seconds with `_txlock=immediate`. Short contention
@@ -98,9 +101,10 @@ do they report the upgrade explicitly instead of partial or empty state:
 - `today` and `resume` print `Database upgrade in progress; capture status
   refreshes when it finishes.` in place of the bridge stall check.
 
-`resume` skips recording its overview check-in while the migration lock is
-held, so the next `resume` still reports work since the previous check-in;
-otherwise the check-in is an ordinary write with the busy timeout. `status`
+`resume` records its overview check-in while holding the migration lock,
+taken without blocking; if another process holds it, the check-in is skipped
+and `resume` still succeeds, so the next `resume` reports work since the
+previous check-in. `status`
 reports a held migration lock, and `doctor` reports it with the journal mode as
 `Database: ok (journal mode: wal)`.
 

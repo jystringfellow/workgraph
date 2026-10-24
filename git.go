@@ -57,7 +57,7 @@ func CaptureGitCommits(config GitCaptureConfig) (GitCaptureResult, error) {
 		return GitCaptureResult{}, err
 	}
 
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return GitCaptureResult{}, fmt.Errorf("open database: %w", err)
 	}

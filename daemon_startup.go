@@ -92,6 +92,14 @@ func liveDaemonStartup(homeDir string) (daemonStartup, bool) {
 	return startup, true
 }
 
+func liveCaptureWorkerExists(homeDir string, databasePath string) bool {
+	processes, err := listDaemonProcesses()
+	if err != nil {
+		return true
+	}
+	return len(matchingCaptureWorkerProcesses(homeDir, databasePath, processes)) > 0
+}
+
 func verifiedDaemonStartup(homeDir string) (daemonStartup, bool) {
 	startup, ok := liveDaemonStartup(homeDir)
 	if !ok || !processMatchesCaptureWorker(startup.PID, homeDir, startup.DatabasePath) {
@@ -212,14 +220,14 @@ func waitForDaemonReady(wait daemonReadyWait) (DaemonStatus, error) {
 				return status, nil
 			}
 			if launchedExited {
-				if !captureHomeLocked(wait.homeDir) {
+				if !liveCaptureWorkerExists(wait.homeDir, wait.databasePath) {
 					return DaemonStatus{}, fmt.Errorf("daemon did not become ready: capture worker exited during startup; see %s", daemonLogPath(wait.homeDir))
 				}
 				if lockHolderSince.IsZero() {
 					lockHolderSince = time.Now()
 				}
 				if time.Since(lockHolderSince) >= daemonStartupStaleAfter {
-					return DaemonStatus{}, fmt.Errorf("daemon did not become ready: the capture worker holding %s reported no startup progress; see %s", filepath.Join(wait.homeDir, "capture.lock"), daemonLogPath(wait.homeDir))
+					return DaemonStatus{}, fmt.Errorf("daemon did not become ready: another capture worker for this home reported no startup progress; see %s", daemonLogPath(wait.homeDir))
 				}
 				time.Sleep(daemonReadyPollInterval)
 				continue

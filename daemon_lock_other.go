@@ -13,7 +13,3 @@ func lockDaemonReady(home string) (func(), error) {
 func daemonReadyLockHeld(home string) bool {
 	return true
 }
-
-func captureHomeLocked(home string) bool {
-	return false
-}

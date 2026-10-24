@@ -222,7 +222,7 @@ func loadProjectLinkVerifications(config ProjectLinkStoreConfig, links []Project
 	if err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}

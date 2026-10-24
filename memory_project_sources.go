@@ -36,7 +36,7 @@ func UpdateMemoryProjectSources(config MemoryProjectSourcesConfig) (string, erro
 	if err != nil {
 		return "", err
 	}
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		return "", err
 	}

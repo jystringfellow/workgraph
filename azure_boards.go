@@ -289,7 +289,7 @@ func CaptureAzureBoards(config AzureBoardsCaptureConfig) (AzureBoardsResult, err
 	if err != nil {
 		return AzureBoardsResult{}, err
 	}
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return AzureBoardsResult{}, fmt.Errorf("open database: %w", err)
 	}

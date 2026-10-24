@@ -8,6 +8,7 @@ import (
 	"log"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -25,6 +26,33 @@ var (
 var databaseSidecarSuffixes = []string{"-wal", "-shm", "-journal", databaseMigrationLockSuffix}
 
 var ErrDatabaseUpgradeInProgress = errors.New("database upgrade in progress; try again when it finishes")
+
+var securedDatabasePaths sync.Map
+
+type databaseSecuring struct {
+	once sync.Once
+	err  error
+}
+
+func openDatabase(path string) (*sql.DB, error) {
+	if err := secureDatabaseFilesOnce(path); err != nil {
+		log.Printf("workgraph store: %v", err)
+	}
+	return sql.Open("sqlite3", path)
+}
+
+func secureDatabaseFilesOnce(path string) error {
+	key := path
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		key = resolved
+	} else if absolute, err := filepath.Abs(path); err == nil {
+		key = absolute
+	}
+	entry, _ := securedDatabasePaths.LoadOrStore(key, &databaseSecuring{})
+	securing := entry.(*databaseSecuring)
+	securing.once.Do(func() { securing.err = secureDatabaseFiles(path) })
+	return securing.err
+}
 
 func createSchema(db *sql.DB) error {
 	return createSchemaContext(context.Background(), db)

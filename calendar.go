@@ -245,7 +245,7 @@ func CaptureCalendarEvents(config CalendarCaptureConfig) (CalendarCaptureResult,
 		return CalendarCaptureResult{}, err
 	}
 
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return CalendarCaptureResult{}, fmt.Errorf("open database: %w", err)
 	}

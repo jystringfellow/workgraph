@@ -53,7 +53,7 @@ func LinkProjectUnits(config ProjectLinkPassConfig) (ProjectLinkRunResult, error
 	if err != nil {
 		return ProjectLinkRunResult{}, err
 	}
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		return ProjectLinkRunResult{}, fmt.Errorf("open database: %w", err)
 	}

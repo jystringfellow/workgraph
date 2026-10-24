@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 	"unicode"
@@ -353,7 +354,7 @@ func ReadProjectLinks(config ProjectLinkStoreConfig, query ProjectLinksQuery) ([
 	if err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -372,6 +373,9 @@ func withProjectLinksTx(config ProjectLinkStoreConfig, apply func(*sql.Tx, time.
 	dbPath, err := resumeDatabasePath(ResumeConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath})
 	if err != nil {
 		return err
+	}
+	if err := secureDatabaseFilesOnce(dbPath); err != nil {
+		log.Printf("workgraph store: %v", err)
 	}
 	db, err := sql.Open("sqlite3", projectLinksWriteDSN(dbPath))
 	if err != nil {

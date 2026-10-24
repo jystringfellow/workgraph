@@ -248,7 +248,7 @@ func CaptureMailMessages(config MailCaptureConfig) (MailCaptureResult, error) {
 		return MailCaptureResult{}, err
 	}
 
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return MailCaptureResult{}, fmt.Errorf("open database: %w", err)
 	}

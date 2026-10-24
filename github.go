@@ -149,7 +149,7 @@ func CaptureGitHubEvents(config GitHubCaptureConfig) (GitHubCaptureResult, error
 		return GitHubCaptureResult{}, fmt.Errorf("parse events file: %w", err)
 	}
 
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return GitHubCaptureResult{}, fmt.Errorf("open database: %w", err)
 	}
@@ -189,7 +189,7 @@ func CaptureGitHubFromGH(config GitHubCaptureConfig) (GitHubCaptureResult, error
 		return GitHubCaptureResult{}, err
 	}
 
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return GitHubCaptureResult{}, fmt.Errorf("open database: %w", err)
 	}

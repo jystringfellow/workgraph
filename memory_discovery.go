@@ -38,7 +38,7 @@ func DoctorMemory(config MemoryDoctorConfig) (MemoryDoctorResult, error) {
 	if err != nil {
 		return MemoryDoctorResult{}, err
 	}
-	db, err := sql.Open("sqlite3", path)
+	db, err := openDatabase(path)
 	if err != nil {
 		return MemoryDoctorResult{}, err
 	}

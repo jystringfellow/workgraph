@@ -116,7 +116,7 @@ func Today(config TodayConfig) (TodayResult, error) {
 		return TodayResult{}, fmt.Errorf("check database: %w", err)
 	}
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		return TodayResult{}, fmt.Errorf("open database: %w", err)
 	}

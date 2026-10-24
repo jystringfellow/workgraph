@@ -38,7 +38,7 @@ func RecordGitHubPRWatchHint(config GitHubPRWatchHintConfig) (GitHubPRWatchHintR
 	if databasePath == "" {
 		databasePath = filepath.Join(homeDir, "workgraph.db")
 	}
-	db, err := sql.Open("sqlite3", databasePath)
+	db, err := openDatabase(databasePath)
 	if err != nil {
 		return GitHubPRWatchHintResult{}, fmt.Errorf("open database: %w", err)
 	}

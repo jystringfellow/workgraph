@@ -177,10 +177,10 @@ func StartRun(config RunConfig) (*RunCapture, error) {
 		return nil, err
 	}
 
-	if err := secureDatabaseFiles(status.DatabasePath); err != nil {
+	if err := secureDatabaseFilesOnce(status.DatabasePath); err != nil {
 		return nil, fmt.Errorf("secure database: %w", err)
 	}
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}

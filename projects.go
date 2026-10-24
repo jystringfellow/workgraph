@@ -1,7 +1,6 @@
 package workgraph
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
 	"sort"
@@ -47,7 +46,7 @@ func loadContainerMappingsIfInitialized(homeDir, databasePath string) (Container
 	if err != nil {
 		return ContainerMappings{}, err
 	}
-	db, err := sql.Open("sqlite3", path)
+	db, err := openDatabase(path)
 	if err != nil {
 		return ContainerMappings{}, err
 	}

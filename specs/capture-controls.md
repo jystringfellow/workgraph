@@ -84,7 +84,8 @@ readiness before startup is complete.
 - ready: the worker wrote `daemon.json` and `daemon.pid` for the same live PID;
   start prints the started message and exits 0.
 - worker exited: the process start launched exited before becoming ready and
-  no process holds the capture home lock; start fails at once with `daemon did not become ready: capture worker exited during
+  no other live capture worker for this home or database exists; start fails
+  at once with `daemon did not become ready: capture worker exited during
   startup; see <home>/daemon.log` and exits 1.
 - no sign of life: neither readiness nor a live heartbeat appeared within two
   seconds; start fails with the existing `daemon did not become ready` error
@@ -105,9 +106,11 @@ and failure. The worker keeps starting in the background.
 
 Running `start` again while a worker is starting joins the wait instead of
 launching a second worker. If two starts race and both launch workers, the
-loser exits on the capture home lock. Its start then keeps waiting while any
-process holds `capture.lock` (the winner), and fails only once nobody holds it,
-or when the holder publishes neither readiness nor a heartbeat for 15 seconds. Installed capture services use the same heartbeat
+loser exits on the capture home lock. Its start then keeps waiting while process
+discovery finds a live capture worker for the same home or database (the
+winner), and fails only once none is found, or when the winner publishes
+neither readiness nor a heartbeat for 15 seconds. Start never probes
+`capture.lock`, so it cannot make a worker lose that lock. Installed capture services use the same heartbeat
 rules; start has no child process to watch in that case, so a dead worker shows
 up as a missing or stale heartbeat.
 

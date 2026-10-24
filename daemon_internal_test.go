@@ -239,22 +239,20 @@ func TestDiscoveryDoesNotRecordStateForWorkerThatIsNotReady(t *testing.T) {
 	}
 }
 
-func TestWaitForDaemonReadyJoinsWorkerHoldingCaptureLockAfterLaunchedWorkerExits(t *testing.T) {
-	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
-		t.Skip("capture home locks need flock")
-	}
+func TestWaitForDaemonReadyJoinsLiveWorkerAfterLaunchedWorkerExits(t *testing.T) {
 	homeDir := t.TempDir()
-	releaseCapture, err := lockCaptureHome(homeDir)
-	if err != nil {
-		t.Fatalf("hold capture lock: %v", err)
+	databasePath := filepath.Join(homeDir, "workgraph.db")
+	original := listDaemonProcesses
+	listDaemonProcesses = func() ([]daemonProcess, error) {
+		return []daemonProcess{{PID: os.Getpid(), Command: "workgraph __capture-worker --home " + homeDir + " --database " + databasePath}}, nil
 	}
-	defer releaseCapture()
+	t.Cleanup(func() { listDaemonProcesses = original })
 	exited := make(chan struct{})
 	close(exited)
 
 	ready := make(chan error, 1)
 	go func() {
-		_, err := waitForDaemonReady(daemonReadyWait{homeDir: homeDir, exited: exited})
+		_, err := waitForDaemonReady(daemonReadyWait{homeDir: homeDir, databasePath: databasePath, exited: exited})
 		ready <- err
 	}()
 	select {
@@ -275,8 +273,11 @@ func TestWaitForDaemonReadyJoinsWorkerHoldingCaptureLockAfterLaunchedWorkerExits
 	}
 }
 
-func TestWaitForDaemonReadyFailsWhenLaunchedWorkerExitsAndNoWorkerHoldsCaptureLock(t *testing.T) {
+func TestWaitForDaemonReadyFailsWhenLaunchedWorkerExitsAndNoWorkerIsLive(t *testing.T) {
 	homeDir := t.TempDir()
+	original := listDaemonProcesses
+	listDaemonProcesses = func() ([]daemonProcess, error) { return nil, nil }
+	t.Cleanup(func() { listDaemonProcesses = original })
 	exited := make(chan struct{})
 	close(exited)
 	started := time.Now()

@@ -338,7 +338,7 @@ func IngestSlackListSnapshotCSV(config SlackListSnapshotCSVConfig) (BridgedInges
 	if err != nil {
 		return BridgedIngestResult{}, err
 	}
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return BridgedIngestResult{}, fmt.Errorf("open database: %w", err)
 	}

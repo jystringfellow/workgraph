@@ -498,7 +498,7 @@ func openSuggestionDatabase(homeDir string, databasePath string) (*sql.DB, error
 	if err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}

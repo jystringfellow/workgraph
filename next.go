@@ -102,7 +102,7 @@ func readNextSnapshot(config NextConfig) (nextSnapshot, error) {
 	if parsed, err := time.ParseDuration(entry.Interval); err == nil && parsed > 0 {
 		interval = parsed
 	}
-	db, err := sql.Open("sqlite3", path)
+	db, err := openDatabase(path)
 	if err != nil {
 		return snapshot, err
 	}
@@ -910,7 +910,7 @@ func recordNextAction(config NextConfig, id string, duration time.Duration) erro
 	if err != nil {
 		return err
 	}
-	db, err := sql.Open("sqlite3", path)
+	db, err := openDatabase(path)
 	if err != nil {
 		return err
 	}

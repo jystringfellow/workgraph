@@ -1,7 +1,6 @@
 package workgraph
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -240,7 +239,7 @@ func SuggestMemoryUpdates(config MemorySuggestConfig) (MemorySuggestResult, erro
 	if err != nil {
 		return MemorySuggestResult{}, err
 	}
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		return MemorySuggestResult{}, fmt.Errorf("open database: %w", err)
 	}
@@ -385,7 +384,7 @@ func ListMemoryLinks(config MemoryLinksConfig) (MemoryLinksResult, error) {
 	if err != nil {
 		return MemoryLinksResult{}, err
 	}
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		return MemoryLinksResult{}, fmt.Errorf("open database: %w", err)
 	}
@@ -736,7 +735,7 @@ func memoryPromotionEvidence(config MemoryPromoteConfig) (ResumeEvent, error) {
 	if err != nil {
 		return ResumeEvent{}, err
 	}
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		return ResumeEvent{}, fmt.Errorf("open database: %w", err)
 	}
@@ -800,7 +799,7 @@ func storeMemoryLink(config MemoryPromoteConfig, memoryPath string, eventID stri
 	if err != nil {
 		return err
 	}
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}

@@ -443,6 +443,45 @@ func TestOpeningRepairsBroadDatabaseFilePermissions(t *testing.T) {
 	}
 }
 
+func TestCaptureRequestListingRepairsBroadDatabaseFilePermissions(t *testing.T) {
+	root := t.TempDir()
+	homeDir := filepath.Join(root, "home")
+	dbPath := filepath.Join(root, "shared", "events.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := runworkgraph(t, repoRoot(t), "init", "--home", homeDir, "--database", dbPath); err != nil {
+		t.Fatalf("init: %v\n%s", err, output)
+	}
+	open, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer open.Close()
+	if _, err := open.Exec(`CREATE TABLE fact_marker (id INTEGER)`); err != nil {
+		t.Fatal(err)
+	}
+	files := []string{dbPath, dbPath + "-wal", dbPath + "-shm"}
+	for _, file := range files {
+		if err := os.Chmod(file, 0o644); err != nil {
+			t.Fatalf("make %s broadly readable: %v", file, err)
+		}
+	}
+
+	if output, err := runworkgraph(t, repoRoot(t), "capture", "requests", "--home", homeDir, "--database", dbPath); err != nil {
+		t.Fatalf("list capture requests: %v\n%s", err, output)
+	}
+	for _, file := range files {
+		info, err := os.Stat(file)
+		if err != nil {
+			t.Fatalf("stat %s: %v", file, err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("expected %s permissions 0600, got %v", file, got)
+		}
+	}
+}
+
 func TestBackgroundCaptureIgnoresDatabaseSidecarFiles(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")

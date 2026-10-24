@@ -7,12 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
-	"time"
-)
-
-const (
-	captureLockAttempts = 5
-	captureLockRetry    = 20 * time.Millisecond
 )
 
 func lockCaptureHome(home string) (func(), error) {
@@ -20,19 +14,11 @@ func lockCaptureHome(home string) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	var lockErr error
-	for attempt := 0; attempt < captureLockAttempts; attempt++ {
-		if lockErr = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); lockErr == nil {
-			return func() { file.Close() }, nil
-		}
-		time.Sleep(captureLockRetry)
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		file.Close()
+		return nil, fmt.Errorf("capture home is already locked: %w", err)
 	}
-	file.Close()
-	return nil, fmt.Errorf("capture home is already locked: %w", lockErr)
-}
-
-func captureHomeLocked(home string) bool {
-	return flockHeld(filepath.Join(home, "capture.lock"))
+	return func() { file.Close() }, nil
 }
 
 func flockHeld(path string) bool {
@@ -53,9 +39,9 @@ func lockDaemonReady(home string) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
 		file.Close()
-		return nil, fmt.Errorf("daemon readiness is already locked: %w", err)
+		return nil, fmt.Errorf("lock daemon readiness: %w", err)
 	}
 	return func() { file.Close() }, nil
 }

@@ -131,7 +131,7 @@ func CaptureGitHubPRWatch(config GitHubPRWatchCaptureConfig) (GitHubPRWatchCaptu
 	if homeDatabase := filepath.Join(status.HomeDir, "workgraph.db"); status.DatabasePath != homeDatabase {
 		return GitHubPRWatchCaptureResult{}, fmt.Errorf("connector %s captures only into the home database %s, not %s", githubPRWatchConnectorID, homeDatabase, status.DatabasePath)
 	}
-	db, err := sql.Open("sqlite3", status.DatabasePath)
+	db, err := openDatabase(status.DatabasePath)
 	if err != nil {
 		return GitHubPRWatchCaptureResult{}, fmt.Errorf("open database: %w", err)
 	}

@@ -3,7 +3,6 @@ package workgraph
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -657,7 +656,7 @@ func configureGitHubCaptureParams(homeDir string, raw json.RawMessage) (json.Raw
 }
 
 func resetCaptureCursor(homeDir string, connectorID string) error {
-	db, err := sql.Open("sqlite3", bridgedDefaultDatabasePath(homeDir))
+	db, err := openDatabase(bridgedDefaultDatabasePath(homeDir))
 	if err != nil {
 		return fmt.Errorf("open capture outbox: %w", err)
 	}

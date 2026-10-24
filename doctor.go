@@ -1,7 +1,6 @@
 package workgraph
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -68,7 +67,7 @@ func doctorDatabaseLine(homeDir string) string {
 }
 
 func databaseJournalMode(dbPath string) string {
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		return ""
 	}

@@ -348,7 +348,7 @@ func setGitHubPRWatchEnabled(homeDir string, state connectorRuntimeFile, enabled
 }
 
 func withGitHubPRWatchDatabase(homeDir string, use func(*sql.DB) error) error {
-	db, err := sql.Open("sqlite3", filepath.Join(homeDir, "workgraph.db"))
+	db, err := openDatabase(filepath.Join(homeDir, "workgraph.db"))
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}

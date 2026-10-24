@@ -52,7 +52,7 @@ func ListProjectUnits(config ProjectUnitsConfig) ([]ProjectUnit, error) {
 	if err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}

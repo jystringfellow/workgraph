@@ -541,7 +541,7 @@ func buildAssociatePayload(homeDir string, config LLMAssociateConfig, now time.T
 	if err != nil {
 		return associatePayload{}, err
 	}
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := openDatabase(dbPath)
 	if err != nil {
 		return associatePayload{}, fmt.Errorf("open database: %w", err)
 	}
