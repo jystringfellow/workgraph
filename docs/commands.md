@@ -312,9 +312,9 @@ Inspect and optionally accept project evidence mappings:
 ```sh
 workgraph memory doctor
 workgraph memory doctor --interactive
-workgraph memory link --source Mercury.Platform.Orchestration --source widgets-ui "MPO Harness"
-workgraph memory links "MPO Harness"
-workgraph memory unlink --source widgets-ui "MPO Harness"
+workgraph memory link --source Helix.Platform.Operations --source widgets-ui "Harbor Harness"
+workgraph memory links "Harbor Harness"
+workgraph memory unlink --source widgets-ui "Harbor Harness"
 ```
 
 Create the memory project before linking. Mappings include captured evidence in

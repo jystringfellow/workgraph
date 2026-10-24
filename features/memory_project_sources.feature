@@ -1,8 +1,8 @@
 Feature: Explicit project evidence mappings
   Scenario: A thematic project spans captured repositories
-    Given memory exists for MPO Harness
+    Given memory exists for Harbor Harness
     And events were captured for two repositories
-    When I explicitly link both repositories to MPO Harness
+    When I explicitly link both repositories to Harbor Harness
     Then suggest and resume include both repositories
     And promotion accepts their evidence
     And authored memory and captured project identifiers are preserved
@@ -12,8 +12,8 @@ Feature: Explicit project evidence mappings
     And previously promoted evidence remains linked
 
   Scenario: Discover an acronym mismatch without changing memory
-    Given memory exists for MPO Harness
-    And captured events belong to Mercury.Platform.Orchestration
+    Given memory exists for HPO Harness
+    And captured events belong to Helix.Platform.Operations
     When I inspect memory doctor, today, resume or empty memory suggestions
     Then I see a possible project mapping with a reason and explicit link command
     And no association is created until I accept it

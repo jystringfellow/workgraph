@@ -129,9 +129,9 @@ memory. Projects span many containers: the event `project` column records the
 container where activity happened, such as a repository or Slack channel, not
 the declared project.
 
-A project may name an optional workstream, a parent grouping such as `mpo`
-over the `mpo-*` projects, in its memory frontmatter. Workstreams have no
-storage of their own.
+A project may name an optional workstream, a parent grouping such as `harbor`
+over `harbor-harness` and `orbit-segments`, in its memory frontmatter.
+Workstreams have no storage of their own.
 
 Units of work, such as a Slack thread or a GitHub PR with its commits, are
 linked to projects through project links. See `specs/projects.md`.

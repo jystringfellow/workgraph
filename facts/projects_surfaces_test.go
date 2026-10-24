@@ -16,24 +16,24 @@ import (
 
 func TestNextCategorizeGroupListsLinksAwaitingADecision(t *testing.T) {
 	home := initProjectLinkingHome(t)
-	writeProjectMemory(t, home.MemoryDir, "mpo-gtm-segments", "---\nworkstream: mpo\n---\n# MPO GTM Segments\n")
-	writeProjectMemory(t, home.MemoryDir, "answer-bot", "# Answer Bot\n")
+	writeProjectMemory(t, home.MemoryDir, "orbit-segments", "---\nworkstream: harbor\n---\n# Orbit Segments\n")
+	writeProjectMemory(t, home.MemoryDir, "atlas-bot", "# Atlas Bot\n")
 	now := time.Now().UTC().Truncate(time.Second)
 	units := insertSurfaceThreads(t, home, now.Add(-6*time.Hour), "C1", "general", 6)
 	store := workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now}
 	var proposals []workgraph.ProjectLinkProposal
 	for _, unit := range units[:4] {
-		proposals = append(proposals, surfaceProposal(unit, "mpo-gtm-segments", "coordination", false))
+		proposals = append(proposals, surfaceProposal(unit, "orbit-segments", "coordination", false))
 	}
 	proposed, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "llm", Profile: "fake", Links: proposals})
 	if err != nil {
 		t.Fatal(err)
 	}
-	auto, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "llm", Profile: "fake", Links: []workgraph.ProjectLinkProposal{surfaceProposal(units[4], "answer-bot", "", true)}})
+	auto, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "llm", Profile: "fake", Links: []workgraph.ProjectLinkProposal{surfaceProposal(units[4], "atlas-bot", "", true)}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "deterministic", Links: []workgraph.ProjectLinkProposal{surfaceProposal(units[5], "answer-bot", "", true)}}); err != nil {
+	if _, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "deterministic", Links: []workgraph.ProjectLinkProposal{surfaceProposal(units[5], "atlas-bot", "", true)}}); err != nil {
 		t.Fatal(err)
 	}
 	slackBefore := surfaceSlackEvents(t, home.DatabasePath)
@@ -56,7 +56,7 @@ func TestNextCategorizeGroupListsLinksAwaitingADecision(t *testing.T) {
 	if shown := strings.Count(listed.Message, "\n  slack.thread:C1:"); shown != 5 {
 		t.Fatalf("expected --reason categorize to list every unit, got %d:\n%s", shown, listed.Message)
 	}
-	if !strings.Contains(listed.Message, "Project links to review: 5 (5 project, 0 no project) (workgraph projects review), 2 auto-applied today (workgraph projects review --auto)\n  "+units[0].ID+" in general: proposed project mpo-gtm-segments (confidence 0.80)") {
+	if !strings.Contains(listed.Message, "Project links to review: 5 (5 project, 0 no project) (workgraph projects review), 2 auto-applied today (workgraph projects review --auto)\n  "+units[0].ID+" in general: proposed project orbit-segments (confidence 0.80)") {
 		t.Fatalf("expected the oldest proposed unit first, got:\n%s", listed.Message)
 	}
 	if strings.Contains(listed.Message, "SECRET SUMMARY") || strings.Contains(listed.Message, "projects:categorize:") {
@@ -96,7 +96,7 @@ func TestNextCategorizeGroupListsLinksAwaitingADecision(t *testing.T) {
 	if _, err := workgraph.ApproveProjectReviewLink(review, links[0].ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := workgraph.AssignProjectUnit(review, workgraph.ProjectUnitAssignment{UnitID: links[1].UnitID, Project: "answer-bot"}); err != nil {
+	if _, err := workgraph.AssignProjectUnit(review, workgraph.ProjectUnitAssignment{UnitID: links[1].UnitID, Project: "atlas-bot"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := workgraph.RejectProjectLink(store, links[2].ID); err != nil {
@@ -123,23 +123,23 @@ func TestNextCategorizeGroupListsLinksAwaitingADecision(t *testing.T) {
 
 func TestTodayGroupsActivityByWorkstreamThenProject(t *testing.T) {
 	home := initProjectLinkingHome(t)
-	writeProjectMemory(t, home.MemoryDir, "mpo-gtm-segments", "---\nworkstream: mpo\n---\n# MPO GTM Segments\n")
-	writeProjectMemory(t, home.MemoryDir, "answer-bot", "# Answer Bot\n")
+	writeProjectMemory(t, home.MemoryDir, "orbit-segments", "---\nworkstream: harbor\n---\n# Orbit Segments\n")
+	writeProjectMemory(t, home.MemoryDir, "atlas-bot", "# Atlas Bot\n")
 	local := time.Now()
 	now := time.Date(local.Year(), local.Month(), local.Day(), 15, 0, 0, 0, local.Location())
-	threads := insertSurfaceThreads(t, home, now.Add(-4*time.Hour), "C1", "gtm-channel", 2)
-	noneThread := insertSurfaceThreads(t, home, now.Add(-3*time.Hour), "C2", "answer-bot-repo", 1)[0]
-	insertSurfaceEvent(t, home.DatabasePath, surfaceFileEvent("mpo-file", "Mercury.Platform.Orchestration", now.Add(-2*time.Hour)))
-	insertSurfaceEvent(t, home.DatabasePath, surfaceFileEvent("answer-bot-file", "answer-bot-repo", now.Add(-90*time.Minute)))
+	threads := insertSurfaceThreads(t, home, now.Add(-4*time.Hour), "C1", "orbit-channel", 2)
+	noneThread := insertSurfaceThreads(t, home, now.Add(-3*time.Hour), "C2", "atlas-bot-repo", 1)[0]
+	insertSurfaceEvent(t, home.DatabasePath, surfaceFileEvent("harbor-file", "Helix.Platform.Operations", now.Add(-2*time.Hour)))
+	insertSurfaceEvent(t, home.DatabasePath, surfaceFileEvent("atlas-bot-file", "atlas-bot-repo", now.Add(-90*time.Minute)))
 	insertSurfaceEvent(t, home.DatabasePath, surfaceFileEvent("scratch-file", "scratch", now.Add(-time.Hour)))
-	linkSurfaceContainer(t, home, "--workstream", "mpo", "--source", "Mercury.Platform.Orchestration")
-	linkSurfaceContainer(t, home, "--source", "answer-bot-repo", "answer-bot")
+	linkSurfaceContainer(t, home, "--workstream", "harbor", "--source", "Helix.Platform.Operations")
+	linkSurfaceContainer(t, home, "--source", "atlas-bot-repo", "atlas-bot")
 
 	store := workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now}
 	run, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "llm", Profile: "fake", Links: []workgraph.ProjectLinkProposal{
-		surfaceProposal(threads[0], "mpo-gtm-segments", "review", true),
-		surfaceProposal(threads[1], "mpo-gtm-segments", "coordination", false),
-		surfaceProposal(noneThread, "answer-bot", "fyi", false),
+		surfaceProposal(threads[0], "orbit-segments", "review", true),
+		surfaceProposal(threads[1], "orbit-segments", "coordination", false),
+		surfaceProposal(noneThread, "atlas-bot", "fyi", false),
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -158,48 +158,48 @@ func TestTodayGroupsActivityByWorkstreamThenProject(t *testing.T) {
 	section := today.Message[strings.Index(today.Message, "Projects\n"):strings.Index(today.Message, "\nSessions")]
 	expected := strings.Join([]string{
 		"Projects",
-		"- mpo workstream: 3 events",
-		"  - mpo-gtm-segments project: 2 events; coordination, review; 1 auto-applied (workgraph projects review --auto)",
-		"  - Mercury.Platform.Orchestration: 1 event",
-		"- answer-bot project: 1 event",
-		"- answer-bot-repo: 1 event",
+		"- harbor workstream: 3 events",
+		"  - orbit-segments project: 2 events; coordination, review; 1 auto-applied (workgraph projects review --auto)",
+		"  - Helix.Platform.Operations: 1 event",
+		"- atlas-bot project: 1 event",
+		"- atlas-bot-repo: 1 event",
 		"- scratch: 1 event",
 		"",
 	}, "\n")
 	if section != expected {
 		t.Fatalf("expected projects grouped by workstream, project, then container:\n%s\ngot:\n%s", expected, section)
 	}
-	if !strings.Contains(today.Message, "gtm-channel (2 events)") {
+	if !strings.Contains(today.Message, "orbit-channel (2 events)") {
 		t.Fatalf("expected sessions to stay grouped by container:\n%s", today.Message)
 	}
 }
 
 func TestResumeGroupsOvernightActivityByProject(t *testing.T) {
 	home := initProjectLinkingHome(t)
-	writeProjectMemory(t, home.MemoryDir, "mpo-gtm-segments", "---\nworkstream: mpo\n---\n# MPO GTM Segments\n")
-	writeProjectMemory(t, home.MemoryDir, "answer-bot", "# Answer Bot\n")
+	writeProjectMemory(t, home.MemoryDir, "orbit-segments", "---\nworkstream: harbor\n---\n# Orbit Segments\n")
+	writeProjectMemory(t, home.MemoryDir, "atlas-bot", "# Atlas Bot\n")
 	now := time.Now().Truncate(time.Second)
 	checkIn := now.Add(-10 * time.Hour)
 	insertSurfaceEvent(t, home.DatabasePath, surfaceFileEvent("old-file", "old-work", checkIn.Add(-time.Hour)))
-	earlier := insertSurfaceThreads(t, home, checkIn.Add(-3*time.Hour), "C1", "gtm-channel", 1)[0]
-	overnight := insertSurfaceThreads(t, home, checkIn.Add(2*time.Hour), "C1", "gtm-channel", 1)[0]
-	insertSurfaceEvent(t, home.DatabasePath, surfaceFileEvent("answer-bot-file", "answer-bot-repo", checkIn.Add(3*time.Hour)))
-	linkSurfaceContainer(t, home, "--source", "answer-bot-repo", "answer-bot")
-	insertSurfaceObservation(t, home.DatabasePath, "PR-agent", "author", "acme/gtm", 7, "Draft segment tracker", "copilot-swe-agent", checkIn.Add(time.Hour))
-	insertSurfaceObservation(t, home.DatabasePath, "PR-agent", "reviewer", "acme/gtm", 7, "Draft segment tracker", "copilot-swe-agent", checkIn.Add(time.Hour))
-	insertSurfaceObservation(t, home.DatabasePath, "PR-older", "author", "acme/gtm", 6, "Older agent work", "copilot-swe-agent", checkIn.Add(-2*time.Hour))
-	prEvent := storedEvent{ID: "github.pull_request.observed:PR-agent", Source: "github", Type: "github.pull_request.observed", Timestamp: checkIn.Add(time.Hour), Project: "gtm", Payload: `{"node_id":"PR-agent","role":"author","repository":"acme/gtm","number":7}`}
+	earlier := insertSurfaceThreads(t, home, checkIn.Add(-3*time.Hour), "C1", "orbit-channel", 1)[0]
+	overnight := insertSurfaceThreads(t, home, checkIn.Add(2*time.Hour), "C1", "orbit-channel", 1)[0]
+	insertSurfaceEvent(t, home.DatabasePath, surfaceFileEvent("atlas-bot-file", "atlas-bot-repo", checkIn.Add(3*time.Hour)))
+	linkSurfaceContainer(t, home, "--source", "atlas-bot-repo", "atlas-bot")
+	insertSurfaceObservation(t, home.DatabasePath, "PR-agent", "author", "acme/orbit", 7, "Draft segment tracker", "copilot-swe-agent", checkIn.Add(time.Hour))
+	insertSurfaceObservation(t, home.DatabasePath, "PR-agent", "reviewer", "acme/orbit", 7, "Draft segment tracker", "copilot-swe-agent", checkIn.Add(time.Hour))
+	insertSurfaceObservation(t, home.DatabasePath, "PR-older", "author", "acme/orbit", 6, "Older agent work", "copilot-swe-agent", checkIn.Add(-2*time.Hour))
+	prEvent := storedEvent{ID: "github.pull_request.observed:PR-agent", Source: "github", Type: "github.pull_request.observed", Timestamp: checkIn.Add(time.Hour), Project: "orbit", Payload: `{"node_id":"PR-agent","role":"author","repository":"acme/orbit","number":7}`}
 	insertSurfaceEvent(t, home.DatabasePath, prEvent)
 
 	store := workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now}
 	if _, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "llm", Profile: "fake", Links: []workgraph.ProjectLinkProposal{
-		surfaceProposal(earlier, "mpo-gtm-segments", "coordination", false),
-		surfaceProposal(overnight, "mpo-gtm-segments", "review", true),
+		surfaceProposal(earlier, "orbit-segments", "coordination", false),
+		surfaceProposal(overnight, "orbit-segments", "review", true),
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	prUnit := workgraph.ProjectUnit{ID: "github.pr:acme/gtm#7", Kind: "github.pr", Container: "gtm", EventIDs: []string{prEvent.ID}}
-	if _, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "llm", Profile: "fake", Links: []workgraph.ProjectLinkProposal{surfaceProposal(prUnit, "mpo-gtm-segments", "build", true)}}); err != nil {
+	prUnit := workgraph.ProjectUnit{ID: "github.pr:acme/orbit#7", Kind: "github.pr", Container: "orbit", EventIDs: []string{prEvent.ID}}
+	if _, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "llm", Profile: "fake", Links: []workgraph.ProjectLinkProposal{surfaceProposal(prUnit, "orbit-segments", "build", true)}}); err != nil {
 		t.Fatal(err)
 	}
 	config := workgraph.ResumeConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, MemoryDir: home.MemoryDir, Now: now}
@@ -219,10 +219,10 @@ func TestResumeGroupsOvernightActivityByProject(t *testing.T) {
 	section = section[:strings.Index(section, "\n\nResumable projects")]
 	expected := strings.Join([]string{
 		"Activity since last check-in by project",
-		"- mpo workstream: 2 events, 1 agent PR",
-		"  - mpo-gtm-segments project: 2 events, 1 agent PR; build, review; 2 auto-applied (workgraph projects review --auto)",
-		"    - agent PR acme/gtm#7 Draft segment tracker (copilot-swe-agent, on your behalf)",
-		"- answer-bot project: 1 event",
+		"- harbor workstream: 2 events, 1 agent PR",
+		"  - orbit-segments project: 2 events, 1 agent PR; build, review; 2 auto-applied (workgraph projects review --auto)",
+		"    - agent PR acme/orbit#7 Draft segment tracker (copilot-swe-agent, on your behalf)",
+		"- atlas-bot project: 1 event",
 		"",
 		"Project links to review: 3 (3 project, 0 no project) (workgraph projects review)",
 	}, "\n")
@@ -236,7 +236,7 @@ func TestResumeGroupsOvernightActivityByProject(t *testing.T) {
 
 func TestNextCategorizeItemsCarryNoLocalPaths(t *testing.T) {
 	home := initProjectLinkingHome(t)
-	writeProjectMemory(t, home.MemoryDir, "answer-bot", "# Answer Bot\n")
+	writeProjectMemory(t, home.MemoryDir, "atlas-bot", "# Atlas Bot\n")
 	now := time.Now().UTC().Truncate(time.Second)
 	repoPath := "/Users/alice/private/customer-repo"
 	commit := storedEvent{ID: "git.commit:abc123", Source: "git", Type: "git.commit", Timestamp: now.Add(-3 * time.Hour), Project: "customer-repo", Payload: fmt.Sprintf(`{"repo_path":%q,"commit":"abc123","subject":"Fix import"}`, repoPath)}
@@ -248,7 +248,7 @@ func TestNextCategorizeItemsCarryNoLocalPaths(t *testing.T) {
 	store := workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now}
 	proposal := surfaceProposal(units[0], "", "build", false)
 	proposal.Target = "new_project"
-	proposal.NewProject = &workgraph.ProposedProject{Slug: "customer-import", Name: "Customer import in " + repoPath, Description: "Fixes imports under " + repoPath, Workstream: "mpo"}
+	proposal.NewProject = &workgraph.ProposedProject{Slug: "customer-import", Name: "Customer import in " + repoPath, Description: "Fixes imports under " + repoPath, Workstream: "harbor"}
 	proposal.Summary = "Edited " + repoPath + "/main.go"
 	if _, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "llm", Profile: "fake", Links: []workgraph.ProjectLinkProposal{proposal}}); err != nil {
 		t.Fatal(err)
@@ -265,7 +265,7 @@ func TestNextCategorizeItemsCarryNoLocalPaths(t *testing.T) {
 	if err := json.Unmarshal(output, &items); err != nil || len(items) != 1 {
 		t.Fatalf("expected one categorize item: %v\n%s", err, output)
 	}
-	if proposed, _ := items[0].Detail["proposed_project"].(map[string]any); len(proposed) != 2 || proposed["slug"] != "customer-import" || proposed["workstream"] != "mpo" {
+	if proposed, _ := items[0].Detail["proposed_project"].(map[string]any); len(proposed) != 2 || proposed["slug"] != "customer-import" || proposed["workstream"] != "harbor" {
 		t.Fatalf("expected the structural proposed project fields in detail, got %+v", items[0].Detail)
 	}
 	mcp := exec.Command(workgraphFactsBinary, "bridge", "mcp", "--home", home.HomeDir)
@@ -511,8 +511,8 @@ func TestProjectLinksToReviewAreCountedApartFromWaitingItems(t *testing.T) {
 	noProject.Target = "none"
 	store := workgraph.ProjectLinkStoreConfig{HomeDir: f.home, DatabasePath: f.db, Now: f.now}
 	if _, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "llm", Profile: "fake", Links: []workgraph.ProjectLinkProposal{
-		surfaceProposal(units[0], "answer-bot", "coordination", false),
-		surfaceProposal(units[1], "answer-bot", "review", false),
+		surfaceProposal(units[0], "atlas-bot", "coordination", false),
+		surfaceProposal(units[1], "atlas-bot", "review", false),
 		noProject,
 	}}); err != nil {
 		t.Fatal(err)

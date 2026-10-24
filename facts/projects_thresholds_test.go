@@ -243,7 +243,7 @@ func TestDirectVerifierDecidesUncertainUnits(t *testing.T) {
 		associateEntry(units[3], "none", "", 0.85),
 	))
 	verdict := associateEntry(units[1], "project", "atlas-bot", 0.96)
-	verdict["summary"] = "Verifier says answer bot"
+	verdict["summary"] = "Verifier says atlas bot"
 	models.Respond("big-model", associateResponse(verdict))
 	result, err := workgraph.AssociateWithLLM(config)
 	if err != nil {
@@ -273,7 +273,7 @@ func TestDirectVerifierDecidesUncertainUnits(t *testing.T) {
 		t.Fatalf("expected the confident unit applied by the associate profile, got %+v", link)
 	}
 	verified := currentProjectLink(t, store, units[1].ID)
-	if verified.State != "applied" || !verified.Auto || verified.Profile != "big-verifier" || verified.Project != "atlas-bot" || verified.Summary != "Verifier says answer bot" || verified.RunID != result.RunID {
+	if verified.State != "applied" || !verified.Auto || verified.Profile != "big-verifier" || verified.Project != "atlas-bot" || verified.Summary != "Verifier says atlas bot" || verified.RunID != result.RunID {
 		t.Fatalf("expected the verifier's answer applied under its profile, got %+v", verified)
 	}
 	if link := currentProjectLink(t, store, units[2].ID); link.State != "proposed" || link.Profile != "local-associate" {

@@ -1,17 +1,17 @@
 Feature: Projects and categorization
 
 Scenario: Group projects under a workstream
-  Given project memory for "mpo-gtm-segments" and "mpo-harness" declares workstream "mpo"
-  And project memory for "answer-bot" has no frontmatter
+  Given project memory for "orbit-segments" and "harbor-harness" declares workstream "harbor"
+  And project memory for "atlas-bot" has no frontmatter
   When I run "workgraph projects list"
-  Then "mpo-gtm-segments" and "mpo-harness" are listed under "mpo"
-  And "answer-bot" is listed without a workstream
+  Then "orbit-segments" and "harbor-harness" are listed under "harbor"
+  And "atlas-bot" is listed without a workstream
 
 Scenario: Show project titles as plain text
-  Given project memory for "mpo-terms-and-phrases" has the heading "MPO Terms &amp; Phrases"
+  Given project memory for "harbor-terms-and-phrases" has the heading "Harbor Terms &amp; Phrases"
   When I run "workgraph projects list"
-  Then the project is listed as "MPO Terms & Phrases"
-  And "workgraph llm associate --dry-run" sends the title "MPO Terms & Phrases"
+  Then the project is listed as "Harbor Terms & Phrases"
+  And "workgraph llm associate --dry-run" sends the title "Harbor Terms & Phrases"
 
 Scenario: Keep terminal controls in project memory out of output
   Given project memory whose heading and description contain escape sequences, line breaks, or bidi overrides, written raw or as character references
@@ -31,52 +31,52 @@ Scenario: Keep a project with invalid frontmatter
   And "workgraph memory doctor" reports the invalid frontmatter
 
 Scenario: Map a container to a workstream
-  Given captured events in "Mercury.Platform.Orchestration"
-  When I run "workgraph memory link --workstream mpo --source Mercury.Platform.Orchestration"
-  Then the container's catalog is narrowed to "mpo" projects
+  Given captured events in "Helix.Platform.Operations"
+  When I run "workgraph memory link --workstream harbor --source Helix.Platform.Operations"
+  Then the container's catalog is narrowed to "harbor" projects
   And no project link is created
-  And "workgraph projects list" shows the container under "mpo"
+  And "workgraph projects list" shows the container under "harbor"
 
 Scenario: Map a container to several projects
   Given captured Slack activity in "Acme.Platform.I18n"
   When I run "workgraph memory link --source Acme.Platform.I18n data-apis"
-  And I run "workgraph memory link --source Acme.Platform.I18n mpo-terms-and-phrases"
-  Then "workgraph llm associate --dry-run" offers only "data-apis" and "mpo-terms-and-phrases" for its units
+  And I run "workgraph memory link --source Acme.Platform.I18n harbor-terms-and-phrases"
+  Then "workgraph llm associate --dry-run" offers only "data-apis" and "harbor-terms-and-phrases" for its units
   And no project link is created
   And "workgraph projects list" shows the container under both projects
   And "workgraph today" marks the container as mapped to both projects
   And "workgraph memory doctor" does not offer the container to another project
-  When I also map the container to workstream "mpo"
+  When I also map the container to workstream "harbor"
   Then the dry run offers the workstream's projects and both mapped projects
 
 Scenario: Keep projects named by a unit's identifiers when narrowing
-  Given "Acme.Platform.I18n" is mapped to "data-apis" and "mpo-terms-and-phrases"
-  And a thread there cites a pull request recorded in "mpo-terms-and-phrases" and "answer-bot" memory
+  Given "Acme.Platform.I18n" is mapped to "data-apis" and "harbor-terms-and-phrases"
+  And a thread there cites a pull request recorded in "harbor-terms-and-phrases" and "atlas-bot" memory
   When I run "workgraph llm associate --dry-run"
-  Then the thread is offered "answer-bot" as well as both mapped projects
+  Then the thread is offered "atlas-bot" as well as both mapped projects
 
 Scenario: Suggest a workstream for a shared acronym
-  Given memory exists for "mpo-harness"
-  And captured events belong to "Mercury.Platform.Orchestration"
+  Given memory exists for "hpo-harness" titled "HPO Harness"
+  And captured events belong to "Helix.Platform.Operations"
   When I run "workgraph memory doctor"
-  Then the shared acronym is offered with a "memory link --workstream mpo" command
+  Then the shared acronym is offered with a "memory link --workstream hpo" command
 
 Scenario: Link a Slack thread by a shared identifier
-  Given a Slack channel is mapped to project "mpo-harness"
-  And a thread in that channel cites a pull request recorded in "answer-bot" memory
+  Given a Slack channel is mapped to project "harbor-harness"
+  And a thread in that channel cites a pull request recorded in "atlas-bot" memory
   When workgraph links units of work
-  Then the thread is linked to "answer-bot" by the shared identifier rule
+  Then the thread is linked to "atlas-bot" by the shared identifier rule
   And the link is marked auto and can be undone
 
 Scenario: Fix a wrong automatic link with one key
   Given a deterministic and an LLM link were applied automatically
   When I run "workgraph projects review --auto"
   Then both links are listed with their run ids
-  When I press "r" on one and enter "answer-bot"
-  Then that unit is linked to "answer-bot" by me and the old link is corrected
+  When I press "r" on one and enter "atlas-bot"
+  Then that unit is linked to "atlas-bot" by me and the old link is corrected
 
 Scenario: Explain how a unit is linked
-  Given a unit was linked to "answer-bot" by me
+  Given a unit was linked to "atlas-bot" by me
   When I run "workgraph projects explain <unit-id>"
   Then the unit's members and every link row are listed
   And the reassign and reject commands are printed without an undo command
@@ -99,9 +99,9 @@ Scenario: Never auto-apply a new project
   Then the proposal waits for review
 
 Scenario: Undo an automatic link
-  Given a unit was linked to "mpo-harness" automatically
+  Given a unit was linked to "harbor-harness" automatically
   When I run "workgraph projects undo <link-id>"
-  Then the unit waits for review with "mpo-harness" proposed
+  Then the unit waits for review with "harbor-harness" proposed
   And later categorization runs do not link it automatically
 
 Scenario: Review every automatic LLM link until there is enough history

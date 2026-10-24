@@ -7,13 +7,13 @@ func TestMemoryNameSimilarityExplainsOnlySupportedMatches(t *testing.T) {
 		name, source string
 		score        int
 	}{
-		{"MPO Harness", "Mercury.Platform.Orchestration", 2},
-		{"MPO Harness", "MercuryPlatformOrchestration", 2},
+		{"HPO Harness", "Helix.Platform.Operations", 2},
+		{"HPO Harness", "HelixPlatformOperations", 2},
 		{"Acme Skills", "acme-skills", 3},
 		{"Acme Workstream", "acme-service", 1},
 		{"My API", "Other API", 0},
 		{"Work Project", "Work Service", 0},
-		{"MPO Harness", "Unrelated.Repository", 0},
+		{"HPO Harness", "Unrelated.Repository", 0},
 	} {
 		score, reason := memoryNameSimilarity(test.name, test.source)
 		if score != test.score || score > 0 && reason == "" {
