@@ -193,3 +193,33 @@ Scenario: Start the morning with overnight work sorted
   When I run "workgraph resume"
   Then activity since my last check-in is grouped by workstream and project
   And the project links to review are counted by project and no project
+
+Scenario: Move a container to another project
+  Given container "orbit-ui" is mapped to project "orbit-segments"
+  And its units were linked to "orbit-segments" by the container mapping
+  When I run "workgraph memory unlink --source orbit-ui orbit-segments"
+  Then those units have no link and wait for categorization
+  When I run "workgraph memory link --source orbit-ui harbor-harness"
+  Then those units are linked to "harbor-harness" in one run
+  And workgraph prints how many units were relinked
+  And links I decided myself are unchanged
+
+Scenario: Resolve pending proposals with a new mapping
+  Given units in container "harbor-sync" have proposed LLM links
+  When I run "workgraph memory link --source harbor-sync harbor-harness"
+  Then those proposals are replaced by container-mapping links
+  And "workgraph projects explain" shows the superseded proposal
+
+Scenario: Recheck proposals after a rule change
+  Given a proposed LLM link cites a pull request
+  And that pull request is added to "atlas-bot" memory
+  When I run "workgraph projects review --recheck"
+  Then the proposal is replaced by a shared-identifier link to "atlas-bot"
+  And no model is called
+
+Scenario: Decide many links at once
+  Given several links wait for review
+  When I run "workgraph projects review --approve 1,2 --approve 3"
+  Then each link is approved and a summary line follows
+  When I run "workgraph projects review --approve-above 0.9 --target project"
+  Then workgraph asks before approving and changes nothing without a yes

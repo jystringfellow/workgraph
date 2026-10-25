@@ -67,6 +67,12 @@ Priority labels used below:
 
 ## Recently Delivered
 
+- [x] Mapping changes relink their units and bulk project review: `memory
+  link` and `memory unlink` move container-mapping links and resolve pending
+  proposals at once, `projects review --recheck` reruns deterministic rules
+  over proposals, and `--approve`, `--reject`, `--assign`, and
+  `--approve-above` decide many links in one process. [spec:
+  `specs/projects.md` D6]
 - [x] Associate thresholds and verifier: per-profile auto-apply thresholds and
   verify floors (`llm add --auto-apply-confidence`, `llm set`), a per-profile
   accuracy gate whose required accuracy is the profile's threshold, and an

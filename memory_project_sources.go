@@ -22,6 +22,7 @@ type MemoryProjectSourcesConfig struct {
 	Workstream   string
 	Sources      []string
 	Unlink       bool
+	GitEmails    []string
 }
 
 func UpdateMemoryProjectSources(config MemoryProjectSourcesConfig) (string, error) {
@@ -75,7 +76,17 @@ func UpdateMemoryProjectSources(config MemoryProjectSourcesConfig) (string, erro
 	if config.Unlink {
 		action = "Unlinked"
 	}
-	return fmt.Sprintf("%s containers for %s: %s\nAuthored memory and captured events were preserved.", action, target, strings.Join(config.Sources, ", ")), nil
+	lines := []string{fmt.Sprintf("%s containers for %s: %s\nAuthored memory and captured events were preserved.", action, target, strings.Join(config.Sources, ", "))}
+	relink, err := RelinkProjectContainers(ProjectRelinkConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir, Location: time.Local, GitEmails: config.GitEmails, Containers: config.Sources})
+	if err != nil {
+		return "", fmt.Errorf("mapping stored; relink containers: %w", err)
+	}
+	for _, container := range relink.Containers {
+		if config.Workstream == "" || container.Changed() {
+			lines = append(lines, container.Line())
+		}
+	}
+	return strings.Join(lines, "\n"), nil
 }
 
 func requireMemoryContainers(db *sql.DB, sources []string) error {

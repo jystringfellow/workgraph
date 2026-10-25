@@ -324,6 +324,32 @@ memory. Flags precede the project argument. All memory commands accept `--home`,
 project-mapping discovery. Discovery suggests associations; only an explicit
 link command or interactive acceptance creates one.
 
+Changing a container's mapping relinks its units in the same command. Its
+undecided container-mapping links move to the project the container now maps
+to, its proposed LLM links are replaced when the deterministic rules now give
+one project, and a container left with no single project returns its units to
+categorization. Links you decided are never changed. The command ends with a
+line such as `Relinked 590 units from widgets-ui to harbor-harness; 37 pending
+proposals resolved.`
+
+Decide project links one at a time or in bulk:
+
+```sh
+workgraph projects review
+workgraph projects review --approve 41,42 --approve 43
+workgraph projects review --reject 44,45
+workgraph projects review --assign <unit-id> --assign <unit-id> --project harbor-harness
+workgraph projects review --approve-above 0.9 --target project --container widgets-ui
+workgraph projects review --recheck
+```
+
+Every bulk form runs in one process and ends with a summary line.
+`--approve-above` approves proposed LLM links at or above the confidence; it
+asks first unless given `--yes`, and never approves new-project proposals or
+links you returned to review with undo. `--recheck` replaces proposals that
+the deterministic rules now resolve, such as after adding an identifier to
+project memory, without calling a model.
+
 For opt-in login startup and crash recovery on macOS or Linux:
 
 ```sh

@@ -46,24 +46,33 @@ func runProjectsReview(args []string, stdin io.Reader, stdout, stderr io.Writer)
 	auto := flags.Bool("auto", false, "List auto-applied links, newest first")
 	since := flags.Duration("since", 24*time.Hour, "With --auto, how far back to list auto-applied links")
 	jsonOutput := flags.Bool("json", false, "Print the review list as JSON without prompting")
-	approve := flags.Int64("approve", 0, "Approve a proposed link or confirm an auto-applied link")
-	reject := flags.Int64("reject", 0, "Assign no project to the unit of a proposed or applied link")
-	assign := flags.String("assign", "", "Unit id to assign")
+	approve := projectLinkIDsFlag{}
+	flags.Var(&approve, "approve", "Approve proposed links or confirm auto-applied links (repeatable, comma-separated)")
+	reject := projectLinkIDsFlag{}
+	flags.Var(&reject, "reject", "Assign no project to the units of proposed or applied links (repeatable, comma-separated)")
+	assign := repeatedStringFlags{}
+	flags.Var(&assign, "assign", "Unit id to assign (repeatable)")
 	project := flags.String("project", "", "With --assign, the catalog project slug")
 	newProject := flags.String("new", "", "With --assign, create project memory with this slug and link to it")
 	workstream := flags.String("workstream", "", "With --new, the workstream to declare")
+	approveAbove := flags.String("approve-above", "", "Approve every proposed LLM link at or above this confidence")
+	target := flags.String("target", "", "With --approve-above, only links with this target: project or none")
+	container := flags.String("container", "", "With --approve-above, only links of units in this container")
+	yes := flags.Bool("yes", false, "With --approve-above, approve without asking")
+	recheck := flags.Bool("recheck", false, "Replace proposed LLM links that deterministic rules now resolve")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
 	forms := 0
-	for _, used := range []bool{*approve != 0, *reject != 0, *assign != ""} {
+	for _, used := range []bool{len(approve) > 0, len(reject) > 0, len(assign) > 0, *approveAbove != "", *recheck} {
 		if used {
 			forms++
 		}
 	}
 	if flags.NArg() != 0 || forms > 1 || (forms == 1 && (*auto || *jsonOutput)) ||
-		(*assign != "") != (*project != "" || *newProject != "") || (*project != "" && *newProject != "") || (*workstream != "" && *newProject == "") {
-		fmt.Fprintln(stderr, "usage: workgraph projects review [--auto [--since <duration>]] [--json] | --approve <link-id> | --reject <link-id> | --assign <unit-id> (--project <slug> | --new <slug> [--workstream <slug>])")
+		(len(assign) > 0) != (*project != "" || *newProject != "") || (*project != "" && *newProject != "") || (*workstream != "" && *newProject == "") ||
+		(*approveAbove == "" && (*target != "" || *container != "" || *yes)) {
+		fmt.Fprintln(stderr, projectsReviewUsage)
 		return 2
 	}
 	config := workgraph.ProjectReviewConfig{
@@ -75,14 +84,29 @@ func runProjectsReview(args []string, stdin io.Reader, stdout, stderr io.Writer)
 		Auto:         *auto,
 		Since:        *since,
 	}
-	if forms == 1 {
-		link, err := applyProjectsReviewFlag(config, *approve, *reject, workgraph.ProjectUnitAssignment{UnitID: *assign, Project: *project, NewProject: *newProject, Workstream: *workstream})
+	switch {
+	case *recheck:
+		result, err := workgraph.RecheckProjectProposals(workgraph.ProjectRelinkConfig{HomeDir: *home, DatabasePath: *database, MemoryDir: *memory, Location: time.Local, GitEmails: config.GitEmails})
 		if err != nil {
 			fmt.Fprintf(stderr, "workgraph projects review: %v\n", err)
 			return 1
 		}
-		fmt.Fprintln(stdout, workgraph.ProjectLinkLine(link))
+		fmt.Fprintln(stdout, result.RecheckLine())
 		return 0
+	case *approveAbove != "":
+		return approveProjectLinksAbove(config, *approveAbove, *target, *container, *yes, stdin, stdout, stderr)
+	case len(approve) > 0:
+		outcomes, err := workgraph.ApproveProjectReviewLinks(config, approve)
+		return writeProjectReviewOutcomes(outcomes, err, len(approve) > 1, func(n int) string { return fmt.Sprintf("Approved %d %s", n, pluralWord(n, "link", "links")) }, stdout, stderr)
+	case len(reject) > 0:
+		outcomes, err := workgraph.RejectProjectLinks(workgraph.ProjectLinkStoreConfig{HomeDir: *home, DatabasePath: *database}, reject)
+		return writeProjectReviewOutcomes(outcomes, err, len(reject) > 1, func(n int) string { return fmt.Sprintf("Rejected %d %s", n, pluralWord(n, "link", "links")) }, stdout, stderr)
+	case len(assign) > 0:
+		outcomes, err := workgraph.AssignProjectUnits(config, assign, workgraph.ProjectUnitAssignment{Project: *project, NewProject: *newProject, Workstream: *workstream})
+		slug := firstNonEmptyString(*newProject, *project)
+		return writeProjectReviewOutcomes(outcomes, err, len(assign) > 1, func(n int) string {
+			return fmt.Sprintf("Assigned %d %s to %s", n, pluralWord(n, "unit", "units"), slug)
+		}, stdout, stderr)
 	}
 	pass, err := workgraph.LinkProjectUnits(workgraph.ProjectLinkPassConfig{HomeDir: *home, DatabasePath: *database, MemoryDir: *memory, Location: time.Local, GitEmails: config.GitEmails})
 	if err != nil {
@@ -126,15 +150,107 @@ func runProjectsReview(args []string, stdin io.Reader, stdout, stderr io.Writer)
 	return reviewProjectLinks(config, links, unitsByID, bufio.NewScanner(stdin), stdout, stderr)
 }
 
-func applyProjectsReviewFlag(config workgraph.ProjectReviewConfig, approve, reject int64, assignment workgraph.ProjectUnitAssignment) (workgraph.ProjectLink, error) {
-	switch {
-	case approve != 0:
-		return workgraph.ApproveProjectReviewLink(config, approve)
-	case reject != 0:
-		return workgraph.RejectProjectLink(workgraph.ProjectLinkStoreConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath}, reject)
-	default:
-		return workgraph.AssignProjectUnit(config, assignment)
+const projectsReviewUsage = "usage: workgraph projects review [--auto [--since <duration>]] [--json] | --approve <link-id>[,<link-id>...] | --reject <link-id>[,<link-id>...] | --assign <unit-id> [--assign <unit-id>...] (--project <slug> | --new <slug> [--workstream <slug>]) | --approve-above <confidence> [--target project|none] [--container <name>] [--yes] | --recheck"
+
+type projectLinkIDsFlag []int64
+
+func (ids *projectLinkIDsFlag) String() string {
+	return fmt.Sprint([]int64(*ids))
+}
+
+func (ids *projectLinkIDsFlag) Set(value string) error {
+	for _, part := range strings.Split(value, ",") {
+		id, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64)
+		if err != nil || id <= 0 {
+			return fmt.Errorf("invalid link id %q", part)
+		}
+		*ids = append(*ids, id)
 	}
+	return nil
+}
+
+func approveProjectLinksAbove(config workgraph.ProjectReviewConfig, value, target, container string, confirmed bool, stdin io.Reader, stdout, stderr io.Writer) int {
+	confidence, err := strconv.ParseFloat(value, 64)
+	if err != nil || confidence < 0 || confidence > 1 {
+		fmt.Fprintf(stderr, "workgraph projects review: --approve-above takes a confidence from 0 to 1, got %q\n", value)
+		return 2
+	}
+	if target != "" && target != "project" && target != "none" {
+		fmt.Fprintf(stderr, "workgraph projects review: --target must be project or none, got %q\n", target)
+		return 2
+	}
+	links, err := workgraph.ProjectLinksToApproveAbove(config, workgraph.ProjectApproveAboveFilter{Confidence: confidence, Target: target, Container: container})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph projects review: %v\n", err)
+		return 1
+	}
+	label := strconv.FormatFloat(confidence, 'f', -1, 64)
+	if len(links) == 0 {
+		fmt.Fprintf(stdout, "No proposed links at or above %s.\n", label)
+		return 0
+	}
+	if !confirmed {
+		fmt.Fprintf(stdout, "%d proposed %s at or above %s match.\n", len(links), pluralWord(len(links), "link", "links"), label)
+		fmt.Fprint(stdout, "Approve them? [y/N] ")
+		scanner := bufio.NewScanner(stdin)
+		answer := ""
+		if scanner.Scan() {
+			answer = strings.ToLower(strings.TrimSpace(scanner.Text()))
+		} else {
+			fmt.Fprintln(stdout)
+		}
+		if err := scanner.Err(); err != nil {
+			fmt.Fprintf(stderr, "read confirmation: %v\n", err)
+			return 1
+		}
+		if answer != "y" && answer != "yes" {
+			fmt.Fprintln(stdout, "No links approved.")
+			return 0
+		}
+	}
+	ids := make([]int64, len(links))
+	for index, link := range links {
+		ids[index] = link.ID
+	}
+	outcomes, err := workgraph.ApproveProjectReviewLinks(config, ids)
+	return writeProjectReviewOutcomes(outcomes, err, true, func(n int) string { return fmt.Sprintf("Approved %d %s", n, pluralWord(n, "link", "links")) }, stdout, stderr)
+}
+
+func writeProjectReviewOutcomes(outcomes []workgraph.ProjectReviewOutcome, err error, summarize bool, summary func(int) string, stdout, stderr io.Writer) int {
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph projects review: %v\n", err)
+		return 1
+	}
+	decided, failed := 0, 0
+	for _, outcome := range outcomes {
+		if outcome.Err != nil {
+			fmt.Fprintf(stderr, "workgraph projects review: %v\n", outcome.Err)
+			failed++
+			continue
+		}
+		fmt.Fprintln(stdout, workgraph.ProjectLinkLine(outcome.Link))
+		decided++
+	}
+	if summarize {
+		line := summary(decided)
+		if failed > 0 {
+			line += fmt.Sprintf("; %d failed", failed)
+		}
+		fmt.Fprintln(stdout, line+".")
+	}
+	if failed > 0 {
+		return 1
+	}
+	return 0
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func reviewProjectLinks(config workgraph.ProjectReviewConfig, links []workgraph.ProjectLink, units map[string]workgraph.ProjectUnit, scanner *bufio.Scanner, stdout, stderr io.Writer) int {

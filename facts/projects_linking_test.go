@@ -36,11 +36,12 @@ func TestDeterministicProjectLinksResolveInOrder(t *testing.T) {
 		{ID: "github.pull_request:acme/b:2", Source: "github", Type: "github.pull_request", Timestamp: base.Add(3 * time.Hour), Project: "b", Payload: `{"repository":"acme/b","number":2,"head_ref":"feature","title":"Unrelated"}`},
 		{ID: "slack.message:C999:8000.000100", Source: "slack", Type: "slack.message", Timestamp: base.Add(2*time.Hour + 4*time.Minute), Project: "random", Payload: `{"channel_id":"C999","ts":"8000.000100","thread_ts":"8000.000100","text":"see attachment","untrusted":{"text":"https://github.com/acme/atlas/pull/7"}}`},
 	}
-	for _, event := range events {
-		insertProjectUnitEvent(t, home.DatabasePath, event)
-	}
+	insertProjectUnitEvent(t, home.DatabasePath, projectContainerFileEvent("harness-team", base))
 	if output, err := runworkgraph(t, repoRoot(t), "memory", "link", "--home", home.HomeDir, "--memory", home.MemoryDir, "--source", "harness-team", "harbor-harness"); err != nil {
 		t.Fatalf("map container: %v %s", err, output)
+	}
+	for _, event := range events {
+		insertProjectUnitEvent(t, home.DatabasePath, event)
 	}
 
 	store := workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now}
@@ -112,6 +113,10 @@ func TestDeterministicProjectLinksResolveInOrder(t *testing.T) {
 	if len(third.Written) != 0 || third.RunID != "" {
 		t.Fatalf("expected a pass with nothing to link to write nothing, got %+v", third)
 	}
+}
+
+func projectContainerFileEvent(container string, at time.Time) storedEvent {
+	return storedEvent{ID: "file.modified:" + container, Source: "file", Type: "file.modified", Timestamp: at, Project: container, Payload: `{"path":"/work/` + container + `/notes.md"}`, Summary: "notes"}
 }
 
 type projectLinkingHome struct {
@@ -293,6 +298,10 @@ func TestProjectsReviewCommandsRecordDecisions(t *testing.T) {
 	home := initProjectLinkingHome(t)
 	writeProjectMemory(t, home.MemoryDir, "atlas-bot", "# Atlas Bot\n\nShips https://github.com/acme/atlas/pull/7.\n")
 	writeProjectMemory(t, home.MemoryDir, "harbor-harness", "# Harbor Harness\n")
+	insertProjectUnitEvent(t, home.DatabasePath, projectContainerFileEvent("harness-team", base))
+	if output, err := runworkgraph(t, repoRoot(t), "memory", "link", "--home", home.HomeDir, "--memory", home.MemoryDir, "--source", "harness-team", "harbor-harness"); err != nil {
+		t.Fatalf("map container: %v %s", err, output)
+	}
 	for _, event := range []storedEvent{
 		slackLinkEvent("C123", "1000.000100", "1000.000100", "review https://github.com/acme/atlas/pull/7", base, "harness-team"),
 		slackLinkEvent("C123", "2000.000100", "", "lunch?", base.Add(time.Hour), "harness-team"),
@@ -311,9 +320,6 @@ func TestProjectsReviewCommandsRecordDecisions(t *testing.T) {
 			t.Fatalf("projects %v: %v %s", extra, err, output)
 		}
 		return string(output)
-	}
-	if output, err := runworkgraph(t, repoRoot(t), append([]string{"memory", "link"}, append(args, "--source", "harness-team", "harbor-harness")...)...); err != nil {
-		t.Fatalf("map container: %v %s", err, output)
 	}
 	eventsBefore := projectUnitEventsSnapshot(t, home.DatabasePath)
 
