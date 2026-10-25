@@ -700,10 +700,12 @@ workgraph llm verify-backlog [--limit 50] [--since 168h]
   policy and catalog, with the current decisions, and the request passes the
   hosted outbound filter when the link's profile is hosted or no longer
   configured. A waiting link's answer may be derived from members that are no
-  longer permitted, so a rebuilt unit is sent only when every member is still
-  permitted (it is not sent under an opaque id) and the link's evidence is
-  among them; any other link is skipped. A snapshot unit is sent only when
-  the link's evidence is among its members. `primary_answer` is the waiting
+  longer permitted, and a snapshot is not tied to the run that proposed the
+  link, so a link is sent only when every current member of its unit is
+  permitted (the unit would not be sent under an opaque id) and the link's
+  evidence is among the members that are sent, from the snapshot or the
+  rebuild; any other link is skipped. Snapshot lookup ignores malformed
+  historical snapshot entries. `primary_answer` is the waiting
   link's target, project, new project, kind, summary, and confidence.
 - The consent, route, and source-policy checks run again immediately before
   every verifier call, as in Verifier. Each request carries at most 50 units,

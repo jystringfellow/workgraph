@@ -276,7 +276,7 @@ func loadVerifyBacklogSnapshots(config LLMAssociateConfig, unitIDs map[string]bo
 	rows, err := db.Query(`SELECT id, created_at, params_json FROM capture_requests
 		WHERE connector_id = ? AND kind = ? AND status = 'completed'
 		AND EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(capture_requests.params_json) THEN capture_requests.params_json ELSE '{}' END, '$.snapshot.units') AS unit
-			WHERE json_extract(unit.value, '$.link_unit_id') IN (?`+strings.Repeat(", ?", len(unitIDs)-1)+`))
+			WHERE CASE WHEN unit.type = 'object' THEN json_extract(unit.value, '$.link_unit_id') END IN (?`+strings.Repeat(", ?", len(unitIDs)-1)+`))
 		ORDER BY created_at, id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("read llm task snapshots: %w", err)
@@ -338,7 +338,8 @@ func (run associateRun) backlogGroups(config LLMAssociateConfig, links []Project
 			rebuilt.sent.hosted = true
 		}
 		unit, found := unitOf(group.sent.payload, link.UnitID)
-		if !found || !answerDerivedFromPermitted(unit, link, group != &rebuilt) {
+		now, permitted := unitOf(current, link.UnitID)
+		if !found || !permitted || now.UnitID != now.linkUnitID || !evidenceAmongMembers(now, link) || !evidenceAmongMembers(unit, link) {
 			skipped++
 			continue
 		}
@@ -356,10 +357,7 @@ func (run associateRun) backlogGroups(config LLMAssociateConfig, links []Project
 	return groups, skipped, nil
 }
 
-func answerDerivedFromPermitted(unit associateUnit, link ProjectLink, fromSnapshot bool) bool {
-	if !fromSnapshot && unit.UnitID != unit.linkUnitID {
-		return false
-	}
+func evidenceAmongMembers(unit associateUnit, link ProjectLink) bool {
 	for _, id := range link.Evidence {
 		if !unit.members[id] {
 			return false
