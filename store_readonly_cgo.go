@@ -10,5 +10,5 @@ import (
 
 func IsDatabaseReadOnly(err error) bool {
 	var sqliteErr sqlite3.Error
-	return errors.As(err, &sqliteErr) && sqliteErr.Code == sqlite3.ErrReadonly
+	return errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrNoExtended(sqlite3.ErrReadonly)
 }

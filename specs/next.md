@@ -217,12 +217,16 @@ Ready
 - An item line carries its own link only when it differs from the PR link,
   such as a review comment.
 - A `reply` line names its location: `on <path>:<line>` for a review thread,
-  `in conversation` for a PR conversation comment, which links the comment
-  when its URL is known. Reply items for threads on the same `path:line`
-  share one line with `(<n> threads)`, linking the first thread.
-- A `checks_failed` line names the first failed check, with duplicate names
-  removed, then `+<n> more` for the other distinct names. JSON keeps every
-  entry of `detail.failed_checks`.
+  `on <path>` when the thread has no line, and `in conversation` for a PR
+  conversation comment, which links the comment when its URL is known. Reply
+  items for threads on the same `path:line` share one line with `(<n>
+  threads)`, linking the first thread; threads without a line are never
+  grouped.
+- A `checks_failed` line summarizes every failed run, not only the 20 kept in
+  `detail.failed_checks`: it names the first check in name order, then `+<n>
+  more` for the other distinct names. Names are compared after trimming
+  surrounding whitespace, and case variants such as `lint` and `Lint` count as
+  distinct. JSON keeps `detail.failed_checks` as before.
 - `triage.unknown` dimensions read as `(not yet known: <labels>)`, using
   `check status`, `review threads`, `approvals`, `merge status`, `merge
   readiness`, `newer comments`, and `newer reviews`. Text output never shows
@@ -456,12 +460,15 @@ only. No fact invokes `gh`.
 - **N8. MCP returns the same items read-only.** The `next_items` tool returns
   the same ids as `next --json` and has no write behavior.
 - **N13. Detail lines stay readable.** With two threads awaiting the user on
-  one `path:line`, a failed check name repeated across runs among three
-  distinct names, a PR whose threads are not loaded, and a baseline
-  conversation comment, `next` prints one `(2 threads)` line linking the
-  first thread (with `--ids` naming both ids), `checks failed on <sha>
-  (<first> +2 more)`, `(not yet known: review threads)` and never
-  `[unknown:`, and `reply requested in conversation — <comment url>`. JSON
-  keeps both reply items and every failed check. A first poll that captures a
-  conversation comment stores its URL so `next` links it
-  (`facts/next_test.go`, `facts/github_pr_watch_author_test.go`).
+  one `path:line`, two threads on the same path with no line, 20 failed
+  `build` runs and one failed `lint` run, a PR whose threads are not loaded,
+  and a baseline conversation comment, `next` prints one `(2 threads)` line
+  linking the first thread (with `--ids` naming both ids), two separate `on
+  <path>` lines, `checks failed on <sha> (build +1 more)`, `(not yet known:
+  review threads)` and never `[unknown:`, and `reply requested in
+  conversation — <comment url>`. JSON keeps all four reply items, 20 failed
+  checks, and the comment URL as the conversation item's `subject.url`.
+  Failed runs named `lint`, ` lint `, and `Lint` read `(lint +1 more)`. A
+  first poll that captures a conversation comment stores its URL so `next`
+  links it, and a later poll that sees the same latest comment backfills a
+  missing URL (`facts/next_test.go`, `facts/github_pr_watch_author_test.go`).

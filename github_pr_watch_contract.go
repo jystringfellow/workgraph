@@ -216,6 +216,7 @@ type NextItem struct {
 	Freshness   NextItemFreshness `json:"freshness"`
 	Untrusted   map[string]any    `json:"untrusted,omitempty"`
 	teamOnly    bool
+	checkNames  []string
 }
 
 type NextItemSubject struct {

@@ -353,3 +353,27 @@ func assertNoTerminalControls(t *testing.T, command, output string) {
 		}
 	}
 }
+
+func TestProjectDescriptionFallbackEndsAtAWord(t *testing.T) {
+	memory := t.TempDir()
+	cases := map[string][2]string{
+		"exact-boundary": {"ab " + strings.Repeat("ü", 196) + " tail words", "ab " + strings.Repeat("ü", 196) + "…"},
+		"overlong-word":  {strings.Repeat("é", 201), strings.Repeat("é", 199) + "…"},
+		"fits":           {strings.Repeat("ö", 200), strings.Repeat("ö", 200)},
+	}
+	for slug, paragraph := range cases {
+		writeProjectMemory(t, memory, slug, "# Title\n\n"+paragraph[0]+"\n")
+	}
+	catalog, err := workgraph.LoadProjectCatalog(memory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range catalog.Projects {
+		if want := cases[entry.Slug][1]; entry.Description != want {
+			t.Fatalf("%s description: got %q (%d runes), want %q", entry.Slug, entry.Description, len([]rune(entry.Description)), want)
+		}
+		if len([]rune(entry.Description)) > 200 {
+			t.Fatalf("%s description exceeds 200 runes", entry.Slug)
+		}
+	}
+}

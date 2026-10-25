@@ -70,8 +70,11 @@ description: Segment definitions for the Orbit launch.
   LLM.
 - `description` is one line, at most 200 characters. When it is absent, the
   first non-heading paragraph is used. A paragraph longer than 200 characters
-  is cut at the last word boundary that fits and ends with `…`, so the
-  description stays within 200 characters and never ends mid-word.
+  keeps the longest run of whole words that fits in 199 characters, a word
+  ending exactly at character 199 included, and ends with `…`. When the first
+  word alone is longer than that, it is cut at 199 characters before the `…`.
+  Characters are Unicode code points, so the description is at most 200 of
+  them.
 - A file without frontmatter is still a project with no workstream or
   aliases. Invalid frontmatter is reported by `memory doctor` and treated as
   absent; it never hides the project.
@@ -281,7 +284,10 @@ in a dry run, which writes nothing. Each
 pass that writes links records them under one new `run_id`; a pass with
 nothing to link writes nothing. When the database is read-only, the listing
 still prints from the links already stored, and `projects review` prints one
-stderr warning that pending project links could not be refreshed.
+stderr warning that pending project links could not be refreshed. Only
+SQLite's plain read-only error counts; extended read-only errors such as a
+moved database file, a needed recovery, or a lock or rollback failure still
+fail the command, as do all other errors. `today` follows the same rule.
 
 Deterministic links are applied immediately, not proposed, with `auto =
 true`, `confidence = 1`, the rule, and the `run_id` of the linking pass, so

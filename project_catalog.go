@@ -349,14 +349,14 @@ func truncateAtWord(value string, limit int) string {
 	if len(runes) <= limit {
 		return value
 	}
-	kept := runes[:limit-1]
-	for end := len(kept); end > 0; end-- {
-		if unicode.IsSpace(kept[end-1]) {
-			kept = kept[:end]
-			break
-		}
+	end := limit - 1
+	for end > 0 && !unicode.IsSpace(runes[end]) {
+		end--
 	}
-	return strings.TrimRightFunc(string(kept), unicode.IsSpace) + "…"
+	if end == 0 {
+		end = limit - 1
+	}
+	return strings.TrimRightFunc(string(runes[:end]), unicode.IsSpace) + "…"
 }
 
 func projectCatalogWorkstreams(catalog ProjectCatalog, mappings ContainerMappings) []string {

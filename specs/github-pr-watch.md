@@ -856,7 +856,11 @@ let item ids and `opened_by` survive observation resets.
 - Conversation `reply` items come only from issue comments. Review bodies do
   not open them. Their `subject.url` is the comment URL, from the opening
   event or, when a baseline opened the item, from
-  `conversation.last_human_comment_url`.
+  `conversation.last_human_comment_url`. This applies to JSON, MCP, and
+  watch output as well as text; it is a compatible addition, and a watch
+  consumer sees one `changed` event when a stored URL first appears. A poll
+  whose timeline includes the stored latest human comment fills its URL when
+  the observation lacks one.
 - Review threads from bots count; conversation comments from bots, such as
   coverage reports, do not.
 - A thread an agent answered with the marker is `awaiting: other`, so it is
