@@ -19,7 +19,7 @@ func TestProjectCatalogReadsFrontmatter(t *testing.T) {
 	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: home, MemoryDir: memory}); err != nil {
 		t.Fatal(err)
 	}
-	longParagraph := strings.Repeat("harness ", 40)
+	longParagraph := "the " + strings.Repeat("harnesses ", 30)
 	files := map[string]string{
 		"orbit-segments": "---\nworkstream: harbor\naliases: [orbit segments, \"segment tracker\"]\ndescription: Segment definitions for the Orbit launch.\n---\n# Orbit Segments\n\nIgnored paragraph.\n",
 		"harbor-harness": "---\n# owned by the platform team\nworkstream: harbor\naliases:\n  - harness\n  - test rig\nowner: platform\n---\n# Harbor Harness\n\n## Context\n\n" + longParagraph + "\n",
@@ -53,7 +53,7 @@ func TestProjectCatalogReadsFrontmatter(t *testing.T) {
 	if harness.Title != "Harbor Harness" || harness.Workstream != "harbor" || !reflect.DeepEqual(harness.Aliases, []string{"harness", "test rig"}) {
 		t.Fatalf("block list entry: %+v", harness)
 	}
-	if len([]rune(harness.Description)) != 200 || !strings.HasPrefix(harness.Description, "harness harness") {
+	if harness.Description != "the "+strings.TrimSpace(strings.Repeat("harnesses ", 19))+"…" {
 		t.Fatalf("paragraph description fallback: %q", harness.Description)
 	}
 	if quoted := entries["quoted-aliases"]; !reflect.DeepEqual(quoted.Aliases, []string{"Design, build", "ordinary", "single, quoted"}) {

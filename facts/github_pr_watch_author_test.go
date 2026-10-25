@@ -138,6 +138,18 @@ func TestGitHubPRWatchFirstSightEmitsOneObservedEventPerPR(t *testing.T) {
 	if harness.observationCount() != 2 {
 		t.Fatalf("expected two observations, got %d", harness.observationCount())
 	}
+	output, err := harness.cli("next", "--home", harness.homeDir)
+	if err != nil {
+		t.Fatalf("next: %v\n%s", err, output)
+	}
+	if !strings.Contains(output, "reply requested in conversation — https://github.com/acme/widget/pull/42#issuecomment-IC_bob") {
+		t.Fatalf("expected the baseline conversation comment to link to the comment, got:\n%s", output)
+	}
+	for _, line := range strings.Split(output, "\n") {
+		if strings.TrimSpace(line) == "reply requested" {
+			t.Fatalf("expected no bare reply line, got:\n%s", output)
+		}
+	}
 }
 
 func TestGitHubPRWatchObservationResetNeitherDuplicatesNorLoses(t *testing.T) {

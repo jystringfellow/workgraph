@@ -177,7 +177,7 @@ func parseProjectCatalogEntry(slug, path, content string) (ProjectCatalogEntry, 
 	}
 	entry.Title = memoryProjectTitle(body, slug)
 	if entry.Description == "" {
-		entry.Description = truncateRunes(firstBodyParagraph(body), projectDescriptionLimit)
+		entry.Description = truncateAtWord(firstBodyParagraph(body), projectDescriptionLimit)
 	}
 	return entry, problem
 }
@@ -342,6 +342,21 @@ func truncateRunes(value string, limit int) string {
 		return value
 	}
 	return string(runes[:limit])
+}
+
+func truncateAtWord(value string, limit int) string {
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	kept := runes[:limit-1]
+	for end := len(kept); end > 0; end-- {
+		if unicode.IsSpace(kept[end-1]) {
+			kept = kept[:end]
+			break
+		}
+	}
+	return strings.TrimRightFunc(string(kept), unicode.IsSpace) + "…"
 }
 
 func projectCatalogWorkstreams(catalog ProjectCatalog, mappings ContainerMappings) []string {

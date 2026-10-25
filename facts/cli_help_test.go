@@ -238,6 +238,15 @@ func TestAIHandoffHelpExplainsContextAndPrivacy(t *testing.T) {
 	}
 }
 
+func TestProjectsReviewHelpSaysListingAppliesLinks(t *testing.T) {
+	output := runWorkgraphCommand(t, nil, "help", "projects", "review")
+	for _, expected := range []string{"Listing forms first apply deterministic links", "container mappings", "units that have no link yet"} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("projects review help omitted %q:\n%s", expected, output)
+		}
+	}
+}
+
 func TestAIArchiveAndSessionsHelpShowLifecycleExamples(t *testing.T) {
 	archiveOutput := runWorkgraphCommand(t, nil, "help", "ai", "archive")
 	for _, expected := range []string{

@@ -85,7 +85,9 @@ func runProjectsReview(args []string, stdin io.Reader, stdout, stderr io.Writer)
 		return 0
 	}
 	pass, err := workgraph.LinkProjectUnits(workgraph.ProjectLinkPassConfig{HomeDir: *home, DatabasePath: *database, MemoryDir: *memory, Location: time.Local, GitEmails: config.GitEmails})
-	if err != nil {
+	if workgraph.IsDatabaseReadOnly(err) {
+		fmt.Fprintln(stderr, "workgraph projects review: warning: the database is read-only, so pending project links could not be refreshed")
+	} else if err != nil {
 		fmt.Fprintf(stderr, "workgraph projects review: %v\n", err)
 		return 1
 	}

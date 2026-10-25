@@ -3565,6 +3565,9 @@ func runToday(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 1
 	}
 
+	for _, warning := range result.Warnings {
+		fmt.Fprintf(stderr, "workgraph today: warning: %s\n", warning)
+	}
 	fmt.Fprintln(stdout, result.Message)
 	return 0
 }

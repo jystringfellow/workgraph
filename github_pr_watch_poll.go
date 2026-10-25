@@ -1016,6 +1016,7 @@ func (poll *githubPRWatchPoll) applyDetail(observation *githubPRObservation, det
 		if item.Author.kind() == "user" && githubTimeAfter(item.CreatedAt, conversation.LastHumanCommentAt) {
 			conversation.LastHumanCommentID = item.ID
 			conversation.LastHumanCommentAt = item.CreatedAt
+			conversation.LastHumanCommentURL = item.URL
 		}
 	}
 	if !detail.complete {

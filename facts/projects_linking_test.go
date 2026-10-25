@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -572,5 +574,78 @@ func TestPrintedFixCommandsKeepTheRequestedCatalog(t *testing.T) {
 	links, err := workgraph.ReadProjectLinks(workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath}, workgraph.ProjectLinksQuery{UnitID: "slack.thread:C999:2000.000100"})
 	if err != nil || len(links) != 0 {
 		t.Fatalf("expected the printed commands to keep the requested catalog, got %+v %v", links, err)
+	}
+}
+
+func TestListingsSurviveAReadOnlyDatabase(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file mode 0400 does not make the database read-only here")
+	}
+	now := time.Now().UTC()
+	home := initProjectLinkingHome(t)
+	writeProjectMemory(t, home.MemoryDir, "harbor-harness", "# Harbor Harness\n")
+	insertProjectUnitEvent(t, home.DatabasePath, slackLinkEvent("C123", "2000.000100", "", "lunch?", now.Add(-2*time.Hour), "harness-team"))
+	insertProjectUnitEvent(t, home.DatabasePath, slackLinkEvent("C456", "3000.000100", "", "standup", time.Now(), "random"))
+	linkSurfaceContainer(t, home, "--source", "harness-team", "harbor-harness")
+	if err := os.Chmod(home.DatabasePath, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	makeWritable := func() {
+		for _, path := range []string{home.DatabasePath, home.DatabasePath + "-wal", home.DatabasePath + "-shm"} {
+			if err := os.Chmod(path, 0o600); err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+		}
+	}
+	t.Cleanup(makeWritable)
+
+	run := func(args ...string) (string, string) {
+		t.Helper()
+		args = append(args, "--home", home.HomeDir)
+		if args[0] == "projects" {
+			args = append(args, "--memory", home.MemoryDir)
+		}
+		command := exec.Command(workgraphFactsBinary, args...)
+		var stdout, stderr strings.Builder
+		command.Stdout, command.Stderr = &stdout, &stderr
+		if err := command.Run(); err != nil {
+			t.Fatalf("%v on a read-only database: %v\nstdout:\n%s\nstderr:\n%s", args, err, stdout.String(), stderr.String())
+		}
+		if strings.Contains(stdout.String()+stderr.String(), "readonly database") {
+			t.Fatalf("%v leaked the SQLite error:\nstdout:\n%s\nstderr:\n%s", args, stdout.String(), stderr.String())
+		}
+		return stdout.String(), stderr.String()
+	}
+	const warning = "pending project links could not be refreshed"
+	stdout, stderr := run("projects", "review", "--json")
+	var listed struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &listed); err != nil {
+		t.Fatalf("expected the review listing as JSON on stdout: %v\n%s", err, stdout)
+	}
+	if strings.Count(stderr, warning) != 1 {
+		t.Fatalf("expected one warning that links could not be refreshed, got:\n%s", stderr)
+	}
+	stdout, stderr = run("projects", "review")
+	if !strings.Contains(stdout, "Nothing to review.") {
+		t.Fatalf("expected the review listing on stdout, got:\n%s", stdout)
+	}
+	if strings.Count(stderr, warning) != 1 {
+		t.Fatalf("expected one warning that links could not be refreshed, got:\n%s", stderr)
+	}
+	if stdout, _ := run("projects", "list"); !strings.Contains(stdout, "harbor-harness: Harbor Harness") {
+		t.Fatalf("expected the project listing, got:\n%s", stdout)
+	}
+	run("next")
+	const suggestionsWarning = "snoozed suggestions could not be refreshed"
+	if _, stderr := run("today"); strings.Count(stderr, suggestionsWarning) != 1 {
+		t.Fatalf("expected today to warn once that snoozed suggestions could not be refreshed, got:\n%s", stderr)
+	}
+
+	makeWritable()
+	stdout, stderr = run("projects", "review", "--auto", "--json")
+	if strings.Contains(stderr, warning) || !strings.Contains(stdout, "slack.burst:C123:2000.000100") {
+		t.Fatalf("expected the pending container link once the database is writable:\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
 	}
 }

@@ -159,5 +159,8 @@ inserts or updates `suggestions` rows itself (only `associations explain`
 coalesces new rows), and it never rewrites or deletes raw events. It does call
 the same snoozed-suggestion expiration step already used elsewhere in the
 substrate, so a snooze whose window has passed is treated as `proposed` again.
+When the database is read-only, `today` skips that step, prints its overview,
+and writes one stderr warning that snoozed suggestions could not be
+refreshed.
 See `specs/event-associations.md` for the full evaluator, scoring, and
 lifecycle contract.

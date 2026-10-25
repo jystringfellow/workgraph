@@ -154,10 +154,11 @@ type githubPRThread struct {
 }
 
 type githubPRConversation struct {
-	LastHumanCommentID string `json:"last_human_comment_id,omitempty"`
-	LastHumanCommentAt string `json:"last_human_comment_at,omitempty"`
-	LastUserCommentAt  string `json:"last_user_comment_at,omitempty"`
-	Unknown            bool   `json:"unknown,omitempty"`
+	LastHumanCommentID  string `json:"last_human_comment_id,omitempty"`
+	LastHumanCommentAt  string `json:"last_human_comment_at,omitempty"`
+	LastHumanCommentURL string `json:"last_human_comment_url,omitempty"`
+	LastUserCommentAt   string `json:"last_user_comment_at,omitempty"`
+	Unknown             bool   `json:"unknown,omitempty"`
 }
 
 type githubPRLastKnown struct {

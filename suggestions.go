@@ -414,6 +414,14 @@ func ListSuggestions(config SuggestionListConfig) (SuggestionListResult, error) 
 	return result, nil
 }
 
+func refreshSnoozedSuggestions(db *sql.DB, now time.Time) ([]string, error) {
+	err := expireSnoozedSuggestions(db, now)
+	if IsDatabaseReadOnly(err) {
+		return []string{"the database is read-only, so snoozed suggestions could not be refreshed"}, nil
+	}
+	return nil, err
+}
+
 func expireSnoozedSuggestions(db *sql.DB, now time.Time) error {
 	nowText := now.UTC().Format(time.RFC3339)
 	_, err := db.Exec(`UPDATE suggestions

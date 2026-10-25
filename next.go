@@ -345,6 +345,8 @@ func projectNextObservation(o githubPRObservation, events []nextStoredEvent, con
 			untrusted := nextItemUntrusted(event, subject.ID, discriminator)
 			if url, ok := untrusted["comment_url"].(string); ok && url != "" {
 				item.Subject.URL = url
+			} else if subject.Kind == "comment" && o.Conversation.LastHumanCommentURL != "" {
+				item.Subject.URL = o.Conversation.LastHumanCommentURL
 			}
 			if config.IncludeUntrusted {
 				item.Untrusted = untrusted
@@ -753,13 +755,43 @@ func nextPullRequestLines(group []NextItem, showIDs bool) []string {
 		}
 	}
 	lines := []string{"  " + header + " — " + nextDisplayText(pr.URL)}
-	for _, item := range group {
-		lines = append(lines, "    "+nextItemLine(item, showIDs))
+	for _, location := range nextLocationGroups(group) {
+		lines = append(lines, "    "+nextItemLine(location, showIDs))
 	}
 	return lines
 }
 
-func nextItemLine(item NextItem, showIDs bool) string {
+func nextLocationGroups(items []NextItem) [][]NextItem {
+	groups := [][]NextItem{}
+	index := map[string]int{}
+	for _, item := range items {
+		if item.Reason != nextReasonReply || item.Subject.Kind != "thread" || item.Subject.Path == "" {
+			groups = append(groups, []NextItem{item})
+			continue
+		}
+		key := fmt.Sprintf("%s:%d", item.Subject.Path, item.Subject.Line)
+		if position, ok := index[key]; ok {
+			groups[position] = append(groups[position], item)
+			continue
+		}
+		index[key] = len(groups)
+		groups = append(groups, []NextItem{item})
+	}
+	return groups
+}
+
+var nextUnknownLabels = map[string]string{
+	"checks":    "check status",
+	"threads":   "review threads",
+	"approval":  "approvals",
+	"mergeable": "merge status",
+	"ready":     "merge readiness",
+	"comments":  "newer comments",
+	"reviews":   "newer reviews",
+}
+
+func nextItemLine(items []NextItem, showIDs bool) string {
+	item := items[0]
 	reason := strings.ReplaceAll(item.Reason, "_", " ")
 	switch item.Reason {
 	case nextReasonReply:
@@ -769,6 +801,11 @@ func nextItemLine(item NextItem, showIDs bool) string {
 		}
 		if item.Subject.Path != "" {
 			reason += fmt.Sprintf(" on %s:%d", item.Subject.Path, item.Subject.Line)
+		} else if item.Subject.Kind == "comment" {
+			reason += " in conversation"
+		}
+		if len(items) > 1 {
+			reason += fmt.Sprintf(" (%d threads)", len(items))
 		}
 	case nextReasonReviewRequested:
 		if request, ok := item.Detail["request"].(*githubPRReviewRequest); ok {
@@ -786,25 +823,51 @@ func nextItemLine(item NextItem, showIDs bool) string {
 			sha = sha[:7]
 		}
 		reason += " on " + sha
-		if checks, ok := item.Detail["failed_checks"].([]map[string]any); ok {
-			names := []string{}
-			for _, check := range checks {
-				names = append(names, fmt.Sprint(check["name"]))
+		if checks, ok := item.Detail["failed_checks"].([]map[string]any); ok && len(checks) > 0 {
+			names := nextUniqueCheckNames(checks)
+			reason += " (" + names[0]
+			if len(names) > 1 {
+				reason += fmt.Sprintf(" +%d more", len(names)-1)
 			}
-			reason += " (" + strings.Join(names, ", ") + ")"
+			reason += ")"
 		}
 	}
 	if unknown, ok := item.Triage["unknown"].([]string); ok && len(unknown) > 0 {
-		reason += " [unknown: " + strings.Join(unknown, ", ") + "]"
+		labels := []string{}
+		for _, dimension := range unknown {
+			if label, ok := nextUnknownLabels[dimension]; ok {
+				labels = append(labels, label)
+			}
+		}
+		if len(labels) > 0 {
+			reason += " (not yet known: " + strings.Join(labels, ", ") + ")"
+		}
 	}
 	line := nextDisplayText(reason)
 	if item.Subject.URL != item.PullRequest.URL {
 		line += " — " + nextDisplayText(item.Subject.URL)
 	}
 	if showIDs {
-		line += " [" + nextDisplayText(item.ID) + "]"
+		ids := []string{}
+		for _, grouped := range items {
+			ids = append(ids, nextDisplayText(grouped.ID))
+		}
+		line += " [" + strings.Join(ids, ", ") + "]"
 	}
 	return line
+}
+
+func nextUniqueCheckNames(checks []map[string]any) []string {
+	names := []string{}
+	seen := map[string]bool{}
+	for _, check := range checks {
+		name := fmt.Sprint(check["name"])
+		if !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 var nextANSISequence = regexp.MustCompile(

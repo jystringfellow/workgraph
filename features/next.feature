@@ -102,3 +102,16 @@ Scenario: A broken next projection does not hide activity
   When I run "workgraph today" or "workgraph resume"
   Then the command succeeds and shows its activity view
   And one short warning replaces the waiting items
+
+Scenario: Detail lines are short and never show internal tokens
+  Given two review threads on the same line are waiting on my reply
+  And a check failed several times alongside other failed checks
+  And a reviewer commented in my pull request's conversation
+  And workgraph has not yet loaded one pull request's review threads
+  When I run "workgraph next"
+  Then the two threads share one line with a thread count and the first thread's link
+  And the failed checks show the first name and how many more
+  And the conversation reply names the conversation and links the comment
+  And the pull request with unloaded threads says what is not yet known in plain words
+  When I run "workgraph next --json"
+  Then every thread and every failed check is still listed

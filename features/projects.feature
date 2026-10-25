@@ -193,3 +193,18 @@ Scenario: Start the morning with overnight work sorted
   When I run "workgraph resume"
   Then activity since my last check-in is grouped by workstream and project
   And the project links to review are counted by project and no project
+
+Scenario: List projects and links when the database is read-only
+  Given a container is mapped to a project and a new unit in it has no link yet
+  And the workgraph database is read-only
+  When I run "workgraph projects review --json"
+  Then workgraph prints the review listing
+  And warns once that pending project links could not be refreshed
+  And "workgraph projects list", "workgraph next", and "workgraph today" still print their listings
+  When the database is writable again
+  Then the next "workgraph projects review" applies the pending link
+
+Scenario: Keep long fallback descriptions readable
+  Given a project memory file has no description and a long first paragraph
+  When I run "workgraph projects list"
+  Then the description ends at a whole word followed by "…"
