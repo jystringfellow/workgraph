@@ -254,6 +254,15 @@ Feature: Bridged connector capture
     And the latest revision is chosen by timestamp instant regardless of fractional-second precision
     And today hides already-stored revisions that repeat the previous revision of the same row
 
+  Scenario: Re-capture a Slack List item without duplicates
+    Given a bridged Slack List item has a stored revision
+    When successive snapshots relay the item unchanged
+    Then workgraph stores no new revision
+    And a changed field stores one new revision with the same List id and row key
+    And snapshots that alternate between already-stored renderings without a state change store nothing
+    And a state change after an alternation stores a new revision
+    And today hides already-stored revisions that alternate without a state change
+
   Scenario: Submit a large Slack List snapshot in chunks
     Given a claimed single-List Slack Lists snapshot is too large to emit in one call
     When the worker submits consecutive raw CSV fragments with snapshot_continues set on all but the last

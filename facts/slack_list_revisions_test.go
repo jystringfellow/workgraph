@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -349,17 +350,127 @@ func TestSlackListSnapshotRecordsReturnToEarlierStateAndDedupesReplays(t *testin
 	}
 }
 
+func TestSlackListSnapshotDedupesAlternatingRenderingsOfAnUnchangedItem(t *testing.T) {
+	homeDir := configureSlackListDriftBridge(t)
+	now := time.Now().UTC().Add(-6 * time.Minute)
+	ingest := func(at time.Time, cycle string, done string) workgraph.BridgedIngestResult {
+		t.Helper()
+		requestID, token := claimSlackListSnapshot(t, homeDir, at)
+		input := `[{"type":"slack.list_item","payload":{"list_id":"FDRIFT","fields":{"Title":"Review backlog","Cycle":"` + cycle + `","Done":"` + done + `","Related Message":"https://example.slack.com/archives/C0FLAP/p7"}}}]`
+		result, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{
+			HomeDir: homeDir, RequestID: requestID, ClaimToken: token, Input: strings.NewReader(input),
+		})
+		if err != nil {
+			t.Fatalf("ingest Slack List row: %v", err)
+		}
+		return result
+	}
+
+	first := ingest(now, "Sprint 8", "true")
+	unchanged := ingest(now.Add(time.Minute), "Sprint 8", "true")
+	if first.EventsInserted != 1 || unchanged.EventsInserted != 0 || unchanged.EventsDuplicate != 1 {
+		t.Fatalf("expected an unchanged re-capture to store nothing: first=%#v unchanged=%#v", first, unchanged)
+	}
+
+	changed := ingest(now.Add(2*time.Minute), "Sprint 7", "true")
+	if changed.EventsInserted != 1 {
+		t.Fatalf("expected a changed item to store one revision: %#v", changed)
+	}
+	db := openBridgedCaptureDatabase(t, homeDir)
+	rows, err := db.Query(`SELECT id, json_extract(payload_json, '$.list_id'), json_extract(payload_json, '$.row_key'), json_extract(payload_json, '$.fields.Cycle')
+		FROM events WHERE type = 'slack.list_item' ORDER BY timestamp`)
+	if err != nil {
+		t.Fatalf("read Slack List revisions: %v", err)
+	}
+	type revision struct{ id, listID, rowKey, cycle string }
+	var revisions []revision
+	for rows.Next() {
+		var stored revision
+		if err := rows.Scan(&stored.id, &stored.listID, &stored.rowKey, &stored.cycle); err != nil {
+			t.Fatalf("scan Slack List revision: %v", err)
+		}
+		revisions = append(revisions, stored)
+	}
+	rows.Close()
+	wantRowKey := slackListRowKey(map[string]string{"Related Message": "https://example.slack.com/archives/C0FLAP/p7"})
+	if len(revisions) != 2 || revisions[0].id == revisions[1].id || revisions[1].cycle != "Sprint 7" {
+		t.Fatalf("expected the change stored as a second, distinct revision: %#v", revisions)
+	}
+	for _, stored := range revisions {
+		if stored.listID != "FDRIFT" || stored.rowKey != wantRowKey {
+			t.Fatalf("expected every revision to keep the item's List id and row key: %#v", revisions)
+		}
+	}
+
+	flapBack := ingest(now.Add(3*time.Minute), "Sprint 8", "true")
+	flapAgain := ingest(now.Add(4*time.Minute), "Sprint 7", "true")
+	if flapBack.EventsInserted != 0 || flapBack.EventsDuplicate != 1 || flapAgain.EventsInserted != 0 || flapAgain.EventsDuplicate != 1 {
+		t.Fatalf("expected re-captures alternating between already-stored renderings to deduplicate: back=%#v again=%#v", flapBack, flapAgain)
+	}
+	reopened := ingest(now.Add(5*time.Minute), "Sprint 8", "false")
+	if reopened.EventsInserted != 1 {
+		t.Fatalf("expected a state change to store a new revision: %#v", reopened)
+	}
+	if count := countSlackListEvents(t, homeDir); count != 3 {
+		t.Fatalf("expected three stored revisions, got %d", count)
+	}
+}
+
+func TestTodayHidesStoredSlackListRevisionsThatAlternateWithoutAStateChange(t *testing.T) {
+	homeDir := configureSlackListDriftBridge(t)
+	now := time.Now()
+	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	db := openBridgedCaptureDatabase(t, homeDir)
+	relatedMessage := "https://example.slack.com/archives/C0FLAP/p9"
+	store := func(id string, at time.Time, cycle string, done bool) {
+		t.Helper()
+		payload, _ := json.Marshal(map[string]any{
+			"capture_semantics": "complete_snapshot",
+			"content_hash":      "stored-" + id,
+			"list_id":           "FDRIFT",
+			"row_key":           slackListRowKey(map[string]string{"Related Message": relatedMessage}),
+			"done":              done,
+			"observed_at":       at.UTC().Format(time.RFC3339Nano),
+			"fields":            map[string]any{"Title": "Review backlog", "Cycle": cycle, "Done": strconv.FormatBool(done), "Related Message": relatedMessage},
+		})
+		if _, err := db.Exec(`INSERT INTO events (id, source, type, timestamp, payload_json, project, summary, created_at)
+			VALUES (?, 'slack', 'slack.list_item', ?, ?, 'slack-list:FDRIFT', 'Review backlog', ?)`,
+			id, at.UTC().Format(time.RFC3339Nano), string(payload), at.UTC().Format(time.RFC3339Nano)); err != nil {
+			t.Fatalf("store Slack List revision: %v", err)
+		}
+	}
+	store("render-a", dayStart.Add(1*time.Hour), "Sprint 8", true)
+	store("render-b", dayStart.Add(2*time.Hour), "Sprint 7", true)
+	store("render-a-again", dayStart.Add(3*time.Hour), "Sprint 8", true)
+	store("render-b-again", dayStart.Add(4*time.Hour), "Sprint 7", true)
+	store("reopened", dayStart.Add(5*time.Hour), "Sprint 8", false)
+
+	today, err := workgraph.Today(workgraph.TodayConfig{HomeDir: homeDir, Now: dayStart.Add(6 * time.Hour)})
+	if err != nil {
+		t.Fatalf("today: %v", err)
+	}
+	var listItems []string
+	for _, event := range today.Events {
+		if event.Type == "slack.list_item" {
+			listItems = append(listItems, event.ID)
+		}
+	}
+	if strings.Join(listItems, ",") != "render-a,render-b,reopened" {
+		t.Fatalf("expected today to hide alternating repeats but keep the change and the state change, got %#v", listItems)
+	}
+}
+
 func TestSlackListLatestRevisionUsesTimestampInstantNotText(t *testing.T) {
 	homeDir := configureSlackListDriftBridge(t)
 	db := openBridgedCaptureDatabase(t, homeDir)
 	second := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 	rowKey := slackListRowKey(map[string]string{"Title": "Precision row"})
-	store := func(id string, timestamp string, priority string) {
+	store := func(id string, timestamp string, priority string, done bool) {
 		t.Helper()
 		payload, _ := json.Marshal(map[string]any{
 			"capture_semantics": "complete_snapshot", "content_hash": id, "list_id": "FDRIFT", "row_key": rowKey,
-			"done": false, "observed_at": timestamp,
-			"fields": map[string]any{"Title": "Precision row", "Done": "false", "Priority": priority},
+			"done": done, "observed_at": timestamp,
+			"fields": map[string]any{"Title": "Precision row", "Done": strconv.FormatBool(done), "Priority": priority},
 		})
 		if _, err := db.Exec(`INSERT INTO events (id, source, type, timestamp, payload_json, project, summary, created_at)
 			VALUES (?, 'slack', 'slack.list_item', ?, ?, 'slack-list:FDRIFT', 'Precision row', ?)`, id, timestamp, string(payload), timestamp); err != nil {
@@ -367,9 +478,9 @@ func TestSlackListLatestRevisionUsesTimestampInstantNotText(t *testing.T) {
 		}
 	}
 	base := second.Format("2006-01-02T15:04:05")
-	store("whole-second", base+"Z", "Low")
-	store("tenth", base+".1Z", "Medium")
-	store("hundredth", base+".11Z", "High")
+	store("whole-second", base+"Z", "Low", true)
+	store("tenth", base+".1Z", "Medium", false)
+	store("hundredth", base+".11Z", "High", false)
 
 	requestID, token := claimSlackListSnapshot(t, homeDir, time.Now().UTC().Add(-time.Minute))
 	input := `[{"type":"slack.list_item","payload":{"list_id":"FDRIFT","fields":{"Title":"Precision row","Done":"false","Priority":"High"}}}]`
