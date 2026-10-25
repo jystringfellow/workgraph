@@ -383,8 +383,8 @@ into tool descriptions or instructions (`specs/llm-integration.md`).
 ## Other Surfaces
 
 - **`resume`**: the default overview shows `Waiting on you` after `Where you
-  left off`, listing at most five pull requests in `next` text order (by
-  section, stale PRs last in their section) in the same grouped format as
+  left off`, listing at most five pull requests in section order, with
+  every stale PR after every active one, in the same grouped format as
   `next`, without section headings or stale collapsing, then `<n> more: workgraph next` with the number
   of remaining pull requests when more exist. `categorize` items are not
   listed there; they are counted in the `Project links to review` line
@@ -506,5 +506,14 @@ only. No fact invokes `gh`.
 - **N15. Team review previews show people first.** With two human-authored
   and three newer bot-authored team-only requests, the summary shows both
   human PRs newest first, then the newest bot PR, then `2 more`.
+- **N16. Stale uses provider activity and an exact threshold.** An old PR
+  whose only reply or review request comes from today's first-capture
+  baseline is stale, an old PR without `updated_at` is stale by its newest
+  item `since`, and with a fixed clock a PR is not stale 1ns before 30 days
+  after its last update and is stale at and after it, for the same instant
+  written with different UTC offsets.
+- **N17. Resume fills its five slots in section order.** With six PRs, the
+  default `resume` lists the waiting, fix-only, blocked, and ready PRs in
+  that order and leaves the stale blocked PR to the `more` line.
 - **N8. MCP returns the same items read-only.** The `next_items` tool returns
   the same ids as `next --json` and has no write behavior.

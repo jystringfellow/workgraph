@@ -719,10 +719,10 @@ func nextSectionOrder(groups [][]NextItem) [][]NextItem {
 	sorted := append([][]NextItem{}, groups...)
 	sort.SliceStable(sorted, func(i, j int) bool {
 		a, b := sorted[i][0], sorted[j][0]
-		if rank[a.Section] != rank[b.Section] {
-			return rank[a.Section] < rank[b.Section]
+		if a.Stale != b.Stale {
+			return b.Stale
 		}
-		return !a.Stale && b.Stale
+		return rank[a.Section] < rank[b.Section]
 	})
 	return sorted
 }
