@@ -103,8 +103,6 @@ type llmConnectorConfig struct {
 	TaskSources    map[string][]string   `json:"task_sources,omitempty"`
 	Profiles       map[string]llmProfile `json:"profiles"`
 	HostedLLM      *llmHostedConfig      `json:"hosted_llm,omitempty"`
-
-	ScheduledVerifyBacklog *bool `json:"scheduled_verify_backlog,omitempty"`
 }
 
 type llmProfile struct {

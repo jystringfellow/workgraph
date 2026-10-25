@@ -343,7 +343,10 @@ The payload is one JSON document:
   the 20 entries are 20 different decisions. Entries are ordered by their
   newest decision. Counting reads at most the 500 newest decisions. A
   decision from a disabled source neither adds an entry nor adds to a count.
-  The prompt says that each entry is distinct and what `count` means. Adding
+  The prompt says that each entry is distinct and what `count` means. When a
+  stored snapshot is reused, an entry without `count` counts as 1, repeated
+  entries are summed, and each count is capped at the count currently
+  permitted. Adding
   `count` is a compatible change, so the schema stays
   `workgraph.associate_request.v1`.
 - A unit's container, time range, participants, and identifiers come from its
@@ -673,7 +676,6 @@ sends them to the verifier:
 ```text
 workgraph llm verify-backlog --dry-run
 workgraph llm verify-backlog [--limit 50] [--since 168h]
-workgraph llm verify-backlog --schedule off
 ```
 
 - A waiting link is a `proposed` LLM link with no decision, no stored
@@ -697,10 +699,12 @@ workgraph llm verify-backlog --schedule off
   decisions. Without a snapshot the unit is rebuilt under the current source
   policy and catalog, with the current decisions, and the request passes the
   hosted outbound filter when the link's profile is hosted or no longer
-  configured. A unit sent under an opaque id gets its `primary_answer`
-  without the stored summary or new-project description. `primary_answer` is
-  the waiting link's target, project, new project, kind, summary, and
-  confidence.
+  configured. A waiting link's answer may be derived from members that are no
+  longer permitted, so a rebuilt unit is sent only when every member is still
+  permitted (it is not sent under an opaque id) and the link's evidence is
+  among them; any other link is skipped. A snapshot unit is sent only when
+  the link's evidence is among its members. `primary_answer` is the waiting
+  link's target, project, new project, kind, summary, and confidence.
 - The consent, route, and source-policy checks run again immediately before
   every verifier call, as in Verifier. Each request carries at most 50 units,
   and a run sends at most `--limit` units, 50 by default.
@@ -708,8 +712,10 @@ workgraph llm verify-backlog --schedule off
   the verifier's pause transition and re-reads every link: a link that is no
   longer proposed and undecided, that has a verification, or whose unit has a
   decided link is skipped. A verdict replaces the waiting link in place, with
-  `profile` set to the verifier and `run_id` set to this run, so `projects
-  undo --run` undoes what it applied. It is applied only as in Auto-Apply for
+  `profile` set to the verifier, `run_id` set to this run, so `projects
+  undo --run` undoes what it applied, and `created_at` set to the time of
+  the verdict, so `projects review --auto --since` and the `next` auto count
+  see it as new. `projects review --auto` lists newest `created_at` first. It is applied only as in Auto-Apply for
   the verifier: its threshold, recent rejections, new-project rule, and
   accuracy gate. Both results are stored in `project_link_verifications`.
 - A link the verifier left out or whose entry was discarded keeps the
@@ -727,11 +733,8 @@ workgraph llm verify-backlog --schedule off
   (the verifier chose a different target), `Skipped`, `Discarded` with
   `verifier:` reasons, `Verifier failed: <reason>` when a call failed,
   `Remaining`, and the accuracy summary.
-- When the daemon's scheduled associate check runs, it also verifies up to 10
-  waiting links, unless `llm.json` has `"scheduled_verify_backlog": false`,
-  which `llm verify-backlog --schedule off` writes; `--schedule on` writes
-  `true`. The scheduled drain does nothing without a direct verifier route or
-  an enabled source.
+- Backlog verification runs only when the user runs the command; the daemon
+  never runs it.
 
 ## Scheduling
 
@@ -962,8 +965,8 @@ Grouping, shared by `today` and `resume`:
   floors with `llm set`, the per-profile accuracy gate, and the
   `associate-verify` route, direct and bridge.
 - **D6 Backlog verification and distinct decisions**: `llm verify-backlog`
-  with dry run, limit, since, resumability, and the scheduled drain; counted,
-  distinct `recent_decisions`. Bridge verifiers for the backlog are deferred.
+  with dry run, limit, since, and resumability; counted, distinct
+  `recent_decisions`. Bridge verifiers for the backlog are deferred.
 
 ## Deferred
 
@@ -974,6 +977,7 @@ Grouping, shared by `today` and `resume`:
 - workstream memory files and workstream-level descriptions
 - learned per-container priors beyond recent user decisions
 - backlog verification through a bridge verifier
+- scheduled backlog verification by the daemon
 
 ## Facts
 
@@ -1072,14 +1076,16 @@ Grouping, shared by `today` and `resume`:
   only undecided proposed LLM links in their profile's floor-to-threshold
   band, never a user-decided unit; the verdict replaces the link under the
   verifier profile, applies only through the verifier's threshold and
-  accuracy gate, appears in `projects explain`, and is undone by `projects
-  undo --run`; `--dry-run` prints the count, destination, and an example
+  accuracy gate, appears in `projects explain` and in `projects review
+  --auto --since 1h` when applied now, and is undone by `projects undo
+  --run`; a proposal whose answer came from a source disabled since then is
+  skipped and nothing derived from it is sent; `--dry-run` prints the count, destination, and an example
   request and calls nothing; it refuses without a verifier route and for a
   `system-one` or bridge verifier; a second run does not resend a link the
   verifier answered or left out, while a failed call leaves links waiting; a
-  stored snapshot keeps the associate's redactions; the scheduled drain sends
-  at most 10 and stops when turned off.
+  stored snapshot keeps the associate's redactions.
 - **P17. Recent decisions are distinct.** Fifteen identical decisions become
   one entry with `count` 15 beside each distinct decision; a decision from a
   disabled source adds neither an entry nor a count, and the hosted outbound
-  filter still redacts decision containers.
+  filter still redacts decision containers; a snapshot stored without counts
+  sends its repeated decision once, capped at the count still permitted.

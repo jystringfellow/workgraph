@@ -59,7 +59,12 @@ func ListProjectReview(config ProjectReviewConfig) ([]ProjectLink, error) {
 				auto = append(auto, link)
 			}
 		}
-		sort.SliceStable(auto, func(i, j int) bool { return auto[i].ID > auto[j].ID })
+		sort.SliceStable(auto, func(i, j int) bool {
+			if !auto[i].CreatedAt.Equal(auto[j].CreatedAt) {
+				return auto[i].CreatedAt.After(auto[j].CreatedAt)
+			}
+			return auto[i].ID > auto[j].ID
+		})
 		return auto, nil
 	}
 	accuracy, err := ProjectLinkAccuracy(ProjectLinkStoreConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, Now: now})

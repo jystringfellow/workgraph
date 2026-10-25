@@ -12,8 +12,7 @@ import (
 )
 
 const (
-	verifyBacklogDefaultLimit   = 50
-	verifyBacklogScheduledLimit = 10
+	verifyBacklogDefaultLimit = 50
 
 	projectLinkBacklogChecksSchema = `CREATE TABLE IF NOT EXISTS project_link_backlog_checks (
  link_id INTEGER NOT NULL,
@@ -90,11 +89,11 @@ func VerifyLLMBacklog(config LLMVerifyBacklogConfig) (LLMVerifyBacklogResult, er
 	if err != nil {
 		return LLMVerifyBacklogResult{}, err
 	}
-	snapshots, err := loadVerifyBacklogSnapshots(associate)
-	if err != nil {
-		return LLMVerifyBacklogResult{}, err
-	}
 	result := LLMVerifyBacklogResult{Waiting: len(waiting)}
+	if len(waiting) == 0 {
+		result.Message = run.backlogMessage(config, result, nil)
+		return result, nil
+	}
 	if !config.DryRun {
 		id, err := newEventID()
 		if err != nil {
@@ -109,6 +108,10 @@ func VerifyLLMBacklog(config LLMVerifyBacklogConfig) (LLMVerifyBacklogResult, er
 		run.recheck = map[string]bool{}
 		for _, link := range waiting[start:end] {
 			run.recheck[link.UnitID] = true
+		}
+		snapshots, err := loadVerifyBacklogSnapshots(associate, run.recheck)
+		if err != nil {
+			return LLMVerifyBacklogResult{}, err
 		}
 		groups, skipped, err := run.backlogGroups(associate, waiting[start:end], snapshots)
 		if err != nil {
@@ -146,60 +149,6 @@ func VerifyLLMBacklog(config LLMVerifyBacklogConfig) (LLMVerifyBacklogResult, er
 	result.Remaining = result.Waiting - handled
 	result.Message = run.backlogMessage(config, result, example)
 	return result, nil
-}
-
-type LLMVerifyBacklogScheduleConfig struct {
-	HomeDir   string
-	Scheduled bool
-}
-
-func ConfigureScheduledVerifyBacklog(config LLMVerifyBacklogScheduleConfig) (LLMResult, error) {
-	homeDir, err := resolveLLMHomeDir(config.HomeDir)
-	if err != nil {
-		return LLMResult{}, err
-	}
-	stored, err := readOrEmptyLLMConnectorConfig(homeDir)
-	if err != nil {
-		return LLMResult{}, err
-	}
-	scheduled := config.Scheduled
-	stored.ScheduledVerifyBacklog = &scheduled
-	configPath := llmConfigPath(homeDir)
-	if err := writeLLMConnectorConfig(configPath, stored); err != nil {
-		return LLMResult{}, err
-	}
-	return LLMResult{ConfigPath: configPath, Message: strings.Join([]string{"Scheduled backlog verification: " + onOff(scheduled), "Config: " + configPath}, "\n")}, nil
-}
-
-func (config llmConnectorConfig) scheduledVerifyBacklog() bool {
-	return config.ScheduledVerifyBacklog == nil || *config.ScheduledVerifyBacklog
-}
-
-func onOff(value bool) string {
-	if value {
-		return "on"
-	}
-	return "off"
-}
-
-func ScheduleLLMVerifyBacklog(config LLMAssociateScheduleConfig) (LLMVerifyBacklogResult, bool, error) {
-	homeDir, err := resolveLLMHomeDir(config.HomeDir)
-	if err != nil {
-		return LLMVerifyBacklogResult{}, false, err
-	}
-	stored, err := readLLMConnectorConfig(homeDir)
-	if err != nil || !stored.scheduledVerifyBacklog() || len(stored.TaskSources[llmTaskAssociate]) == 0 {
-		return LLMVerifyBacklogResult{}, false, nil
-	}
-	verifier, routed := stored.Profiles[strings.TrimSpace(stored.TaskProfiles[llmTaskAssociateVerify])]
-	if !routed || verifier.Provider == llmProviderSystemOne || associateExecutesInBridge(verifier) {
-		return LLMVerifyBacklogResult{}, false, nil
-	}
-	result, err := VerifyLLMBacklog(LLMVerifyBacklogConfig{
-		HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir, GitEmails: config.GitEmails,
-		Limit: verifyBacklogScheduledLimit, Now: config.Now, Location: config.Location, HTTPClient: config.HTTPClient, ctx: config.Context,
-	})
-	return result, err == nil, err
 }
 
 func (config LLMVerifyBacklogConfig) associateConfig() LLMAssociateConfig {
@@ -306,7 +255,7 @@ func sqliteTablePresent(db projectLinkQueryer, name string) (bool, error) {
 	return rows.Next(), rows.Err()
 }
 
-func loadVerifyBacklogSnapshots(config LLMAssociateConfig) (map[string][]verifyBacklogSnapshot, error) {
+func loadVerifyBacklogSnapshots(config LLMAssociateConfig, unitIDs map[string]bool) (map[string][]verifyBacklogSnapshot, error) {
 	dbPath, err := resumeDatabasePath(ResumeConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath})
 	if err != nil {
 		return nil, err
@@ -320,7 +269,15 @@ func loadVerifyBacklogSnapshots(config LLMAssociateConfig) (map[string][]verifyB
 	if present, err := sqliteTablePresent(db, "capture_requests"); err != nil || !present {
 		return snapshots, err
 	}
-	rows, err := db.Query(`SELECT id, created_at, params_json FROM capture_requests WHERE connector_id = ? AND kind = ? AND status = 'completed' ORDER BY created_at, id`, llmAssociateConnectorID, captureRequestKindLLMTask)
+	args := []any{llmAssociateConnectorID, captureRequestKindLLMTask}
+	for id := range unitIDs {
+		args = append(args, id)
+	}
+	rows, err := db.Query(`SELECT id, created_at, params_json FROM capture_requests
+		WHERE connector_id = ? AND kind = ? AND status = 'completed'
+		AND EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(capture_requests.params_json) THEN capture_requests.params_json ELSE '{}' END, '$.snapshot.units') AS unit
+			WHERE json_extract(unit.value, '$.link_unit_id') IN (?`+strings.Repeat(", ?", len(unitIDs)-1)+`))
+		ORDER BY created_at, id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("read llm task snapshots: %w", err)
 	}
@@ -336,6 +293,9 @@ func loadVerifyBacklogSnapshots(config LLMAssociateConfig) (map[string][]verifyB
 			continue
 		}
 		for _, unit := range params.Snapshot.Units {
+			if !unitIDs[unit.LinkUnitID] {
+				continue
+			}
 			snapshots[unit.LinkUnitID] = append(snapshots[unit.LinkUnitID], verifyBacklogSnapshot{requestID: id, createdAt: created, snapshot: params.Snapshot})
 		}
 	}
@@ -377,7 +337,8 @@ func (run associateRun) backlogGroups(config LLMAssociateConfig, links []Project
 		} else if run.backlogHosted(link) {
 			rebuilt.sent.hosted = true
 		}
-		if _, found := unitOf(group.sent.payload, link.UnitID); !found {
+		unit, found := unitOf(group.sent.payload, link.UnitID)
+		if !found || !answerDerivedFromPermitted(unit, link, group != &rebuilt) {
 			skipped++
 			continue
 		}
@@ -393,6 +354,18 @@ func (run associateRun) backlogGroups(config LLMAssociateConfig, links []Project
 		groups = append(groups, rebuilt)
 	}
 	return groups, skipped, nil
+}
+
+func answerDerivedFromPermitted(unit associateUnit, link ProjectLink, fromSnapshot bool) bool {
+	if !fromSnapshot && unit.UnitID != unit.linkUnitID {
+		return false
+	}
+	for _, id := range link.Evidence {
+		if !unit.members[id] {
+			return false
+		}
+	}
+	return true
 }
 
 func unitOf(payload associatePayload, unitID string) (associateUnit, bool) {
@@ -416,14 +389,6 @@ func (run associateRun) backlogVerifyRequest(group verifyBacklogGroup) (associat
 			Kind: link.Kind, Summary: link.Summary, Confidence: link.Confidence,
 			Evidence: link.Evidence, Profile: link.Profile,
 		})
-		if unit.UnitID != unit.linkUnitID {
-			answer.Summary = ""
-			if answer.NewProject != nil {
-				project := *answer.NewProject
-				project.Description = ""
-				answer.NewProject = &project
-			}
-		}
 		escalations[link.UnitID] = associateEscalation{Profile: link.Profile, Members: associateMembersHash(unit), Evidence: link.Evidence, Answer: answer}
 	}
 	return associateSent{payload: verifyPayloadFor(group.sent.payload, escalations), hosted: group.sent.hosted}, primaries
@@ -478,7 +443,7 @@ func (run associateRun) writeBacklogVerdicts(config LLMAssociateConfig, runID st
 			if proposal.Apply, err = associateAutoApplies(tx, now, accuracy.For(run.verifierName), thresholds.of(run.verifierName), proposal); err != nil {
 				return err
 			}
-			if err := replaceBacklogLink(tx, original, proposal, runID); err != nil {
+			if err := replaceBacklogLink(tx, now, original, proposal, runID); err != nil {
 				return err
 			}
 			if err := recordProjectLinkVerification(tx, original.ID, proposal.verification); err != nil {
@@ -526,7 +491,7 @@ func backlogLinkUndecided(tx *sql.Tx, original ProjectLink) (bool, error) {
 	return verified == 0 && decided == 0, nil
 }
 
-func replaceBacklogLink(tx *sql.Tx, original ProjectLink, verdict ProjectLinkProposal, runID string) error {
+func replaceBacklogLink(tx *sql.Tx, now time.Time, original ProjectLink, verdict ProjectLinkProposal, runID string) error {
 	link := original
 	link.Target, link.Project, link.NewProject = verdict.Target, verdict.Project, verdict.NewProject
 	link.Kind, link.Summary, link.Confidence, link.Evidence = verdict.Kind, sanitizeProjectLinkSummary(verdict.Summary), verdict.Confidence, verdict.Evidence
@@ -550,8 +515,8 @@ func replaceBacklogLink(tx *sql.Tx, original ProjectLink, verdict ProjectLinkPro
 		proposed = string(encoded)
 	}
 	updated, err := tx.Exec(`UPDATE project_links SET target = ?, project = ?, proposed_project_json = ?, kind = ?, summary = ?, confidence = ?,
-		evidence_json = ?, state = ?, auto = ?, profile = ?, run_id = ? WHERE id = ? AND state = 'proposed' AND decision = ''`,
-		link.Target, link.Project, proposed, link.Kind, link.Summary, link.Confidence, string(evidence), link.State, link.Auto, link.Profile, link.RunID, link.ID)
+		evidence_json = ?, state = ?, auto = ?, profile = ?, run_id = ?, created_at = ? WHERE id = ? AND state = 'proposed' AND decision = ''`,
+		link.Target, link.Project, proposed, link.Kind, link.Summary, link.Confidence, string(evidence), link.State, link.Auto, link.Profile, link.RunID, now.Format(time.RFC3339Nano), link.ID)
 	if err != nil {
 		return fmt.Errorf("store verified link %d: %w", link.ID, err)
 	}
@@ -575,6 +540,9 @@ func (run associateRun) backlogMessage(config LLMVerifyBacklogConfig, result LLM
 		"Enabled sources: " + associateSourcesLabel(orderedAssociateSources(run.enabled)),
 		fmt.Sprintf("Waiting in the verify band: %d", result.Waiting),
 		fmt.Sprintf("Limit: %d", config.Limit),
+	}
+	if result.Waiting == 0 {
+		return strings.Join(append(lines, "No links are waiting in the verify band; nothing was sent."), "\n")
 	}
 	if config.DryRun {
 		lines = append(lines, fmt.Sprintf("Would send: %d", result.Sent), fmt.Sprintf("Skipped: %d", result.Skipped))

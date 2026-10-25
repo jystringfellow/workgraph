@@ -127,22 +127,12 @@ func runLLMVerifyBacklog(args []string, stdout, stderr io.Writer) int {
 	dryRun := flags.Bool("dry-run", false, "Print the count, destination, and an example request without calling the verifier")
 	limit := flags.Int("limit", 50, "Most waiting links to send to the verifier in this run")
 	since := flags.Duration("since", 0, "Only links proposed within this duration, such as 72h")
-	schedule := flags.String("schedule", "", "Turn the daemon's scheduled backlog verification on or off")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 || *limit <= 0 || (*schedule != "" && *schedule != "on" && *schedule != "off") {
-		fmt.Fprintln(stderr, "usage: workgraph llm verify-backlog [--dry-run] [--limit N] [--since <duration>] [--schedule on|off] [options]")
+	if flags.NArg() != 0 || *limit <= 0 {
+		fmt.Fprintln(stderr, "usage: workgraph llm verify-backlog [--dry-run] [--limit N] [--since <duration>] [options]")
 		return 2
-	}
-	if *schedule != "" {
-		result, err := workgraph.ConfigureScheduledVerifyBacklog(workgraph.LLMVerifyBacklogScheduleConfig{HomeDir: *home, Scheduled: *schedule == "on"})
-		if err != nil {
-			fmt.Fprintf(stderr, "workgraph llm verify-backlog: %v\n", err)
-			return 1
-		}
-		fmt.Fprintln(stdout, result.Message)
-		return 0
 	}
 	result, err := workgraph.VerifyLLMBacklog(workgraph.LLMVerifyBacklogConfig{
 		HomeDir:      *home,

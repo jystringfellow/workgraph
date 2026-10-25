@@ -124,13 +124,22 @@ func restrictToCurrent(stored associatePayload, current associatePayload) associ
 	for _, decision := range current.Decisions {
 		permitted[decision.key()] = decision.Count
 	}
+	positions := map[associateDecision]int{}
 	for _, decision := range stored.Decisions {
-		count, found := permitted[decision.key()]
-		if !found {
+		if _, found := permitted[decision.key()]; !found {
 			continue
 		}
-		decision.Count = min(decision.Count, count)
+		decision.Count = max(decision.Count, 1)
+		if position, seen := positions[decision.key()]; seen {
+			restricted.Decisions[position].Count += decision.Count
+			continue
+		}
+		positions[decision.key()] = len(restricted.Decisions)
 		restricted.Decisions = append(restricted.Decisions, decision)
+	}
+	for index := range restricted.Decisions {
+		decision := &restricted.Decisions[index]
+		decision.Count = min(decision.Count, permitted[decision.key()])
 	}
 	return restricted
 }

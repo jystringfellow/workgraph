@@ -953,11 +953,8 @@ and is applied only at the verifier's threshold and accuracy gate; `workgraph
 projects undo --run <run-id>` undoes what a run applied. Links the user
 already decided are never sent, and a link the verifier answered or left out
 is not sent to it again. The verifier must run directly: `system-one` and
-bridge-executed profiles are refused.
-
-While the daemon runs, each scheduled associate check also verifies up to 10
-waiting links. Turn that off with `workgraph llm verify-backlog --schedule
-off`.
+bridge-executed profiles are refused. The daemon never runs it; it runs only
+when you run the command.
 
 ## New Machine Setup
 
