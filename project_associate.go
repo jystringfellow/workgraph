@@ -739,13 +739,6 @@ func loadAssociateEvents(db *sql.DB, ids []string) ([]associateStoredEvent, erro
 }
 
 func associateRecentDecisions(db *sql.DB, links []ProjectLink, enabled map[string]bool, units []ProjectUnit, catalog ProjectCatalog) ([]associateDecision, error) {
-	containing := map[string]ProjectUnit{}
-	for _, unit := range units {
-		for _, id := range unit.EventIDs {
-			containing[id] = unit
-		}
-	}
-	permittedUnits := map[string]bool{}
 	type candidate struct {
 		link     ProjectLink
 		decision string
@@ -762,11 +755,27 @@ func associateRecentDecisions(db *sql.DB, links []ProjectLink, enabled map[strin
 	}
 	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].at.After(candidates[j].at) })
 	decisions := []associateDecision{}
-	positions := map[associateDecision]int{}
-	for scanned, candidate := range candidates {
-		if scanned == associateDecisionScan {
-			break
+	if len(candidates) == 0 {
+		return decisions, nil
+	}
+	candidates = candidates[:min(len(candidates), associateDecisionScan)]
+	cited := map[string]bool{}
+	for _, candidate := range candidates {
+		for _, id := range candidate.link.Evidence {
+			cited[id] = true
 		}
+	}
+	containing := map[string]ProjectUnit{}
+	for _, unit := range units {
+		for _, id := range unit.EventIDs {
+			if cited[id] {
+				containing[id] = unit
+			}
+		}
+	}
+	permittedUnits := map[string]bool{}
+	positions := map[associateDecision]int{}
+	for _, candidate := range candidates {
 		evidence, err := loadAssociateEvents(db, candidate.link.Evidence)
 		if err != nil {
 			return nil, err
