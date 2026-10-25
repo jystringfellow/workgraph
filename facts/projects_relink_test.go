@@ -1,7 +1,9 @@
 package facts
 
 import (
+	"database/sql"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -389,7 +391,109 @@ func TestApproveAboveConfirmsAndFilters(t *testing.T) {
 	if nothing := review("", "--approve-above", "0.999"); !strings.Contains(nothing, "No proposed links at or above 0.999.") {
 		t.Fatalf("expected no match to say so:\n%s", nothing)
 	}
-	if output, err := runworkgraph(t, repoRoot(t), append([]string{"projects", "review", "--approve-above", "1.5", "--yes"}, args...)...); err == nil {
-		t.Fatalf("expected a confidence above 1 to be refused:\n%s", output)
+	for _, invalid := range []string{"1.5", "-0.1", "NaN", "nan", "Inf", "-Inf"} {
+		if output, err := runworkgraph(t, repoRoot(t), append([]string{"projects", "review", "--approve-above", invalid, "--yes"}, args...)...); err == nil || !strings.Contains(string(output), "takes a confidence from 0 to 1") {
+			t.Fatalf("expected --approve-above %s to be refused: %v\n%s", invalid, err, output)
+		}
+	}
+	reviewConfig := workgraph.ProjectReviewConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now}
+	if _, err := workgraph.ProjectLinksToApproveAbove(reviewConfig, workgraph.ProjectApproveAboveFilter{Confidence: math.NaN()}); err == nil {
+		t.Fatal("expected the library to refuse a NaN confidence")
+	}
+	if _, err := workgraph.ProjectLinksToApproveAbove(reviewConfig, workgraph.ProjectApproveAboveFilter{Confidence: math.Inf(-1)}); err == nil {
+		t.Fatal("expected the library to refuse an infinite confidence")
+	}
+	if fmt.Sprint(proposedUnits()) != left {
+		t.Fatalf("expected refused confidences to approve nothing, got %v", proposedUnits())
+	}
+}
+
+func TestRelinkAcrossBatchesUsesOneRun(t *testing.T) {
+	now := time.Now().UTC()
+	base := now.Add(-48 * time.Hour)
+	home := initProjectLinkingHome(t)
+	writeProjectMemory(t, home.MemoryDir, "harbor-harness", "# Harbor Harness\n")
+	const count = 620
+	var events []storedEvent
+	var proposals []workgraph.ProjectLinkProposal
+	for i := 0; i < count; i++ {
+		ts := fmt.Sprintf("%d.000100", 100000+i)
+		events = append(events, slackLinkEvent("C900", ts, ts, "sync note", base.Add(time.Duration(i)*time.Second), "harbor-sync"))
+		proposals = append(proposals, workgraph.ProjectLinkProposal{UnitID: "slack.thread:C900:" + ts, UnitKind: "slack.thread", Container: "harbor-sync", Target: "none", Kind: "fyi", Summary: "Sync", Confidence: 0.6, Evidence: []string{"slack.message:C900:" + ts}})
+	}
+	insertProjectUnitEventsAtOnce(t, home.DatabasePath, events)
+	store := workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now}
+	if _, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "llm", Profile: "hosted-mini", Links: proposals}); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--home", home.HomeDir, "--memory", home.MemoryDir}
+	run := func(command ...string) string {
+		t.Helper()
+		output, err := runworkgraph(t, repoRoot(t), command...)
+		if err != nil {
+			t.Fatalf("%v: %v %s", command, err, output)
+		}
+		return string(output)
+	}
+
+	linked := run(append(append([]string{"memory", "link"}, args...), "--source", "harbor-sync", "harbor-harness")...)
+	if !strings.Contains(linked, fmt.Sprintf("Relinked 0 units from harbor-sync to harbor-harness; %d pending proposals resolved.", count)) {
+		t.Fatalf("expected every proposal resolved across batches:\n%s", linked)
+	}
+	current := readCurrentProjectLinks(t, store)
+	runs := map[string]int{}
+	for _, link := range current {
+		if link.Rule != "container_mapping" || link.State != "applied" {
+			t.Fatalf("expected only container mapping links, got %+v", link)
+		}
+		runs[link.RunID]++
+	}
+	if len(current) != count || len(runs) != 1 {
+		t.Fatalf("expected %d links in one run, got %d links in runs %v", count, len(current), runs)
+	}
+	var runID string
+	for id := range runs {
+		runID = id
+	}
+
+	undone := run(append([]string{"projects", "undo", "--run", runID}, args...)...)
+	if !strings.Contains(undone, fmt.Sprintf("Undid %d auto-applied links", count)) {
+		t.Fatalf("expected undo --run to reverse the whole relink:\n%s", undone)
+	}
+	for _, link := range readCurrentProjectLinks(t, store) {
+		if link.State != "proposed" || link.Source != "deterministic" {
+			t.Fatalf("expected each unit to wait in review after undo, got %+v", link)
+		}
+	}
+	rechecked := run(append([]string{"projects", "review", "--recheck"}, args...)...)
+	if !strings.Contains(rechecked, "Rechecked 0 pending proposals; 0 resolved by deterministic rules.") {
+		t.Fatalf("expected recheck to leave an undo's proposals alone:\n%s", rechecked)
+	}
+	again := run(append(append([]string{"memory", "link"}, args...), "--source", "harbor-sync", "harbor-harness")...)
+	if !strings.Contains(again, "Relinked 0 units from harbor-sync to harbor-harness; 0 pending proposals resolved.") {
+		t.Fatalf("expected a repeated mapping not to reapply undone links:\n%s", again)
+	}
+}
+
+func insertProjectUnitEventsAtOnce(t *testing.T, dbPath string, events []storedEvent) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	for _, event := range events {
+		if _, err := tx.Exec(`INSERT INTO events (id, source, type, timestamp, payload_json, project, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			event.ID, event.Source, event.Type, event.Timestamp.UTC().Format(time.RFC3339Nano), event.Payload, event.Project, event.Summary, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			t.Fatalf("insert event %s: %v", event.ID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
 	}
 }

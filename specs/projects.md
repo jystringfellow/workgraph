@@ -274,8 +274,13 @@ deterministic rules run in their usual order against the new mappings:
   `projects undo --run` reverses them. `projects explain` lists the superseded
   row marked `superseded` before its replacement.
 - Writes use immediate transactions of at most 500 units with the busy
-  timeout. Each unit's current link is read again in its transaction, and a
-  unit whose link changed since it was evaluated is left alone.
+  timeout, all under the command's one `run_id`. Each unit's current link is
+  read again in its transaction, and a unit whose link changed since it was
+  evaluated is left alone. When a later transaction fails, earlier ones stay
+  committed: the command still prints the count lines for what committed,
+  then `Relinking stopped: <u> units were not changed.`, naming the run and
+  its `projects undo --run` command when replacements committed, and exits
+  1. Running the same command again finishes the rest.
 - After the mapping message the command prints one line per container:
   `Relinked <n> units from <container> to <project>; <m> pending proposals
   resolved.` when the container maps to exactly one catalog project,
@@ -874,12 +879,16 @@ workgraph projects explain <unit-id>
   it. One process decides them all, in immediate transactions of at most 500
   links. An id that cannot be decided is reported as `workgraph projects
   review: <error>` and does not stop the others; the exit status is then 1.
+  When a transaction fails, earlier batches stay decided and are printed as
+  usual, and every id in the failed batch and after it is reported as not
+  decided, followed by the transaction error.
   Each decided link prints the same line as a single decision. With more than
   one id a summary follows: `Approved <n> links.`, `Rejected <n> links.`, or
   `Assigned <n> units to <slug>.`, with `; <f> failed` before the period when
   some failed.
 - `--approve-above <confidence>` approves every `proposed` LLM link whose
-  confidence is at or above the given number, from 0 to 1. `--target project`
+  confidence is at or above the given number, from 0 to 1; `NaN` and
+  infinities are refused. `--target project`
   or `--target none` keeps links with that target, and `--container <name>`
   keeps links of units in that container. It never approves a new-project
   proposal or the proposal of a unit returned to review by undo; approve those

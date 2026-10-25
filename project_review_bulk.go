@@ -110,7 +110,7 @@ func AssignProjectUnits(config ProjectReviewConfig, unitIDs []string, assignment
 }
 
 func ProjectLinksToApproveAbove(config ProjectReviewConfig, filter ProjectApproveAboveFilter) ([]ProjectLink, error) {
-	if filter.Confidence < 0 || filter.Confidence > 1 {
+	if !ProjectConfidenceValid(filter.Confidence) {
 		return nil, fmt.Errorf("confidence %v is outside [0, 1]", filter.Confidence)
 	}
 	if filter.Target != "" && filter.Target != "project" && filter.Target != "none" {
@@ -141,6 +141,10 @@ func ProjectLinksToApproveAbove(config ProjectReviewConfig, filter ProjectApprov
 	return matched, nil
 }
 
+func ProjectConfidenceValid(confidence float64) bool {
+	return confidence >= 0 && confidence <= 1
+}
+
 func projectLinkIDOutcomes(linkIDs []int64) []ProjectReviewOutcome {
 	outcomes := make([]ProjectReviewOutcome, len(linkIDs))
 	for index, linkID := range linkIDs {
@@ -162,6 +166,7 @@ func decideProjectReviewBatches(store ProjectLinkStoreConfig, outcomes []Project
 		}
 		err := withProjectLinksTx(store, func(tx *sql.Tx, now time.Time) error {
 			for _, index := range pending {
+				outcomes[index].Link, outcomes[index].Err = ProjectLink{}, nil
 				if _, err := tx.Exec(`SAVEPOINT project_review_item`); err != nil {
 					return err
 				}
@@ -179,6 +184,14 @@ func decideProjectReviewBatches(store ProjectLinkStoreConfig, outcomes []Project
 			return nil
 		})
 		if err != nil {
+			for _, index := range pending {
+				outcomes[index].Link, outcomes[index].Err = ProjectLink{}, fmt.Errorf("%s not decided: its batch was rolled back", outcomes[index].Ref)
+			}
+			for index := start + projectLinkBatchSize; index < len(outcomes); index++ {
+				if outcomes[index].Err == nil {
+					outcomes[index].Err = fmt.Errorf("%s not decided: an earlier batch failed", outcomes[index].Ref)
+				}
+			}
 			return err
 		}
 	}

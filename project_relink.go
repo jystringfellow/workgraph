@@ -31,6 +31,7 @@ type ProjectRelinkResult struct {
 	Containers []ProjectContainerRelink
 	Checked    int
 	Resolved   int
+	Unfinished int
 }
 
 type projectRelinkChange struct {
@@ -77,11 +78,8 @@ func RelinkProjectContainers(config ProjectRelinkConfig) (ProjectRelinkResult, e
 			changes = append(changes, change)
 		}
 	}
-	applied, runID, err := applyProjectRelinkChanges(ProjectLinkStoreConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, Now: config.Now}, changes)
-	if err != nil {
-		return ProjectRelinkResult{}, err
-	}
-	result.RunID = runID
+	applied, runID, unfinished, err := applyProjectRelinkChanges(ProjectLinkStoreConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, Now: config.Now}, changes)
+	result.RunID, result.Unfinished = runID, unfinished
 	for _, change := range applied {
 		counts := &result.Containers[containers[change.unit.Container]]
 		switch {
@@ -93,7 +91,7 @@ func RelinkProjectContainers(config ProjectRelinkConfig) (ProjectRelinkResult, e
 			counts.Relinked++
 		}
 	}
-	return result, nil
+	return result, err
 }
 
 func RecheckProjectProposals(config ProjectRelinkConfig) (ProjectRelinkResult, error) {
@@ -118,12 +116,9 @@ func RecheckProjectProposals(config ProjectRelinkConfig) (ProjectRelinkResult, e
 			changes = append(changes, projectRelinkChange{unit: unit, current: &current, replacement: &proposal})
 		}
 	}
-	applied, runID, err := applyProjectRelinkChanges(ProjectLinkStoreConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, Now: config.Now}, changes)
-	if err != nil {
-		return ProjectRelinkResult{}, err
-	}
-	result.RunID, result.Resolved = runID, len(applied)
-	return result, nil
+	applied, runID, unfinished, err := applyProjectRelinkChanges(ProjectLinkStoreConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, Now: config.Now}, changes)
+	result.RunID, result.Resolved, result.Unfinished = runID, len(applied), unfinished
+	return result, err
 }
 
 func (relink ProjectContainerRelink) Line() string {
@@ -144,6 +139,14 @@ func (relink ProjectContainerRelink) Line() string {
 
 func (relink ProjectContainerRelink) Changed() bool {
 	return relink.Relinked+relink.Released+relink.Resolved > 0
+}
+
+func (result ProjectRelinkResult) UnfinishedLine() string {
+	line := fmt.Sprintf("Relinking stopped: %d %s not changed.", result.Unfinished, projectCountNoun(result.Unfinished, "unit was", "units were"))
+	if result.RunID != "" {
+		line += " Committed replacements are in run " + result.RunID + "; workgraph projects undo --run " + result.RunID + " reverses them."
+	}
+	return line
 }
 
 func (result ProjectRelinkResult) RecheckLine() string {
@@ -272,17 +275,23 @@ func (state projectRelinkState) proposalReplaceable(link ProjectLink) bool {
 	return link.State == "proposed" && link.Source == "llm" && !state.undone[link.UnitID]
 }
 
-func applyProjectRelinkChanges(store ProjectLinkStoreConfig, changes []projectRelinkChange) ([]projectRelinkChange, string, error) {
+func applyProjectRelinkChanges(store ProjectLinkStoreConfig, changes []projectRelinkChange) ([]projectRelinkChange, string, int, error) {
 	if len(changes) == 0 {
-		return nil, "", nil
+		return nil, "", 0, nil
 	}
 	id, err := newEventID()
 	if err != nil {
-		return nil, "", fmt.Errorf("create run id: %w", err)
+		return nil, "", len(changes), fmt.Errorf("create run id: %w", err)
 	}
 	runID := "run_" + id
 	var applied []projectRelinkChange
 	wrote := false
+	committedRunID := func() string {
+		if wrote {
+			return runID
+		}
+		return ""
+	}
 	for start := 0; start < len(changes); start += projectLinkBatchSize {
 		batch := changes[start:min(start+projectLinkBatchSize, len(changes))]
 		var batchApplied []projectRelinkChange
@@ -309,17 +318,14 @@ func applyProjectRelinkChanges(store ProjectLinkStoreConfig, changes []projectRe
 			return err
 		})
 		if err != nil {
-			return nil, "", err
+			return applied, committedRunID(), len(changes) - start, err
 		}
 		for _, change := range batchApplied {
 			wrote = wrote || change.replacement != nil
 		}
 		applied = append(applied, batchApplied...)
 	}
-	if !wrote {
-		runID = ""
-	}
-	return applied, runID, nil
+	return applied, committedRunID(), 0, nil
 }
 
 func supersedeProjectLinkTx(tx *sql.Tx, now time.Time, change projectRelinkChange) (bool, error) {

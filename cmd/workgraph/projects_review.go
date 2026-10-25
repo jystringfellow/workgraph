@@ -88,6 +88,10 @@ func runProjectsReview(args []string, stdin io.Reader, stdout, stderr io.Writer)
 	case *recheck:
 		result, err := workgraph.RecheckProjectProposals(workgraph.ProjectRelinkConfig{HomeDir: *home, DatabasePath: *database, MemoryDir: *memory, Location: time.Local, GitEmails: config.GitEmails})
 		if err != nil {
+			if result.Unfinished > 0 {
+				fmt.Fprintln(stdout, result.RecheckLine())
+				fmt.Fprintln(stdout, result.UnfinishedLine())
+			}
 			fmt.Fprintf(stderr, "workgraph projects review: %v\n", err)
 			return 1
 		}
@@ -171,7 +175,7 @@ func (ids *projectLinkIDsFlag) Set(value string) error {
 
 func approveProjectLinksAbove(config workgraph.ProjectReviewConfig, value, target, container string, confirmed bool, stdin io.Reader, stdout, stderr io.Writer) int {
 	confidence, err := strconv.ParseFloat(value, 64)
-	if err != nil || confidence < 0 || confidence > 1 {
+	if err != nil || !workgraph.ProjectConfidenceValid(confidence) {
 		fmt.Fprintf(stderr, "workgraph projects review: --approve-above takes a confidence from 0 to 1, got %q\n", value)
 		return 2
 	}
@@ -217,7 +221,7 @@ func approveProjectLinksAbove(config workgraph.ProjectReviewConfig, value, targe
 }
 
 func writeProjectReviewOutcomes(outcomes []workgraph.ProjectReviewOutcome, err error, summarize bool, summary func(int) string, stdout, stderr io.Writer) int {
-	if err != nil {
+	if err != nil && len(outcomes) == 0 {
 		fmt.Fprintf(stderr, "workgraph projects review: %v\n", err)
 		return 1
 	}
@@ -237,6 +241,10 @@ func writeProjectReviewOutcomes(outcomes []workgraph.ProjectReviewOutcome, err e
 			line += fmt.Sprintf("; %d failed", failed)
 		}
 		fmt.Fprintln(stdout, line+".")
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph projects review: %v\n", err)
+		return 1
 	}
 	if failed > 0 {
 		return 1

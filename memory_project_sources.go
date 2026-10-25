@@ -78,13 +78,16 @@ func UpdateMemoryProjectSources(config MemoryProjectSourcesConfig) (string, erro
 	}
 	lines := []string{fmt.Sprintf("%s containers for %s: %s\nAuthored memory and captured events were preserved.", action, target, strings.Join(config.Sources, ", "))}
 	relink, err := RelinkProjectContainers(ProjectRelinkConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir, Location: time.Local, GitEmails: config.GitEmails, Containers: config.Sources})
-	if err != nil {
-		return "", fmt.Errorf("mapping stored; relink containers: %w", err)
-	}
 	for _, container := range relink.Containers {
 		if config.Workstream == "" || container.Changed() {
 			lines = append(lines, container.Line())
 		}
+	}
+	if err != nil {
+		if relink.Unfinished > 0 {
+			lines = append(lines, relink.UnfinishedLine()+" Run the same command again to finish.")
+		}
+		return strings.Join(lines, "\n"), fmt.Errorf("mapping stored; relink containers: %w", err)
 	}
 	return strings.Join(lines, "\n"), nil
 }
