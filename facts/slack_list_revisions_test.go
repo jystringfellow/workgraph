@@ -460,6 +460,59 @@ func TestTodayHidesStoredSlackListRevisionsThatAlternateWithoutAStateChange(t *t
 	}
 }
 
+func TestTodayAndResumeKeepAReopeningOrderedByCaptureTimeWhenTimestampsTie(t *testing.T) {
+	homeDir := configureSlackListDriftBridge(t)
+	now := time.Now()
+	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	observedAt := dayStart.Add(time.Hour).UTC().Format(time.RFC3339Nano)
+	db := openBridgedCaptureDatabase(t, homeDir)
+	relatedMessage := "https://example.slack.com/archives/C0TIE/p3"
+	store := func(id string, capturedAt time.Time, done bool) {
+		t.Helper()
+		payload, _ := json.Marshal(map[string]any{
+			"capture_semantics": "complete_snapshot",
+			"content_hash":      "stored-" + id,
+			"list_id":           "FDRIFT",
+			"row_key":           slackListRowKey(map[string]string{"Related Message": relatedMessage}),
+			"done":              done,
+			"observed_at":       observedAt,
+			"fields":            map[string]any{"Title": "Tied revision", "Done": strconv.FormatBool(done), "Related Message": relatedMessage},
+		})
+		if _, err := db.Exec(`INSERT INTO events (id, source, type, timestamp, payload_json, project, summary, created_at)
+			VALUES (?, 'slack', 'slack.list_item', ?, ?, 'slack-list:FDRIFT', 'Tied revision', ?)`,
+			id, observedAt, string(payload), capturedAt.UTC().Format(time.RFC3339Nano)); err != nil {
+			t.Fatalf("store Slack List revision: %v", err)
+		}
+	}
+	store("tie-a-open", dayStart.Add(time.Hour+time.Minute), false)
+	store("tie-c-done", dayStart.Add(time.Hour+2*time.Minute), true)
+	store("tie-b-reopened", dayStart.Add(time.Hour+3*time.Minute), false)
+
+	today, err := workgraph.Today(workgraph.TodayConfig{HomeDir: homeDir, Now: dayStart.Add(2 * time.Hour)})
+	if err != nil {
+		t.Fatalf("today: %v", err)
+	}
+	todayIDs := map[string]bool{}
+	for _, event := range today.Events {
+		todayIDs[event.ID] = true
+	}
+	if !todayIDs["tie-a-open"] || !todayIDs["tie-c-done"] || !todayIDs["tie-b-reopened"] {
+		t.Fatalf("expected today to keep open, done, and the reopening ordered by capture time, got %#v", todayIDs)
+	}
+
+	resume, err := workgraph.Resume(workgraph.ResumeConfig{HomeDir: homeDir, Project: "slack-list:FDRIFT", Now: dayStart.Add(2 * time.Hour)})
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	resumeIDs := map[string]bool{}
+	for _, event := range resume.Events {
+		resumeIDs[event.ID] = true
+	}
+	if !resumeIDs["tie-a-open"] || !resumeIDs["tie-c-done"] || !resumeIDs["tie-b-reopened"] {
+		t.Fatalf("expected resume to keep open, done, and the reopening ordered by capture time, got %#v", resumeIDs)
+	}
+}
+
 func TestSlackListLatestRevisionUsesTimestampInstantNotText(t *testing.T) {
 	homeDir := configureSlackListDriftBridge(t)
 	db := openBridgedCaptureDatabase(t, homeDir)
