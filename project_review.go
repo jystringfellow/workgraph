@@ -15,7 +15,7 @@ const (
 	projectListCountWindow  = 7 * 24 * time.Hour
 )
 
-var projectShellSafePattern = regexp.MustCompile(`^[A-Za-z0-9_.:/#@=+-]+$`)
+var projectShellSafePattern = regexp.MustCompile(`^[A-Za-z0-9_./:@%+=,-][A-Za-z0-9_./:@%+=,#-]*$`)
 
 type ProjectReviewConfig struct {
 	HomeDir      string

@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -572,7 +574,7 @@ func TestRelinkReportsCommittedBatchesWhenALaterBatchFails(t *testing.T) {
 	}
 
 	execProjectLinksSQL(t, home.DatabasePath, `DROP TRIGGER forced_batch_failure`)
-	finished, err := runworkgraph(t, repoRoot(t), strings.Fields(finish)[1:]...)
+	finished, err := runPrintedWorkgraphCommand(t, finish)
 	if err != nil || !strings.Contains(string(finished), "Relinked 0 units from harbor-sync to harbor-harness; 120 pending proposals resolved.") {
 		t.Fatalf("expected the printed command to finish the relink: %v\n%s", err, finished)
 	}
@@ -609,6 +611,74 @@ func TestBulkReviewReportsCommittedBatchesWhenALaterBatchFails(t *testing.T) {
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("expected the failure output to include %q:\n%s", expected, text[max(0, len(text)-3000):])
+		}
+	}
+}
+
+func runPrintedWorkgraphCommand(t *testing.T, command string) ([]byte, error) {
+	t.Helper()
+	rest, ok := strings.CutPrefix(command, "workgraph ")
+	if !ok {
+		t.Fatalf("unexpected printed command %q", command)
+	}
+	shell := exec.Command("sh", "-c", `"$0" `+rest, workgraphFactsBinary)
+	shell.Dir = repoRoot(t)
+	return shell.CombinedOutput()
+}
+
+func printedCommandArgs(t *testing.T, command string) []string {
+	t.Helper()
+	rest, ok := strings.CutPrefix(command, "workgraph ")
+	if !ok {
+		t.Fatalf("unexpected printed command %q", command)
+	}
+	output, err := exec.Command("sh", "-c", `printf '%s\n' `+rest).CombinedOutput()
+	if err != nil {
+		t.Fatalf("shell parse %q: %v %s", command, err, output)
+	}
+	return strings.Split(strings.TrimSuffix(string(output), "\n"), "\n")
+}
+
+func TestRelinkRecoveryCommandSurvivesTheShell(t *testing.T) {
+	now := time.Now().UTC()
+	home := initProjectLinkingHomeAt(t, filepath.Join(t.TempDir(), `work "dir" it's`))
+	writeProjectMemory(t, home.MemoryDir, "harbor-harness", "# Harbor Harness\n")
+	sources := []string{"#general", "team chat", "it's", `say "hi"`}
+	for i, source := range sources {
+		ts := fmt.Sprintf("%d.000100", 1000+i)
+		insertProjectUnitEvent(t, home.DatabasePath, slackLinkEvent(fmt.Sprintf("C%d", i), ts, ts, "note", now.Add(-time.Hour), source))
+	}
+	store := workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now}
+	if _, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "deterministic", Links: []workgraph.ProjectLinkProposal{projectLinkProposal("unit-existing", "harbor-harness", "container_mapping", true)}}); err != nil {
+		t.Fatal(err)
+	}
+	execProjectLinksSQL(t, home.DatabasePath, `CREATE TRIGGER forced_batch_failure BEFORE INSERT ON project_links BEGIN SELECT RAISE(ABORT, 'forced batch failure'); END`)
+	args := []string{"memory", "link", "--home", home.HomeDir, "--memory", home.MemoryDir}
+	for _, source := range sources {
+		args = append(args, "--source", source)
+	}
+	output, err := runworkgraph(t, repoRoot(t), append(args, "harbor-harness")...)
+	if err == nil {
+		t.Fatalf("expected the forced failure to exit 1:\n%s", output)
+	}
+	_, finish, found := strings.Cut(string(output), "To finish, run: ")
+	if !found {
+		t.Fatalf("expected a recovery command:\n%s", output)
+	}
+	finish = strings.SplitN(finish, "\n", 2)[0]
+	expected := append(append([]string{}, args...), "harbor-harness")
+	if got := printedCommandArgs(t, finish); fmt.Sprint(got) != fmt.Sprint(expected) || len(got) != len(expected) {
+		t.Fatalf("expected the shell to read %q, got %q from %s", expected, got, finish)
+	}
+
+	execProjectLinksSQL(t, home.DatabasePath, `DROP TRIGGER forced_batch_failure`)
+	finished, err := runPrintedWorkgraphCommand(t, finish)
+	if err != nil {
+		t.Fatalf("printed command failed: %v\n%s", err, finished)
+	}
+	for _, source := range sources {
+		if !strings.Contains(string(finished), "Relinked 1 unit from "+source+" to harbor-harness; 0 pending proposals resolved.") {
+			t.Fatalf("expected %q relinked by the printed command:\n%s", source, finished)
 		}
 	}
 }

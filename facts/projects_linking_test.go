@@ -127,7 +127,14 @@ type projectLinkingHome struct {
 
 func initProjectLinkingHome(t *testing.T) projectLinkingHome {
 	t.Helper()
-	root := t.TempDir()
+	return initProjectLinkingHomeAt(t, t.TempDir())
+}
+
+func initProjectLinkingHomeAt(t *testing.T, root string) projectLinkingHome {
+	t.Helper()
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	globalGitConfig := filepath.Join(root, "gitconfig")
 	if err := os.WriteFile(globalGitConfig, nil, 0o600); err != nil {
 		t.Fatal(err)
