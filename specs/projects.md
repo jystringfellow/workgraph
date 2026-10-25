@@ -340,9 +340,11 @@ The payload is one JSON document:
   against the source policy.
 - A decision is included only when its project is `none` or a project
   declared in the current catalog, so a rejected new-project slug that was
-  never created is left out, and, when its unit is still grouped, only when
-  every current member of that unit is permitted, so a decision is never
-  sent for a unit whose other members are now excluded.
+  never created is left out, and only when every evidence event belongs to
+  a current unit whose members are all permitted. Each evidence event is
+  resolved to the unit that contains it now, so a decision on a unit that
+  was regrouped, for example a burst that became a thread, is judged by the
+  new unit; a decision whose evidence is in no current unit is left out.
 - Decisions with the same container, decision, target, project, and kind are
   one entry whose `count` is how many of them passed the source policy, so
   the 20 entries are 20 different decisions. Entries are ordered by their

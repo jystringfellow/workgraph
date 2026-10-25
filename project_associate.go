@@ -739,10 +739,13 @@ func loadAssociateEvents(db *sql.DB, ids []string) ([]associateStoredEvent, erro
 }
 
 func associateRecentDecisions(db *sql.DB, links []ProjectLink, enabled map[string]bool, units []ProjectUnit, catalog ProjectCatalog) ([]associateDecision, error) {
-	members := map[string][]string{}
+	containing := map[string]ProjectUnit{}
 	for _, unit := range units {
-		members[unit.ID] = unit.EventIDs
+		for _, id := range unit.EventIDs {
+			containing[id] = unit
+		}
 	}
+	permittedUnits := map[string]bool{}
 	type candidate struct {
 		link     ProjectLink
 		decision string
@@ -782,14 +785,12 @@ func associateRecentDecisions(db *sql.DB, links []ProjectLink, enabled map[strin
 		if candidate.link.Target != "none" && !catalogHasProject(catalog, project) {
 			continue
 		}
-		if ids, found := members[candidate.link.UnitID]; found {
-			permitted, err := associateMembersPermitted(db, ids, enabled)
-			if err != nil {
-				return nil, err
-			}
-			if !permitted {
-				continue
-			}
+		permitted, err := associateEvidenceUnitsPermitted(db, candidate.link.Evidence, containing, permittedUnits, enabled)
+		if err != nil {
+			return nil, err
+		}
+		if !permitted {
+			continue
 		}
 		decision := associateDecision{Container: evidence[0].Project, Decision: candidate.decision, Target: candidate.link.Target, Project: project, Kind: candidate.link.Kind}
 		if position, found := positions[decision]; found {
@@ -804,6 +805,27 @@ func associateRecentDecisions(db *sql.DB, links []ProjectLink, enabled map[strin
 		decisions = append(decisions, decision)
 	}
 	return decisions, nil
+}
+
+func associateEvidenceUnitsPermitted(db *sql.DB, evidence []string, containing map[string]ProjectUnit, permittedUnits map[string]bool, enabled map[string]bool) (bool, error) {
+	for _, id := range evidence {
+		unit, found := containing[id]
+		if !found {
+			return false, nil
+		}
+		permitted, checked := permittedUnits[unit.ID]
+		if !checked {
+			var err error
+			if permitted, err = associateMembersPermitted(db, unit.EventIDs, enabled); err != nil {
+				return false, err
+			}
+			permittedUnits[unit.ID] = permitted
+		}
+		if !permitted {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func associateMembersPermitted(db *sql.DB, ids []string, enabled map[string]bool) (bool, error) {

@@ -491,6 +491,64 @@ func TestRecentDecisionsLeaveOutUndeclaredAndPrivateDerivedProjects(t *testing.T
 	}
 }
 
+func TestRecentDecisionsFollowARegroupedUnit(t *testing.T) {
+	home, models, now := initVerifyBacklogHome(t)
+	store := workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir}
+	start := now.Add(-8 * 24 * time.Hour)
+	ts := fmt.Sprintf("%d.000100", start.Unix())
+	message := associateSlackEvent("C5", ts, "channel", "burst-team", "Sam", "public burst message", start)
+	message.Payload = strings.Replace(message.Payload, `"thread_ts":"`+ts+`",`, "", 1)
+	insertEvent(t, home.DatabasePath, message)
+	burst := "slack.burst:C5:" + ts
+	for index := 0; index < 3; index++ {
+		at := start.Add(time.Duration(index+1) * time.Hour)
+		visible := insertAssociateThreads(t, home, at, fmt.Sprintf("C6%d", index), "visible-team", 1)
+		if _, err := workgraph.AssignProjectLink(workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, Now: at}, workgraph.ProjectLinkAssignment{UnitID: visible[0].ID, UnitKind: "slack.thread", Container: "visible-team", Evidence: visible[0].EventIDs, Target: "project", Project: "atlas-bot", Summary: "Decided"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := workgraph.AssignProjectLink(workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, Now: start.Add(5 * time.Hour)}, workgraph.ProjectLinkAssignment{UnitID: burst, UnitKind: "slack.burst", Container: "burst-team", Evidence: []string{message.ID}, Target: "project", Project: "atlas-bot", Summary: "Decided"}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := workgraph.AssociateWithLLM(workgraph.LLMAssociateConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, Now: now, DryRun: true})
+	if err != nil || !strings.Contains(before.Message, "burst-team") {
+		t.Fatalf("expected the public burst decision while its unit is public: %v\n%s", err, before.Message)
+	}
+
+	replyTS := fmt.Sprintf("%d.000100", start.Unix()+60)
+	reply := associateSlackEvent("C5", replyTS, "", "burst-team", "Alex", "reply of unknown privacy", start.Add(time.Minute))
+	reply.ID, reply.Type = "slack.thread_reply:C5:"+replyTS, "slack.thread_reply"
+	reply.Payload = strings.Replace(reply.Payload, `"thread_ts":"`+replyTS+`"`, `"thread_ts":"`+ts+`"`, 1)
+	insertEvent(t, home.DatabasePath, reply)
+	unrelated := insertAssociateThreads(t, home, now.Add(-6*time.Hour), "C2", "harness-team", 1)
+	dryRun, err := workgraph.AssociateWithLLM(workgraph.LLMAssociateConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, Now: now, DryRun: true})
+	if err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	payload := associateDryRunPayload(t, dryRun.Message)
+	if len(payload.Decisions) != 1 || payload.Decisions[0].Container != "visible-team" || !strings.Contains(dryRun.Message, `"count": 3`) {
+		t.Fatalf("expected only the visible decision, counted without the regrouped one, got %+v\n%s", payload.Decisions, dryRun.Message)
+	}
+	models.Respond("small-model", associateResponse(associateEntry(unrelated[0], "project", "harbor-harness", 0.8)))
+	if _, err := workgraph.AssociateWithLLM(workgraph.LLMAssociateConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, HTTPClient: models.Client, Now: now}); err != nil {
+		t.Fatalf("associate: %v", err)
+	}
+	routeBigVerifier(t, home, models)
+	models.Respond("big-model", `{"schema":"workgraph.associate_result.v1","units":[]}`)
+	if result, err := workgraph.VerifyLLMBacklog(workgraph.LLMVerifyBacklogConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, HTTPClient: models.Client, Now: now}); err != nil || result.Sent != 1 {
+		t.Fatalf("verify backlog: %+v %v", result, err)
+	}
+	for _, sent := range []string{models.LastRequest("small-model"), models.LastRequest("big-model")} {
+		decisions := verifierRequestDecisions(t, sent)
+		if len(decisions) != 1 || decisions[0].Container != "visible-team" || decisions[0].Count != 3 {
+			t.Fatalf("expected the regrouped decision left out of recent_decisions and its count, got %+v", decisions)
+		}
+	}
+	if link := currentProjectLink(t, store, burst); link.Project != "atlas-bot" {
+		t.Fatalf("expected the user's decision kept, got %+v", link)
+	}
+}
+
 func TestDeferredVerifyCountsDecisionsFromALegacySnapshot(t *testing.T) {
 	home := initScheduleHome(t)
 	writeInventedProjects(t, home)
