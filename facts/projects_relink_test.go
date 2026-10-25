@@ -626,13 +626,13 @@ func runPrintedWorkgraphCommand(t *testing.T, command string) ([]byte, error) {
 	return shell.CombinedOutput()
 }
 
-func printedCommandArgs(t *testing.T, command string) []string {
+func printedCommandArgs(t *testing.T, shell []string, command string) []string {
 	t.Helper()
 	rest, ok := strings.CutPrefix(command, "workgraph ")
 	if !ok {
 		t.Fatalf("unexpected printed command %q", command)
 	}
-	output, err := exec.Command("sh", "-c", `printf '%s\n' `+rest).CombinedOutput()
+	output, err := exec.Command(shell[0], append(shell[1:], "-c", `printf '%s\n' `+rest)...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("shell parse %q: %v %s", command, err, output)
 	}
@@ -643,7 +643,7 @@ func TestRelinkRecoveryCommandSurvivesTheShell(t *testing.T) {
 	now := time.Now().UTC()
 	home := initProjectLinkingHomeAt(t, filepath.Join(t.TempDir(), `work "dir" it's`))
 	writeProjectMemory(t, home.MemoryDir, "harbor-harness", "# Harbor Harness\n")
-	sources := []string{"#general", "team chat", "it's", `say "hi"`}
+	sources := []string{"#general", "team chat", "it's", `say "hi"`, "=sh", "foo#bar"}
 	for i, source := range sources {
 		ts := fmt.Sprintf("%d.000100", 1000+i)
 		insertProjectUnitEvent(t, home.DatabasePath, slackLinkEvent(fmt.Sprintf("C%d", i), ts, ts, "note", now.Add(-time.Hour), source))
@@ -667,8 +667,15 @@ func TestRelinkRecoveryCommandSurvivesTheShell(t *testing.T) {
 	}
 	finish = strings.SplitN(finish, "\n", 2)[0]
 	expected := append(append([]string{}, args...), "harbor-harness")
-	if got := printedCommandArgs(t, finish); fmt.Sprint(got) != fmt.Sprint(expected) || len(got) != len(expected) {
-		t.Fatalf("expected the shell to read %q, got %q from %s", expected, got, finish)
+	for _, shell := range [][]string{{"sh"}, {"zsh", "-f"}, {"zsh", "-f", "-o", "extendedglob"}} {
+		t.Run(strings.Join(shell, " "), func(t *testing.T) {
+			if _, err := exec.LookPath(shell[0]); err != nil {
+				t.Skipf("%s is not on PATH", shell[0])
+			}
+			if got := printedCommandArgs(t, shell, finish); fmt.Sprint(got) != fmt.Sprint(expected) || len(got) != len(expected) {
+				t.Fatalf("expected %v to read %q, got %q from %s", shell, expected, got, finish)
+			}
+		})
 	}
 
 	execProjectLinksSQL(t, home.DatabasePath, `DROP TRIGGER forced_batch_failure`)
