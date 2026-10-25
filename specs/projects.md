@@ -338,6 +338,11 @@ The payload is one JSON document:
   earliest evidence event, the decision, target, project, and kind. Stored
   link summaries are never sent, because their provenance cannot be checked
   against the source policy.
+- A decision is included only when its project is `none` or a project
+  declared in the current catalog, so a rejected new-project slug that was
+  never created is left out, and, when its unit is still grouped, only when
+  every current member of that unit is permitted, so a decision is never
+  sent for a unit whose other members are now excluded.
 - Decisions with the same container, decision, target, project, and kind are
   one entry whose `count` is how many of them passed the source policy, so
   the 20 entries are 20 different decisions. Entries are ordered by their
@@ -681,32 +686,32 @@ workgraph llm verify-backlog [--limit 50] [--since 168h]
 - A waiting link is a `proposed` LLM link with no decision, no stored
   verification, and a profile other than the verifier, whose confidence is at
   or above its own profile's verify floor and below that profile's auto-apply
-  threshold. A link whose profile is no longer configured is judged against
+  threshold, and whose target is `none` or a project declared in the current
+  catalog. A link whose profile is no longer configured is judged against
   0.6 and 0.95. A unit that has any decided link, including an undone or
   corrected one, is never verified. `--since` keeps links created within that
   duration. Links are taken oldest first.
+- New-project proposals, and proposals for a project that is no longer
+  declared, in the band are not sent; they stay in `projects review` and are
+  counted as `Left in review, new or undeclared project: <n>`.
 - It refuses before reading the backlog when `associate-verify` is not
   routed, names a profile that is not configured, names a `system-one`
   profile, or names a profile with bridge execution: backlog verification
   calls the verifier directly. Outside a dry run, the verifier passes the
   hosted opt-in and managed-provider checks first.
-- The verifier receives the same request as in Verifier, built the same way.
-  When a completed `llm.associate` request stored a snapshot containing the
-  unit, the latest one created at or before the link is the payload the
-  associate saw; it is checked against current permissions as in Verifier,
-  and a unit whose permitted members changed is skipped. Units from one
-  snapshot share a request with that snapshot's catalog entries and
-  decisions. Without a snapshot the unit is rebuilt under the current source
-  policy and catalog, with the current decisions, and the request passes the
+- Stored model text cannot be traced to the members, other units, catalog,
+  or redactions that produced it, so backlog verification never reuses a
+  snapshot and never sends stored model text. Each unit is rebuilt from
+  current content under the current source policy, catalog, and managed
+  redactions, with the current recent decisions, and the request passes the
   hosted outbound filter when the link's profile is hosted or no longer
-  configured. A waiting link's answer may be derived from members that are no
-  longer permitted, and a snapshot is not tied to the run that proposed the
-  link, so a link is sent only when every current member of its unit is
-  permitted (the unit would not be sent under an opaque id) and the link's
-  evidence is among the members that are sent, from the snapshot or the
-  rebuild; any other link is skipped. Snapshot lookup ignores malformed
-  historical snapshot entries. `primary_answer` is the waiting
-  link's target, project, new project, kind, summary, and confidence.
+  configured, or the verifier is hosted. A link is sent only when every
+  current member of its unit is permitted (the unit would not be sent under
+  an opaque id) and the link's evidence is among those members; any other
+  link is skipped. `primary_answer` holds only the waiting link's `target`,
+  its `project` when the target is a declared project, and its
+  `confidence`; the stored summary, kind, and new-project fields are never
+  sent. The verifier answers in the associate result shape, as in Verifier.
 - The consent, route, and source-policy checks run again immediately before
   every verifier call, as in Verifier. Each request carries at most 50 units,
   and a run sends at most `--limit` units, 50 by default.
@@ -717,8 +722,8 @@ workgraph llm verify-backlog [--limit 50] [--since 168h]
   `profile` set to the verifier, `run_id` set to this run, so `projects
   undo --run` undoes what it applied, and `created_at` set to the time of
   the verdict, so `projects review --auto --since` and the `next` auto count
-  see it as new. `projects review --auto` lists newest `created_at` first. It is applied only as in Auto-Apply for
-  the verifier: its threshold, recent rejections, new-project rule, and
+  see it as new. `projects review --auto` lists newest `created_at` first.
+  It is applied only as in Auto-Apply for the verifier: its threshold, recent rejections, new-project rule, and
   accuracy gate. Both results are stored in `project_link_verifications`.
 - A link the verifier left out or whose entry was discarded keeps the
   associate result and is recorded in `project_link_backlog_checks` (link
@@ -727,7 +732,8 @@ workgraph llm verify-backlog [--limit 50] [--since 168h]
   Running the command twice never sends the same link to the same verifier
   twice after it answered.
 - `--dry-run` reads only. It prints the verifier, provider, model,
-  destination, enabled sources, `Waiting in the verify band: <n>`, the limit,
+  destination, enabled sources, `Waiting in the verify band: <n>`, `Left in
+  review, new or undeclared project: <n>`, the limit,
   `Would send: <n>`, `Skipped: <n>`, and the first request exactly as it
   would be sent, after the outbound filter.
 - A run prints `Run`, `Sent`, `Verified`, `Applied`, `Kept for review`
@@ -1080,14 +1086,20 @@ Grouping, shared by `today` and `resume`:
   verifier profile, applies only through the verifier's threshold and
   accuracy gate, appears in `projects explain` and in `projects review
   --auto --since 1h` when applied now, and is undone by `projects undo
-  --run`; a proposal whose answer came from a source disabled since then is
-  skipped and nothing derived from it is sent; `--dry-run` prints the count, destination, and an example
-  request and calls nothing; it refuses without a verifier route and for a
-  `system-one` or bridge verifier; a second run does not resend a link the
-  verifier answered or left out, while a failed call leaves links waiting; a
-  stored snapshot keeps the associate's redactions.
+  --run`; new-project proposals stay in review; a unit with a member from a
+  source disabled since the proposal is skipped; no stored summary or
+  new-project text, nothing from other units in the original batch, and no
+  earlier snapshot's text or catalog description is sent, and the rebuilt
+  request carries current redactions; `--dry-run` prints the count,
+  destination, and an example request and calls nothing; it refuses without
+  a verifier route and for a `system-one` or bridge verifier; a second run
+  does not resend a link the verifier answered or left out, while a failed
+  call leaves links waiting.
 - **P17. Recent decisions are distinct.** Fifteen identical decisions become
   one entry with `count` 15 beside each distinct decision; a decision from a
   disabled source adds neither an entry nor a count, and the hosted outbound
-  filter still redacts decision containers; a snapshot stored without counts
-  sends its repeated decision once, capped at the count still permitted.
+  filter still redacts decision containers; a rejected new-project slug and a
+  decision on a unit whose member is now from a disabled source are left out
+  of every associate and verify payload; a snapshot stored without counts
+  sends its repeated decision once to a deferred verifier, capped at the
+  count still permitted.

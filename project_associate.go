@@ -637,7 +637,7 @@ func buildAssociatePayload(homeDir string, config LLMAssociateConfig, now time.T
 		payload.Units = append(payload.Units, entry)
 	}
 	sort.Slice(payload.Projects, func(i, j int) bool { return payload.Projects[i].Slug < payload.Projects[j].Slug })
-	payload.Decisions, err = associateRecentDecisions(db, links, enabled)
+	payload.Decisions, err = associateRecentDecisions(db, links, enabled, units, catalog)
 	if err != nil {
 		return associatePayload{}, err
 	}
@@ -738,7 +738,11 @@ func loadAssociateEvents(db *sql.DB, ids []string) ([]associateStoredEvent, erro
 	return events, rows.Err()
 }
 
-func associateRecentDecisions(db *sql.DB, links []ProjectLink, enabled map[string]bool) ([]associateDecision, error) {
+func associateRecentDecisions(db *sql.DB, links []ProjectLink, enabled map[string]bool, units []ProjectUnit, catalog ProjectCatalog) ([]associateDecision, error) {
+	members := map[string][]string{}
+	for _, unit := range units {
+		members[unit.ID] = unit.EventIDs
+	}
 	type candidate struct {
 		link     ProjectLink
 		decision string
@@ -774,7 +778,20 @@ func associateRecentDecisions(db *sql.DB, links []ProjectLink, enabled map[strin
 		if !passes {
 			continue
 		}
-		decision := associateDecision{Container: evidence[0].Project, Decision: candidate.decision, Target: candidate.link.Target, Project: firstNonEmpty(candidate.link.Project, proposedProjectSlug(candidate.link.NewProject)), Kind: candidate.link.Kind}
+		project := firstNonEmpty(candidate.link.Project, proposedProjectSlug(candidate.link.NewProject))
+		if candidate.link.Target != "none" && !catalogHasProject(catalog, project) {
+			continue
+		}
+		if ids, found := members[candidate.link.UnitID]; found {
+			permitted, err := associateMembersPermitted(db, ids, enabled)
+			if err != nil {
+				return nil, err
+			}
+			if !permitted {
+				continue
+			}
+		}
+		decision := associateDecision{Container: evidence[0].Project, Decision: candidate.decision, Target: candidate.link.Target, Project: project, Kind: candidate.link.Kind}
 		if position, found := positions[decision]; found {
 			decisions[position].Count++
 			continue
@@ -787,6 +804,19 @@ func associateRecentDecisions(db *sql.DB, links []ProjectLink, enabled map[strin
 		decisions = append(decisions, decision)
 	}
 	return decisions, nil
+}
+
+func associateMembersPermitted(db *sql.DB, ids []string, enabled map[string]bool) (bool, error) {
+	members, err := loadAssociateEvents(db, ids)
+	if err != nil {
+		return false, err
+	}
+	for _, member := range members {
+		if !enabled[associateEventSource(member)] {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func projectLinkDecisionTime(link ProjectLink) time.Time {

@@ -22,8 +22,8 @@ type associateAnswer struct {
 	Target     string           `json:"target"`
 	Project    string           `json:"project,omitempty"`
 	NewProject *ProposedProject `json:"new_project,omitempty"`
-	Kind       string           `json:"kind"`
-	Summary    string           `json:"summary"`
+	Kind       string           `json:"kind,omitempty"`
+	Summary    string           `json:"summary,omitempty"`
 	Confidence float64          `json:"confidence"`
 }
 

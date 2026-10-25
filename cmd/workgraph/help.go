@@ -112,7 +112,7 @@ var helpTopics = map[string]helpTopic{
 	"llm test":                {"workgraph llm test [--profile <name>] [options]", "Verify that an LLM profile can reach and use its provider."},
 	"llm set":                 {"workgraph llm set <profile> [--auto-apply-confidence <0.5-1.0>] [--verify-floor <0-1>] [options]", "Change a profile's project auto-apply threshold or verify floor."},
 	"llm use":                 {"workgraph llm use <profile> [--for <task>] [options]", "Select an LLM profile as a default or for a task."},
-	"llm verify-backlog":      {"workgraph llm verify-backlog [--dry-run] [--limit N] [--since <duration>] [options]", "Send waiting proposed project links in the verify band to the associate-verify profile."},
+	"llm verify-backlog":      {"workgraph llm verify-backlog [--dry-run] [--limit N] [--since <duration>] [options]", "Send waiting proposals for an existing project or no project, in the verify band, to the associate-verify profile."},
 	"mail":                    {"workgraph mail <subcommand>", "Connect, capture, or disconnect mail providers."},
 	"mail capture":            {"workgraph mail capture [options]", "Capture normalized mail events from a connected provider."},
 	"mail connect":            {"workgraph mail connect <google|microsoft> [options]", "Connect a mail provider with OAuth."},

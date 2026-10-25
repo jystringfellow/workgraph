@@ -945,8 +945,14 @@ workgraph llm verify-backlog --limit 50
 workgraph llm verify-backlog --since 168h
 ```
 
-The dry run prints how many links are waiting, where the verifier sends data,
-and the first request exactly as it would be sent, and calls nothing. A run
+Only proposals for an existing declared project or for no project are sent;
+new-project proposals stay in `workgraph projects review`. Each unit is
+rebuilt from current content under the current source settings and
+redactions, and the verifier sees the proposal only as its target project and
+confidence, never the stored summary. A unit with a member from a source you
+have since disabled is skipped. The dry run prints how many links are waiting,
+how many were left in review, where the verifier sends data, and the first
+request exactly as it would be sent, and calls nothing. A run
 prints how many links were verified, applied, kept for review, corrected, and
 skipped. The verifier's answer replaces the link under the verifier's profile
 and is applied only at the verifier's threshold and accuracy gate; `workgraph

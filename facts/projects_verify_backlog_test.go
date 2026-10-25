@@ -219,52 +219,6 @@ func TestVerifyBacklogAppliesThroughTheVerifierAccuracyGate(t *testing.T) {
 	}
 }
 
-func TestVerifyBacklogReusesTheSnapshotTheAssociateSaw(t *testing.T) {
-	home := initScheduleHome(t)
-	writeInventedProjects(t, home)
-	managedPath := filepath.Join(t.TempDir(), "managed-settings.json")
-	writeManagedPatterns(t, managedPath, `"ORBIT-[0-9]{4}-SECRET"`)
-	restore := workgraph.SetManagedSettingsPathForTest(managedPath)
-	defer restore()
-	configureBridgeAssociateProfile(t, home, "slack")
-	start := time.Now().UTC().Add(-6 * time.Hour)
-	ts := fmt.Sprintf("%d.000100", start.Unix())
-	event := associateSlackEvent("C1", ts, "channel", "harness-team", "Sam", "Rotate ORBIT-1234-SECRET before launch", start)
-	insertEvent(t, home.DatabasePath, event)
-	unit := workgraph.ProjectUnit{ID: "slack.thread:C1:" + ts, EventIDs: []string{event.ID}}
-	if emitted, err := workgraph.ScheduleLLMAssociate(workgraph.LLMAssociateScheduleConfig{HomeDir: home.HomeDir}); err != nil || !emitted.Created {
-		t.Fatalf("emit: %+v %v", emitted, err)
-	}
-	claims, err := workgraph.ClaimCaptureRequests(workgraph.CaptureRequestClaimConfig{HomeDir: home.HomeDir, Kind: "llm_task", Worker: "claude-code-drain-fact", MemoryDir: home.MemoryDir})
-	if err != nil || len(claims) != 1 {
-		t.Fatalf("claim: %+v %v", claims, err)
-	}
-	response := associateResponse(associateEntry(unit, "project", "harbor-harness", 0.8))
-	if _, err := workgraph.SubmitLLMTask(workgraph.LLMTaskSubmitConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, RequestID: claims[0].Request.ID, ClaimToken: claims[0].ClaimToken, Response: response}); err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if link := currentProjectLink(t, workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir}, unit.ID); link.State != "proposed" || link.Profile != "claude-bridge" {
-		t.Fatalf("expected a waiting associate proposal, got %+v", link)
-	}
-
-	writeManagedPatterns(t, managedPath, ``)
-	verifier := newRecordingVerifier(t)
-	if _, err := workgraph.AddLLMProfile(workgraph.LLMAddProfileConfig{HomeDir: home.HomeDir, Name: "local-verify", Provider: "openai-compatible", BaseURL: verifier.URL + "/v1", Model: "local-verify-model"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := workgraph.UseLLMProfile(workgraph.LLMUseProfileConfig{HomeDir: home.HomeDir, Name: "local-verify", Task: "associate-verify"}); err != nil {
-		t.Fatal(err)
-	}
-	result, err := workgraph.VerifyLLMBacklog(workgraph.LLMVerifyBacklogConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir})
-	if err != nil || result.Sent != 1 {
-		t.Fatalf("verify backlog: %+v %v", result, err)
-	}
-	requests := verifier.Requests()
-	if len(requests) != 1 || !strings.Contains(requests[0], "[REDACTED:managed-pattern]") || strings.Contains(requests[0], "ORBIT-1234-SECRET") {
-		t.Fatalf("expected the verifier to receive the redaction the associate saw:\n%s", strings.Join(requests, "\n"))
-	}
-}
-
 func TestVerifyBacklogNeverSendsAnAnswerDerivedFromADisabledSource(t *testing.T) {
 	home, models, now := initVerifyBacklogHome(t)
 	if _, err := workgraph.ConfigureLLMSources(workgraph.LLMSourcesConfig{HomeDir: home.HomeDir, Task: "associate", Enable: []string{"slack.dm"}}); err != nil {
@@ -300,8 +254,8 @@ func TestVerifyBacklogNeverSendsAnAnswerDerivedFromADisabledSource(t *testing.T)
 		t.Fatalf("dry run: %v", err)
 	}
 	result, err := workgraph.VerifyLLMBacklog(workgraph.LLMVerifyBacklogConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, HTTPClient: models.Client, Now: now})
-	if err != nil || result.Waiting != 2 || result.Sent != 1 || result.Skipped != 1 {
-		t.Fatalf("expected the legacy thread skipped and the channel thread sent, got %+v %v\n%s", result, err, result.Message)
+	if err != nil || result.Waiting != 1 || result.SetAside != 1 || result.Sent != 1 || result.Skipped != 0 || !strings.Contains(result.Message, "Left in review, new or undeclared project: 1") {
+		t.Fatalf("expected the new-project proposal left in review and the channel thread sent, got %+v %v\n%s", result, err, result.Message)
 	}
 	request := models.LastRequest("big-model")
 	if !strings.Contains(request, plain[0].ID) {
@@ -342,15 +296,14 @@ func TestVerifyBacklogSkipsAnOpaqueUnitEvenWithAnEarlierSnapshot(t *testing.T) {
 
 	models := newRoutedAssociateModels(t)
 	configureAssociateProfile(t, home, models.URL, "slack.dm")
-	proposal := associateEntry(legacy, "new_project", "", 0.8)
-	proposal["new_project"] = map[string]any{"slug": "pricing-escalations", "name": "Pricing Escalations", "description": "Escalated pricing threads", "workstream": "pricing-desk"}
+	proposal := associateEntry(legacy, "project", "atlas-bot", 0.8)
 	proposal["summary"] = "Pricing escalation from the root"
 	models.Respond("small-model", associateResponse(proposal))
 	if _, err := workgraph.AssociateWithLLM(workgraph.LLMAssociateConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, HTTPClient: models.Client}); err != nil {
 		t.Fatalf("direct associate: %v", err)
 	}
-	if link := currentProjectLink(t, workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir}, legacy.ID); link.State != "proposed" || link.Target != "new_project" || link.Profile != "local-associate" {
-		t.Fatalf("expected the direct run's new-project proposal, got %+v", link)
+	if link := currentProjectLink(t, workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir}, legacy.ID); link.State != "proposed" || link.Project != "atlas-bot" || link.Profile != "local-associate" {
+		t.Fatalf("expected the direct run's proposal, got %+v", link)
 	}
 	if _, err := workgraph.ConfigureLLMSources(workgraph.LLMSourcesConfig{HomeDir: home.HomeDir, Task: "associate", Disable: []string{"slack.dm"}}); err != nil {
 		t.Fatal(err)
@@ -365,35 +318,180 @@ func TestVerifyBacklogSkipsAnOpaqueUnitEvenWithAnEarlierSnapshot(t *testing.T) {
 	if err != nil || result.Waiting != 1 || result.Sent != 0 || result.Skipped != 1 || models.Calls("big-model") != 0 {
 		t.Fatalf("expected the opaque unit skipped with no verifier call, got %+v calls=%d %v\n%s", result, models.Calls("big-model"), err, result.Message)
 	}
-	for _, leaked := range []string{"pricing-escalations", "Pricing Escalations", "Escalated pricing", "pricing-desk", "Pricing escalation from the root", "legacy root"} {
+	for _, leaked := range []string{"Pricing escalation from the root", "legacy root", legacy.ID} {
 		if strings.Contains(dryRun.Message, leaked) {
 			t.Fatalf("the dry run carried %q, derived from a source disabled since the proposal:\n%s", leaked, dryRun.Message)
 		}
 	}
 }
 
-func TestVerifyBacklogIgnoresAMalformedHistoricalSnapshot(t *testing.T) {
+func TestVerifyBacklogSendsNoTextFromTheOriginalBatch(t *testing.T) {
 	home, models, now := initVerifyBacklogHome(t)
-	units := proposeVerifyBacklog(t, home, models, now, "C1", 0.8)
-	db, err := sql.Open("sqlite3", home.DatabasePath)
-	if err != nil {
+	if _, err := workgraph.ConfigureLLMSources(workgraph.LLMSourcesConfig{HomeDir: home.HomeDir, Task: "associate", Enable: []string{"slack.dm"}}); err != nil {
 		t.Fatal(err)
 	}
-	created := now.Add(-8 * 24 * time.Hour).Format(time.RFC3339Nano)
-	if _, err := db.Exec(`INSERT INTO capture_requests (id, connector_id, kind, since, until, params_json, status, attempts, available_at, created_at)
-		VALUES ('broken-snapshot', 'llm.associate', 'llm_task', ?, ?, '{"unit_ids":[],"snapshot":{"units":["broken", 7, null]}}', 'completed', 1, ?, ?)`, created, created, created, created); err != nil {
+	start := now.Add(-8 * 24 * time.Hour)
+	dmTS := fmt.Sprintf("%d.000100", start.Unix())
+	insertEvent(t, home.DatabasePath, associateSlackEvent("D500", dmTS, "im", "D500", "Robin", "private pricing escalation in a dm", start))
+	dm := workgraph.ProjectUnit{ID: "slack.thread:D500:" + dmTS, EventIDs: []string{"slack.message:D500:" + dmTS}}
+	public := insertAssociateThreads(t, home, start.Add(time.Hour), "C1", "harness-team", 2)
+	summarized := associateEntry(public[0], "project", "harbor-harness", 0.8)
+	summarized["summary"] = "Pricing escalation from the private dm"
+	invented := associateEntry(public[1], "new_project", "", 0.8)
+	invented["new_project"] = map[string]any{"slug": "pricing-escalations", "name": "Pricing Escalations", "description": "From the private dm", "workstream": "pricing-desk"}
+	models.Respond("small-model", associateResponse(associateEntry(dm, "none", "", 0.3), summarized, invented))
+	if _, err := workgraph.AssociateWithLLM(workgraph.LLMAssociateConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, HTTPClient: models.Client, Now: now.Add(-7 * 24 * time.Hour)}); err != nil {
+		t.Fatalf("associate: %v", err)
+	}
+	if _, err := workgraph.ConfigureLLMSources(workgraph.LLMSourcesConfig{HomeDir: home.HomeDir, Task: "associate", Disable: []string{"slack.dm"}}); err != nil {
 		t.Fatal(err)
 	}
-	db.Close()
 	routeBigVerifier(t, home, models)
-	models.Respond("big-model", associateResponse(associateEntry(units[0], "project", "atlas-bot", 0.9)))
+	models.Respond("big-model", `{"schema":"workgraph.associate_result.v1","units":[]}`)
+	dryRun, err := workgraph.VerifyLLMBacklog(workgraph.LLMVerifyBacklogConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, Now: now, DryRun: true})
+	if err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
 	result, err := workgraph.VerifyLLMBacklog(workgraph.LLMVerifyBacklogConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, HTTPClient: models.Client, Now: now})
-	if err != nil || result.Verified != 1 {
-		t.Fatalf("expected a malformed historical snapshot to be ignored and the link verified, got %+v %v", result, err)
+	if err != nil || result.Sent != 1 || result.SetAside != 1 {
+		t.Fatalf("expected the project proposal sent and the new-project proposal left in review, got %+v %v\n%s", result, err, result.Message)
+	}
+	request := models.LastRequest("big-model")
+	if !strings.Contains(request, public[0].ID) || !strings.Contains(request, `\"confidence\": 0.8`) {
+		t.Fatalf("expected the rebuilt unit and the proposing confidence in the verifier request:\n%s", request)
+	}
+	for _, sent := range []string{request, dryRun.Message} {
+		for _, leaked := range []string{"Pricing escalation", "pricing-escalations", "Pricing Escalations", "From the private dm", "pricing-desk", "private pricing", "D500", public[1].ID} {
+			if strings.Contains(sent, leaked) {
+				t.Fatalf("the verifier request carried %q from the original batch:\n%s", leaked, sent)
+			}
+		}
 	}
 }
 
-func TestVerifyBacklogCountsDecisionsFromALegacySnapshot(t *testing.T) {
+func TestVerifyBacklogRebuildsUnderTheCurrentRedactions(t *testing.T) {
+	home := initScheduleHome(t)
+	writeProjectMemory(t, home.MemoryDir, "atlas-bot", "# Atlas Bot\n\nOwns the zeta-codename rollout.\n")
+	managedPath := filepath.Join(t.TempDir(), "managed-settings.json")
+	writeManagedPatterns(t, managedPath, ``)
+	restore := workgraph.SetManagedSettingsPathForTest(managedPath)
+	defer restore()
+	configureBridgeAssociateProfile(t, home, "slack")
+	start := time.Now().UTC().Add(-6 * time.Hour)
+	ts := fmt.Sprintf("%d.000100", start.Unix())
+	event := associateSlackEvent("C1", ts, "channel", "harness-team", "Sam", "Rotate ORBIT-1234-SECRET before launch", start)
+	insertEvent(t, home.DatabasePath, event)
+	unit := workgraph.ProjectUnit{ID: "slack.thread:C1:" + ts, EventIDs: []string{event.ID}}
+	if emitted, err := workgraph.ScheduleLLMAssociate(workgraph.LLMAssociateScheduleConfig{HomeDir: home.HomeDir}); err != nil || !emitted.Created {
+		t.Fatalf("emit: %+v %v", emitted, err)
+	}
+	claims, err := workgraph.ClaimCaptureRequests(workgraph.CaptureRequestClaimConfig{HomeDir: home.HomeDir, Kind: "llm_task", Worker: "claude-code-drain-fact", MemoryDir: home.MemoryDir})
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("claim: %+v %v", claims, err)
+	}
+	if params := storedLLMRequestParams(t, home, claims[0].Request.ID); !strings.Contains(params, "ORBIT-1234-SECRET") || !strings.Contains(params, "zeta-codename") {
+		t.Fatalf("expected an earlier snapshot that holds the unredacted text and the old description:\n%s", params)
+	}
+	if _, err := workgraph.SubmitLLMTask(workgraph.LLMTaskSubmitConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, RequestID: claims[0].Request.ID, ClaimToken: claims[0].ClaimToken, Response: `{"schema":"workgraph.associate_result.v1","units":[]}`}); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	writeManagedPatterns(t, managedPath, `"ORBIT-[0-9]{4}-SECRET"`)
+	writeProjectMemory(t, home.MemoryDir, "atlas-bot", "# Atlas Bot\n\nOwns the ORBIT-5678-SECRET bot.\n")
+	models := newRoutedAssociateModels(t)
+	if _, err := workgraph.AddLLMProfile(workgraph.LLMAddProfileConfig{HomeDir: home.HomeDir, Name: "hosted-associate", Provider: "openai-compatible", BaseURL: "https://models.example.test/v1", Model: "small-model"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workgraph.UseLLMProfile(workgraph.LLMUseProfileConfig{HomeDir: home.HomeDir, Name: "hosted-associate", Task: "associate"}); err != nil {
+		t.Fatal(err)
+	}
+	models.Respond("small-model", associateResponse(associateEntry(unit, "project", "harbor-harness", 0.8)))
+	if _, err := workgraph.AssociateWithLLM(workgraph.LLMAssociateConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, HTTPClient: models.Client}); err != nil {
+		t.Fatalf("direct associate: %v", err)
+	}
+	if strings.Contains(models.LastRequest("small-model"), "ORBIT-1234-SECRET") {
+		t.Fatalf("expected the proposing request redacted")
+	}
+	routeBigVerifier(t, home, models)
+	models.Respond("big-model", `{"schema":"workgraph.associate_result.v1","units":[]}`)
+	if result, err := workgraph.VerifyLLMBacklog(workgraph.LLMVerifyBacklogConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, HTTPClient: models.Client}); err != nil || result.Sent != 1 {
+		t.Fatalf("verify backlog: %+v %v", result, err)
+	}
+	request := models.LastRequest("big-model")
+	if !strings.Contains(request, "[REDACTED:managed-pattern]") {
+		t.Fatalf("expected the rebuilt request redacted:\n%s", request)
+	}
+	for _, leaked := range []string{"ORBIT-1234-SECRET", "ORBIT-5678-SECRET", "zeta-codename"} {
+		if strings.Contains(request, leaked) {
+			t.Fatalf("the verifier request carried %q from an earlier snapshot:\n%s", leaked, request)
+		}
+	}
+}
+
+func TestRecentDecisionsLeaveOutUndeclaredAndPrivateDerivedProjects(t *testing.T) {
+	home, models, now := initVerifyBacklogHome(t)
+	if _, err := workgraph.ConfigureLLMSources(workgraph.LLMSourcesConfig{HomeDir: home.HomeDir, Task: "associate", Enable: []string{"slack.dm"}}); err != nil {
+		t.Fatal(err)
+	}
+	store := workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir}
+	start := now.Add(-8 * 24 * time.Hour)
+	legacyThread := func(channelID, replyContainer string, offset time.Duration) workgraph.ProjectUnit {
+		at := start.Add(offset)
+		rootTS, replyTS := fmt.Sprintf("%d.000100", at.Unix()), fmt.Sprintf("%d.000100", at.Unix()+60)
+		root := associateSlackEvent(channelID, rootTS, "", "legacy-root-name", "Alex", "harbor pricing escalation from the legacy root", at)
+		reply := associateSlackEvent(channelID, replyTS, "channel", replyContainer, "Sam", "channel reply in a legacy thread", at.Add(time.Minute))
+		reply.ID, reply.Type = "slack.thread_reply:"+channelID+":"+replyTS, "slack.thread_reply"
+		reply.Payload = strings.Replace(reply.Payload, `"thread_ts":"`+replyTS+`"`, `"thread_ts":"`+rootTS+`"`, 1)
+		insertEvent(t, home.DatabasePath, root)
+		insertEvent(t, home.DatabasePath, reply)
+		return workgraph.ProjectUnit{ID: "slack.thread:" + channelID + ":" + rootTS, EventIDs: []string{reply.ID}}
+	}
+	invented := legacyThread("C700", "harness-team", 0)
+	chosen := legacyThread("C701", "quiet-team", time.Hour)
+	public := insertAssociateThreads(t, home, start.Add(2*time.Hour), "C1", "visible-team", 1)
+	proposal := associateEntry(invented, "new_project", "", 0.8)
+	proposal["new_project"] = map[string]any{"slug": "pricing-escalations", "name": "Pricing Escalations"}
+	models.Respond("small-model", associateResponse(proposal, associateEntry(chosen, "project", "atlas-bot", 0.8), associateEntry(public[0], "project", "harbor-harness", 0.8)))
+	if _, err := workgraph.AssociateWithLLM(workgraph.LLMAssociateConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, HTTPClient: models.Client, Now: now.Add(-7 * 24 * time.Hour)}); err != nil {
+		t.Fatalf("associate: %v", err)
+	}
+	if _, err := workgraph.RejectProjectLink(store, currentProjectLink(t, store, invented.ID).ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workgraph.ApproveProjectLink(store, currentProjectLink(t, store, chosen.ID).ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workgraph.ApproveProjectLink(store, currentProjectLink(t, store, public[0].ID).ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workgraph.ConfigureLLMSources(workgraph.LLMSourcesConfig{HomeDir: home.HomeDir, Task: "associate", Disable: []string{"slack.dm"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	unrelated := insertAssociateThreads(t, home, now.Add(-6*time.Hour), "C2", "harness-team", 1)
+	dryRun, err := workgraph.AssociateWithLLM(workgraph.LLMAssociateConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, Now: now, DryRun: true})
+	if err != nil || !strings.Contains(dryRun.Message, unrelated[0].ID) || !strings.Contains(dryRun.Message, "visible-team") {
+		t.Fatalf("expected the unrelated unit and the permitted decision in the payload: %v\n%s", err, dryRun.Message)
+	}
+	models.Respond("small-model", associateResponse(associateEntry(unrelated[0], "project", "harbor-harness", 0.8)))
+	if _, err := workgraph.AssociateWithLLM(workgraph.LLMAssociateConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, HTTPClient: models.Client, Now: now}); err != nil {
+		t.Fatalf("associate: %v", err)
+	}
+	routeBigVerifier(t, home, models)
+	models.Respond("big-model", `{"schema":"workgraph.associate_result.v1","units":[]}`)
+	if result, err := workgraph.VerifyLLMBacklog(workgraph.LLMVerifyBacklogConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, HTTPClient: models.Client, Now: now}); err != nil || result.Sent != 1 {
+		t.Fatalf("verify backlog: %+v %v", result, err)
+	}
+	for _, sent := range []string{dryRun.Message, models.LastRequest("big-model")} {
+		for _, leaked := range []string{"pricing-escalations", "quiet-team", "legacy-root-name"} {
+			if strings.Contains(sent, leaked) {
+				t.Fatalf("recent_decisions carried %q from a unit whose source is now disabled:\n%s", leaked, sent)
+			}
+		}
+	}
+}
+
+func TestDeferredVerifyCountsDecisionsFromALegacySnapshot(t *testing.T) {
 	home := initScheduleHome(t)
 	writeInventedProjects(t, home)
 	configureBridgeAssociateProfile(t, home, "slack")
@@ -413,11 +511,6 @@ func TestVerifyBacklogCountsDecisionsFromALegacySnapshot(t *testing.T) {
 		t.Fatalf("claim: %+v %v", claims, err)
 	}
 	stripSnapshotDecisionCounts(t, home, claims[0].Request.ID, 3)
-	response := associateResponse(associateEntry(units[0], "project", "harbor-harness", 0.8))
-	if _, err := workgraph.SubmitLLMTask(workgraph.LLMTaskSubmitConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, RequestID: claims[0].Request.ID, ClaimToken: claims[0].ClaimToken, Response: response}); err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-
 	verifier := newRecordingVerifier(t)
 	if _, err := workgraph.AddLLMProfile(workgraph.LLMAddProfileConfig{HomeDir: home.HomeDir, Name: "local-verify", Provider: "openai-compatible", BaseURL: verifier.URL + "/v1", Model: "local-verify-model"}); err != nil {
 		t.Fatal(err)
@@ -425,8 +518,9 @@ func TestVerifyBacklogCountsDecisionsFromALegacySnapshot(t *testing.T) {
 	if _, err := workgraph.UseLLMProfile(workgraph.LLMUseProfileConfig{HomeDir: home.HomeDir, Name: "local-verify", Task: "associate-verify"}); err != nil {
 		t.Fatal(err)
 	}
-	if result, err := workgraph.VerifyLLMBacklog(workgraph.LLMVerifyBacklogConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir}); err != nil || result.Sent != 1 {
-		t.Fatalf("verify backlog: %+v %v", result, err)
+	response := associateResponse(associateEntry(units[0], "project", "harbor-harness", 0.8))
+	if _, err := workgraph.SubmitLLMTask(workgraph.LLMTaskSubmitConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, RequestID: claims[0].Request.ID, ClaimToken: claims[0].ClaimToken, Response: response}); err != nil {
+		t.Fatalf("submit: %v", err)
 	}
 	requests := verifier.Requests()
 	if len(requests) != 1 {
