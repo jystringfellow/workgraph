@@ -458,7 +458,9 @@ Persistence:
   and every undecided auto link from it is listed for review
 - an optional `associate-verify` route sends results between the associate
   profile's verify floor and its threshold to a second profile, whose result
-  becomes the link (see Verifier in `specs/projects.md`)
+  becomes the link (see Verifier in `specs/projects.md`); `workgraph llm
+  verify-backlog` sends links that were proposed before the route existed
+  (see Backlog Verification)
 - the daemon schedules categorization through the outbox; an `ai-client`
   profile with `"execution": "bridge"` is run by the bridge worker instead of
   workgraph (see Scheduling in `specs/projects.md`)

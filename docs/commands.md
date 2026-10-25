@@ -932,6 +932,33 @@ the scheme and host with a fixed message, never provider output. `system-one` pr
 direct only, cannot use `--execution bridge`, and are refused by `llm test` and
 `llm summarize today`.
 
+### Verify waiting project proposals
+
+Links the associate profile proposed before a verifier was routed stay in
+review. Send the ones between that profile's verify floor and its auto-apply
+threshold to the verifier:
+
+```sh
+workgraph llm use sonnet --for associate-verify
+workgraph llm verify-backlog --dry-run
+workgraph llm verify-backlog --limit 50
+workgraph llm verify-backlog --since 168h
+```
+
+The dry run prints how many links are waiting, where the verifier sends data,
+and the first request exactly as it would be sent, and calls nothing. A run
+prints how many links were verified, applied, kept for review, corrected, and
+skipped. The verifier's answer replaces the link under the verifier's profile
+and is applied only at the verifier's threshold and accuracy gate; `workgraph
+projects undo --run <run-id>` undoes what a run applied. Links the user
+already decided are never sent, and a link the verifier answered or left out
+is not sent to it again. The verifier must run directly: `system-one` and
+bridge-executed profiles are refused.
+
+While the daemon runs, each scheduled associate check also verifies up to 10
+waiting links. Turn that off with `workgraph llm verify-backlog --schedule
+off`.
+
 ## New Machine Setup
 
 For a second machine, install from source or GitHub, initialize local state, and

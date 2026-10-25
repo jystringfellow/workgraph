@@ -835,6 +835,8 @@ func runLLM(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) 
 		return runLLMAssociate(args[1:], stdin, stdout, stderr)
 	case "sources":
 		return runLLMSources(args[1:], stdout, stderr)
+	case "verify-backlog":
+		return runLLMVerifyBacklog(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown llm command: %s\n", args[0])
 		return 2

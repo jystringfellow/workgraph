@@ -500,10 +500,24 @@ func (capture *RunCapture) runLLMAssociateScheduler(ctx context.Context) {
 				log.Printf("workgraph llm associate schedule failed: %v", err)
 			}
 			cadence.record(now, result, err)
+			capture.drainVerifyBacklog(ctx, now)
 		}
 		if !waitForConnectorSchedule(ctx, time.Minute) {
 			return
 		}
+	}
+}
+
+func (capture *RunCapture) drainVerifyBacklog(ctx context.Context, now time.Time) {
+	result, ran, err := ScheduleLLMVerifyBacklog(LLMAssociateScheduleConfig{
+		Context: ctx, HomeDir: capture.homeDir, DatabasePath: capture.databasePath, Now: now, Location: time.Local,
+		GitEmails: LocalGitEmails(LocalGitIdentityConfig{HomeDir: capture.homeDir}),
+	})
+	switch {
+	case err != nil:
+		log.Printf("workgraph llm verify-backlog schedule failed: %v", err)
+	case ran && result.Sent > 0:
+		log.Printf("workgraph llm verify-backlog: sent %d, verified %d, applied %d, kept %d, remaining %d", result.Sent, result.Verified, result.Applied, result.Kept, result.Remaining)
 	}
 }
 

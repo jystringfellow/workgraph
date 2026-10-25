@@ -296,8 +296,8 @@ This is the `associate_events` task in `specs/llm-integration.md`.
 - the catalog: slug, title, workstream, aliases, description; narrowed by a
   workstream mapping or a mapping to several projects when one applies, and
   always including projects the unit's identifiers name
-- up to 20 recent user decisions: container, unit summary, chosen project or
-  rejection
+- up to 20 distinct recent user decisions: container, decision, target,
+  project, kind, and how many times the user made that decision
 
 Every part of the payload passes the source policy in Privacy below.
 
@@ -320,7 +320,7 @@ The payload is one JSON document:
       "events": [{"id": "slack.message:C123:1760000000.000100", "timestamp": "2026-10-20T09:00:00Z", "actor": "Sam", "summary": "..."}]
     }
   ],
-  "recent_decisions": [{"container": "harness-team", "decision": "chose", "target": "project", "project": "harbor-harness", "kind": "advice"}]
+  "recent_decisions": [{"container": "harness-team", "decision": "chose", "target": "project", "project": "harbor-harness", "kind": "advice", "count": 3}]
 }
 ```
 
@@ -338,6 +338,14 @@ The payload is one JSON document:
   earliest evidence event, the decision, target, project, and kind. Stored
   link summaries are never sent, because their provenance cannot be checked
   against the source policy.
+- Decisions with the same container, decision, target, project, and kind are
+  one entry whose `count` is how many of them passed the source policy, so
+  the 20 entries are 20 different decisions. Entries are ordered by their
+  newest decision. Counting reads at most the 500 newest decisions. A
+  decision from a disabled source neither adds an entry nor adds to a count.
+  The prompt says that each entry is distinct and what `count` means. Adding
+  `count` is a compatible change, so the schema stays
+  `workgraph.associate_request.v1`.
 - A unit's container, time range, participants, and identifiers come from its
   permitted members only, and catalog narrowing uses that container. When the
   policy removed any member, the unit is sent under an opaque per-request id
@@ -656,6 +664,75 @@ workgraph llm use sonnet --for associate-verify
   verifier ran, `Verified: <n> by <profile> (<changed> changed)`, or
   `Verify request emitted: <id> (<n> units)` for a bridge verifier.
 
+### Backlog Verification
+
+Links proposed before a verifier was routed are never escalated by the
+associate pass, so they can wait in review indefinitely. `llm verify-backlog`
+sends them to the verifier:
+
+```text
+workgraph llm verify-backlog --dry-run
+workgraph llm verify-backlog [--limit 50] [--since 168h]
+workgraph llm verify-backlog --schedule off
+```
+
+- A waiting link is a `proposed` LLM link with no decision, no stored
+  verification, and a profile other than the verifier, whose confidence is at
+  or above its own profile's verify floor and below that profile's auto-apply
+  threshold. A link whose profile is no longer configured is judged against
+  0.6 and 0.95. A unit that has any decided link, including an undone or
+  corrected one, is never verified. `--since` keeps links created within that
+  duration. Links are taken oldest first.
+- It refuses before reading the backlog when `associate-verify` is not
+  routed, names a profile that is not configured, names a `system-one`
+  profile, or names a profile with bridge execution: backlog verification
+  calls the verifier directly. Outside a dry run, the verifier passes the
+  hosted opt-in and managed-provider checks first.
+- The verifier receives the same request as in Verifier, built the same way.
+  When a completed `llm.associate` request stored a snapshot containing the
+  unit, the latest one created at or before the link is the payload the
+  associate saw; it is checked against current permissions as in Verifier,
+  and a unit whose permitted members changed is skipped. Units from one
+  snapshot share a request with that snapshot's catalog entries and
+  decisions. Without a snapshot the unit is rebuilt under the current source
+  policy and catalog, with the current decisions, and the request passes the
+  hosted outbound filter when the link's profile is hosted or no longer
+  configured. A unit sent under an opaque id gets its `primary_answer`
+  without the stored summary or new-project description. `primary_answer` is
+  the waiting link's target, project, new project, kind, summary, and
+  confidence.
+- The consent, route, and source-policy checks run again immediately before
+  every verifier call, as in Verifier. Each request carries at most 50 units,
+  and a run sends at most `--limit` units, 50 by default.
+- Each request's verdicts are written in one transaction that first records
+  the verifier's pause transition and re-reads every link: a link that is no
+  longer proposed and undecided, that has a verification, or whose unit has a
+  decided link is skipped. A verdict replaces the waiting link in place, with
+  `profile` set to the verifier and `run_id` set to this run, so `projects
+  undo --run` undoes what it applied. It is applied only as in Auto-Apply for
+  the verifier: its threshold, recent rejections, new-project rule, and
+  accuracy gate. Both results are stored in `project_link_verifications`.
+- A link the verifier left out or whose entry was discarded keeps the
+  associate result and is recorded in `project_link_backlog_checks` (link
+  id, verifier profile, time), so the same verifier is not asked again. A
+  failed call writes nothing and stops the run, so the links stay waiting.
+  Running the command twice never sends the same link to the same verifier
+  twice after it answered.
+- `--dry-run` reads only. It prints the verifier, provider, model,
+  destination, enabled sources, `Waiting in the verify band: <n>`, the limit,
+  `Would send: <n>`, `Skipped: <n>`, and the first request exactly as it
+  would be sent, after the outbound filter.
+- A run prints `Run`, `Sent`, `Verified`, `Applied`, `Kept for review`
+  (verified but proposed, plus links the verifier left out), `Corrected`
+  (the verifier chose a different target), `Skipped`, `Discarded` with
+  `verifier:` reasons, `Verifier failed: <reason>` when a call failed,
+  `Remaining`, and the accuracy summary.
+- When the daemon's scheduled associate check runs, it also verifies up to 10
+  waiting links, unless `llm.json` has `"scheduled_verify_backlog": false`,
+  which `llm verify-backlog --schedule off` writes; `--schedule on` writes
+  `true`. The scheduled drain does nothing without a direct verifier route or
+  an enabled source.
+
 ## Scheduling
 
 Categorization runs through the bridged-capture outbox
@@ -884,6 +961,9 @@ Grouping, shared by `today` and `resume`:
 - **D5 Thresholds and verifier**: per-profile auto-apply thresholds and verify
   floors with `llm set`, the per-profile accuracy gate, and the
   `associate-verify` route, direct and bridge.
+- **D6 Backlog verification and distinct decisions**: `llm verify-backlog`
+  with dry run, limit, since, resumability, and the scheduled drain; counted,
+  distinct `recent_decisions`. Bridge verifiers for the backlog are deferred.
 
 ## Deferred
 
@@ -893,6 +973,7 @@ Grouping, shared by `today` and `resume`:
 - LLM-chosen unit boundaries
 - workstream memory files and workstream-level descriptions
 - learned per-container priors beyond recent user decisions
+- backlog verification through a bridge verifier
 
 ## Facts
 
@@ -987,3 +1068,18 @@ Grouping, shared by `today` and `resume`:
   discarded units are not escalated; a `system-one` verifier is refused at
   `llm use` and, when hand-routed, at run time with the associate results
   kept; `llm set` thresholds change what a `system-one` profile auto-applies.
+- **P16. Waiting proposals are verified once.** `llm verify-backlog` sends
+  only undecided proposed LLM links in their profile's floor-to-threshold
+  band, never a user-decided unit; the verdict replaces the link under the
+  verifier profile, applies only through the verifier's threshold and
+  accuracy gate, appears in `projects explain`, and is undone by `projects
+  undo --run`; `--dry-run` prints the count, destination, and an example
+  request and calls nothing; it refuses without a verifier route and for a
+  `system-one` or bridge verifier; a second run does not resend a link the
+  verifier answered or left out, while a failed call leaves links waiting; a
+  stored snapshot keeps the associate's redactions; the scheduled drain sends
+  at most 10 and stops when turned off.
+- **P17. Recent decisions are distinct.** Fifteen identical decisions become
+  one entry with `count` 15 beside each distinct decision; a decision from a
+  disabled source adds neither an entry nor a count, and the hosted outbound
+  filter still redacts decision containers.

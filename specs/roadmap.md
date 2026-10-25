@@ -67,6 +67,12 @@ Priority labels used below:
 
 ## Recently Delivered
 
+- [x] Backlog verification and distinct decisions: `llm verify-backlog`
+  sends waiting floor-to-threshold proposals to the `associate-verify`
+  profile with dry run, limit, since, resumable checks, and a bounded
+  scheduled drain, and `recent_decisions` collapses repeated decisions into
+  one counted entry. [spec: `specs/projects.md` D6]
+
 - [x] Associate thresholds and verifier: per-profile auto-apply thresholds and
   verify floors (`llm add --auto-apply-confidence`, `llm set`), a per-profile
   accuracy gate whose required accuracy is the profile's threshold, and an
