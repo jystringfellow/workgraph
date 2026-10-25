@@ -497,3 +497,118 @@ func insertProjectUnitEventsAtOnce(t *testing.T, dbPath string, events []storedE
 		t.Fatal(err)
 	}
 }
+
+func seedRelinkBatchProposals(t *testing.T, count int) (projectLinkingHome, workgraph.ProjectLinkStoreConfig, []workgraph.ProjectLink) {
+	t.Helper()
+	now := time.Now().UTC()
+	base := now.Add(-48 * time.Hour)
+	home := initProjectLinkingHome(t)
+	writeProjectMemory(t, home.MemoryDir, "harbor-harness", "# Harbor Harness\n")
+	var events []storedEvent
+	var proposals []workgraph.ProjectLinkProposal
+	for i := 0; i < count; i++ {
+		ts := fmt.Sprintf("%d.000100", 100000+i)
+		events = append(events, slackLinkEvent("C900", ts, ts, "sync note", base.Add(time.Duration(i)*time.Second), "harbor-sync"))
+		proposals = append(proposals, workgraph.ProjectLinkProposal{UnitID: "slack.thread:C900:" + ts, UnitKind: "slack.thread", Container: "harbor-sync", Target: "none", Kind: "fyi", Summary: "Sync", Confidence: 0.6, Evidence: []string{"slack.message:C900:" + ts}})
+	}
+	insertProjectUnitEventsAtOnce(t, home.DatabasePath, events)
+	store := workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now}
+	seeded, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "llm", Profile: "hosted-mini", Links: proposals})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return home, store, seeded.Written
+}
+
+func execProjectLinksSQL(t *testing.T, dbPath, statement string) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(statement); err != nil {
+		t.Fatalf("%s: %v", statement, err)
+	}
+}
+
+func TestRelinkReportsCommittedBatchesWhenALaterBatchFails(t *testing.T) {
+	home, store, _ := seedRelinkBatchProposals(t, 620)
+	execProjectLinksSQL(t, home.DatabasePath, `CREATE TRIGGER forced_batch_failure BEFORE INSERT ON project_links
+		WHEN NEW.source = 'deterministic' AND (SELECT count(*) FROM project_links WHERE run_id = NEW.run_id) >= 500
+		BEGIN SELECT RAISE(ABORT, 'forced batch failure'); END`)
+	output, err := runworkgraph(t, repoRoot(t), "memory", "link", "--home", home.HomeDir, "--memory", home.MemoryDir, "--source", "harbor-sync", "harbor-harness")
+	text := string(output)
+	if err == nil {
+		t.Fatalf("expected a failed later batch to exit 1:\n%s", text)
+	}
+	runs := map[string]int{}
+	waiting := 0
+	for _, link := range readCurrentProjectLinks(t, store) {
+		switch link.State {
+		case "applied":
+			runs[link.RunID]++
+		case "proposed":
+			waiting++
+		}
+	}
+	if len(runs) != 1 || waiting != 120 {
+		t.Fatalf("expected one committed batch of 500 and 120 waiting proposals, got runs %v and %d waiting", runs, waiting)
+	}
+	var runID string
+	for id := range runs {
+		runID = id
+	}
+	finish := "workgraph memory link --home " + home.HomeDir + " --memory " + home.MemoryDir + " --source harbor-sync harbor-harness"
+	for _, expected := range []string{
+		"Relinked 0 units from harbor-sync to harbor-harness; 500 pending proposals resolved.",
+		"Relinking stopped: 120 units were not changed. Committed replacements are in run " + runID + "; workgraph projects undo --run " + runID + " reverses them.",
+		"To finish, run: " + finish,
+		"forced batch failure",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("expected the failure output to include %q:\n%s", expected, text)
+		}
+	}
+
+	execProjectLinksSQL(t, home.DatabasePath, `DROP TRIGGER forced_batch_failure`)
+	finished, err := runworkgraph(t, repoRoot(t), strings.Fields(finish)[1:]...)
+	if err != nil || !strings.Contains(string(finished), "Relinked 0 units from harbor-sync to harbor-harness; 120 pending proposals resolved.") {
+		t.Fatalf("expected the printed command to finish the relink: %v\n%s", err, finished)
+	}
+}
+
+func TestBulkReviewReportsCommittedBatchesWhenALaterBatchFails(t *testing.T) {
+	home, store, seeded := seedRelinkBatchProposals(t, 620)
+	execProjectLinksSQL(t, home.DatabasePath, `CREATE TRIGGER forced_batch_failure BEFORE UPDATE ON project_links
+		WHEN NEW.decision = 'approved' AND OLD.decision = '' AND (SELECT count(*) FROM project_links WHERE decision = 'approved') >= 500
+		BEGIN SELECT RAISE(ROLLBACK, 'forced batch failure'); END`)
+	ids := make([]string, len(seeded))
+	for i, link := range seeded {
+		ids[i] = fmt.Sprint(link.ID)
+	}
+	output, err := runworkgraph(t, repoRoot(t), "projects", "review", "--approve", strings.Join(ids, ","), "--home", home.HomeDir, "--memory", home.MemoryDir)
+	text := string(output)
+	if err == nil {
+		t.Fatalf("expected a failed later batch to exit 1:\n%s", text)
+	}
+	approved := 0
+	for _, link := range readCurrentProjectLinks(t, store) {
+		if link.Decision == "approved" {
+			approved++
+		}
+	}
+	if approved != 500 || strings.Count(text, ": applied project") != 0 || strings.Count(text, ": applied no project") != 500 {
+		t.Fatalf("expected the first batch approved and printed, got %d approved:\n%s", approved, text)
+	}
+	for _, expected := range []string{
+		fmt.Sprintf("%d not decided: its batch was rolled back", seeded[500].ID),
+		fmt.Sprintf("%d not decided: its batch was rolled back", seeded[619].ID),
+		"Approved 500 links; 120 failed.",
+		"forced batch failure",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("expected the failure output to include %q:\n%s", expected, text[max(0, len(text)-3000):])
+		}
+	}
+}

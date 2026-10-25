@@ -173,7 +173,7 @@ func decideProjectReviewBatches(store ProjectLinkStoreConfig, outcomes []Project
 				link, err := decide(tx, now, index)
 				if err != nil {
 					if _, rollbackErr := tx.Exec(`ROLLBACK TO project_review_item`); rollbackErr != nil {
-						return rollbackErr
+						return fmt.Errorf("%w; %v", err, rollbackErr)
 					}
 				}
 				if _, releaseErr := tx.Exec(`RELEASE project_review_item`); releaseErr != nil {

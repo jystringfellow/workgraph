@@ -280,7 +280,10 @@ deterministic rules run in their usual order against the new mappings:
   committed: the command still prints the count lines for what committed,
   then `Relinking stopped: <u> units were not changed.`, naming the run and
   its `projects undo --run` command when replacements committed, and exits
-  1. Running the same command again finishes the rest.
+  1. It ends with `To finish, run:` and the `memory link` or `memory unlink`
+  command for the same mapping and options, which finishes the rest; this is
+  also the recovery for `memory doctor --interactive`, which skips containers
+  that are already mapped.
 - After the mapping message the command prints one line per container:
   `Relinked <n> units from <container> to <project>; <m> pending proposals
   resolved.` when the container maps to exactly one catalog project,

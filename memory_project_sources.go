@@ -85,7 +85,7 @@ func UpdateMemoryProjectSources(config MemoryProjectSourcesConfig) (string, erro
 	}
 	if err != nil {
 		if relink.Unfinished > 0 {
-			lines = append(lines, relink.UnfinishedLine()+" Run the same command again to finish.")
+			lines = append(lines, relink.UnfinishedLine()+" To finish, run: "+memoryProjectSourcesCommand(config))
 		}
 		return strings.Join(lines, "\n"), fmt.Errorf("mapping stored; relink containers: %w", err)
 	}
@@ -191,4 +191,22 @@ func mappedMemoryEvents(db *sql.DB, events []ResumeEvent, project, memoryPath st
 		}
 	}
 	return result, nil
+}
+
+func memoryProjectSourcesCommand(config MemoryProjectSourcesConfig) string {
+	action := "link"
+	if config.Unlink {
+		action = "unlink"
+	}
+	command := "workgraph memory " + action + ProjectCommandOptions(config.HomeDir, config.MemoryDir, config.DatabasePath)
+	if config.Workstream != "" {
+		command += " --workstream " + projectShellArg(config.Workstream)
+	}
+	for _, source := range config.Sources {
+		command += " --source " + projectShellArg(source)
+	}
+	if config.Workstream == "" {
+		command += " " + projectShellArg(config.Project)
+	}
+	return command
 }
