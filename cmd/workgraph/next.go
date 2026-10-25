@@ -40,6 +40,7 @@ func runNext(args []string, stdout, stderr io.Writer) int {
 		flags.BoolVar(&jsonOutput, "json", false, "Print versioned JSON items")
 		flags.BoolVar(&config.ShowIDs, "ids", false, "Show item ids in text output")
 		flags.BoolVar(&config.TeamReviews, "team-reviews", false, "List every team-only review request in text output")
+		flags.BoolVar(&config.Stale, "stale", false, "List pull requests with no activity in 30+ days in text output")
 		flags.BoolVar(&config.IncludeUntrusted, "include-untrusted", false, "Include delimited untrusted content in JSON")
 		flags.BoolVar(&watch, "watch", false, "Stream item changes as JSON Lines")
 	}
@@ -60,8 +61,8 @@ func runNext(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "unexpected next arguments")
 		return 2
 	}
-	if (action != "" && id == "") || (action == "snooze" && duration <= 0) || (watch && !jsonOutput) || (config.IncludeUntrusted && !jsonOutput) || (config.TeamReviews && jsonOutput) {
-		fmt.Fprintln(stderr, "usage: workgraph next [--ids] [--team-reviews] | next --json [--watch] [--include-untrusted] | explain <id> | done <id> | snooze <id> --for <duration>")
+	if (action != "" && id == "") || (action == "snooze" && duration <= 0) || (watch && !jsonOutput) || (config.IncludeUntrusted && !jsonOutput) || (config.TeamReviews && jsonOutput) || (config.Stale && jsonOutput) {
+		fmt.Fprintln(stderr, "usage: workgraph next [--ids] [--team-reviews] [--stale] | next --json [--watch] [--include-untrusted] | explain <id> | done <id> | snooze <id> --for <duration>")
 		return 2
 	}
 	config.HomeDir = *home

@@ -56,7 +56,39 @@ Items are ordered by reason group, then oldest `since` first:
 4. links awaiting a categorization decision: `categorize`
 
 Sources map their reasons into these groups. The order is deterministic and
-documented, not a priority score.
+documented, not a priority score. JSON, `--watch`, and MCP keep this item
+order; text output then orders pull requests by section (see Sections).
+
+### Sections
+
+Every item also has a `section`: where text output shows its pull request.
+It is computed per pull request over every open item before `--project` and
+`--reason` filters, so all items on one pull request share a section:
+
+| Section | Pull request |
+|---|---|
+| `waiting_on_you` | has a `reply` or `review_requested` item |
+| `needs_fix` | otherwise, every item is `checks_failed` or `conflicts`: the user's own PR needs only the user's fix |
+| `blocked` | otherwise, has a `changes_requested` item, so it waits on a reviewer's request |
+| `ready` | its only item is `ready_to_merge` |
+| `team_review` | a team-only review request (see Team review requests) |
+| `categorize` | a `categorize` item |
+
+`group` keeps its reason mapping: a `checks_failed` item in `needs_fix` still
+has `group: "blocked"`.
+
+### Stale pull requests
+
+A pull request is stale when its last activity is 30 or more days old. Last
+activity is the newest `updated_at` the watch observed for it, or, when none
+was observed, its newest item `since`. A pull request is never stale while it
+has a `reply` or `review_requested` item opened by a provider event (not the
+first-capture baseline) in the last 30 days. Every item on a stale pull
+request has `stale: true`; `categorize` items are never stale. The 30-day
+threshold is the `nextStaleAfter` constant.
+
+`stale` is about the pull request's activity. `freshness.stale` is unrelated:
+it says the capture behind the item may be out of date.
 
 The `categorize` group comes from project links (`specs/projects.md`, Daily
 Loop Surfaces). It has one item per link that the default `workgraph projects
@@ -78,6 +110,8 @@ JSON, MCP, `explain`, `done`, and `snooze` still cover every item.
   "source": "github",
   "reason": "reply",
   "group": "waiting_on_you",
+  "section": "waiting_on_you",
+  "stale": false,
   "role": "author",
   "project": "workgraph-demo",
   "since": "2026-10-16T17:02:11Z",
@@ -124,7 +158,8 @@ JSON, MCP, `explain`, `done`, and `snooze` still cover every item.
 ```
 
 - `schema` is versioned. Adding a field is compatible; removing or renaming a
-  field requires a new version.
+  field requires a new version. `section` and `stale` were added to v1 this
+  way; `group` and every other field are unchanged.
 - `triage` carries the deterministic inputs a later classifier needs. `next`
   does not classify; it never says whether an agent could take the item.
 - `untrusted` is present only with `--include-untrusted` and only in JSON.
@@ -175,7 +210,7 @@ JSON, MCP, `explain`, `done`, and `snooze` still cover every item.
 ## Commands
 
 ```text
-workgraph next [--project <p>] [--reason <r>] [--ids] [--team-reviews]
+workgraph next [--project <p>] [--reason <r>] [--ids] [--team-reviews] [--stale]
 workgraph next [--project <p>] [--reason <r>] --json [--include-untrusted]
 workgraph next --watch --json [--include-untrusted]
 workgraph next explain <item-id>
@@ -195,6 +230,10 @@ Waiting on you
     alice replied on settings.go:18 — https://github.com/acme/workgraph-demo/pull/42#discussion_r1
     checks failed on 1111111 (lint, unit)
     review requested
+Needs your fix
+  acme/api#63 Cache keys — https://github.com/acme/api/pull/63
+    checks failed on 2222222 (unit)
+  2 stale PRs (no activity in 30+ days): workgraph next --stale
 Blocked
   acme/api#57 Cache warmup — https://github.com/acme/api/pull/57
     changes requested by bob
@@ -204,10 +243,17 @@ Ready
 ```
 
 - Text output groups items by pull request: one header line per PR, then one
-  indented line per item. A PR appears once, in the section of its first
-  item, so PR groups follow the documented item order of their most urgent
-  item. Grouping is text-only: JSON, `--watch`, MCP, and item ids are per
-  item, so `explain`, `done`, and `snooze` still act on one item.
+  indented line per item. A PR appears once, under its `section`, in the
+  order `Waiting on you`, `Needs your fix`, `Blocked`, `Ready`, then the team
+  review summaries. Within a section PRs follow the documented item order of
+  their most urgent item. Grouping is text-only: JSON, `--watch`, MCP, and
+  item ids are per item, so `explain`, `done`, and `snooze` still act on one
+  item.
+- Stale PRs are listed last in their section and collapse into one `<n> stale
+  PRs (no activity in 30+ days): workgraph next --stale` line. `--stale`
+  replaces the hint with `:` and lists every stale PR of that section under
+  the line. `--stale` is text-only; with `--json` it is a usage error. Team
+  review summaries do not collapse stale PRs; they already show three.
 - The header leads with `owner/repo#number title`, so equal numbers in
   different repositories stay distinct, then `[draft]`, the author label, and
   the PR link. A bot-authored PR the user is only asked to review is tagged
@@ -242,21 +288,23 @@ listing them under `Waiting on you`:
 
 ```text
 Team review requests via acme/all-engineers: 4 PRs (3 bot) across 2 repos
+  acme/widgets#11 Fix flaky test — https://github.com/acme/widgets/pull/11
+    review requested via acme/all-engineers
   acme/widgets#12 Bump yaml [bot] — https://github.com/acme/widgets/pull/12
     review requested via acme/all-engineers
   acme/gadgets#8 Bump lodash [bot] — https://github.com/acme/gadgets/pull/8
     review requested via acme/all-engineers
-  acme/widgets#11 Fix flaky test — https://github.com/acme/widgets/pull/11
-    review requested via acme/all-engineers
   1 more: workgraph next --team-reviews
 ```
 
-- Team summaries follow the `Waiting on you`, `Blocked`, and `Ready`
-  sections, one per team label, sorted by label. The label is the item's
+- Team summaries follow the `Waiting on you`, `Needs your fix`, `Blocked`,
+  and `Ready` sections, one per team label, sorted by label. The label is the item's
   teams joined by `, `, or `team (unresolved)`.
 - Each summary counts pull requests, bot-authored pull requests (omitted when
-  zero), and distinct repositories, then shows the three newest by `since`
-  and a `more` line when there are more.
+  zero), and distinct repositories, then shows three pull requests and a
+  `more` line when there are more. The three are human-authored pull
+  requests first, then bot-authored ones (`pull_request.author.kind` is
+  `bot`), each group newest first by `since`.
 - `--team-reviews` lists every team-only pull request under its summary,
   sorted by repository then number, with no `more` line. It is text-only;
   with `--json` it is a usage error.
@@ -335,8 +383,9 @@ into tool descriptions or instructions (`specs/llm-integration.md`).
 ## Other Surfaces
 
 - **`resume`**: the default overview shows `Waiting on you` after `Where you
-  left off`, listing at most five pull requests in `next` order in the same
-  grouped format as `next`, then `<n> more: workgraph next` with the number
+  left off`, listing at most five pull requests in `next` text order (by
+  section, stale PRs last in their section) in the same grouped format as
+  `next`, without section headings or stale collapsing, then `<n> more: workgraph next` with the number
   of remaining pull requests when more exist. `categorize` items are not
   listed there; they are counted in the `Project links to review` line
   instead (see `specs/resume.md`). Team-only review requests are not listed;
@@ -430,8 +479,8 @@ only. No fact invokes `gh`.
   four team-only requests from one team across two repositories (three by
   bots), and one from another team, `next` lists the direct, direct-plus-team,
   and on-behalf PRs under `Waiting on you` and not under a summary, prints one
-  summary per team with its counts, the three newest PRs, and a `more` line,
-  and omits the oldest team-only PR. `--team-reviews` lists all five in team
+  summary per team with its counts, the human-authored PR and then the two
+  newest bot PRs, and a `more` line, and omits the oldest team-only PR. `--team-reviews` lists all five in team
   then repository order without a `more` line, and is a usage error with
   `--json`. `--json` still returns every item. `today` counts the five
   separately, and `resume` lists none of them and counts them. Snoozing one
@@ -441,5 +490,21 @@ only. No fact invokes `gh`.
   team request whose captured request list is truncated without the user is
   `incomplete` and stays listed, while a complete one is summarized
   (`facts/github_pr_watch_reviewer_test.go`).
+- **N13. The user's own fixes are grouped apart from blocked work.** A PR
+  whose only items are failed checks, and one whose only item is a conflict,
+  are listed under `Needs your fix`, between `Waiting on you` and `Blocked`,
+  while a PR with changes requested, alone or with failed checks, stays under
+  `Blocked`, also when filtered with `--reason checks_failed`. JSON carries
+  each item's `section` and keeps `group`.
+- **N14. Stale PRs collapse per section.** Two conflicted PRs and one PR with
+  changes requested, last updated 40 to 45 days ago, collapse into one stale
+  line under `Needs your fix` and one under `Blocked`. A PR updated 29 days
+  ago, an old PR with a reply requested 2 days ago, and an old PR with a
+  review requested 3 days ago stay listed. `--stale` lists the stale PRs
+  under their line without the hint, and is a usage error with `--json`.
+  JSON keeps every item and sets `stale` only on the three.
+- **N15. Team review previews show people first.** With two human-authored
+  and three newer bot-authored team-only requests, the summary shows both
+  human PRs newest first, then the newest bot PR, then `2 more`.
 - **N8. MCP returns the same items read-only.** The `next_items` tool returns
   the same ids as `next --json` and has no write behavior.

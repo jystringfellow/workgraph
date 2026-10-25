@@ -118,6 +118,12 @@ Priority labels used below:
   read-only `next_items` MCP tool; items appear in `resume`, with a count in
   `today`. [spec: `specs/next.md`]
 
+- [x] Less noise in `next`: the user's own PRs that only need a checks or
+  conflict fix get a `Needs your fix` section, PRs with no activity in 30+
+  days collapse into one line per section (`--stale` lists them), team
+  review previews show human-authored PRs first, and JSON items carry
+  `section` and `stale`. [spec: `specs/next.md` N13-N15]
+
 - [x] Team-only review requests in `next` are summarized per team with
   counts and the newest three, expandable with `--team-reviews`, and counted
   separately in `today` and `resume`. [spec: `specs/next.md` N12]

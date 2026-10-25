@@ -773,10 +773,10 @@ func TestNextSummarizesTeamOnlyReviewRequestsPerTeam(t *testing.T) {
 	if strings.Index(text, "\nWaiting on you\n") > strings.Index(text, "  acme/demo#2 Work 2") || !strings.Contains(text, "review requested via acme/platform") {
 		t.Fatalf("direct-plus-team request must stay under Waiting on you: %s", text)
 	}
-	newest := []int{strings.Index(text, header("acme/gadgets", 8)), strings.Index(text, header("acme/widgets", 12)), strings.Index(text, header("acme/widgets", 11)), strings.Index(text, mobile)}
+	newest := []int{strings.Index(text, header("acme/widgets", 11)), strings.Index(text, header("acme/gadgets", 8)), strings.Index(text, header("acme/widgets", 12)), strings.Index(text, mobile)}
 	for i := 1; i < len(newest); i++ {
 		if newest[i-1] < summary || newest[i-1] > newest[i] {
-			t.Fatalf("expected the three newest team PRs under their summary, newest first: %s", text)
+			t.Fatalf("expected three team PRs under their summary, human-authored first, then newest first: %s", text)
 		}
 	}
 	if strings.Contains(text, header("acme/widgets", 10)) || strings.Count(text, "\n  1 more: workgraph next --team-reviews") != 1 {
@@ -880,5 +880,190 @@ func TestNextClassifiesTeamOnlyRequestsBeforeFilters(t *testing.T) {
 		if mixed < 0 || summary < 0 || mixed > summary || strings.Index(out, "\nWaiting on you\n") > mixed {
 			t.Fatalf("%v: a team request on a PR with other items must stay under Waiting on you: %s", args, out)
 		}
+	}
+}
+
+func (f *nextFixture) rawItems(t *testing.T, args ...string) []map[string]any {
+	t.Helper()
+	var items []map[string]any
+	if err := json.Unmarshal([]byte(f.cli(t, append([]string{"next", "--json"}, args...)...)), &items); err != nil {
+		t.Fatal(err)
+	}
+	return items
+}
+
+func (f *nextFixture) changesRequested(t *testing.T, node string, age time.Duration) {
+	t.Helper()
+	at := f.now.Add(-age).Format(time.RFC3339Nano)
+	f.event(t, "github.pull_request.changes_requested:"+node+":R-"+node, "changes_requested", at, map[string]any{"node_id": node, "role": "author", "head_sha": "abc123", "triage": map[string]any{"needs_user": true}, "actor_kind": "user"})
+}
+
+func (f *nextFixture) checksFailed(t *testing.T, node string, age time.Duration) {
+	t.Helper()
+	at := f.now.Add(-age).Format(time.RFC3339Nano)
+	f.event(t, "github.pull_request.checks_failed:"+node+":abc123:fp-"+node, "checks_failed", at, map[string]any{"node_id": node, "role": "author", "head_sha": "abc123", "triage": map[string]any{"needs_user": true, "run_fingerprint": "fp-" + node}, "actor_kind": "user"})
+}
+
+func nextSections(items []map[string]any) map[string]string {
+	sections := map[string]string{}
+	for _, item := range items {
+		pr := item["pull_request"].(map[string]any)
+		sections[fmt.Sprintf("%s#%v:%s", pr["repository"], pr["number"], item["reason"])] = fmt.Sprint(item["section"])
+	}
+	return sections
+}
+
+func TestNextGroupsTheUsersFixesApartFromBlockedWork(t *testing.T) {
+	f := newNextFixture(t)
+	f.authoredPR(t, "HARBOR", "acme/harbor-harness", 7, "octo", 5*time.Minute, func(o map[string]any) {
+		o["opinionated_reviews"] = []any{map[string]any{"review_id": "R-HARBOR", "reviewer": "quinn", "actor_kind": "user", "state": "CHANGES_REQUESTED"}}
+		o["checks_state"] = "failed"
+		o["check_runs"] = []any{map[string]any{"id": "RUN7", "name": "unit", "status": "COMPLETED", "conclusion": "FAILURE", "details_url": "https://github.com/acme/harbor-harness/actions/runs/7"}}
+	})
+	f.changesRequested(t, "HARBOR", 5*time.Minute)
+	f.checksFailed(t, "HARBOR", 4*time.Minute)
+
+	text := f.cli(t, "next")
+	at := func(want string) int { return strings.Index(text, want) }
+	waiting, fix, blocked, ready := at("\nWaiting on you\n"), at("\nNeeds your fix\n"), at("\nBlocked\n"), at("\nReady\n")
+	if waiting < 0 || fix < waiting || blocked < fix || ready < blocked {
+		t.Fatalf("expected Waiting on you, Needs your fix, Blocked, then Ready sections: %s", text)
+	}
+	for _, header := range []string{"\n  acme/demo#4 Work 4", "\n  acme/demo#5 Work 5"} {
+		if line := at(header); line < fix || line > blocked {
+			t.Fatalf("expected the failing-checks-only and conflicts-only PR %q under Needs your fix: %s", header, text)
+		}
+	}
+	for _, header := range []string{"\n  acme/demo#3 Work 3", "\n  acme/harbor-harness#7 Change 7"} {
+		if line := at(header); line < blocked || line > ready {
+			t.Fatalf("expected the PR waiting on a reviewer %q under Blocked: %s", header, text)
+		}
+	}
+
+	items := f.rawItems(t)
+	want := map[string]string{
+		"acme/demo#1:reply":                       "waiting_on_you",
+		"acme/demo#2:review_requested":            "waiting_on_you",
+		"acme/demo#3:changes_requested":           "blocked",
+		"acme/demo#4:checks_failed":               "needs_fix",
+		"acme/demo#5:conflicts":                   "needs_fix",
+		"acme/demo#6:ready_to_merge":              "ready",
+		"acme/harbor-harness#7:changes_requested": "blocked",
+		"acme/harbor-harness#7:checks_failed":     "blocked",
+	}
+	if got := nextSections(items); !reflect.DeepEqual(got, want) {
+		t.Fatalf("JSON sections: %v", got)
+	}
+	for _, item := range items {
+		if item["reason"] == "checks_failed" && item["group"] != "blocked" {
+			t.Fatalf("group must keep its reason mapping: %v", item)
+		}
+	}
+
+	filtered := f.cli(t, "next", "--reason", "checks_failed")
+	if strings.Index(filtered, "\n  acme/harbor-harness#7 Change 7") < strings.Index(filtered, "\nBlocked\n") || strings.Index(filtered, "\nBlocked\n") < strings.Index(filtered, "\nNeeds your fix\n") {
+		t.Fatalf("a PR with changes requested stays Blocked when filtered to its failing checks: %s", filtered)
+	}
+}
+
+func TestNextCollapsesStalePullRequests(t *testing.T) {
+	f := newNextFixture(t)
+	old := 45 * 24 * time.Hour
+	stale := func(o map[string]any) { o["updated_at"] = f.now.Add(-old).Format(time.RFC3339Nano) }
+	conflicted := func(o map[string]any) { stale(o); o["mergeable"] = "CONFLICTING" }
+	f.authoredPR(t, "OLD1", "acme/widgets", 101, "octo", old, conflicted)
+	f.authoredPR(t, "OLD2", "acme/gizmos", 102, "octo", old, conflicted)
+	f.authoredPR(t, "OLD3", "acme/widgets", 103, "octo", 40*24*time.Hour, func(o map[string]any) {
+		stale(o)
+		o["opinionated_reviews"] = []any{map[string]any{"review_id": "R-OLD3", "reviewer": "quinn", "actor_kind": "user", "state": "CHANGES_REQUESTED"}}
+	})
+	f.changesRequested(t, "OLD3", 40*24*time.Hour)
+	f.authoredPR(t, "RECENT", "acme/widgets", 104, "octo", 29*24*time.Hour, func(o map[string]any) {
+		o["updated_at"] = f.now.Add(-29 * 24 * time.Hour).Format(time.RFC3339Nano)
+		o["mergeable"] = "CONFLICTING"
+	})
+	f.authoredPR(t, "ASKED", "acme/widgets", 105, "octo", old, func(o map[string]any) {
+		stale(o)
+		o["threads"] = []any{map[string]any{"thread_id": "T-ASKED", "path": "main.go", "line": 3, "depth": 1, "last_comment_id": "C-ASKED", "last_responder": "other", "awaiting": "user"}}
+	})
+	f.event(t, "github.pull_request.review_comment:ASKED:C-ASKED", "review_comment", f.now.Add(-2*24*time.Hour).Format(time.RFC3339Nano), map[string]any{"node_id": "ASKED", "role": "author", "actor_kind": "user"})
+	f.teamReview(t, "REVIEW", "acme/gizmos", 106, "acme/all-engineers", "atlas-dev", 3*24*time.Hour)
+	f.observations[len(f.observations)-1]["review_request"] = map[string]any{"direct": true, "teams": []string{}, "unresolved_team": false}
+	stale(f.observations[len(f.observations)-1])
+	f.save(t, f.observations[len(f.observations)-1])
+
+	header := func(repository string, number int) string {
+		return fmt.Sprintf("\n  %s#%d Change %d", repository, number, number)
+	}
+	text := f.cli(t, "next")
+	fix, blocked, ready := strings.Index(text, "\nNeeds your fix\n"), strings.Index(text, "\nBlocked\n"), strings.Index(text, "\nReady\n")
+	fixLine := strings.Index(text, "\n  2 stale PRs (no activity in 30+ days): workgraph next --stale\n")
+	blockedLine := strings.Index(text, "\n  1 stale PR (no activity in 30+ days): workgraph next --stale\n")
+	if fixLine < fix || fixLine > blocked || blockedLine < blocked || blockedLine > ready {
+		t.Fatalf("expected one stale line under Needs your fix and one under Blocked: %s", text)
+	}
+	if strings.Count(text, "stale PR") != 2 {
+		t.Fatalf("expected exactly two stale lines: %s", text)
+	}
+	for _, folded := range []string{header("acme/widgets", 101), header("acme/gizmos", 102), header("acme/widgets", 103)} {
+		if strings.Contains(text, folded) {
+			t.Fatalf("expected stale PR %q collapsed: %s", folded, text)
+		}
+	}
+	for _, listed := range []string{header("acme/widgets", 104), header("acme/widgets", 105), header("acme/gizmos", 106)} {
+		if !strings.Contains(text, listed) {
+			t.Fatalf("expected %q listed; recent activity and recent requests are never collapsed: %s", listed, text)
+		}
+	}
+
+	expanded := f.cli(t, "next", "--stale")
+	for _, listed := range []string{header("acme/widgets", 101), header("acme/gizmos", 102), header("acme/widgets", 103), header("acme/widgets", 104), header("acme/widgets", 105)} {
+		if !strings.Contains(expanded, listed) {
+			t.Fatalf("--stale must list %q: %s", listed, expanded)
+		}
+	}
+	if strings.Contains(expanded, "workgraph next --stale") || !strings.Contains(expanded, "\n  2 stale PRs (no activity in 30+ days):\n") {
+		t.Fatalf("--stale must list stale PRs under their stale line without the hint: %s", expanded)
+	}
+	if line, pr := strings.Index(expanded, "\n  2 stale PRs (no activity in 30+ days):\n"), strings.Index(expanded, header("acme/widgets", 101)); pr < line || pr > strings.Index(expanded, "\nBlocked\n") {
+		t.Fatalf("--stale must list stale PRs in their section after the stale line: %s", expanded)
+	}
+	command := exec.Command(workgraphFactsBinary, "next", "--stale", "--json", "--home", f.home)
+	if err := command.Run(); err == nil {
+		t.Fatal("--stale with --json succeeded")
+	} else if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 2 {
+		t.Fatalf("usage error: %v", err)
+	}
+
+	items := f.rawItems(t)
+	if len(items) != 12 {
+		t.Fatalf("JSON must keep every item, got %d", len(items))
+	}
+	for _, item := range items {
+		node := item["pull_request"].(map[string]any)["node_id"]
+		want := node == "OLD1" || node == "OLD2" || node == "OLD3"
+		if value, ok := item["stale"].(bool); !ok || value != want {
+			t.Fatalf("expected stale=%v on %v: %v", want, node, item)
+		}
+	}
+}
+
+func TestNextTeamReviewPreviewShowsPeopleFirst(t *testing.T) {
+	f := newNextFixture(t)
+	f.teamReview(t, "HUMAN1", "acme/widgets", 41, "acme/all-engineers", "rowan", 90*time.Minute)
+	f.teamReview(t, "HUMAN2", "acme/gizmos", 42, "acme/all-engineers", "sky", 80*time.Minute)
+	f.teamReview(t, "BOT1", "acme/widgets", 43, "acme/all-engineers", "atlas-bot[bot]", 30*time.Minute)
+	f.teamReview(t, "BOT2", "acme/widgets", 44, "acme/all-engineers", "atlas-bot[bot]", 20*time.Minute)
+	f.teamReview(t, "BOT3", "acme/gizmos", 45, "acme/all-engineers", "atlas-bot[bot]", 10*time.Minute)
+	text := f.cli(t, "next")
+	summary := strings.Index(text, "\nTeam review requests via acme/all-engineers: 5 PRs (3 bot) across 2 repos\n")
+	order := []int{summary, strings.Index(text, "\n  acme/gizmos#42 Change 42"), strings.Index(text, "\n  acme/widgets#41 Change 41"), strings.Index(text, "\n  acme/gizmos#45 Change 45"), strings.Index(text, "\n  2 more: workgraph next --team-reviews")}
+	for i := 1; i < len(order); i++ {
+		if order[i-1] < 0 || order[i] <= order[i-1] {
+			t.Fatalf("expected human-authored PRs newest first, then the newest bot PR, then the more line: %s", text)
+		}
+	}
+	if strings.Contains(text, "#43 Change 43") || strings.Contains(text, "#44 Change 44") {
+		t.Fatalf("expected older bot PRs folded into the more line: %s", text)
 	}
 }

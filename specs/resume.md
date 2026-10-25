@@ -62,7 +62,8 @@ render, query, or output does not advance the check-in.
 
 With `workgraph next` (`specs/next.md`) and the GitHub pull request watch
 (`specs/github-pr-watch.md`): the default overview shows a `Waiting on you` section after
-`Where you left off` with at most five `workgraph next` items, and
+`Where you left off` with at most five `workgraph next` pull requests in
+`next` text order, and
 `resume <project>` shows that project's items after `Recent activity`.
 A `github.pull_request.*` event qualifies for `Relevant updates since last
 check-in` only when its type is one of the needs-user transition types listed

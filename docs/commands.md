@@ -494,6 +494,23 @@ after `github prs connect` run `workgraph start`, or `workgraph stop` then
 `github prs disconnect` deletes the watch's observations and keeps captured
 events.
 
+`workgraph next` lists what is waiting on you, by pull request, in the
+sections `Waiting on you`, `Needs your fix` (your PRs that only have failing
+checks or merge conflicts), `Blocked` (changes requested by a reviewer), and
+`Ready`, then one summary per team review request, previewing PRs by people
+before bot PRs. PRs with no activity in 30 or more days collapse into one
+line per section:
+
+```sh
+workgraph next
+workgraph next --stale
+workgraph next --team-reviews
+workgraph next --json
+```
+
+`--stale` and `--team-reviews` expand the collapsed lines. `--json` returns
+every item with its `section` and a `stale` flag; see `specs/next.md`.
+
 Ask the running daemon to poll the watch within seconds, for example from a
 webhook relay. `--pr` refreshes that pull request's review threads:
 
