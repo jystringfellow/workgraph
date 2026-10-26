@@ -250,8 +250,16 @@ type storedSlackListRevision struct {
 }
 
 type latestSlackListRevision struct {
-	hash    string
-	eventID string
+	eventID         string
+	done            *bool
+	sameStateHashes map[string]bool
+}
+
+func sameSlackListState(a *bool, b *bool) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }
 
 func slackListRevisionHistory(db slackListRevisionQueryer, listIDs []string) (map[string]latestSlackListRevision, map[string]bool, error) {
@@ -309,11 +317,17 @@ func slackListRevisionHistory(db slackListRevisionQueryer, listIDs []string) (ma
 		}
 		key := slackListRevisionKey(payload.ListID, payload.RowKey)
 		revision := slackListRevisionHash(payload.ListID, payload.Fields, payload.Done)
-		if previous, found := latest[key]; found && previous.hash == revision {
+		previous, found := latest[key]
+		if found && previous.sameStateHashes[revision] {
 			repeated[id] = true
 			continue
 		}
-		latest[key] = latestSlackListRevision{hash: revision, eventID: id}
+		hashes := map[string]bool{}
+		if found && sameSlackListState(previous.done, payload.Done) {
+			hashes = previous.sameStateHashes
+		}
+		hashes[revision] = true
+		latest[key] = latestSlackListRevision{eventID: id, done: payload.Done, sameStateHashes: hashes}
 	}
 	return latest, repeated, nil
 }

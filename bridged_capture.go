@@ -1077,7 +1077,7 @@ func IngestBridgedCapture(config BridgedIngestConfig) (BridgedIngestResult, erro
 	for _, event := range prepared {
 		if event.SnapshotKey != "" {
 			previous, found := latestSlackListRevisions[event.SnapshotKey]
-			if found && previous.hash == event.SnapshotRevision {
+			if found && previous.sameStateHashes[event.SnapshotRevision] {
 				result.EventsDuplicate++
 				continue
 			}

@@ -100,8 +100,9 @@ hashes canonical JSON of the row's revision content, and derives
 every non-empty single-line field with whitespace collapsed. Multi-line values
 such as a Details body stay in `fields` but do not create revisions, so relay
 drift in long text cannot duplicate an unchanged row. Field order and
-observation metadata do not affect the content hash. A row matching its latest
-stored revision is deduplicated. Duplicate or missing row keys fail the complete batch.
+observation metadata do not affect the content hash. A row matching any stored
+revision of the same List id and row key since that row's latest `done` change
+is deduplicated, so alternating renderings of an unchanged row store nothing. Duplicate or missing row keys fail the complete batch.
 State is revision content, not identity, and never filters capture, so completed
 rows remain evidence while future next-work views can exclude them. Without a
 state mapping, `done` remains absent/unknown.
