@@ -1,6 +1,7 @@
 package facts
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -559,7 +560,9 @@ func TestBulkApproveSkipsALinkVerifiedDuringTheConfirmation(t *testing.T) {
 	routeBigVerifier(t, home, models)
 	models.Respond("big-model", associateResponse(associateEntry(units[0], "none", "", 0.70)))
 
-	command := exec.Command(workgraphFactsBinary, "projects", "review", "--approve-above", "0.9", "--target", "project", "--home", home.HomeDir, "--memory", home.MemoryDir)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	command := exec.CommandContext(ctx, workgraphFactsBinary, "projects", "review", "--approve-above", "0.9", "--target", "project", "--home", home.HomeDir, "--memory", home.MemoryDir)
 	command.Dir = repoRoot(t)
 	stdin, err := command.StdinPipe()
 	if err != nil {
@@ -574,6 +577,13 @@ func TestBulkApproveSkipsALinkVerifiedDuringTheConfirmation(t *testing.T) {
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
+	waited := false
+	t.Cleanup(func() {
+		if !waited {
+			_ = command.Process.Kill()
+			_ = command.Wait()
+		}
+	})
 	var output strings.Builder
 	prompted := make(chan error, 1)
 	go func() {
@@ -612,7 +622,9 @@ func TestBulkApproveSkipsALinkVerifiedDuringTheConfirmation(t *testing.T) {
 	stdin.Close()
 	rest, _ := io.ReadAll(stdout)
 	output.Write(rest)
-	if err := command.Wait(); err != nil {
+	err = command.Wait()
+	waited = true
+	if err != nil {
 		t.Fatalf("projects review: %v\n%s%s", err, output.String(), stderr.String())
 	}
 	for _, expected := range []string{
