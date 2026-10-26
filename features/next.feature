@@ -79,11 +79,35 @@ Scenario: Team-only review requests do not bury direct work
   And other pull requests request my review directly or need my reply
   When I run "workgraph next"
   Then the direct items are listed under "Waiting on you" as before
-  And each team's requests are summarized on one line with pull request, bot, and repository counts and the newest three pull requests
+  And each team's requests are summarized on one line with pull request, bot, and repository counts and three pull requests, human-authored ones first
   When I run "workgraph next --team-reviews"
   Then every team-only request is listed under its team, ordered by repository
   When I run "workgraph today"
   Then the waiting count excludes team-only requests and reports them separately
+
+Scenario: My own fixes are grouped apart from work waiting on others
+  Given one of my pull requests only has failing checks and another only has a merge conflict
+  And another of my pull requests has changes requested by a reviewer
+  When I run "workgraph next"
+  Then the pull requests with failing checks or conflicts are listed under "Needs your fix"
+  And the pull request with changes requested stays under "Blocked"
+  And "Needs your fix" comes after "Waiting on you" and before "Blocked"
+  And "workgraph next --json" gives each item its section
+
+Scenario: Stale pull requests do not crowd the list
+  Given several of my pull requests have had no activity for more than 30 days
+  And an old pull request has a reply requested from me this week
+  When I run "workgraph next"
+  Then each section shows one line counting its stale pull requests and pointing at "workgraph next --stale"
+  And the pull request with the recent reply request is still listed
+  When I run "workgraph next --stale"
+  Then the stale pull requests are listed in full
+  And "workgraph next --json" still returns every item with a stale flag
+
+Scenario: Team review previews show people before bots
+  Given a team's review requests include pull requests by people and newer dependency bumps by bots
+  When I run "workgraph next"
+  Then the team summary previews the pull requests by people first
 
 Scenario: Agents read the same items through MCP
   Given workgraph has items waiting on me

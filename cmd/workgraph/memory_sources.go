@@ -27,11 +27,13 @@ func runMemorySourceLink(args []string, unlink bool, stdout, stderr io.Writer) i
 		fmt.Fprintf(stderr, "usage: workgraph %s --source <container> <memory-project>\n       workgraph %s --workstream <slug> --source <container>\n", command, command)
 		return 2
 	}
-	message, err := workgraph.UpdateMemoryProjectSources(workgraph.MemoryProjectSourcesConfig{HomeDir: *home, MemoryDir: *memory, DatabasePath: *database, Project: flags.Arg(0), Workstream: *workstream, Sources: sources, Unlink: unlink})
+	message, err := workgraph.UpdateMemoryProjectSources(workgraph.MemoryProjectSourcesConfig{HomeDir: *home, MemoryDir: *memory, DatabasePath: *database, Project: flags.Arg(0), Workstream: *workstream, Sources: sources, Unlink: unlink, GitEmails: workgraph.LocalGitEmails(workgraph.LocalGitIdentityConfig{HomeDir: *home, DatabasePath: *database})})
+	if message != "" {
+		fmt.Fprintln(stdout, message)
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph %s: %v\n", command, err)
 		return 1
 	}
-	fmt.Fprintln(stdout, message)
 	return 0
 }

@@ -354,11 +354,12 @@ func TestAssociateAppliesDeterministicLinksBeforeTheModel(t *testing.T) {
 	fake := newAssociateFakeModel(t)
 	configureAssociateProfile(t, home, fake.URL, "slack")
 	now := time.Date(2026, 10, 21, 18, 0, 0, 0, time.UTC)
-	mapped := insertAssociateThreads(t, home, now.Add(-6*time.Hour), "C1", "mapped-team", 1)
-	open := insertAssociateThreads(t, home, now.Add(-5*time.Hour), "C2", "open-team", 1)
+	insertEvent(t, home.DatabasePath, storedEvent{ID: "file.modified:mapped-team", Source: "file", Type: "file.modified", Timestamp: now.Add(-7 * time.Hour), Project: "mapped-team", Payload: `{"path":"/work/mapped-team/notes.md"}`, Summary: "notes"})
 	if output, err := runworkgraph(t, repoRoot(t), "memory", "link", "--home", home.HomeDir, "--memory", home.MemoryDir, "--source", "mapped-team", "atlas-bot"); err != nil {
 		t.Fatalf("memory link: %v\n%s", err, output)
 	}
+	mapped := insertAssociateThreads(t, home, now.Add(-6*time.Hour), "C1", "mapped-team", 1)
+	open := insertAssociateThreads(t, home, now.Add(-5*time.Hour), "C2", "open-team", 1)
 
 	dryRun, err := workgraph.AssociateWithLLM(workgraph.LLMAssociateConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, HTTPClient: fake.Client, Now: now, DryRun: true})
 	if err != nil || len(dryRun.Sent) != 2 || len(dryRun.Deterministic.Written) != 0 {
@@ -488,9 +489,6 @@ func TestNarrowedCatalogKeepsProjectsCitedByIdentifiers(t *testing.T) {
 	insertEvent(t, home.DatabasePath, associateSlackEvent("C4", ts(3), "channel", "Acme.Platform.Both", "Sam", "Both mappings", base.Add(3*time.Minute)))
 	dm := associateSlackEvent("D1", ts(4), "im", "D1", "Robin", "Glossary PR https://github.com/acme/i18n/pull/9", base.Add(4*time.Minute))
 	insertEvent(t, home.DatabasePath, dm)
-	if _, err := workgraph.AssignProjectLink(workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir}, workgraph.ProjectLinkAssignment{UnitID: "slack.thread:D1:" + ts(4), UnitKind: "slack.thread", Container: "D1", Evidence: []string{dm.ID}, Target: "project", Project: "intl-glossary", Summary: "Glossary"}); err != nil {
-		t.Fatalf("assign: %v", err)
-	}
 	args := []string{"--home", home.HomeDir, "--memory", home.MemoryDir}
 	for _, mapping := range [][]string{
 		{"--source", "Acme.Platform.I18n", "data-apis"},
@@ -503,6 +501,9 @@ func TestNarrowedCatalogKeepsProjectsCitedByIdentifiers(t *testing.T) {
 		if output, err := runworkgraph(t, repoRoot(t), append(append([]string{"memory", "link"}, args...), mapping...)...); err != nil {
 			t.Fatalf("memory link %v: %v\n%s", mapping, err, output)
 		}
+	}
+	if _, err := workgraph.AssignProjectLink(workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir}, workgraph.ProjectLinkAssignment{UnitID: "slack.thread:D1:" + ts(4), UnitKind: "slack.thread", Container: "D1", Evidence: []string{dm.ID}, Target: "project", Project: "intl-glossary", Summary: "Glossary"}); err != nil {
+		t.Fatalf("assign: %v", err)
 	}
 
 	output, err := runworkgraph(t, repoRoot(t), append([]string{"llm", "associate", "--dry-run"}, args...)...)

@@ -203,6 +203,8 @@ type NextItem struct {
 	Source      string            `json:"source"`
 	Reason      string            `json:"reason"`
 	Group       string            `json:"group"`
+	Section     string            `json:"section"`
+	Stale       bool              `json:"stale"`
 	Role        string            `json:"role"`
 	Project     string            `json:"project"`
 	Since       time.Time         `json:"since"`
@@ -216,6 +218,7 @@ type NextItem struct {
 	Freshness   NextItemFreshness `json:"freshness"`
 	Untrusted   map[string]any    `json:"untrusted,omitempty"`
 	teamOnly    bool
+	requestAt   time.Time
 	checkNames  []string
 }
 
