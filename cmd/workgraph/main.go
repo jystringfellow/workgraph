@@ -3236,6 +3236,10 @@ func runSettings(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runSettingsIgnorePath(args[1:], false, stdout, stderr)
 	case "add-watch":
 		return runSettingsAddWatch(args[1:], stdout, stderr)
+	case "disable-agent-checkpoints":
+		return runSettingsAgentCheckpoints(args[1:], false, stdout, stderr)
+	case "enable-agent-checkpoints":
+		return runSettingsAgentCheckpoints(args[1:], true, stdout, stderr)
 	case "get":
 		return runSettingsGet(args[1:], stdout, stderr)
 	case "doctor":
@@ -3248,6 +3252,37 @@ func runSettings(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unknown settings command: %s\n", args[0])
 		return 2
 	}
+}
+
+func runSettingsAgentCheckpoints(args []string, enabled bool, stdout io.Writer, stderr io.Writer) int {
+	command := "disable-agent-checkpoints"
+	if enabled {
+		command = "enable-agent-checkpoints"
+	}
+	flags := flag.NewFlagSet("settings "+command, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph settings "+command)
+		return 2
+	}
+
+	result, err := workgraph.SetAIAgentCheckpoints(workgraph.SettingsAgentCheckpointsConfig{
+		HomeDir: *homeDir,
+		Enabled: enabled,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph settings %s: %v\n", command, err)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, result.Message)
+	return 0
 }
 
 func runSettingsGet(args []string, stdout io.Writer, stderr io.Writer) int {

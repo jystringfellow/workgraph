@@ -20,8 +20,9 @@ Reusable agent skills live under `skills/` so users can symlink or copy them
 into their preferred AI tool:
 
 - `skills/workgraph-memory/`: draft and edit workgraph project memory
-- `skills/workgraph-ai-checkpoint/`: record an explicit, privacy-bounded AI
-  session restart checkpoint without requiring the user to write JSON
+- `skills/workgraph-ai-checkpoint/`: record a privacy-bounded AI session
+  restart checkpoint on request, or at work milestones with standing consent,
+  without requiring the user to write JSON
 
 For now, `.agents/` is an agent-facing workspace, not a runtime or orchestration
 system.

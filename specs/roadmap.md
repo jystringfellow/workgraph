@@ -180,6 +180,11 @@ Priority labels used below:
   read-only database, with one warning. [specs: `specs/next.md`,
   `specs/projects.md`, and `specs/today.md`]
 
+- [x] Opt-in agent-initiated AI checkpoints: one setting lets wrapped agents
+  record short checkpoints at work milestones, each marked with its initiator
+  in `ai show`, so `ai handoff` always has fresh context. [spec:
+  `specs/ai-sessions.md`]
+
 - Signed-in client config-dir bindings shared by bridge workers and LLM
   profiles, with runtime enforcement and inspectable diagnostics. [spec:
   `specs/signed-in-client-binding.md`]

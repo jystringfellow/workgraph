@@ -1758,3 +1758,59 @@ func TestAIHandoffDistinguishesNotionTokensFromRepositoryNames(t *testing.T) {
 		}
 	}
 }
+
+func TestAIHandoffUsesLatestCheckpointWhateverItsInitiator(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init workgraph: %v", err)
+	}
+	runWorkgraphCommand(t, nil, "settings", "enable-agent-checkpoints", "--home", homeDir)
+	workingDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve working directory: %v", err)
+	}
+	argsPath := filepath.Join(workingDir, "args.txt")
+	policyPath := filepath.Join(workingDir, "policy.txt")
+	writeAIFactExecutable(t, workingDir, "codex", `printf '%s\n' "$@" > "$WORKGRAPH_AI_TEST_ARGS"
+printf '%s' "${WORKGRAPH_AI_CHECKPOINT_POLICY-unset}" > "$WORKGRAPH_AI_TEST_POLICY"`)
+	sourceID := "00000000-0000-4000-8000-000000000323"
+	insertAINativeFactSession(t, initialized.DatabasePath, sourceID, "claude", "/usr/local/bin/claude", "claude-native", "", workingDir, "2026-08-03T12:00:00Z", false)
+	if _, err := workgraph.CheckpointAISession(workgraph.AICheckpointConfig{
+		HomeDir: homeDir, DatabasePath: initialized.DatabasePath, SessionID: sourceID,
+		WorkingDir: workingDir, Input: strings.NewReader(`{"goal":"User requested state"}`),
+	}); err != nil {
+		t.Fatalf("record user checkpoint: %v", err)
+	}
+	t.Setenv("WORKGRAPH_AI_CHECKPOINT_POLICY", "agent")
+	agentCheckpoint, err := workgraph.CheckpointAISession(workgraph.AICheckpointConfig{
+		HomeDir: homeDir, DatabasePath: initialized.DatabasePath, SessionID: sourceID,
+		WorkingDir: workingDir, AgentInitiated: true, Input: strings.NewReader(`{"goal":"Agent recorded state"}`),
+	})
+	if err != nil {
+		t.Fatalf("record agent-initiated checkpoint: %v", err)
+	}
+	os.Unsetenv("WORKGRAPH_AI_CHECKPOINT_POLICY")
+
+	t.Setenv("PATH", workingDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("WORKGRAPH_AI_TEST_ARGS", argsPath)
+	t.Setenv("WORKGRAPH_AI_TEST_POLICY", policyPath)
+	result, err := workgraph.HandoffAISession(workgraph.AIHandoffConfig{
+		HomeDir: homeDir, DatabasePath: initialized.DatabasePath, SourceSessionID: sourceID, Destination: "codex",
+	})
+	if err != nil {
+		t.Fatalf("handoff agent-initiated checkpoint: %v", err)
+	}
+	if !result.ReusedCheckpoint || result.CheckpointEventID != agentCheckpoint.EventID {
+		t.Fatalf("handoff did not reuse the latest agent-initiated checkpoint %s: %#v", agentCheckpoint.EventID, result)
+	}
+	if arguments := readAIFactFile(t, workingDir, "args.txt"); !strings.Contains(arguments, "Agent recorded state") || strings.Contains(arguments, "User requested state") || strings.Contains(arguments, "initiated_by") {
+		t.Fatalf("destination did not receive only the latest checkpoint text:\n%s", arguments)
+	}
+	if policy := readAIFactFile(t, workingDir, "policy.txt"); policy != "agent" {
+		t.Fatalf("handoff destination checkpoint policy = %q, want agent", policy)
+	}
+}

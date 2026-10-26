@@ -652,6 +652,9 @@ func TestAICheckpointStoresValidatedAgentContextAndObservedState(t *testing.T) {
 	if err := json.Unmarshal([]byte(payloadText), &payload); err != nil {
 		t.Fatalf("decode checkpoint payload: %v", err)
 	}
+	if strings.Contains(payloadText, "initiated_by") {
+		t.Fatalf("user-requested checkpoint recorded an initiator field: %s", payloadText)
+	}
 	if payload.SchemaVersion != 1 || payload.AgentStated.Goal != "Add durable context" || len(payload.AgentStated.Completed) != 1 || len(payload.AgentStated.NextActions) != 1 || len(payload.AgentStated.Decisions) != 1 {
 		t.Fatalf("unexpected agent checkpoint: %#v", payload.AgentStated)
 	}
@@ -1059,6 +1062,7 @@ func TestAIShowSeparatesStoredObservationFromAgentCheckpoint(t *testing.T) {
 		"Current state\nCheckpoint storage works",
 		"Next actions\n- Render deterministic context",
 		"Blockers\n- None",
+		"Initiated by: user",
 	} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("expected show output to contain %q, got:\n%s", expected, output)
@@ -1878,5 +1882,87 @@ func TestAISessionsOmitsSessionsWithOnlyUnorderableEvidence(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(workingDir, "codex.launched")); !os.IsNotExist(err) {
 		t.Fatalf("destination launched: %v", err)
+	}
+}
+
+func TestAIAgentInitiatedCheckpointRequiresStandingConsent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init workgraph: %v", err)
+	}
+	agent := `printf 'policy=%s\n' "${WORKGRAPH_AI_CHECKPOINT_POLICY-unset}"
+printf '%s' '{"goal":"Ship agent checkpoints","next_actions":["Open the pull request"]}' | "$WORKGRAPH_FACT_BINARY" ai checkpoint --agent-initiated --stdin || echo rejected`
+	runAgent := func() string {
+		t.Helper()
+		output, err := runWorkgraphCommandAllowError([]string{
+			"WORKGRAPH_AI_CHECKPOINT_POLICY=agent",
+			"WORKGRAPH_FACT_BINARY=" + workgraphFactsBinary,
+		}, "ai", "run", "--home", homeDir, "--database", initialized.DatabasePath, "--", "sh", "-c", agent)
+		if err != nil {
+			t.Fatalf("run wrapped agent: %v\n%s", err, output)
+		}
+		return output
+	}
+	countCheckpoints := func() int {
+		t.Helper()
+		db, err := sql.Open("sqlite3", initialized.DatabasePath)
+		if err != nil {
+			t.Fatalf("open event database: %v", err)
+		}
+		defer db.Close()
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type = 'ai.session_checkpointed'`).Scan(&count); err != nil {
+			t.Fatalf("count checkpoints: %v", err)
+		}
+		return count
+	}
+
+	output := runAgent()
+	if !strings.Contains(output, "policy=unset") {
+		t.Fatalf("agent inherited checkpoint policy without standing consent:\n%s", output)
+	}
+	if !strings.Contains(output, "agent-initiated checkpoints are not enabled") || !strings.Contains(output, "rejected") {
+		t.Fatalf("agent-initiated checkpoint was not rejected without consent:\n%s", output)
+	}
+	if count := countCheckpoints(); count != 0 {
+		t.Fatalf("rejected agent-initiated checkpoint wrote %d events", count)
+	}
+
+	runWorkgraphCommand(t, nil, "settings", "enable-agent-checkpoints", "--home", homeDir)
+	output = runAgent()
+	if !strings.Contains(output, "policy=agent") || !strings.Contains(output, "AI checkpoint recorded") || strings.Contains(output, "rejected") {
+		t.Fatalf("agent could not checkpoint with standing consent:\n%s", output)
+	}
+
+	db, err := sql.Open("sqlite3", initialized.DatabasePath)
+	if err != nil {
+		t.Fatalf("open event database: %v", err)
+	}
+	defer db.Close()
+	var sessionID, payloadText string
+	if err := db.QueryRow(`SELECT json_extract(payload_json, '$.session_id'), payload_json FROM events WHERE type = 'ai.session_checkpointed'`).Scan(&sessionID, &payloadText); err != nil {
+		t.Fatalf("read agent-initiated checkpoint: %v", err)
+	}
+	var payload struct {
+		SchemaVersion int    `json:"schema_version"`
+		InitiatedBy   string `json:"initiated_by"`
+		AgentStated   struct {
+			Goal string `json:"goal"`
+		} `json:"agent_stated"`
+	}
+	if err := json.Unmarshal([]byte(payloadText), &payload); err != nil {
+		t.Fatalf("decode checkpoint payload: %v", err)
+	}
+	if payload.SchemaVersion != 1 || payload.InitiatedBy != "agent" || payload.AgentStated.Goal != "Ship agent checkpoints" {
+		t.Fatalf("unexpected agent-initiated checkpoint payload: %s", payloadText)
+	}
+
+	shown := runWorkgraphCommand(t, nil, "ai", "show", "--home", homeDir, "--database", initialized.DatabasePath, sessionID)
+	if !strings.Contains(shown, "Agent-stated checkpoint\nRecorded: ") || !strings.Contains(shown, "Initiated by: agent") {
+		t.Fatalf("show did not report the agent initiator:\n%s", shown)
 	}
 }

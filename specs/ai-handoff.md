@@ -42,7 +42,8 @@ An unknown destination is a CLI usage error (exit 2). Value-taking options
 value or `=value`, before or after the destination.
 `--from` selects the source explicitly; otherwise the command uses
 `WORKGRAPH_AI_SESSION_ID`. Without `--stdin`, handoff reuses the latest valid
-structured checkpoint. With `--stdin`, it first appends a checkpoint through
+structured checkpoint, whether the user requested it or the agent recorded it
+under standing consent. With `--stdin`, it first appends a checkpoint through
 the existing checkpoint contract while the source remains active. An ended
 source can reuse a stored checkpoint but cannot accept a new one.
 

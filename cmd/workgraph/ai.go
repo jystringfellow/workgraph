@@ -115,6 +115,7 @@ func runAICheckpoint(args []string, stdin io.Reader, stdout io.Writer, stderr io
 	homeDir := flags.String("home", os.Getenv("WORKGRAPH_AI_HOME"), "workgraph home directory")
 	databasePath := flags.String("database", os.Getenv("WORKGRAPH_AI_DATABASE"), "workgraph SQLite database path")
 	fromStdin := flags.Bool("stdin", false, "read structured checkpoint JSON from standard input")
+	agentInitiated := flags.Bool("agent-initiated", false, "record that the agent started this checkpoint under the user's standing consent")
 	if err := flags.Parse(parseArgs); err != nil {
 		return 2
 	}
@@ -123,7 +124,7 @@ func runAICheckpoint(args []string, stdin io.Reader, stdout io.Writer, stderr io
 		explicit[option.Name] = true
 	})
 	if flags.NArg() != 0 || len(positional) > 1 {
-		fmt.Fprintln(stderr, "usage: workgraph ai checkpoint [session-id] --stdin")
+		fmt.Fprintln(stderr, "usage: workgraph ai checkpoint [session-id] [--agent-initiated] --stdin")
 		return 2
 	}
 	if !*fromStdin {
@@ -137,7 +138,7 @@ func runAICheckpoint(args []string, stdin io.Reader, stdout io.Writer, stderr io
 	result, err := workgraph.CheckpointAISession(workgraph.AICheckpointConfig{
 		HomeDir: *homeDir, DatabasePath: *databasePath,
 		HomeExplicit: explicit["home"], DatabaseExplicit: explicit["database"],
-		SessionID: sessionID, Input: stdin,
+		SessionID: sessionID, AgentInitiated: *agentInitiated, Input: stdin,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph ai checkpoint: %v\n", err)

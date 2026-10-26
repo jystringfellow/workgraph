@@ -44,6 +44,15 @@ Scenario: Manage an ignored basename from the CLI
   Then ".cache" is removed from ignore_names
   And removing it again succeeds without changing settings
 
+Scenario: Opt in to agent-initiated AI checkpoints
+  Given workgraph has been initialized
+  Then "workgraph settings get" reports AI agent checkpoints as disabled
+  When I run "workgraph settings enable-agent-checkpoints"
+  Then ai_agent_checkpoints is true in settings.json
+  And "workgraph settings get" reports AI agent checkpoints as enabled
+  When I run "workgraph settings disable-agent-checkpoints"
+  Then ai_agent_checkpoints is removed from settings.json
+
 Scenario: Ignore generated build output by default
   Given workgraph has been initialized
   When I inspect the settings file

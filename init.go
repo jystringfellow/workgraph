@@ -35,6 +35,7 @@ type settingsFile struct {
 	RepoDirs              []string `json:"repo_dirs"`
 	IgnorePaths           []string `json:"ignore_paths"`
 	IgnoreNames           []string `json:"ignore_names"`
+	AIAgentCheckpoints    bool     `json:"ai_agent_checkpoints,omitempty"`
 }
 
 func Init(config InitConfig) (InitResult, error) {
