@@ -4,7 +4,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -547,6 +549,85 @@ func TestRecentDecisionsFollowARegroupedUnit(t *testing.T) {
 	if link := currentProjectLink(t, store, burst); link.Project != "atlas-bot" {
 		t.Fatalf("expected the user's decision kept, got %+v", link)
 	}
+}
+
+func TestBulkApproveSkipsALinkVerifiedDuringTheConfirmation(t *testing.T) {
+	home, models, now := initVerifyBacklogHome(t)
+	store := workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir}
+	units := proposeVerifyBacklog(t, home, models, now, "C1", 0.92, 0.93)
+	rewritten, untouched := currentProjectLink(t, store, units[0].ID), currentProjectLink(t, store, units[1].ID)
+	routeBigVerifier(t, home, models)
+	models.Respond("big-model", associateResponse(associateEntry(units[0], "none", "", 0.70)))
+
+	command := exec.Command(workgraphFactsBinary, "projects", "review", "--approve-above", "0.9", "--target", "project", "--home", home.HomeDir, "--memory", home.MemoryDir)
+	command.Dir = repoRoot(t)
+	stdin, err := command.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr strings.Builder
+	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	var output strings.Builder
+	prompted := make(chan error, 1)
+	go func() {
+		buffer := make([]byte, 256)
+		for {
+			n, err := stdout.Read(buffer)
+			output.Write(buffer[:n])
+			if strings.Contains(output.String(), "Approve them? [y/N] ") {
+				prompted <- nil
+				return
+			}
+			if err != nil {
+				prompted <- err
+				return
+			}
+		}
+	}()
+	select {
+	case err := <-prompted:
+		if err != nil {
+			t.Fatalf("no confirmation prompt: %v\n%s%s", err, output.String(), stderr.String())
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatalf("timed out waiting for the confirmation prompt:\n%s", output.String())
+	}
+	if !strings.Contains(output.String(), "2 proposed links at or above 0.9 match.") {
+		t.Fatalf("expected both links listed:\n%s", output.String())
+	}
+
+	if result, err := workgraph.VerifyLLMBacklog(workgraph.LLMVerifyBacklogConfig{HomeDir: home.HomeDir, MemoryDir: home.MemoryDir, HTTPClient: models.Client, Now: now}); err != nil || result.Verified != 1 {
+		t.Fatalf("verify backlog during the prompt: %+v %v", result, err)
+	}
+	if _, err := stdin.Write([]byte("y\n")); err != nil {
+		t.Fatal(err)
+	}
+	stdin.Close()
+	rest, _ := io.ReadAll(stdout)
+	output.Write(rest)
+	if err := command.Wait(); err != nil {
+		t.Fatalf("projects review: %v\n%s%s", err, output.String(), stderr.String())
+	}
+	for _, expected := range []string{
+		fmt.Sprintf("Skipped: project link %d changed after it was listed; not approved", rewritten.ID),
+		fmt.Sprintf("Link %d: applied project harbor-harness", untouched.ID),
+		"Approved 1 link; 1 skipped because it changed after listing.",
+	} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("expected %q in the review output:\n%s", expected, output.String())
+		}
+	}
+	if link := currentProjectLink(t, store, units[0].ID); link.State != "proposed" || link.Target != "none" || link.Confidence != 0.70 || link.Profile != "big-verifier" {
+		t.Fatalf("expected the verifier's new verdict left proposed, got %+v", link)
+	}
+	assertProjectLinkRow(t, store, untouched.ID, "applied", "approved")
 }
 
 func TestDeferredVerifyCountsDecisionsFromALegacySnapshot(t *testing.T) {

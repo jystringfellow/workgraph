@@ -346,7 +346,9 @@ workgraph projects review --recheck
 Every bulk form runs in one process and ends with a summary line.
 `--approve-above` approves proposed LLM links at or above the confidence; it
 asks first unless given `--yes`, and never approves new-project proposals or
-links you returned to review with undo. `--recheck` replaces proposals that
+links you returned to review with undo. A link that changes while the
+prompt waits, such as one `llm verify-backlog` rewrites, is skipped and
+reported rather than approved. `--recheck` replaces proposals that
 the deterministic rules now resolve, such as after adding an identifier to
 project memory, without calling a model.
 

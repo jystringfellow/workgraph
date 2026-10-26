@@ -991,7 +991,14 @@ workgraph projects explain <unit-id>
   links approved.` and changes nothing. With no match it prints `No proposed
   links at or above <c>.` Approvals are ordinary approvals: `decision =
   approved`, `auto = false`, and the same accuracy, seeding, and count rules.
-  Output is one line per link, then `Approved <n> links.`
+  Each link is approved only if, inside the approval transaction, it is
+  still the row that was listed: same state, decision, target, project,
+  confidence, profile, and `created_at`. A link that changed after listing,
+  for example one `llm verify-backlog` rewrote while the prompt waited, is
+  not approved and prints `Skipped: project link <id> changed after it was
+  listed; not approved`. Output is one line per link, then `Approved <n>
+  links.`, with `; <k> skipped because they changed after listing` before
+  the period when any were skipped.
 - `--recheck` runs the deterministic rules, with no LLM call, over every unit
   whose current link is a `proposed` LLM link of a unit not returned to
   review by undo, and supersedes each one that now resolves to exactly one
@@ -1202,7 +1209,9 @@ Grouping, shared by `today` and `resume`:
   `--approve-above` without `--yes` asks, and changes nothing unless told
   `y`; with `--yes` it approves only proposed LLM links at or above the
   confidence that pass `--target` and `--container`, never a new-project
-  proposal or an undo's proposal.
+  proposal or an undo's proposal; a link that `llm verify-backlog` rewrites
+  while the prompt waits is skipped, reported, and left with its new
+  verdict.
 - **P19. Waiting proposals are verified once.** `llm verify-backlog` sends
   only undecided proposed LLM links in their profile's floor-to-threshold
   band, never a user-decided unit; the verdict replaces the link under the
