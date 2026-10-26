@@ -2,9 +2,12 @@ package workgraph
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
+
+var ErrProjectLinkChanged = errors.New("changed after it was listed")
 
 type ProjectReviewOutcome struct {
 	Ref  string
@@ -54,6 +57,30 @@ func ApproveProjectReviewLinks(config ProjectReviewConfig, linkIDs []int64) ([]P
 		return approveNewProjectLinkTx(tx, now, linkIDs[index])
 	})
 	return outcomes, err
+}
+
+func ApproveProjectLinksAsListed(config ProjectReviewConfig, listed []ProjectLink) ([]ProjectReviewOutcome, error) {
+	outcomes := make([]ProjectReviewOutcome, len(listed))
+	for index, link := range listed {
+		outcomes[index].Ref = fmt.Sprint(link.ID)
+	}
+	err := decideProjectReviewBatches(config.store(), outcomes, func(tx *sql.Tx, now time.Time, index int) (ProjectLink, error) {
+		current, err := readProjectLinkTx(tx, listed[index].ID)
+		if err != nil {
+			return ProjectLink{}, err
+		}
+		if !projectLinkUnchanged(listed[index], current) {
+			return current, fmt.Errorf("project link %d %w; not approved", current.ID, ErrProjectLinkChanged)
+		}
+		return approveProjectLinkTx(tx, now, current.ID)
+	})
+	return outcomes, err
+}
+
+func projectLinkUnchanged(listed, current ProjectLink) bool {
+	return current.State == listed.State && current.Decision == listed.Decision && current.Target == listed.Target &&
+		current.Project == listed.Project && current.Confidence == listed.Confidence && current.Profile == listed.Profile &&
+		current.CreatedAt.Equal(listed.CreatedAt)
 }
 
 func RejectProjectLinks(config ProjectLinkStoreConfig, linkIDs []int64) ([]ProjectReviewOutcome, error) {

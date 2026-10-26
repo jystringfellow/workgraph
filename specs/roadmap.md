@@ -67,12 +67,19 @@ Priority labels used below:
 
 ## Recently Delivered
 
+- [x] Backlog verification and distinct decisions: `llm verify-backlog`
+  sends waiting floor-to-threshold proposals to the `associate-verify`
+  profile with dry run, limit, since, and resumable checks, and
+  `recent_decisions` collapses repeated decisions into one counted entry.
+  [spec: `specs/projects.md` D7]
+
 - [x] Mapping changes relink their units and bulk project review: `memory
   link` and `memory unlink` move container-mapping links and resolve pending
   proposals at once, `projects review --recheck` reruns deterministic rules
   over proposals, and `--approve`, `--reject`, `--assign`, and
   `--approve-above` decide many links in one process. [spec:
   `specs/projects.md` D6]
+
 - [x] Associate thresholds and verifier: per-profile auto-apply thresholds and
   verify floors (`llm add --auto-apply-confidence`, `llm set`), a per-profile
   accuracy gate whose required accuracy is the profile's threshold, and an

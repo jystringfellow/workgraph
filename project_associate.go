@@ -21,6 +21,7 @@ const (
 	associateEventLimit    = 20
 	associateTextLimit     = 2000
 	associateDecisionLimit = 20
+	associateDecisionScan  = 500
 	associateResponseLimit = 1 << 20
 	associateDataOpen      = "<<<WORKGRAPH_DATA"
 	associateDataClose     = "WORKGRAPH_DATA>>>"
@@ -120,6 +121,7 @@ type associateDecision struct {
 	Target    string `json:"target"`
 	Project   string `json:"project,omitempty"`
 	Kind      string `json:"kind,omitempty"`
+	Count     int    `json:"count"`
 }
 
 type associateStoredEvent struct {
@@ -218,7 +220,7 @@ func AssociateWithLLM(config LLMAssociateConfig) (LLMAssociateResult, error) {
 			return LLMAssociateResult{}, err
 		}
 	}
-	payload, err := buildAssociatePayload(run.homeDir, config, run.now, run.catalog, run.enabled, nil, nil)
+	payload, err := buildAssociatePayload(run.homeDir, config, run.now, run.catalog, run.enabled, nil, nil, nil)
 	if err != nil {
 		return LLMAssociateResult{}, err
 	}
@@ -262,6 +264,7 @@ type associateRun struct {
 	enabled      map[string]bool
 	catalog      ProjectCatalog
 	now          time.Time
+	recheck      map[string]bool
 }
 
 func newAssociateRun(config LLMAssociateConfig) (associateRun, error) {
@@ -535,7 +538,7 @@ func associateEventSource(event associateStoredEvent) string {
 	return event.Source
 }
 
-func buildAssociatePayload(homeDir string, config LLMAssociateConfig, now time.Time, catalog ProjectCatalog, enabled map[string]bool, requested []string, cooled map[string]string) (associatePayload, error) {
+func buildAssociatePayload(homeDir string, config LLMAssociateConfig, now time.Time, catalog ProjectCatalog, enabled map[string]bool, requested []string, cooled map[string]string, recheck map[string]bool) (associatePayload, error) {
 	payload := associatePayload{Schema: associateRequestSchema, Projects: []associateProject{}, Units: []associateUnit{}, Decisions: []associateDecision{}}
 	dbPath, err := resumeDatabasePath(ResumeConfig{HomeDir: homeDir, DatabasePath: config.DatabasePath})
 	if err != nil {
@@ -588,7 +591,7 @@ func buildAssociatePayload(homeDir string, config LLMAssociateConfig, now time.T
 		if len(payload.Units) == associateUnitLimit {
 			break
 		}
-		if !unit.Eligible || linked[unit.ID] {
+		if !unit.Eligible || (linked[unit.ID] && !recheck[unit.ID]) {
 			continue
 		}
 		members, err := loadAssociateEvents(db, unit.EventIDs)
@@ -634,7 +637,7 @@ func buildAssociatePayload(homeDir string, config LLMAssociateConfig, now time.T
 		payload.Units = append(payload.Units, entry)
 	}
 	sort.Slice(payload.Projects, func(i, j int) bool { return payload.Projects[i].Slug < payload.Projects[j].Slug })
-	payload.Decisions, err = associateRecentDecisions(db, links, enabled)
+	payload.Decisions, err = associateRecentDecisions(db, links, enabled, units, catalog)
 	if err != nil {
 		return associatePayload{}, err
 	}
@@ -735,7 +738,7 @@ func loadAssociateEvents(db *sql.DB, ids []string) ([]associateStoredEvent, erro
 	return events, rows.Err()
 }
 
-func associateRecentDecisions(db *sql.DB, links []ProjectLink, enabled map[string]bool) ([]associateDecision, error) {
+func associateRecentDecisions(db *sql.DB, links []ProjectLink, enabled map[string]bool, units []ProjectUnit, catalog ProjectCatalog) ([]associateDecision, error) {
 	type candidate struct {
 		link     ProjectLink
 		decision string
@@ -752,10 +755,27 @@ func associateRecentDecisions(db *sql.DB, links []ProjectLink, enabled map[strin
 	}
 	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].at.After(candidates[j].at) })
 	decisions := []associateDecision{}
+	if len(candidates) == 0 {
+		return decisions, nil
+	}
+	candidates = candidates[:min(len(candidates), associateDecisionScan)]
+	cited := map[string]bool{}
 	for _, candidate := range candidates {
-		if len(decisions) == associateDecisionLimit {
-			break
+		for _, id := range candidate.link.Evidence {
+			cited[id] = true
 		}
+	}
+	containing := map[string]ProjectUnit{}
+	for _, unit := range units {
+		for _, id := range unit.EventIDs {
+			if cited[id] {
+				containing[id] = unit
+			}
+		}
+	}
+	permittedUnits := map[string]bool{}
+	positions := map[associateDecision]int{}
+	for _, candidate := range candidates {
 		evidence, err := loadAssociateEvents(db, candidate.link.Evidence)
 		if err != nil {
 			return nil, err
@@ -770,9 +790,64 @@ func associateRecentDecisions(db *sql.DB, links []ProjectLink, enabled map[strin
 		if !passes {
 			continue
 		}
-		decisions = append(decisions, associateDecision{Container: evidence[0].Project, Decision: candidate.decision, Target: candidate.link.Target, Project: firstNonEmpty(candidate.link.Project, proposedProjectSlug(candidate.link.NewProject)), Kind: candidate.link.Kind})
+		project := firstNonEmpty(candidate.link.Project, proposedProjectSlug(candidate.link.NewProject))
+		if candidate.link.Target != "none" && !catalogHasProject(catalog, project) {
+			continue
+		}
+		permitted, err := associateEvidenceUnitsPermitted(db, candidate.link.Evidence, containing, permittedUnits, enabled)
+		if err != nil {
+			return nil, err
+		}
+		if !permitted {
+			continue
+		}
+		decision := associateDecision{Container: evidence[0].Project, Decision: candidate.decision, Target: candidate.link.Target, Project: project, Kind: candidate.link.Kind}
+		if position, found := positions[decision]; found {
+			decisions[position].Count++
+			continue
+		}
+		if len(decisions) == associateDecisionLimit {
+			continue
+		}
+		positions[decision] = len(decisions)
+		decision.Count = 1
+		decisions = append(decisions, decision)
 	}
 	return decisions, nil
+}
+
+func associateEvidenceUnitsPermitted(db *sql.DB, evidence []string, containing map[string]ProjectUnit, permittedUnits map[string]bool, enabled map[string]bool) (bool, error) {
+	for _, id := range evidence {
+		unit, found := containing[id]
+		if !found {
+			return false, nil
+		}
+		permitted, checked := permittedUnits[unit.ID]
+		if !checked {
+			var err error
+			if permitted, err = associateMembersPermitted(db, unit.EventIDs, enabled); err != nil {
+				return false, err
+			}
+			permittedUnits[unit.ID] = permitted
+		}
+		if !permitted {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func associateMembersPermitted(db *sql.DB, ids []string, enabled map[string]bool) (bool, error) {
+	members, err := loadAssociateEvents(db, ids)
+	if err != nil {
+		return false, err
+	}
+	for _, member := range members {
+		if !enabled[associateEventSource(member)] {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func projectLinkDecisionTime(link ProjectLink) time.Time {
@@ -817,7 +892,7 @@ func associateTaskMessages(payload associatePayload, intro []string) ([]openAICo
 		"Reply with JSON only, in this shape:",
 		`{"schema":"`+associateResultSchema+`","units":[{"unit_id":"<unit id>","target":"project|new_project|none","project":"<slug when target is project>","new_project":{"slug":"<kebab-case slug>","name":"<name>","description":"<one line>","workstream":"<optional slug>"},"kind":"review|build|coordination|advice|unblock|decision|fyi","summary":"<one line, at most 120 characters>","confidence":0.0,"evidence":["<member event ids of the unit>"]}]}`,
 		"Set new_project to null unless target is new_project.",
-		"Use recent_decisions as examples of how the user files similar work.",
+		"Use recent_decisions as examples of how the user files similar work; each is a distinct decision, and count is how many times the user made it.",
 		"Use confidence 0.95 or higher only when the evidence makes the target unambiguous.",
 		"",
 		associateDataOpen,

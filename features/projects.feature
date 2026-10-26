@@ -143,6 +143,41 @@ Scenario: Verify uncertain units in the signed-in client bridge
   Then an "associate-verify" request is emitted on "llm.associate"
   And only the verifier's client can claim it
 
+Scenario: Verify proposals that were waiting before the verifier existed
+  Given the associate profile proposed links at 0.97, 0.80, 0.40, 0.70, and 0.85
+  And the user approved the 0.85 link
+  And a verifier profile is then routed for "associate-verify"
+  When the user runs "workgraph llm verify-backlog"
+  Then only the 0.80 and 0.70 links are sent to the verifier, rebuilt from current content with only their target and confidence
+  And each verdict replaces its link under the verifier profile, applied only at the verifier's threshold and accuracy gate
+  And the summary counts verified, applied, kept for review, corrected, and skipped links
+  And running it again sends nothing
+
+Scenario: Leave new-project proposals out of backlog verification
+  Given a waiting new-project proposal in the verify band
+  When the user runs "workgraph llm verify-backlog"
+  Then the proposal is not sent and stays in "workgraph projects review"
+  And the summary counts it as left in review
+
+Scenario: Preview backlog verification
+  Given proposed links are waiting in the verify band
+  When the user runs "workgraph llm verify-backlog --dry-run"
+  Then the count, the verifier's destination, and an example request are printed
+  And no model is called and no link changes
+
+Scenario: Refuse backlog verification without a usable verifier
+  Given no profile is routed for "associate-verify", or the routed profile is system-one or runs in the bridge
+  When the user runs "workgraph llm verify-backlog"
+  Then the command fails and says why
+  And no model is called
+
+Scenario: Send distinct recent decisions
+  Given the user filed fifteen threads from one container to one project and made six other decisions
+  When the associate request is built
+  Then "recent_decisions" has one entry with count 15 and one entry for each other decision
+  And decisions from disabled sources are left out of entries and counts
+  And decisions for undeclared projects or for units with a member from a disabled source are left out
+
 Scenario: Keep auto-apply paused while the sample is small
   Given auto-apply was paused for low accuracy
   And fewer than 20 automatic links were decided in the last 14 days

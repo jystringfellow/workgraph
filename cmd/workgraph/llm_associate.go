@@ -117,3 +117,36 @@ func runLLMSources(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintln(stdout, result.Message)
 	return 0
 }
+
+func runLLMVerifyBacklog(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("llm verify-backlog", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	home := flags.String("home", "", "workgraph home directory")
+	memory := flags.String("memory", "", "workgraph memory directory")
+	database := flags.String("database", "", "workgraph SQLite database path")
+	dryRun := flags.Bool("dry-run", false, "Print the count, destination, and an example request without calling the verifier")
+	limit := flags.Int("limit", 50, "Most waiting links to send to the verifier in this run")
+	since := flags.Duration("since", 0, "Only links proposed within this duration, such as 72h")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 || *limit <= 0 {
+		fmt.Fprintln(stderr, "usage: workgraph llm verify-backlog [--dry-run] [--limit N] [--since <duration>] [options]")
+		return 2
+	}
+	result, err := workgraph.VerifyLLMBacklog(workgraph.LLMVerifyBacklogConfig{
+		HomeDir:      *home,
+		MemoryDir:    *memory,
+		DatabasePath: *database,
+		GitEmails:    workgraph.LocalGitEmails(workgraph.LocalGitIdentityConfig{HomeDir: *home}),
+		DryRun:       *dryRun,
+		Limit:        *limit,
+		Since:        *since,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph llm verify-backlog: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}

@@ -346,7 +346,9 @@ workgraph projects review --recheck
 Every bulk form runs in one process and ends with a summary line.
 `--approve-above` approves proposed LLM links at or above the confidence; it
 asks first unless given `--yes`, and never approves new-project proposals or
-links you returned to review with undo. `--recheck` replaces proposals that
+links you returned to review with undo. A link that changes while the
+prompt waits, such as one `llm verify-backlog` rewrites, is skipped and
+reported rather than approved. `--recheck` replaces proposals that
 the deterministic rules now resolve, such as after adding an identifier to
 project memory, without calling a model.
 
@@ -974,6 +976,36 @@ the returned probability of the chosen project. Redirects are refused, and error
 the scheme and host with a fixed message, never provider output. `system-one` profiles run
 direct only, cannot use `--execution bridge`, and are refused by `llm test` and
 `llm summarize today`.
+
+### Verify waiting project proposals
+
+Links the associate profile proposed before a verifier was routed stay in
+review. Send the ones between that profile's verify floor and its auto-apply
+threshold to the verifier:
+
+```sh
+workgraph llm use sonnet --for associate-verify
+workgraph llm verify-backlog --dry-run
+workgraph llm verify-backlog --limit 50
+workgraph llm verify-backlog --since 168h
+```
+
+Only proposals for an existing declared project or for no project are sent;
+new-project proposals stay in `workgraph projects review`. Each unit is
+rebuilt from current content under the current source settings and
+redactions, and the verifier sees the proposal only as its target project and
+confidence, never the stored summary. A unit with a member from a source you
+have since disabled is skipped. The dry run prints how many links are waiting,
+how many were left in review, where the verifier sends data, and the first
+request exactly as it would be sent, and calls nothing. A run
+prints how many links were verified, applied, kept for review, corrected, and
+skipped. The verifier's answer replaces the link under the verifier's profile
+and is applied only at the verifier's threshold and accuracy gate; `workgraph
+projects undo --run <run-id>` undoes what a run applied. Links the user
+already decided are never sent, and a link the verifier answered or left out
+is not sent to it again. The verifier must run directly: `system-one` and
+bridge-executed profiles are refused. The daemon never runs it; it runs only
+when you run the command.
 
 ## New Machine Setup
 
