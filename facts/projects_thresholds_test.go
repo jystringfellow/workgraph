@@ -47,6 +47,16 @@ func TestLLMProfileThresholdSettings(t *testing.T) {
 			t.Fatalf("%v was accepted:\n%s", refused, output)
 		}
 	}
+	for _, refused := range [][]string{
+		{"llm", "set", "tuned", "--auto-apply-confidence", "NaN"},
+		{"llm", "set", "tuned", "--auto-apply-confidence", "Inf"},
+		{"llm", "set", "tuned", "--verify-floor", "NaN"},
+		{"llm", "set", "tuned", "--verify-floor", "-Inf"},
+	} {
+		if output, err := runworkgraph(t, repoRoot(t), append(refused, args...)...); err == nil || !strings.Contains(string(output), "must be from") {
+			t.Fatalf("%v was not refused with a range error: %v\n%s", refused, err, output)
+		}
+	}
 	contents, err := os.ReadFile(filepath.Join(home.HomeDir, "llm.json"))
 	if err != nil {
 		t.Fatal(err)

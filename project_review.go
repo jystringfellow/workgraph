@@ -1,7 +1,6 @@
 package workgraph
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -16,7 +15,7 @@ const (
 	projectListCountWindow  = 7 * 24 * time.Hour
 )
 
-var projectShellSafePattern = regexp.MustCompile(`^[A-Za-z0-9_.:/#@=+-]+$`)
+var projectShellSafePattern = regexp.MustCompile(`^[A-Za-z0-9_./:@+-]+$`)
 
 type ProjectReviewConfig struct {
 	HomeDir      string
@@ -97,58 +96,20 @@ func projectLinkUndoable(link ProjectLink) bool {
 }
 
 func ApproveProjectReviewLink(config ProjectReviewConfig, linkID int64) (ProjectLink, error) {
-	links, err := ReadProjectLinks(config.store(), ProjectLinksQuery{})
-	if err != nil {
-		return ProjectLink{}, err
-	}
-	for _, link := range links {
-		if link.ID != linkID || link.State != "proposed" || link.Target != "new_project" {
-			continue
-		}
-		catalog, err := LoadProjectCatalog(config.MemoryDir)
-		if err != nil {
-			return ProjectLink{}, err
-		}
-		if !catalogHasProject(catalog, link.NewProject.Slug) {
-			if err := createProjectMemory(config, link.NewProject.Slug, link.NewProject.Workstream); err != nil {
-				return ProjectLink{}, err
-			}
-		}
-	}
-	var approved ProjectLink
-	err = withProjectLinksTx(config.store(), func(tx *sql.Tx, now time.Time) error {
-		var err error
-		approved, err = approveNewProjectLinkTx(tx, now, linkID)
-		return err
-	})
-	return approved, err
+	outcomes, err := ApproveProjectReviewLinks(config, []int64{linkID})
+	return singleProjectReviewOutcome(outcomes, err)
 }
 
 func AssignProjectUnit(config ProjectReviewConfig, assignment ProjectUnitAssignment) (ProjectLink, error) {
-	project := assignment.Project
-	if assignment.NewProject != "" {
-		if err := createProjectMemory(config, assignment.NewProject, assignment.Workstream); err != nil {
-			return ProjectLink{}, err
-		}
-		project = assignment.NewProject
-	} else {
-		catalog, err := LoadProjectCatalog(config.MemoryDir)
-		if err != nil {
-			return ProjectLink{}, err
-		}
-		if !catalogHasProject(catalog, project) {
-			return ProjectLink{}, fmt.Errorf("project %q has no project memory; use --new to create it", project)
-		}
-	}
-	link := ProjectLinkAssignment{UnitID: assignment.UnitID, Target: "project", Project: project}
-	unit, err := findProjectUnit(config, assignment.UnitID)
+	outcomes, err := AssignProjectUnits(config, []string{assignment.UnitID}, assignment)
+	return singleProjectReviewOutcome(outcomes, err)
+}
+
+func singleProjectReviewOutcome(outcomes []ProjectReviewOutcome, err error) (ProjectLink, error) {
 	if err != nil {
 		return ProjectLink{}, err
 	}
-	if unit != nil {
-		link.UnitKind, link.Container, link.Evidence = unit.Kind, unit.Container, unit.EventIDs
-	}
-	return AssignProjectLink(config.store(), link)
+	return outcomes[0].Link, outcomes[0].Err
 }
 
 func createProjectMemory(config ProjectReviewConfig, slug, workstream string) error {
@@ -274,6 +235,9 @@ func ProjectLinkLine(link ProjectLink) string {
 	}
 	if link.Decision != "" {
 		parts = append(parts, "decision "+link.Decision)
+	}
+	if projectLinkSuperseded(link) {
+		parts = append(parts, "superseded")
 	}
 	return strings.Join(parts, ", ")
 }

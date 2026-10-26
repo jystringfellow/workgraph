@@ -60,10 +60,10 @@ func SetLLMProfile(config LLMSetProfileConfig) (LLMResult, error) {
 }
 
 func validateLLMProfileThresholds(profile llmProfile) error {
-	if value := profile.AutoApplyConfidence; value != nil && (*value < minimumAutoApplyConfidence || *value > 1) {
+	if value := profile.AutoApplyConfidence; value != nil && (!ProjectConfidenceValid(*value) || *value < minimumAutoApplyConfidence) {
 		return fmt.Errorf("auto-apply confidence %v must be from %.1f to 1.0", *value, minimumAutoApplyConfidence)
 	}
-	if value := profile.VerifyFloor; value != nil && (*value < 0 || *value > 1) {
+	if value := profile.VerifyFloor; value != nil && !ProjectConfidenceValid(*value) {
 		return fmt.Errorf("verify floor %v must be from 0 to 1", *value)
 	}
 	return nil

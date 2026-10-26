@@ -43,12 +43,14 @@ func runMemoryDoctor(args []string, stdin io.Reader, stdout, stderr io.Writer) i
 		if answer != "y" && answer != "yes" {
 			continue
 		}
-		message, err := workgraph.UpdateMemoryProjectSources(workgraph.MemoryProjectSourcesConfig{HomeDir: *home, MemoryDir: *memory, DatabasePath: *database, Project: candidate.Project, Sources: []string{candidate.Source}})
+		message, err := workgraph.UpdateMemoryProjectSources(workgraph.MemoryProjectSourcesConfig{HomeDir: *home, MemoryDir: *memory, DatabasePath: *database, Project: candidate.Project, Sources: []string{candidate.Source}, GitEmails: workgraph.LocalGitEmails(workgraph.LocalGitIdentityConfig{HomeDir: *home, DatabasePath: *database})})
+		if message != "" {
+			fmt.Fprintln(stdout, message)
+		}
 		if err != nil {
 			fmt.Fprintf(stderr, "workgraph memory doctor: %v\n", err)
 			return 1
 		}
-		fmt.Fprintln(stdout, message)
 	}
 	if err := scanner.Err(); err != nil {
 		fmt.Fprintf(stderr, "read confirmation: %v\n", err)

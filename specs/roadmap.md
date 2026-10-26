@@ -70,7 +70,15 @@ Priority labels used below:
 - [x] Backlog verification and distinct decisions: `llm verify-backlog`
   sends waiting floor-to-threshold proposals to the `associate-verify`
   profile with dry run, limit, since, and resumable checks, and
-  `recent_decisions` collapses repeated decisions into one counted entry. [spec: `specs/projects.md` D6]
+  `recent_decisions` collapses repeated decisions into one counted entry.
+  [spec: `specs/projects.md` D7]
+
+- [x] Mapping changes relink their units and bulk project review: `memory
+  link` and `memory unlink` move container-mapping links and resolve pending
+  proposals at once, `projects review --recheck` reruns deterministic rules
+  over proposals, and `--approve`, `--reject`, `--assign`, and
+  `--approve-above` decide many links in one process. [spec:
+  `specs/projects.md` D6]
 
 - [x] Associate thresholds and verifier: per-profile auto-apply thresholds and
   verify floors (`llm add --auto-apply-confidence`, `llm set`), a per-profile
@@ -122,6 +130,12 @@ Priority labels used below:
   stable item ids, `explain`, `done`, `snooze`, a `--watch --json` feed, and a
   read-only `next_items` MCP tool; items appear in `resume`, with a count in
   `today`. [spec: `specs/next.md`]
+
+- [x] Less noise in `next`: the user's own PRs that only need a checks or
+  conflict fix get a `Needs your fix` section, PRs with no activity in 30+
+  days collapse into one line per section (`--stale` lists them), team
+  review previews show human-authored PRs first, and JSON items carry
+  `section` and `stale`. [spec: `specs/next.md` N13-N15]
 
 - [x] Team-only review requests in `next` are summarized per team with
   counts and the newest three, expandable with `--team-reviews`, and counted

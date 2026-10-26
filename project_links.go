@@ -252,19 +252,8 @@ func AssignProjectLink(config ProjectLinkStoreConfig, assignment ProjectLinkAssi
 }
 
 func RejectProjectLink(config ProjectLinkStoreConfig, linkID int64) (ProjectLink, error) {
-	var assigned ProjectLink
-	err := withProjectLinksTx(config, func(tx *sql.Tx, now time.Time) error {
-		link, err := readProjectLinkTx(tx, linkID)
-		if err != nil {
-			return err
-		}
-		if !projectLinkCurrent(link) {
-			return fmt.Errorf("project link %d is not proposed or applied", linkID)
-		}
-		assigned, err = assignProjectLinkTx(tx, now, ProjectLinkAssignment{UnitID: link.UnitID, Target: "none"})
-		return err
-	})
-	return assigned, err
+	outcomes, err := RejectProjectLinks(config, []int64{linkID})
+	return singleProjectReviewOutcome(outcomes, err)
 }
 
 func assignProjectLinkTx(tx *sql.Tx, now time.Time, assignment ProjectLinkAssignment) (ProjectLink, error) {

@@ -27,13 +27,13 @@ var helpDetails = map[string]string{
 }
 
 var helpTopics = map[string]helpTopic{
-	"next":                    {"workgraph next [--project <p>] [--reason <r>] [--ids] [--team-reviews] | --json [--include-untrusted] [--watch]", "List local attention items and their evidence."},
+	"next":                    {"workgraph next [--project <p>] [--reason <r>] [--ids] [--team-reviews] [--stale] | --json [--include-untrusted] [--watch]", "List local attention items and their evidence."},
 	"next explain":            {"workgraph next explain <item-id> [options]", "Explain the rule and evidence for an open item."},
 	"next done":               {"workgraph next done <item-id> [options]", "Hide one item with a local bookkeeping event."},
 	"next snooze":             {"workgraph next snooze <item-id> --for <duration> [options]", "Hide one item locally until the duration expires."},
 	"memory doctor":           {"workgraph memory doctor [--interactive] [project] [options]", "Inspect container mappings, project frontmatter, and possible container matches."},
-	"memory link":             {"workgraph memory link (--source <container> <memory-project> | --workstream <slug> --source <container>) [options]", "Map containers to an existing memory project or to a workstream."},
-	"memory unlink":           {"workgraph memory unlink (--source <container> <memory-project> | --workstream <slug> --source <container>) [options]", "Remove a container mapping, preserving promoted evidence."},
+	"memory link":             {"workgraph memory link (--source <container> <memory-project> | --workstream <slug> --source <container>) [options]", "Map containers to an existing memory project or to a workstream, and relink their units."},
+	"memory unlink":           {"workgraph memory unlink (--source <container> <memory-project> | --workstream <slug> --source <container>) [options]", "Remove a container mapping and relink its units, preserving promoted evidence."},
 	"service":                 {"workgraph service <install|status|uninstall>", "Manage opt-in supervised capture on macOS and Linux."},
 	"service install":         {"workgraph service install [--home path]", "Enable login startup and automatic capture restart."},
 	"service status":          {"workgraph service status [--home path]", "Inspect supervisor state and capture health."},
@@ -134,7 +134,7 @@ var helpTopics = map[string]helpTopic{
 	"notion index show":       {"workgraph notion index show <notion-id> [options]", "Show one locally indexed Notion object."},
 	"projects":                {"workgraph projects <subcommand>", "Inspect declared projects, workstreams, and their containers."},
 	"projects list":           {"workgraph projects list [options]", "List workstreams, their projects and mapped containers, and projects with no workstream."},
-	"projects review":         {"workgraph projects review [--auto [--since <duration>]] [--json] | --approve <id> | --reject <id> | --assign <unit-id> (--project <slug> | --new <slug>) [options]", "Decide proposed and auto-applied project links."},
+	"projects review":         {"workgraph projects review [--auto [--since <duration>]] [--json] | --approve <id>[,<id>...] | --reject <id>[,<id>...] | --assign <unit-id>... (--project <slug> | --new <slug>) | --approve-above <confidence> [--yes] | --recheck [options]", "Decide proposed and auto-applied project links, one or many at a time."},
 	"projects undo":           {"workgraph projects undo <link-id> | --run <run-id> [options]", "Return auto-applied project links to review."},
 	"projects explain":        {"workgraph projects explain <unit-id> [options]", "Show a unit's members, every link row, and the commands that change it."},
 	"plugin":                  {"workgraph plugin <subcommand>", "Install and diagnose the workgraph agent plugin for supported AI clients."},

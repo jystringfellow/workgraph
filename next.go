@@ -24,6 +24,7 @@ type NextConfig struct {
 	IncludeUntrusted bool
 	ShowIDs          bool
 	TeamReviews      bool
+	Stale            bool
 	Now              time.Time
 	Clock            func() time.Time
 	WatchInterval    time.Duration
@@ -179,6 +180,7 @@ func readNextSnapshot(config NextConfig) (nextSnapshot, error) {
 		active = append(active, item)
 	}
 	nextMarkTeamOnly(active)
+	nextMarkSections(active, snapshot.observations, snapshot.result.AsOf)
 	for _, item := range active {
 		if (config.Project != "" && item.Project != config.Project) || (config.Reason != "" && item.Reason != config.Reason) {
 			continue
@@ -205,7 +207,7 @@ func readNextSnapshot(config NextConfig) (nextSnapshot, error) {
 			capturedAt = verifiedAt
 		}
 	}
-	snapshot.result.Message = nextMessage(snapshot.result, entry.SetupState == "error", capturedAt, interval, config.ShowIDs, config.TeamReviews)
+	snapshot.result.Message = nextMessage(snapshot.result, entry.SetupState == "error", capturedAt, interval, config.ShowIDs, config.TeamReviews, config.Stale)
 	if categorize := nextCategorizeLines(snapshot.result.Items, snapshot.categorized, config.ShowIDs, config.Reason == nextReasonCategorize); len(categorize) > 0 {
 		snapshot.result.Message += "\n" + strings.Join(categorize, "\n")
 	}
@@ -337,6 +339,9 @@ func projectNextObservation(o githubPRObservation, events []nextStoredEvent, con
 				}
 			}
 			item.Actor.Association = event.Payload.ActorAssociation
+		}
+		if event.Type != githubPREventObserved {
+			item.requestAt = event.At
 		}
 		if config.IncludeUntrusted && event.Type != githubPREventObserved {
 			item.Untrusted = event.Payload.Untrusted
@@ -577,7 +582,7 @@ func nextHidden(id string, events []nextStoredEvent, now time.Time) string {
 	return ""
 }
 
-func nextMessage(result NextResult, setupError bool, capturedAt time.Time, interval time.Duration, showIDs, expandTeamReviews bool) string {
+func nextMessage(result NextResult, setupError bool, capturedAt time.Time, interval time.Duration, showIDs, expandTeamReviews, expandStale bool) string {
 	if !result.Enabled {
 		return "No enabled next sources. Connect GitHub pull requests: workgraph github prs connect"
 	}
@@ -598,13 +603,38 @@ func nextMessage(result NextResult, setupError bool, capturedAt time.Time, inter
 		lines = append(lines, "Warning: github.pr_watch data is stale or unreachable; run workgraph github prs capture")
 	}
 	direct, teamOnly := nextSplitTeamReviews(nextNonCategorizeItems(result.Items))
-	section := ""
-	for _, group := range nextPullRequestGroups(direct) {
-		if group[0].Group != section {
-			section = group[0].Group
-			lines = append(lines, map[string]string{"waiting_on_you": "Waiting on you", "blocked": "Blocked", "ready": "Ready"}[section])
+	groups := nextPullRequestGroups(direct)
+	for _, section := range []string{nextSectionWaitingOnYou, nextSectionNeedsFix, nextSectionBlocked, nextSectionReady} {
+		var active, stale [][]NextItem
+		for _, group := range groups {
+			if group[0].Section != section {
+				continue
+			}
+			if group[0].Stale {
+				stale = append(stale, group)
+			} else {
+				active = append(active, group)
+			}
 		}
-		lines = append(lines, nextPullRequestLines(group, showIDs)...)
+		if len(active) == 0 && len(stale) == 0 {
+			continue
+		}
+		lines = append(lines, nextSectionTitles[section])
+		for _, group := range active {
+			lines = append(lines, nextPullRequestLines(group, showIDs)...)
+		}
+		if len(stale) == 0 {
+			continue
+		}
+		staleLine := fmt.Sprintf("  %s (no activity in %d+ days)", nextCount(len(stale), "stale PR"), int(nextStaleAfter.Hours()/24))
+		if !expandStale {
+			lines = append(lines, staleLine+": workgraph next --stale")
+			continue
+		}
+		lines = append(lines, staleLine+":")
+		for _, group := range stale {
+			lines = append(lines, nextPullRequestLines(group, showIDs)...)
+		}
 	}
 	lines = append(lines, nextTeamReviewLines(teamOnly, expandTeamReviews, showIDs)...)
 	if len(result.Items) == 0 {
@@ -621,6 +651,80 @@ func nextMarkTeamOnly(items []NextItem) {
 	for i, item := range items {
 		items[i].teamOnly = nextTeamOnlyReview(item) && perPullRequest[item.Source+":"+item.PullRequest.NodeID] == 1
 	}
+}
+
+const (
+	nextSectionWaitingOnYou = "waiting_on_you"
+	nextSectionNeedsFix     = "needs_fix"
+	nextSectionBlocked      = "blocked"
+	nextSectionReady        = "ready"
+	nextSectionTeamReview   = "team_review"
+	nextStaleAfter          = 30 * 24 * time.Hour
+)
+
+var nextSectionTitles = map[string]string{nextSectionWaitingOnYou: "Waiting on you", nextSectionNeedsFix: "Needs your fix", nextSectionBlocked: "Blocked", nextSectionReady: "Ready"}
+
+func nextMarkSections(items []NextItem, observations []githubPRObservation, now time.Time) {
+	updatedAt := map[string]time.Time{}
+	for _, observation := range observations {
+		if at := parseNextTime(observation.UpdatedAt); at.After(updatedAt[observation.NodeID]) {
+			updatedAt[observation.NodeID] = at
+		}
+	}
+	byPullRequest := map[string][]int{}
+	for i, item := range items {
+		if item.Group == nextGroupCategorize {
+			items[i].Section = nextGroupCategorize
+			continue
+		}
+		key := item.Source + ":" + item.PullRequest.NodeID
+		byPullRequest[key] = append(byPullRequest[key], i)
+	}
+	rank := map[string]int{nextSectionWaitingOnYou: 0, nextSectionBlocked: 1, nextSectionReady: 2}
+	for _, indexes := range byPullRequest {
+		first := items[indexes[0]]
+		section := nextSectionReady
+		fixOnly := true
+		requested := false
+		lastActivity := updatedAt[first.PullRequest.NodeID]
+		for _, i := range indexes {
+			item := items[i]
+			if rank[item.Group] < rank[section] {
+				section = item.Group
+			}
+			fixOnly = fixOnly && (item.Reason == nextReasonChecksFailed || item.Reason == nextReasonConflicts)
+			if updatedAt[item.PullRequest.NodeID].IsZero() && item.Since.After(lastActivity) {
+				lastActivity = item.Since
+			}
+			if (item.Reason == nextReasonReply || item.Reason == nextReasonReviewRequested) && !item.requestAt.IsZero() && now.Sub(item.requestAt) < nextStaleAfter {
+				requested = true
+			}
+		}
+		if section == nextSectionBlocked && fixOnly {
+			section = nextSectionNeedsFix
+		}
+		if first.teamOnly {
+			section = nextSectionTeamReview
+		}
+		stale := !requested && !lastActivity.IsZero() && now.Sub(lastActivity) >= nextStaleAfter
+		for _, i := range indexes {
+			items[i].Section = section
+			items[i].Stale = stale
+		}
+	}
+}
+
+func nextSectionOrder(groups [][]NextItem) [][]NextItem {
+	rank := map[string]int{nextSectionWaitingOnYou: 0, nextSectionNeedsFix: 1, nextSectionBlocked: 2, nextSectionReady: 3}
+	sorted := append([][]NextItem{}, groups...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		a, b := sorted[i][0], sorted[j][0]
+		if a.Stale != b.Stale {
+			return b.Stale
+		}
+		return rank[a.Section] < rank[b.Section]
+	})
+	return sorted
 }
 
 func nextSplitTeamReviews(items []NextItem) (direct, teamOnly []NextItem) {
@@ -670,7 +774,7 @@ func nextTeamReviewLines(items []NextItem, expand, showIDs bool) []string {
 		bots := 0
 		for _, item := range team {
 			repositories[item.PullRequest.Repository] = true
-			if item.PullRequest.Author != nil && item.PullRequest.Author.Kind == "bot" {
+			if nextBotAuthored(item) {
 				bots++
 			}
 		}
@@ -689,6 +793,7 @@ func nextTeamReviewLines(items []NextItem, expand, showIDs bool) []string {
 			})
 		} else {
 			sort.SliceStable(team, func(i, j int) bool { return team[i].Since.After(team[j].Since) })
+			sort.SliceStable(team, func(i, j int) bool { return !nextBotAuthored(team[i]) && nextBotAuthored(team[j]) })
 		}
 		shown := team
 		if !expand && len(shown) > nextTeamReviewPreview {
@@ -702,6 +807,10 @@ func nextTeamReviewLines(items []NextItem, expand, showIDs bool) []string {
 		}
 	}
 	return lines
+}
+
+func nextBotAuthored(item NextItem) bool {
+	return item.PullRequest.Author != nil && item.PullRequest.Author.Kind == "bot"
 }
 
 func nextCount(n int, noun string) string {
@@ -837,7 +946,7 @@ func nextWaitingMessage(items []NextItem, limit int) string {
 		return ""
 	}
 	lines := []string{"Waiting on you"}
-	groups := nextPullRequestGroups(items)
+	groups := nextSectionOrder(nextPullRequestGroups(items))
 	count := len(groups)
 	if limit > 0 && count > limit {
 		count = limit

@@ -127,13 +127,13 @@ func TestTodayGroupsActivityByWorkstreamThenProject(t *testing.T) {
 	writeProjectMemory(t, home.MemoryDir, "atlas-bot", "# Atlas Bot\n")
 	local := time.Now()
 	now := time.Date(local.Year(), local.Month(), local.Day(), 15, 0, 0, 0, local.Location())
-	threads := insertSurfaceThreads(t, home, now.Add(-4*time.Hour), "C1", "orbit-channel", 2)
-	noneThread := insertSurfaceThreads(t, home, now.Add(-3*time.Hour), "C2", "atlas-bot-repo", 1)[0]
 	insertSurfaceEvent(t, home.DatabasePath, surfaceFileEvent("harbor-file", "Helix.Platform.Operations", now.Add(-2*time.Hour)))
 	insertSurfaceEvent(t, home.DatabasePath, surfaceFileEvent("atlas-bot-file", "atlas-bot-repo", now.Add(-90*time.Minute)))
 	insertSurfaceEvent(t, home.DatabasePath, surfaceFileEvent("scratch-file", "scratch", now.Add(-time.Hour)))
 	linkSurfaceContainer(t, home, "--workstream", "harbor", "--source", "Helix.Platform.Operations")
 	linkSurfaceContainer(t, home, "--source", "atlas-bot-repo", "atlas-bot")
+	threads := insertSurfaceThreads(t, home, now.Add(-4*time.Hour), "C1", "orbit-channel", 2)
+	noneThread := insertSurfaceThreads(t, home, now.Add(-3*time.Hour), "C2", "atlas-bot-repo", 1)[0]
 
 	store := workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now}
 	run, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "llm", Profile: "fake", Links: []workgraph.ProjectLinkProposal{
@@ -420,10 +420,6 @@ func TestResumeProjectDrillDownSelectsLinkedActivity(t *testing.T) {
 	writeProjectMemory(t, home.MemoryDir, "other", "# Other\n")
 	now := time.Now().Truncate(time.Second)
 	checkIn := now.Add(-10 * time.Hour)
-	linked := insertSurfaceThreads(t, home, checkIn.Add(time.Hour), "C1", "general", 1)[0]
-	mappedNone := insertSurfaceThreads(t, home, checkIn.Add(2*time.Hour), "C2", "demo-repo", 1)[0]
-	mappedOther := insertSurfaceThreads(t, home, checkIn.Add(3*time.Hour), "C3", "demo-repo", 1)[0]
-	sibling := insertSurfaceThreads(t, home, checkIn.Add(4*time.Hour), "C4", "sibling-channel", 1)[0]
 	insertSurfaceEvent(t, home.DatabasePath, surfaceFileEvent("mapped-file", "demo-repo", checkIn.Add(5*time.Hour)))
 	insertSurfaceEvent(t, home.DatabasePath, surfaceFileEvent("named-file", "demo", checkIn.Add(6*time.Hour)))
 	insertSurfaceEvent(t, home.DatabasePath, surfaceFileEvent("shared-file", "shared-repo", checkIn.Add(7*time.Hour)))
@@ -431,6 +427,10 @@ func TestResumeProjectDrillDownSelectsLinkedActivity(t *testing.T) {
 	linkSurfaceContainer(t, home, "--source", "demo-repo", "demo")
 	linkSurfaceContainer(t, home, "--source", "shared-repo", "demo")
 	linkSurfaceContainer(t, home, "--source", "shared-repo", "other")
+	linked := insertSurfaceThreads(t, home, checkIn.Add(time.Hour), "C1", "general", 1)[0]
+	mappedNone := insertSurfaceThreads(t, home, checkIn.Add(2*time.Hour), "C2", "demo-repo", 1)[0]
+	mappedOther := insertSurfaceThreads(t, home, checkIn.Add(3*time.Hour), "C3", "demo-repo", 1)[0]
+	sibling := insertSurfaceThreads(t, home, checkIn.Add(4*time.Hour), "C4", "sibling-channel", 1)[0]
 
 	store := workgraph.ProjectLinkStoreConfig{HomeDir: home.HomeDir, DatabasePath: home.DatabasePath, Now: now}
 	run, err := workgraph.RecordProjectLinkRun(store, workgraph.ProjectLinkRun{Source: "llm", Profile: "fake", Links: []workgraph.ProjectLinkProposal{
