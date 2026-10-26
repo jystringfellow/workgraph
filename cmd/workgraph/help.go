@@ -24,7 +24,7 @@ type helpTopic struct {
 
 var helpDetails = map[string]string{
 	"projects review": "Listing forms first apply deterministic links, such as container mappings, to units that have no link yet. On a read-only database they list without applying them and print a warning.",
-	"ai checkpoint":   "--agent-initiated is accepted only when the session was launched with agent checkpoints enabled; see `workgraph settings enable-agent-checkpoints`.",
+	"ai checkpoint":   "--agent-initiated is checked against the agent checkpoint consent recorded when the session launched, not the caller's environment; see `workgraph settings enable-agent-checkpoints`.",
 	"ai handoff":      "Handoff rejects unsupported newer source evidence. Source transcripts, environment, terminal output, arguments, file contents, and diffs are not persisted or transported. The tool retains normal child-process capabilities.",
 }
 

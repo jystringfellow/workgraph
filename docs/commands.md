@@ -637,8 +637,10 @@ then records short checkpoints with `workgraph ai checkpoint --agent-initiated
 or review result, a task switch, or a nearly full context window. It never
 checkpoints on a timer. `ai show` reports whether the latest checkpoint was
 `Initiated by: user` or `Initiated by: agent`, and `ai handoff` uses the latest
-checkpoint either way. `--agent-initiated` is rejected in sessions launched
-without the setting. The change applies to sessions launched after it.
+checkpoint either way. Workgraph records the setting in each session's start
+event at launch and checks `--agent-initiated` against that record, not the
+caller's environment, so it is rejected in sessions launched without the
+setting. Changing the setting applies only to sessions launched after it.
 
 ## Agent Plugin
 

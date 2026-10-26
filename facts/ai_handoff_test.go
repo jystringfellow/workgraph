@@ -1785,7 +1785,7 @@ printf '%s' "${WORKGRAPH_AI_CHECKPOINT_POLICY-unset}" > "$WORKGRAPH_AI_TEST_POLI
 	}); err != nil {
 		t.Fatalf("record user checkpoint: %v", err)
 	}
-	t.Setenv("WORKGRAPH_AI_CHECKPOINT_POLICY", "agent")
+	grantAIFactLaunchConsent(t, initialized.DatabasePath, sourceID)
 	agentCheckpoint, err := workgraph.CheckpointAISession(workgraph.AICheckpointConfig{
 		HomeDir: homeDir, DatabasePath: initialized.DatabasePath, SessionID: sourceID,
 		WorkingDir: workingDir, AgentInitiated: true, Input: strings.NewReader(`{"goal":"Agent recorded state"}`),
@@ -1793,7 +1793,6 @@ printf '%s' "${WORKGRAPH_AI_CHECKPOINT_POLICY-unset}" > "$WORKGRAPH_AI_TEST_POLI
 	if err != nil {
 		t.Fatalf("record agent-initiated checkpoint: %v", err)
 	}
-	os.Unsetenv("WORKGRAPH_AI_CHECKPOINT_POLICY")
 
 	t.Setenv("PATH", workingDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("WORKGRAPH_AI_TEST_ARGS", argsPath)
@@ -1812,5 +1811,17 @@ printf '%s' "${WORKGRAPH_AI_CHECKPOINT_POLICY-unset}" > "$WORKGRAPH_AI_TEST_POLI
 	}
 	if policy := readAIFactFile(t, workingDir, "policy.txt"); policy != "agent" {
 		t.Fatalf("handoff destination checkpoint policy = %q, want agent", policy)
+	}
+}
+
+func grantAIFactLaunchConsent(t *testing.T, databasePath, sessionID string) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", databasePath)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`UPDATE events SET payload_json = json_set(payload_json, '$.agent_checkpoints', json('true')) WHERE id = ?`, "ai.session_started:"+sessionID); err != nil {
+		t.Fatalf("record launch consent: %v", err)
 	}
 }

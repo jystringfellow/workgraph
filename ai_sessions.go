@@ -67,6 +67,7 @@ type aiStartedPayload struct {
 	PID                  int             `json:"pid"`
 	BootIdentity         string          `json:"boot_identity,omitempty"`
 	ProcessStartIdentity string          `json:"process_start_identity,omitempty"`
+	AgentCheckpoints     bool            `json:"agent_checkpoints,omitempty"`
 	Observed             AIObservedState `json:"observed"`
 }
 
@@ -352,6 +353,7 @@ func runAISession(config AIRunConfig, permittedParentSessionID string) (AIRunRes
 		PID:                  command.Process.Pid,
 		BootIdentity:         currentAIBootIdentity(),
 		ProcessStartIdentity: currentAIProcessStartIdentity(command.Process.Pid),
+		AgentCheckpoints:     agentCheckpoints,
 		Observed:             observed,
 	}
 	start := persistAIRunStart(status.DatabasePath, func(db aiRunConnection) error {
@@ -431,13 +433,6 @@ func CheckpointAISession(config AICheckpointConfig) (AICheckpointResult, error) 
 	if sessionID == "" {
 		return AICheckpointResult{}, errors.New("session id is required")
 	}
-	initiatedBy := ""
-	if config.AgentInitiated {
-		if os.Getenv(aiCheckpointPolicyEnv) != aiAgentCheckpointPolicy {
-			return AICheckpointResult{}, errors.New("agent-initiated checkpoints are not enabled for this session; the user can run `workgraph settings enable-agent-checkpoints` and relaunch the agent")
-		}
-		initiatedBy = aiAgentCheckpointPolicy
-	}
 	agentStated, err := validateAICheckpointInput(config.Input)
 	if err != nil {
 		return AICheckpointResult{}, err
@@ -483,6 +478,13 @@ func CheckpointAISession(config AICheckpointConfig) (AICheckpointResult, error) 
 	var started aiStartedPayload
 	if err := json.Unmarshal([]byte(startedJSON), &started); err != nil || started.SchemaVersion != aiSchemaVersion {
 		return AICheckpointResult{}, errors.New("AI session start payload is unsupported or invalid")
+	}
+	initiatedBy := ""
+	if config.AgentInitiated {
+		if !started.AgentCheckpoints {
+			return AICheckpointResult{}, errors.New("agent-initiated checkpoints were not enabled when this session launched; the user can run `workgraph settings enable-agent-checkpoints` and relaunch the agent")
+		}
+		initiatedBy = aiAgentCheckpointPolicy
 	}
 
 	workingDir := config.WorkingDir

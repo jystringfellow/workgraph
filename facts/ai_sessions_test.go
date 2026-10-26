@@ -1895,7 +1895,7 @@ func TestAIAgentInitiatedCheckpointRequiresStandingConsent(t *testing.T) {
 		t.Fatalf("init workgraph: %v", err)
 	}
 	agent := `printf 'policy=%s\n' "${WORKGRAPH_AI_CHECKPOINT_POLICY-unset}"
-printf '%s' '{"goal":"Ship agent checkpoints","next_actions":["Open the pull request"]}' | "$WORKGRAPH_FACT_BINARY" ai checkpoint --agent-initiated --stdin || echo rejected`
+printf '%s' '{"goal":"Ship agent checkpoints","next_actions":["Open the pull request"]}' | WORKGRAPH_AI_CHECKPOINT_POLICY=agent "$WORKGRAPH_FACT_BINARY" ai checkpoint --agent-initiated --stdin || echo rejected`
 	runAgent := func() string {
 		t.Helper()
 		output, err := runWorkgraphCommandAllowError([]string{
@@ -1925,8 +1925,8 @@ printf '%s' '{"goal":"Ship agent checkpoints","next_actions":["Open the pull req
 	if !strings.Contains(output, "policy=unset") {
 		t.Fatalf("agent inherited checkpoint policy without standing consent:\n%s", output)
 	}
-	if !strings.Contains(output, "agent-initiated checkpoints are not enabled") || !strings.Contains(output, "rejected") {
-		t.Fatalf("agent-initiated checkpoint was not rejected without consent:\n%s", output)
+	if !strings.Contains(output, "agent-initiated checkpoints were not enabled when this session launched") || !strings.Contains(output, "rejected") {
+		t.Fatalf("self-granted agent-initiated checkpoint was not rejected:\n%s", output)
 	}
 	if count := countCheckpoints(); count != 0 {
 		t.Fatalf("rejected agent-initiated checkpoint wrote %d events", count)
@@ -1960,9 +1960,109 @@ printf '%s' '{"goal":"Ship agent checkpoints","next_actions":["Open the pull req
 	if payload.SchemaVersion != 1 || payload.InitiatedBy != "agent" || payload.AgentStated.Goal != "Ship agent checkpoints" {
 		t.Fatalf("unexpected agent-initiated checkpoint payload: %s", payloadText)
 	}
+	var consentedLaunches, unconsentedLaunches int
+	if err := db.QueryRow(`SELECT
+		COUNT(*) FILTER (WHERE json_extract(payload_json, '$.agent_checkpoints') = 1),
+		COUNT(*) FILTER (WHERE json_type(payload_json, '$.agent_checkpoints') IS NULL)
+		FROM events WHERE type = 'ai.session_started'`).Scan(&consentedLaunches, &unconsentedLaunches); err != nil {
+		t.Fatalf("read recorded launch consent: %v", err)
+	}
+	if consentedLaunches != 1 || unconsentedLaunches != 1 {
+		t.Fatalf("launch consent records = %d consented, %d without consent; want 1 and 1", consentedLaunches, unconsentedLaunches)
+	}
 
 	shown := runWorkgraphCommand(t, nil, "ai", "show", "--home", homeDir, "--database", initialized.DatabasePath, sessionID)
 	if !strings.Contains(shown, "Agent-stated checkpoint\nRecorded: ") || !strings.Contains(shown, "Initiated by: agent") {
 		t.Fatalf("show did not report the agent initiator:\n%s", shown)
+	}
+}
+
+func TestAIAgentCheckpointConsentIsFixedAtLaunch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init workgraph: %v", err)
+	}
+	agentAfterToggling := func(toggle string) string {
+		t.Helper()
+		agent := `"$WORKGRAPH_FACT_BINARY" settings ` + toggle + ` --home "$WORKGRAPH_FACT_HOME" >/dev/null
+printf 'policy=%s\n' "${WORKGRAPH_AI_CHECKPOINT_POLICY-unset}"
+printf '%s' '{"goal":"Lifecycle consent"}' | "$WORKGRAPH_FACT_BINARY" ai checkpoint --agent-initiated --stdin || echo rejected`
+		output, err := runWorkgraphCommandAllowError([]string{
+			"WORKGRAPH_FACT_BINARY=" + workgraphFactsBinary,
+			"WORKGRAPH_FACT_HOME=" + homeDir,
+		}, "ai", "run", "--home", homeDir, "--database", initialized.DatabasePath, "--", "sh", "-c", agent)
+		if err != nil {
+			t.Fatalf("run wrapped agent: %v\n%s", err, output)
+		}
+		return output
+	}
+
+	if output := agentAfterToggling("enable-agent-checkpoints"); !strings.Contains(output, "policy=unset") || !strings.Contains(output, "rejected") {
+		t.Fatalf("enabling consent inside an unconsented session granted it:\n%s", output)
+	}
+	if output := agentAfterToggling("disable-agent-checkpoints"); !strings.Contains(output, "policy=agent") || !strings.Contains(output, "AI checkpoint recorded") || strings.Contains(output, "rejected") {
+		t.Fatalf("disabling consent revoked the running session's launch grant:\n%s", output)
+	}
+	if output := agentAfterToggling("disable-agent-checkpoints"); !strings.Contains(output, "policy=unset") || !strings.Contains(output, "rejected") {
+		t.Fatalf("a launch after disabling consent kept a grant:\n%s", output)
+	}
+
+	db, err := sql.Open("sqlite3", initialized.DatabasePath)
+	if err != nil {
+		t.Fatalf("open event database: %v", err)
+	}
+	defer db.Close()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type = 'ai.session_checkpointed'`).Scan(&count); err != nil {
+		t.Fatalf("count checkpoints: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("recorded %d agent-initiated checkpoints, want only the consented launch's one", count)
+	}
+}
+
+func TestAIResumeCarriesAgentCheckpointConsent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init workgraph: %v", err)
+	}
+	runWorkgraphCommand(t, nil, "settings", "enable-agent-checkpoints", "--home", homeDir)
+	workingDir := t.TempDir()
+	policyPath := filepath.Join(workingDir, "policy.txt")
+	codexPath := writeAIFactExecutable(t, workingDir, "codex", `printf '%s' "${WORKGRAPH_AI_CHECKPOINT_POLICY-unset}" > "$WORKGRAPH_AI_TEST_POLICY"`)
+	priorID := "00000000-0000-4000-8000-000000000021"
+	insertAINativeFactSession(t, initialized.DatabasePath, priorID, "codex", codexPath, "019c547f-d3a6-733d-8471-a0a043354c6d", "", workingDir, "2026-08-03T12:00:00Z", true)
+
+	if output, err := runWorkgraphCommandAllowError([]string{"WORKGRAPH_AI_TEST_POLICY=" + policyPath},
+		"ai", "resume", "--home", homeDir, "--database", initialized.DatabasePath, priorID,
+	); err != nil {
+		t.Fatalf("resume native Codex session: %v\n%s", err, output)
+	}
+	policy, err := os.ReadFile(policyPath)
+	if err != nil {
+		t.Fatalf("read resumed policy: %v", err)
+	}
+	if string(policy) != "agent" {
+		t.Fatalf("resumed agent checkpoint policy = %q, want agent", policy)
+	}
+	db, err := sql.Open("sqlite3", initialized.DatabasePath)
+	if err != nil {
+		t.Fatalf("open event database: %v", err)
+	}
+	defer db.Close()
+	var consent int
+	if err := db.QueryRow(`SELECT COALESCE(json_extract(payload_json, '$.agent_checkpoints'), 0) FROM events WHERE type = 'ai.session_started' AND json_extract(payload_json, '$.predecessor_session_id') = ?`, priorID).Scan(&consent); err != nil {
+		t.Fatalf("read resumed launch consent: %v", err)
+	}
+	if consent != 1 {
+		t.Fatal("resumed lifetime did not record agent checkpoint consent")
 	}
 }

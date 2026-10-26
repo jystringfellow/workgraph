@@ -413,9 +413,10 @@ When the user has turned on standing agent checkpoint consent (see
 `WORKGRAPH_AI_CHECKPOINT_POLICY=agent` into the child. When the setting is
 off, workgraph injects nothing extra and removes any inherited
 `WORKGRAPH_AI_CHECKPOINT_POLICY` from the child environment, so a parent shell
-cannot grant the consent. The setting is read once at launch; changing it
-affects sessions launched afterwards. An unreadable settings file stops the
-launch before the child starts.
+cannot pass the signal along. The setting is read once at launch and the
+decision is recorded as `agent_checkpoints` in the start event; changing the
+setting affects only sessions launched afterwards. An unreadable settings file
+stops the launch before the child starts.
 
 ## `workgraph ai checkpoint`
 
@@ -546,14 +547,17 @@ The setting is stored as `ai_agent_checkpoints` in the selected home's
 `settings.json`, as described in [Configuration](config.md).
 
 `ai checkpoint --agent-initiated` records that the agent, not the user,
-started the checkpoint. It is accepted only when the command's environment
-contains `WORKGRAPH_AI_CHECKPOINT_POLICY=agent`; otherwise it fails before
-reading input and writes no event. The flag changes nothing else: the six
+started the checkpoint. It is accepted only when the target session's start
+event records `"agent_checkpoints": true`; otherwise it fails and writes no
+event. The caller's environment never authorizes the flag, so a child that sets
+`WORKGRAPH_AI_CHECKPOINT_POLICY` itself, or that enables the setting from
+inside its session, gains no consent for that session. A start event without
+the field records no consent. The environment variable is only the signal the
+skill reads. A child that writes directly to the database or settings file is
+outside this boundary, consistent with wrapped tools keeping normal
+child-process capabilities. The flag changes nothing else: the six
 agent-stated fields, validation, the credential guardrail, size limits,
-storage and checkout binding, and the receipt are unchanged. The injected
-policy is a cooperative signal to the wrapped agent, like the rest of the
-checkpoint protocol, not a sandbox against a process that edits its own
-environment.
+storage and checkout binding, and the receipt are unchanged.
 
 With the policy injected, the skill checkpoints without asking at work
 milestones: after a commit, push, or pull request; after a review round or a
@@ -645,9 +649,14 @@ Every payload begins with the stable envelope fields `schema_version` and
   "pid": 1234,
   "boot_identity": "opaque-digest",
   "process_start_identity": "opaque-platform-value",
+  "agent_checkpoints": true,
   "observed": {}
 }
 ```
+
+`agent_checkpoints` records standing agent checkpoint consent read from
+settings at launch. It is omitted when consent was off, and an absent field
+means no consent.
 
 `boot_identity` and `process_start_identity` are omitted when unavailable;
 they are never written as `null`. Boot identity is an opaque one-way digest of
