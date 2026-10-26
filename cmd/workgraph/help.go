@@ -152,7 +152,7 @@ var helpTopics = map[string]helpTopic{
 	"settings add-ignore-name":           {"workgraph settings add-ignore-name <name> [options]", "Ignore directories and files with an exact basename."},
 	"settings add-ignore-path":           {"workgraph settings add-ignore-path <path> [options]", "Ignore an absolute path and all of its descendants."},
 	"settings add-watch":                 {"workgraph settings add-watch [path] [options]", "Add a directory to the configured watch roots."},
-	"settings disable-agent-checkpoints": {"workgraph settings disable-agent-checkpoints [options]", "Stop wrapped AI agents from recording their own checkpoints."},
+	"settings disable-agent-checkpoints": {"workgraph settings disable-agent-checkpoints [options]", "Disable agent-initiated checkpoints for AI sessions launched afterwards."},
 	"settings doctor":                    {"workgraph settings doctor [options]", "Diagnose local and managed settings."},
 	"settings enable-agent-checkpoints":  {"workgraph settings enable-agent-checkpoints [options]", "Let wrapped AI agents record their own checkpoints at work milestones."},
 	"settings get":                       {"workgraph settings get [--format text|json] [options]", "Show effective non-secret settings and provenance."},

@@ -1812,6 +1812,37 @@ printf '%s' "${WORKGRAPH_AI_CHECKPOINT_POLICY-unset}" > "$WORKGRAPH_AI_TEST_POLI
 	if policy := readAIFactFile(t, workingDir, "policy.txt"); policy != "agent" {
 		t.Fatalf("handoff destination checkpoint policy = %q, want agent", policy)
 	}
+	if !aiFactLaunchConsent(t, initialized.DatabasePath, result.DestinationSessionID) {
+		t.Fatal("handoff destination start event did not record agent checkpoint consent")
+	}
+
+	runWorkgraphCommand(t, nil, "settings", "disable-agent-checkpoints", "--home", homeDir)
+	result, err = workgraph.HandoffAISession(workgraph.AIHandoffConfig{
+		HomeDir: homeDir, DatabasePath: initialized.DatabasePath, SourceSessionID: sourceID, Destination: "codex",
+	})
+	if err != nil {
+		t.Fatalf("handoff after disabling consent: %v", err)
+	}
+	if policy := readAIFactFile(t, workingDir, "policy.txt"); policy != "unset" {
+		t.Fatalf("destination inherited its consented predecessor's policy %q after the setting was disabled", policy)
+	}
+	if aiFactLaunchConsent(t, initialized.DatabasePath, result.DestinationSessionID) {
+		t.Fatal("destination start event inherited its predecessor's agent checkpoint consent")
+	}
+}
+
+func aiFactLaunchConsent(t *testing.T, databasePath, sessionID string) bool {
+	t.Helper()
+	db, err := sql.Open("sqlite3", databasePath)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	var consent int
+	if err := db.QueryRow(`SELECT COALESCE(json_extract(payload_json, '$.agent_checkpoints'), 0) FROM events WHERE id = ?`, "ai.session_started:"+sessionID).Scan(&consent); err != nil {
+		t.Fatalf("read launch consent for %s: %v", sessionID, err)
+	}
+	return consent == 1
 }
 
 func grantAIFactLaunchConsent(t *testing.T, databasePath, sessionID string) {
