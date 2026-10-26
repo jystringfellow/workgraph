@@ -22,6 +22,7 @@ type MemoryProjectSourcesConfig struct {
 	Workstream   string
 	Sources      []string
 	Unlink       bool
+	GitEmails    []string
 }
 
 func UpdateMemoryProjectSources(config MemoryProjectSourcesConfig) (string, error) {
@@ -75,7 +76,20 @@ func UpdateMemoryProjectSources(config MemoryProjectSourcesConfig) (string, erro
 	if config.Unlink {
 		action = "Unlinked"
 	}
-	return fmt.Sprintf("%s containers for %s: %s\nAuthored memory and captured events were preserved.", action, target, strings.Join(config.Sources, ", ")), nil
+	lines := []string{fmt.Sprintf("%s containers for %s: %s\nAuthored memory and captured events were preserved.", action, target, strings.Join(config.Sources, ", "))}
+	relink, err := RelinkProjectContainers(ProjectRelinkConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, MemoryDir: config.MemoryDir, Location: time.Local, GitEmails: config.GitEmails, Containers: config.Sources})
+	for _, container := range relink.Containers {
+		if config.Workstream == "" || container.Changed() {
+			lines = append(lines, container.Line())
+		}
+	}
+	if err != nil {
+		if relink.Unfinished > 0 {
+			lines = append(lines, relink.UnfinishedLine()+" To finish, run: "+memoryProjectSourcesCommand(config))
+		}
+		return strings.Join(lines, "\n"), fmt.Errorf("mapping stored; relink containers: %w", err)
+	}
+	return strings.Join(lines, "\n"), nil
 }
 
 func requireMemoryContainers(db *sql.DB, sources []string) error {
@@ -177,4 +191,22 @@ func mappedMemoryEvents(db *sql.DB, events []ResumeEvent, project, memoryPath st
 		}
 	}
 	return result, nil
+}
+
+func memoryProjectSourcesCommand(config MemoryProjectSourcesConfig) string {
+	action := "link"
+	if config.Unlink {
+		action = "unlink"
+	}
+	command := "workgraph memory " + action + ProjectCommandOptions(config.HomeDir, config.MemoryDir, config.DatabasePath)
+	if config.Workstream != "" {
+		command += " --workstream " + projectShellArg(config.Workstream)
+	}
+	for _, source := range config.Sources {
+		command += " --source " + projectShellArg(source)
+	}
+	if config.Workstream == "" {
+		command += " " + projectShellArg(config.Project)
+	}
+	return command
 }

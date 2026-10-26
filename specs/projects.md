@@ -1,6 +1,6 @@
 # Projects, Workstreams, And Categorization
 
-Status: D1 through D4 implemented. Slices are listed in
+Status: D1 through D6 implemented. Slices are listed in
 `specs/roadmap.md`. Facts live in `facts/projects*_test.go`.
 
 ## Intent
@@ -166,6 +166,10 @@ profile, run_id, created_at, decided_at, decision
   - `undone`: the user undid an auto-applied link
 - A link is **user-approved** when its `source` is `user` or its `decision` is
   `approved` or `confirmed`.
+- A link **superseded** by a rule change (see Mapping Changes) is `rejected`
+  with no `decision` and with `decided_at` set. It records no user decision:
+  it is not counted by the accuracy gate, is not a recent rejection for
+  auto-apply, and is not a recent decision in the categorization payload.
 
 Contracts:
 
@@ -181,8 +185,10 @@ Contracts:
 - links never rewrite or delete events, and never edit memory files except
   when the user explicitly creates a new project
 - deterministic and LLM runs consider only units with no `proposed` or
-  `applied` link, so they never replace an existing link; a unit returned to
-  review by undo cannot be reapplied automatically until the user decides it
+  `applied` link, so they never replace an existing link; the only exceptions
+  are the re-evaluations in Mapping Changes and `projects review --recheck`;
+  a unit returned to review by undo cannot be reapplied automatically until
+  the user decides it
 - only the user changes a user-approved link
 - the table is created on the first command that writes a link; read-only
   queries do not migrate the database
@@ -236,6 +242,59 @@ that has mapped containers, so a container mapped to several projects is
 listed under each of them. `memory doctor`, and the mapping hints in `today`
 and `resume`, never offer a container that already has a project or
 workstream mapping.
+
+### Mapping Changes
+
+`memory link` and `memory unlink`, for a project or a workstream, and each
+candidate accepted by `memory doctor --interactive`, re-evaluate every unit of
+each named container in the same command, after the mapping is stored. The
+deterministic rules run in their usual order against the new mappings:
+
+- A unit with no `proposed` or `applied` link gets the deterministic link the
+  rules now give, as a linking pass would; open Slack bursts still wait.
+- An undecided auto-applied link with `rule = container_mapping` is
+  superseded when the rules no longer give its project. When they give
+  exactly one project, a new deterministic link to it replaces the row. When
+  they give none, because the container now maps to no catalog project or to
+  several, or the unit's identifiers name several projects, the unit is left
+  with no link and takes the path of any unlinked unit: the next `llm
+  associate` run or scheduled request categorizes it, with the catalog
+  narrowed as above. Keeping the old link would file the container's earlier
+  units under a project the user just unmapped, and turning hundreds of them
+  into proposals would fill review with a choice the user already made.
+- A `proposed` LLM link is superseded by the deterministic link when the
+  rules now give exactly one project.
+- Nothing else changes: user links, links with any decision, proposed links
+  of a unit returned to review by undo (one with an `undone` row), proposed
+  deterministic links, and auto-applied LLM links keep their rows. A
+  stronger rule still wins, so a unit citing another project's identifier
+  keeps that project.
+- Replacements are applied deterministic links with `auto = true`,
+  `confidence = 1`, their rule, and one new `run_id` for the command, so
+  `projects undo --run` reverses them. `projects explain` lists the superseded
+  row marked `superseded` before its replacement.
+- Writes use immediate transactions of at most 500 units with the busy
+  timeout, all under the command's one `run_id`. Each unit's current link is
+  read again in its transaction, and a unit whose link changed since it was
+  evaluated is left alone. When a later transaction fails, earlier ones stay
+  committed: the command still prints the count lines for what committed,
+  then `Relinking stopped: <u> units were not changed.`, naming the run and
+  its `projects undo --run` command when replacements committed, and exits
+  1. It ends with `To finish, run:` and the `memory link` or `memory unlink`
+  command for the same mapping and options, which finishes the rest; this is
+  also the recovery for `memory doctor --interactive`, which skips containers
+  that are already mapped.
+- After the mapping message the command prints one line per container:
+  `Relinked <n> units from <container> to <project>; <m> pending proposals
+  resolved.` when the container maps to exactly one catalog project,
+  otherwise `Unlinked <k> units from <container>, which maps to no single
+  project; <m> pending proposals resolved.` `<n>` counts units whose
+  container-mapping link was replaced or that had no link and got one, `<k>`
+  container-mapping links superseded with no replacement, and `<m>`
+  proposals superseded. A nonzero `<k>` on a
+  `Relinked` line, or `<n>` on an `Unlinked` line, is appended as `<k> units
+  wait for categorization.` or `<n> units relinked by other rules.` A
+  workstream mapping change prints the line only when something changed.
 
 ## Deterministic Linking
 
@@ -755,10 +814,12 @@ Categorization runs through the bridged-capture outbox
 ```text
 workgraph projects list
 workgraph projects review [--auto] [--json]
-workgraph projects review --approve <link-id>
-workgraph projects review --reject <link-id>
-workgraph projects review --assign <unit-id> --project <slug>
-workgraph projects review --assign <unit-id> --new <slug> [--workstream <slug>]
+workgraph projects review --approve <link-id>[,<link-id>...] [--approve <link-id>...]
+workgraph projects review --reject <link-id>[,<link-id>...] [--reject <link-id>...]
+workgraph projects review --assign <unit-id> [--assign <unit-id>...] --project <slug>
+workgraph projects review --assign <unit-id> [--assign <unit-id>...] --new <slug> [--workstream <slug>]
+workgraph projects review --approve-above <confidence> [--target project|none] [--container <name>] [--yes]
+workgraph projects review --recheck
 workgraph projects undo <link-id> | --run <run-id>
 workgraph projects explain <unit-id>
 ```
@@ -808,11 +869,47 @@ workgraph projects explain <unit-id>
   source, rule or run, and decision, and for the current link the exact
   `projects review --assign` and `--reject` commands that change it and, when
   the link is undoable, the `projects undo` command. User and user-approved
-  links other than confirmed auto links are not undoable. Printed commands
+  links other than confirmed auto links are not undoable. A superseded row
+  is marked `superseded`. Printed commands
   carry the `--home`, `--database`, and `--memory` options the command was
   given, shell-quoted, because undo leads to a review that runs a linking
   pass against that catalog.
-- Flag forms make the same changes as the keys and never prompt.
+- Flag forms make the same changes as the keys and never prompt, except
+  `--approve-above` without `--yes`.
+- `--approve` and `--reject` take several link ids, repeated or
+  comma-separated, and `--assign` may be repeated with one `--project` or
+  `--new`; `--new` creates the project memory once and links every unit to
+  it. One process decides them all, in immediate transactions of at most 500
+  links. An id that cannot be decided is reported as `workgraph projects
+  review: <error>` and does not stop the others; the exit status is then 1.
+  When a transaction fails, earlier batches stay decided and are printed as
+  usual, and every id in the failed batch and after it is reported as not
+  decided, followed by the transaction error.
+  Each decided link prints the same line as a single decision. With more than
+  one id a summary follows: `Approved <n> links.`, `Rejected <n> links.`, or
+  `Assigned <n> units to <slug>.`, with `; <f> failed` before the period when
+  some failed.
+- `--approve-above <confidence>` approves every `proposed` LLM link whose
+  confidence is at or above the given number, from 0 to 1; `NaN` and
+  infinities are refused. `--target project`
+  or `--target none` keeps links with that target, and `--container <name>`
+  keeps links of units in that container. It never approves a new-project
+  proposal or the proposal of a unit returned to review by undo; approve those
+  by id. With `--yes` it approves at once. Without it the command prints
+  `<n> proposed links at or above <c> match.` and asks `Approve them? [y/N]
+  `; any answer other than `y` or `yes`, including end of input, prints `No
+  links approved.` and changes nothing. With no match it prints `No proposed
+  links at or above <c>.` Approvals are ordinary approvals: `decision =
+  approved`, `auto = false`, and the same accuracy, seeding, and count rules.
+  Output is one line per link, then `Approved <n> links.`
+- `--recheck` runs the deterministic rules, with no LLM call, over every unit
+  whose current link is a `proposed` LLM link of a unit not returned to
+  review by undo, and supersedes each one that now resolves to exactly one
+  project, as Mapping Changes does. It catches rule changes that touch no
+  container, such as an identifier added to project memory or a newly
+  approved link that seeds the shared identifier rule. It prints `Rechecked
+  <n> pending proposals; <m> resolved by deterministic rules.`, with ` (run
+  <run-id>)` before the period when any was resolved.
 
 ## Daily Loop Surfaces
 
@@ -884,6 +981,9 @@ Grouping, shared by `today` and `resume`:
 - **D5 Thresholds and verifier**: per-profile auto-apply thresholds and verify
   floors with `llm set`, the per-profile accuracy gate, and the
   `associate-verify` route, direct and bridge.
+- **D6 Mapping relink and bulk review**: mapping changes re-evaluate their
+  containers' units, `projects review --recheck`, several ids per decision
+  flag, and `--approve-above`.
 
 ## Deferred
 
@@ -987,3 +1087,24 @@ Grouping, shared by `today` and `resume`:
   discarded units are not escalated; a `system-one` verifier is refused at
   `llm use` and, when hand-routed, at run time with the associate results
   kept; `llm set` thresholds change what a `system-one` profile auto-applies.
+- **P16. Mapping changes relink their units.** Moving a container from one
+  project to another with `memory unlink` and `memory link` moves its
+  undecided container-mapping links to the new project under one run id and
+  prints the counts; unlinking the only mapping leaves those units unlinked
+  and eligible for categorization; mapping a container resolves its proposed
+  LLM links to the mapped project, and `projects explain` shows the
+  superseded row; user links, approved and confirmed links, an undo's
+  proposal, a link won by a shared identifier, and auto-applied LLM links are
+  unchanged; superseded rows count in no accuracy sample.
+- **P17. Recheck resolves proposals with deterministic rules.** After a
+  proposal's identifier is added to project memory, `projects review
+  --recheck` replaces it with a shared-identifier link, calls no model,
+  leaves proposals the rules do not resolve, and prints the counts.
+- **P18. Bulk review decides many links in one process.** `--approve` with
+  repeated and comma-separated ids approves each, `--reject` rejects each,
+  repeated `--assign` with `--project` or `--new` assigns each unit, a bad id
+  is reported without stopping the rest, and a summary line follows.
+  `--approve-above` without `--yes` asks, and changes nothing unless told
+  `y`; with `--yes` it approves only proposed LLM links at or above the
+  confidence that pass `--target` and `--container`, never a new-project
+  proposal or an undo's proposal.
