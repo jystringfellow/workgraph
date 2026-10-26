@@ -161,7 +161,7 @@ func emitLLMAssociateRequest(config LLMAssociateConfig, run associateRun) (LLMAs
 	if err != nil {
 		return LLMAssociateScheduleResult{}, err
 	}
-	payload, err := buildAssociatePayload(run.homeDir, config, run.now, run.catalog, run.enabled, nil, cooled)
+	payload, err := buildAssociatePayload(run.homeDir, config, run.now, run.catalog, run.enabled, nil, cooled, nil)
 	if err != nil {
 		return LLMAssociateScheduleResult{}, err
 	}
@@ -520,7 +520,7 @@ func loadLLMTaskWork(config LLMAssociateConfig, run associateRun, requestID stri
 	if err != nil {
 		return llmTaskWork{}, err
 	}
-	payload, err := buildAssociatePayload(run.homeDir, config, run.now, run.catalog, run.enabled, params.UnitIDs, nil)
+	payload, err := buildAssociatePayload(run.homeDir, config, run.now, run.catalog, run.enabled, params.UnitIDs, nil, nil)
 	if err != nil {
 		return llmTaskWork{}, err
 	}

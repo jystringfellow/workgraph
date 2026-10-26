@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -214,11 +215,7 @@ func approveProjectLinksAbove(config workgraph.ProjectReviewConfig, value, targe
 			return 0
 		}
 	}
-	ids := make([]int64, len(links))
-	for index, link := range links {
-		ids[index] = link.ID
-	}
-	outcomes, err := workgraph.ApproveProjectReviewLinks(config, ids)
+	outcomes, err := workgraph.ApproveProjectLinksAsListed(config, links)
 	return writeProjectReviewOutcomes(outcomes, err, true, func(n int) string { return fmt.Sprintf("Approved %d %s", n, pluralWord(n, "link", "links")) }, stdout, stderr)
 }
 
@@ -227,8 +224,13 @@ func writeProjectReviewOutcomes(outcomes []workgraph.ProjectReviewOutcome, err e
 		fmt.Fprintf(stderr, "workgraph projects review: %v\n", err)
 		return 1
 	}
-	decided, failed := 0, 0
+	decided, failed, skipped := 0, 0, 0
 	for _, outcome := range outcomes {
+		if errors.Is(outcome.Err, workgraph.ErrProjectLinkChanged) {
+			fmt.Fprintf(stdout, "Skipped: %v\n", outcome.Err)
+			skipped++
+			continue
+		}
 		if outcome.Err != nil {
 			fmt.Fprintf(stderr, "workgraph projects review: %v\n", outcome.Err)
 			failed++
@@ -239,6 +241,9 @@ func writeProjectReviewOutcomes(outcomes []workgraph.ProjectReviewOutcome, err e
 	}
 	if summarize {
 		line := summary(decided)
+		if skipped > 0 {
+			line += fmt.Sprintf("; %d skipped because %s changed after listing", skipped, pluralWord(skipped, "it", "they"))
+		}
 		if failed > 0 {
 			line += fmt.Sprintf("; %d failed", failed)
 		}

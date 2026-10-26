@@ -22,8 +22,8 @@ type associateAnswer struct {
 	Target     string           `json:"target"`
 	Project    string           `json:"project,omitempty"`
 	NewProject *ProposedProject `json:"new_project,omitempty"`
-	Kind       string           `json:"kind"`
-	Summary    string           `json:"summary"`
+	Kind       string           `json:"kind,omitempty"`
+	Summary    string           `json:"summary,omitempty"`
 	Confidence float64          `json:"confidence"`
 }
 
@@ -120,16 +120,33 @@ func restrictToCurrent(stored associatePayload, current associatePayload) associ
 			restricted.Projects = append(restricted.Projects, project)
 		}
 	}
-	permitted := map[associateDecision]bool{}
+	permitted := map[associateDecision]int{}
 	for _, decision := range current.Decisions {
-		permitted[decision] = true
+		permitted[decision.key()] = decision.Count
 	}
+	positions := map[associateDecision]int{}
 	for _, decision := range stored.Decisions {
-		if permitted[decision] {
-			restricted.Decisions = append(restricted.Decisions, decision)
+		if _, found := permitted[decision.key()]; !found {
+			continue
 		}
+		decision.Count = max(decision.Count, 1)
+		if position, seen := positions[decision.key()]; seen {
+			restricted.Decisions[position].Count += decision.Count
+			continue
+		}
+		positions[decision.key()] = len(restricted.Decisions)
+		restricted.Decisions = append(restricted.Decisions, decision)
+	}
+	for index := range restricted.Decisions {
+		decision := &restricted.Decisions[index]
+		decision.Count = min(decision.Count, permitted[decision.key()])
 	}
 	return restricted
+}
+
+func (decision associateDecision) key() associateDecision {
+	decision.Count = 0
+	return decision
 }
 
 func sentFromFiltered(payload associatePayload, filtered llmOutboundFilterResult, hosted bool) associateSent {
@@ -176,7 +193,7 @@ func (run associateRun) revalidateVerify(config LLMAssociateConfig, verify assoc
 	for _, unit := range verify.payload.Units {
 		unitIDs = append(unitIDs, unit.linkUnitID)
 	}
-	current, err := buildAssociatePayload(run.homeDir, config, run.now, run.catalog, enabled, unitIDs, nil)
+	current, err := buildAssociatePayload(run.homeDir, config, run.now, run.catalog, enabled, unitIDs, nil, run.recheck)
 	if err != nil {
 		return associateSent{}, llmConnectorConfig{}, err
 	}
@@ -422,12 +439,17 @@ func (run associateRun) mergeVerdicts(verify associatePayload, primaries []Proje
 }
 
 func (run associateRun) verifyDirect(config LLMAssociateConfig, verify associateSent, primaries []ProjectLinkProposal, result *LLMAssociateResult) []ProjectLinkProposal {
+	merged, _ := run.verifySent(config, verify, primaries, result)
+	return merged
+}
+
+func (run associateRun) verifySent(config LLMAssociateConfig, verify associateSent, primaries []ProjectLinkProposal, result *LLMAssociateResult) ([]ProjectLinkProposal, associatePayload) {
 	verify, fresh, err := run.revalidateVerify(config, verify)
 	if err == nil {
 		err = enforceHostedLLMOptIn(fresh, run.verifier)
 	}
 	if err == nil && len(verify.payload.Units) == 0 {
-		return primaries
+		return primaries, verify.payload
 	}
 	var response string
 	if err == nil {
@@ -436,11 +458,11 @@ func (run associateRun) verifyDirect(config LLMAssociateConfig, verify associate
 	if err == nil {
 		var merged []ProjectLinkProposal
 		if merged, err = run.mergeVerdicts(verify.payload, primaries, response, result); err == nil {
-			return merged
+			return merged, verify.payload
 		}
 	}
 	result.VerifyError = sanitizeProjectLinkSummary(err.Error())
-	return primaries
+	return primaries, emptyAssociatePayload()
 }
 
 func otherActiveLLMRequest(tx *sql.Tx, currentID string) (string, bool, error) {

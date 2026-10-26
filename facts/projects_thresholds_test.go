@@ -561,6 +561,12 @@ func (models *routedAssociateModels) Fail(model string) {
 	models.failing[model] = true
 }
 
+func (models *routedAssociateModels) Recover(model string) {
+	models.mu.Lock()
+	defer models.mu.Unlock()
+	delete(models.failing, model)
+}
+
 func (models *routedAssociateModels) Calls(model string) int {
 	models.mu.Lock()
 	defer models.mu.Unlock()

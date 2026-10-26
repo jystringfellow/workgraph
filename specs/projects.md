@@ -1,6 +1,6 @@
 # Projects, Workstreams, And Categorization
 
-Status: D1 through D6 implemented. Slices are listed in
+Status: D1 through D7 implemented. Slices are listed in
 `specs/roadmap.md`. Facts live in `facts/projects*_test.go`.
 
 ## Intent
@@ -365,8 +365,8 @@ This is the `associate_events` task in `specs/llm-integration.md`.
 - the catalog: slug, title, workstream, aliases, description; narrowed by a
   workstream mapping or a mapping to several projects when one applies, and
   always including projects the unit's identifiers name
-- up to 20 recent user decisions: container, unit summary, chosen project or
-  rejection
+- up to 20 distinct recent user decisions: container, decision, target,
+  project, kind, and how many times the user made that decision
 
 Every part of the payload passes the source policy in Privacy below.
 
@@ -389,7 +389,7 @@ The payload is one JSON document:
       "events": [{"id": "slack.message:C123:1760000000.000100", "timestamp": "2026-10-20T09:00:00Z", "actor": "Sam", "summary": "..."}]
     }
   ],
-  "recent_decisions": [{"container": "harness-team", "decision": "chose", "target": "project", "project": "harbor-harness", "kind": "advice"}]
+  "recent_decisions": [{"container": "harness-team", "decision": "chose", "target": "project", "project": "harbor-harness", "kind": "advice", "count": 3}]
 }
 ```
 
@@ -407,6 +407,24 @@ The payload is one JSON document:
   earliest evidence event, the decision, target, project, and kind. Stored
   link summaries are never sent, because their provenance cannot be checked
   against the source policy.
+- A decision is included only when its project is `none` or a project
+  declared in the current catalog, so a rejected new-project slug that was
+  never created is left out, and only when every evidence event belongs to
+  a current unit whose members are all permitted. Each evidence event is
+  resolved to the unit that contains it now, so a decision on a unit that
+  was regrouped, for example a burst that became a thread, is judged by the
+  new unit; a decision whose evidence is in no current unit is left out.
+- Decisions with the same container, decision, target, project, and kind are
+  one entry whose `count` is how many of them passed the source policy, so
+  the 20 entries are 20 different decisions. Entries are ordered by their
+  newest decision. Counting reads at most the 500 newest decisions. A
+  decision from a disabled source neither adds an entry nor adds to a count.
+  The prompt says that each entry is distinct and what `count` means. When a
+  stored snapshot is reused, an entry without `count` counts as 1, repeated
+  entries are summed, and each count is capped at the count currently
+  permitted. Adding
+  `count` is a compatible change, so the schema stays
+  `workgraph.associate_request.v1`.
 - A unit's container, time range, participants, and identifiers come from its
   permitted members only, and catalog narrowing uses that container. When the
   policy removed any member, the unit is sent under an opaque per-request id
@@ -725,6 +743,78 @@ workgraph llm use sonnet --for associate-verify
   verifier ran, `Verified: <n> by <profile> (<changed> changed)`, or
   `Verify request emitted: <id> (<n> units)` for a bridge verifier.
 
+### Backlog Verification
+
+Links proposed before a verifier was routed are never escalated by the
+associate pass, so they can wait in review indefinitely. `llm verify-backlog`
+sends them to the verifier:
+
+```text
+workgraph llm verify-backlog --dry-run
+workgraph llm verify-backlog [--limit 50] [--since 168h]
+```
+
+- A waiting link is a `proposed` LLM link with no decision, no stored
+  verification, and a profile other than the verifier, whose confidence is at
+  or above its own profile's verify floor and below that profile's auto-apply
+  threshold, and whose target is `none` or a project declared in the current
+  catalog. A link whose profile is no longer configured is judged against
+  0.6 and 0.95. A unit that has any decided link, including an undone or
+  corrected one, is never verified. `--since` keeps links created within that
+  duration. Links are taken oldest first.
+- New-project proposals, and proposals for a project that is no longer
+  declared, in the band are not sent; they stay in `projects review` and are
+  counted as `Left in review, new or undeclared project: <n>`.
+- It refuses before reading the backlog when `associate-verify` is not
+  routed, names a profile that is not configured, names a `system-one`
+  profile, or names a profile with bridge execution: backlog verification
+  calls the verifier directly. Outside a dry run, the verifier passes the
+  hosted opt-in and managed-provider checks first.
+- Stored model text cannot be traced to the members, other units, catalog,
+  or redactions that produced it, so backlog verification never reuses a
+  snapshot and never sends stored model text. Each unit is rebuilt from
+  current content under the current source policy, catalog, and managed
+  redactions, with the current recent decisions, and the request passes the
+  hosted outbound filter when the link's profile is hosted or no longer
+  configured, or the verifier is hosted. A link is sent only when every
+  current member of its unit is permitted (the unit would not be sent under
+  an opaque id) and the link's evidence is among those members; any other
+  link is skipped. `primary_answer` holds only the waiting link's `target`,
+  its `project` when the target is a declared project, and its
+  `confidence`; the stored summary, kind, and new-project fields are never
+  sent. The verifier answers in the associate result shape, as in Verifier.
+- The consent, route, and source-policy checks run again immediately before
+  every verifier call, as in Verifier. Each request carries at most 50 units,
+  and a run sends at most `--limit` units, 50 by default.
+- Each request's verdicts are written in one transaction that first records
+  the verifier's pause transition and re-reads every link: a link that is no
+  longer proposed and undecided, that has a verification, or whose unit has a
+  decided link is skipped. A verdict replaces the waiting link in place, with
+  `profile` set to the verifier, `run_id` set to this run, so `projects
+  undo --run` undoes what it applied, and `created_at` set to the time of
+  the verdict, so `projects review --auto --since` and the `next` auto count
+  see it as new. `projects review --auto` lists newest `created_at` first.
+  It is applied only as in Auto-Apply for the verifier: its threshold, recent rejections, new-project rule, and
+  accuracy gate. Both results are stored in `project_link_verifications`.
+- A link the verifier left out or whose entry was discarded keeps the
+  associate result and is recorded in `project_link_backlog_checks` (link
+  id, verifier profile, time), so the same verifier is not asked again. A
+  failed call writes nothing and stops the run, so the links stay waiting.
+  Running the command twice never sends the same link to the same verifier
+  twice after it answered.
+- `--dry-run` reads only. It prints the verifier, provider, model,
+  destination, enabled sources, `Waiting in the verify band: <n>`, `Left in
+  review, new or undeclared project: <n>`, the limit,
+  `Would send: <n>`, `Skipped: <n>`, and the first request exactly as it
+  would be sent, after the outbound filter.
+- A run prints `Run`, `Sent`, `Verified`, `Applied`, `Kept for review`
+  (verified but proposed, plus links the verifier left out), `Corrected`
+  (the verifier chose a different target), `Skipped`, `Discarded` with
+  `verifier:` reasons, `Verifier failed: <reason>` when a call failed,
+  `Remaining`, and the accuracy summary.
+- Backlog verification runs only when the user runs the command; the daemon
+  never runs it.
+
 ## Scheduling
 
 Categorization runs through the bridged-capture outbox
@@ -911,7 +1001,14 @@ workgraph projects explain <unit-id>
   links approved.` and changes nothing. With no match it prints `No proposed
   links at or above <c>.` Approvals are ordinary approvals: `decision =
   approved`, `auto = false`, and the same accuracy, seeding, and count rules.
-  Output is one line per link, then `Approved <n> links.`
+  Each link is approved only if, inside the approval transaction, it is
+  still the row that was listed: same state, decision, target, project,
+  confidence, profile, and `created_at`. A link that changed after listing,
+  for example one `llm verify-backlog` rewrote while the prompt waited, is
+  not approved and prints `Skipped: project link <id> changed after it was
+  listed; not approved`. Output is one line per link, then `Approved <n>
+  links.`, with `; <k> skipped because they changed after listing` before
+  the period when any were skipped.
 - `--recheck` runs the deterministic rules, with no LLM call, over every unit
   whose current link is a `proposed` LLM link of a unit not returned to
   review by undo, and supersedes each one that now resolves to exactly one
@@ -994,6 +1091,9 @@ Grouping, shared by `today` and `resume`:
 - **D6 Mapping relink and bulk review**: mapping changes re-evaluate their
   containers' units, `projects review --recheck`, several ids per decision
   flag, and `--approve-above`.
+- **D7 Backlog verification and distinct decisions**: `llm verify-backlog`
+  with dry run, limit, since, and resumability; counted, distinct
+  `recent_decisions`. Bridge verifiers for the backlog are deferred.
 
 ## Deferred
 
@@ -1003,6 +1103,8 @@ Grouping, shared by `today` and `resume`:
 - LLM-chosen unit boundaries
 - workstream memory files and workstream-level descriptions
 - learned per-container priors beyond recent user decisions
+- backlog verification through a bridge verifier
+- scheduled backlog verification by the daemon
 
 ## Facts
 
@@ -1117,8 +1219,33 @@ Grouping, shared by `today` and `resume`:
   `--approve-above` without `--yes` asks, and changes nothing unless told
   `y`; with `--yes` it approves only proposed LLM links at or above the
   confidence that pass `--target` and `--container`, never a new-project
-  proposal or an undo's proposal.
-- **P19. Listings survive a read-only database.** With a unit awaiting a
+  proposal or an undo's proposal; a link that `llm verify-backlog` rewrites
+  while the prompt waits is skipped, reported, and left with its new
+  verdict.
+- **P19. Waiting proposals are verified once.** `llm verify-backlog` sends
+  only undecided proposed LLM links in their profile's floor-to-threshold
+  band, never a user-decided unit; the verdict replaces the link under the
+  verifier profile, applies only through the verifier's threshold and
+  accuracy gate, appears in `projects explain` and in `projects review
+  --auto --since 1h` when applied now, and is undone by `projects undo
+  --run`; new-project proposals stay in review; a unit with a member from a
+  source disabled since the proposal is skipped; no stored summary or
+  new-project text, nothing from other units in the original batch, and no
+  earlier snapshot's text or catalog description is sent, and the rebuilt
+  request carries current redactions; `--dry-run` prints the count,
+  destination, and an example request and calls nothing; it refuses without
+  a verifier route and for a `system-one` or bridge verifier; a second run
+  does not resend a link the verifier answered or left out, while a failed
+  call leaves links waiting.
+- **P20. Recent decisions are distinct.** Fifteen identical decisions become
+  one entry with `count` 15 beside each distinct decision; a decision from a
+  disabled source adds neither an entry nor a count, and the hosted outbound
+  filter still redacts decision containers; a rejected new-project slug and a
+  decision on a unit whose member is now from a disabled source are left out
+  of every associate and verify payload; a snapshot stored without counts
+  sends its repeated decision once to a deferred verifier, capped at the
+  count still permitted.
+- **P21. Listings survive a read-only database.** With a unit awaiting a
   container-mapping link and the database file made read-only, `projects
   review --json` prints the JSON listing and `projects review` the text
   listing, each with exactly one stderr warning that pending project links

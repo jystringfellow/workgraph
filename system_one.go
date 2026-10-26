@@ -108,7 +108,7 @@ func associateWithSystemOne(config LLMAssociateConfig, run associateRun) (LLMAss
 			return LLMAssociateResult{}, err
 		}
 	}
-	payload, err := buildAssociatePayload(run.homeDir, config, run.now, run.catalog, run.enabled, nil, nil)
+	payload, err := buildAssociatePayload(run.homeDir, config, run.now, run.catalog, run.enabled, nil, nil, nil)
 	if err != nil {
 		return LLMAssociateResult{}, err
 	}
