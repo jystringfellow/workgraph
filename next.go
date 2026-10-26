@@ -350,6 +350,8 @@ func projectNextObservation(o githubPRObservation, events []nextStoredEvent, con
 			untrusted := nextItemUntrusted(event, subject.ID, discriminator)
 			if url, ok := untrusted["comment_url"].(string); ok && url != "" {
 				item.Subject.URL = url
+			} else if subject.Kind == "comment" && o.Conversation.LastHumanCommentURL != "" {
+				item.Subject.URL = o.Conversation.LastHumanCommentURL
 			}
 			if config.IncludeUntrusted {
 				item.Untrusted = untrusted
@@ -387,7 +389,12 @@ func projectNextObservation(o githubPRObservation, events []nextStoredEvent, con
 	}
 	if o.ChecksState == "failed" {
 		fingerprint := nextRunFingerprint(o, relevant)
-		add(nextReasonChecksFailed, githubPREventChecksFailed, o.HeadSHA+":"+fingerprint, pr, map[string]any{"run_fingerprint": fingerprint, "failed_checks": nextFailedChecks(o.CheckRuns)}, nil)
+		failed := nextFailedChecks(o.CheckRuns)
+		opened := len(items)
+		add(nextReasonChecksFailed, githubPREventChecksFailed, o.HeadSHA+":"+fingerprint, pr, map[string]any{"run_fingerprint": fingerprint, "failed_checks": nextCappedChecks(failed)}, nil)
+		if len(items) > opened {
+			items[opened].checkNames = nextUniqueCheckNames(failed)
+		}
 	}
 	if o.Mergeable == "CONFLICTING" {
 		add(nextReasonConflicts, githubPREventMergeConflict, "", pr, map[string]any{"base_ref": o.BaseRef}, nil)
@@ -497,8 +504,12 @@ func nextFailedChecks(runs []githubPRCheckRun) []map[string]any {
 		}
 	}
 	sort.Slice(failed, func(i, j int) bool { return fmt.Sprint(failed[i]["name"]) < fmt.Sprint(failed[j]["name"]) })
+	return failed
+}
+
+func nextCappedChecks(failed []map[string]any) []map[string]any {
 	if len(failed) > 20 {
-		failed = failed[:20]
+		return failed[:20]
 	}
 	return failed
 }
@@ -862,13 +873,43 @@ func nextPullRequestLines(group []NextItem, showIDs bool) []string {
 		}
 	}
 	lines := []string{"  " + header + " — " + nextDisplayText(pr.URL)}
-	for _, item := range group {
-		lines = append(lines, "    "+nextItemLine(item, showIDs))
+	for _, location := range nextLocationGroups(group) {
+		lines = append(lines, "    "+nextItemLine(location, showIDs))
 	}
 	return lines
 }
 
-func nextItemLine(item NextItem, showIDs bool) string {
+func nextLocationGroups(items []NextItem) [][]NextItem {
+	groups := [][]NextItem{}
+	index := map[string]int{}
+	for _, item := range items {
+		if item.Reason != nextReasonReply || item.Subject.Kind != "thread" || item.Subject.Path == "" || item.Subject.Line <= 0 {
+			groups = append(groups, []NextItem{item})
+			continue
+		}
+		key := fmt.Sprintf("%s:%d", item.Subject.Path, item.Subject.Line)
+		if position, ok := index[key]; ok {
+			groups[position] = append(groups[position], item)
+			continue
+		}
+		index[key] = len(groups)
+		groups = append(groups, []NextItem{item})
+	}
+	return groups
+}
+
+var nextUnknownLabels = map[string]string{
+	"checks":    "check status",
+	"threads":   "review threads",
+	"approval":  "approvals",
+	"mergeable": "merge status",
+	"ready":     "merge readiness",
+	"comments":  "newer comments",
+	"reviews":   "newer reviews",
+}
+
+func nextItemLine(items []NextItem, showIDs bool) string {
+	item := items[0]
 	reason := strings.ReplaceAll(item.Reason, "_", " ")
 	switch item.Reason {
 	case nextReasonReply:
@@ -876,8 +917,15 @@ func nextItemLine(item NextItem, showIDs bool) string {
 		if item.Actor != nil {
 			reason = item.Actor.Login + " replied"
 		}
-		if item.Subject.Path != "" {
+		if item.Subject.Path != "" && item.Subject.Line > 0 {
 			reason += fmt.Sprintf(" on %s:%d", item.Subject.Path, item.Subject.Line)
+		} else if item.Subject.Path != "" {
+			reason += " on " + item.Subject.Path
+		} else if item.Subject.Kind == "comment" {
+			reason += " in conversation"
+		}
+		if len(items) > 1 {
+			reason += fmt.Sprintf(" (%d threads)", len(items))
 		}
 	case nextReasonReviewRequested:
 		if request, ok := item.Detail["request"].(*githubPRReviewRequest); ok {
@@ -895,25 +943,50 @@ func nextItemLine(item NextItem, showIDs bool) string {
 			sha = sha[:7]
 		}
 		reason += " on " + sha
-		if checks, ok := item.Detail["failed_checks"].([]map[string]any); ok {
-			names := []string{}
-			for _, check := range checks {
-				names = append(names, fmt.Sprint(check["name"]))
+		if names := item.checkNames; len(names) > 0 {
+			reason += " (" + names[0]
+			if len(names) > 1 {
+				reason += fmt.Sprintf(" +%d more", len(names)-1)
 			}
-			reason += " (" + strings.Join(names, ", ") + ")"
+			reason += ")"
 		}
 	}
 	if unknown, ok := item.Triage["unknown"].([]string); ok && len(unknown) > 0 {
-		reason += " [unknown: " + strings.Join(unknown, ", ") + "]"
+		labels := []string{}
+		for _, dimension := range unknown {
+			if label, ok := nextUnknownLabels[dimension]; ok {
+				labels = append(labels, label)
+			}
+		}
+		if len(labels) > 0 {
+			reason += " (not yet known: " + strings.Join(labels, ", ") + ")"
+		}
 	}
 	line := nextDisplayText(reason)
 	if item.Subject.URL != item.PullRequest.URL {
 		line += " — " + nextDisplayText(item.Subject.URL)
 	}
 	if showIDs {
-		line += " [" + nextDisplayText(item.ID) + "]"
+		ids := []string{}
+		for _, grouped := range items {
+			ids = append(ids, nextDisplayText(grouped.ID))
+		}
+		line += " [" + strings.Join(ids, ", ") + "]"
 	}
 	return line
+}
+
+func nextUniqueCheckNames(checks []map[string]any) []string {
+	names := []string{}
+	seen := map[string]bool{}
+	for _, check := range checks {
+		name := strings.TrimSpace(fmt.Sprint(check["name"]))
+		if name != "" && !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 var nextANSISequence = regexp.MustCompile(

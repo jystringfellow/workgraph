@@ -40,6 +40,7 @@ type TodayResult struct {
 	Sessions     []TodaySession
 	Associations []TodayAssociation
 	Message      string
+	Warnings     []string
 }
 
 type TodayEvent struct {
@@ -139,6 +140,11 @@ func Today(config TodayConfig) (TodayResult, error) {
 		Events: events,
 	}
 	result.Sessions = groupTodaySessions(events)
+	if len(events) > 0 {
+		if result.Warnings, err = refreshSnoozedSuggestions(db, now.UTC()); err != nil {
+			return TodayResult{}, err
+		}
+	}
 	associations, err := loadTodayAssociations(db, events, now.UTC())
 	if err != nil {
 		return TodayResult{}, err
@@ -319,9 +325,6 @@ func newTodaySession(event TodayEvent) TodaySession {
 func loadTodayAssociations(db *sql.DB, events []TodayEvent, now time.Time) ([]TodayAssociation, error) {
 	if len(events) == 0 {
 		return nil, nil
-	}
-	if err := expireSnoozedSuggestions(db, now); err != nil {
-		return nil, err
 	}
 
 	targets := events

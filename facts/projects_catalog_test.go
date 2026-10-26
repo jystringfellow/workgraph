@@ -19,7 +19,7 @@ func TestProjectCatalogReadsFrontmatter(t *testing.T) {
 	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: home, MemoryDir: memory}); err != nil {
 		t.Fatal(err)
 	}
-	longParagraph := strings.Repeat("harness ", 40)
+	longParagraph := "the " + strings.Repeat("harnesses ", 30)
 	files := map[string]string{
 		"orbit-segments": "---\nworkstream: harbor\naliases: [orbit segments, \"segment tracker\"]\ndescription: Segment definitions for the Orbit launch.\n---\n# Orbit Segments\n\nIgnored paragraph.\n",
 		"harbor-harness": "---\n# owned by the platform team\nworkstream: harbor\naliases:\n  - harness\n  - test rig\nowner: platform\n---\n# Harbor Harness\n\n## Context\n\n" + longParagraph + "\n",
@@ -53,7 +53,7 @@ func TestProjectCatalogReadsFrontmatter(t *testing.T) {
 	if harness.Title != "Harbor Harness" || harness.Workstream != "harbor" || !reflect.DeepEqual(harness.Aliases, []string{"harness", "test rig"}) {
 		t.Fatalf("block list entry: %+v", harness)
 	}
-	if len([]rune(harness.Description)) != 200 || !strings.HasPrefix(harness.Description, "harness harness") {
+	if harness.Description != "the "+strings.TrimSpace(strings.Repeat("harnesses ", 19))+"…" {
 		t.Fatalf("paragraph description fallback: %q", harness.Description)
 	}
 	if quoted := entries["quoted-aliases"]; !reflect.DeepEqual(quoted.Aliases, []string{"Design, build", "ordinary", "single, quoted"}) {
@@ -350,6 +350,30 @@ func assertNoTerminalControls(t *testing.T, command, output string) {
 	for _, r := range output {
 		if (r < 0x20 && r != '\n') || (r >= 0x7f && r <= 0x9f) || r == '\u2028' || r == '\u2029' || (r >= '\u202a' && r <= '\u202e') || (r >= '\u2066' && r <= '\u2069') {
 			t.Fatalf("%s printed control character %U:\n%q", command, r, output)
+		}
+	}
+}
+
+func TestProjectDescriptionFallbackEndsAtAWord(t *testing.T) {
+	memory := t.TempDir()
+	cases := map[string][2]string{
+		"exact-boundary": {"ab " + strings.Repeat("ü", 196) + " tail words", "ab " + strings.Repeat("ü", 196) + "…"},
+		"overlong-word":  {strings.Repeat("é", 201), strings.Repeat("é", 199) + "…"},
+		"fits":           {strings.Repeat("ö", 200), strings.Repeat("ö", 200)},
+	}
+	for slug, paragraph := range cases {
+		writeProjectMemory(t, memory, slug, "# Title\n\n"+paragraph[0]+"\n")
+	}
+	catalog, err := workgraph.LoadProjectCatalog(memory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range catalog.Projects {
+		if want := cases[entry.Slug][1]; entry.Description != want {
+			t.Fatalf("%s description: got %q (%d runes), want %q", entry.Slug, entry.Description, len([]rune(entry.Description)), want)
+		}
+		if len([]rune(entry.Description)) > 200 {
+			t.Fatalf("%s description exceeds 200 runes", entry.Slug)
 		}
 	}
 }

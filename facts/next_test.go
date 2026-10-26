@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -359,6 +360,91 @@ func TestNextDoneAndSnoozeHideOnlyThatItemID(t *testing.T) {
 	}
 
 }
+func TestNextDetailLinesStayReadable(t *testing.T) {
+	f := newNextFixture(t)
+	at := f.now.Add(-5 * time.Minute).Format(time.RFC3339Nano)
+	threads := f.observations[0]["threads"].([]any)
+	f.observations[0]["threads"] = append(threads, map[string]any{"thread_id": "T2", "path": "settings.go", "line": 18, "depth": 1, "last_comment_id": "C2", "last_comment_at": at, "last_responder": "other", "awaiting": "user"})
+	f.save(t, f.observations[0])
+	f.event(t, "github.pull_request.review_comment:PR0:C2", "review_comment", at, map[string]any{"node_id": "PR0", "role": "author", "triage": map[string]any{"needs_user": true, "thread_id": "T2"}, "actor_kind": "user", "untrusted": map[string]any{"comment_url": "https://github.com/acme/demo/pull/1#discussion_r2"}})
+
+	f.observations[2]["threads"] = nil
+	f.save(t, f.observations[2])
+
+	failedRuns := func(names ...string) []any {
+		runs := []any{}
+		for i, name := range names {
+			runs = append(runs, map[string]any{"id": fmt.Sprintf("RUN%d", i), "name": name, "status": "COMPLETED", "conclusion": "FAILURE", "completed_at": at})
+		}
+		return runs
+	}
+	f.observations[3]["check_runs"] = failedRuns(append(slices.Repeat([]string{"build"}, 20), "lint")...)
+	f.save(t, f.observations[3])
+
+	threads = f.observations[0]["threads"].([]any)
+	for _, id := range []string{"3", "4"} {
+		threads = append(threads, map[string]any{"thread_id": "T" + id, "path": "settings.go", "depth": 1, "last_comment_id": "C" + id, "last_comment_at": at, "last_responder": "other", "awaiting": "user"})
+		f.event(t, "github.pull_request.review_comment:PR0:C"+id, "review_comment", at, map[string]any{"node_id": "PR0", "role": "author", "triage": map[string]any{"needs_user": true, "thread_id": "T" + id}, "actor_kind": "user"})
+	}
+	f.observations[0]["threads"] = threads
+	f.save(t, f.observations[0])
+
+	f.observations[5]["conversation"] = map[string]any{"last_human_comment_id": "IC9", "last_human_comment_at": at, "last_human_comment_url": "https://github.com/acme/demo/pull/6#issuecomment-9"}
+	f.save(t, f.observations[5])
+	f.event(t, "github.pull_request.observed:PR5:author", "observed", at, map[string]any{"node_id": "PR5", "role": "author", "baseline": map[string]any{"conversation": map[string]any{"last_human_comment_id": "IC9"}}})
+
+	text := f.cli(t, "next")
+	if strings.Contains(text, "[unknown:") {
+		t.Fatalf("text shows an internal unknown token: %s", text)
+	}
+	if !strings.Contains(text, "changes requested by bob (not yet known: review threads)") {
+		t.Fatalf("expected unknown threads to read as not yet known: %s", text)
+	}
+	if !strings.Contains(text, "checks failed on abc123 (build +1 more)") {
+		t.Fatalf("expected the summary to count checks past the JSON cap: %s", text)
+	}
+	if strings.Count(text, "alice replied on settings.go\n") != 2 {
+		t.Fatalf("expected threads without a line to stay on separate lines: %s", text)
+	}
+	if strings.Count(text, "settings.go:18") != 1 || !strings.Contains(text, "alice replied on settings.go:18 (2 threads) — https://github.com/acme/demo/pull/1#discussion_r1") {
+		t.Fatalf("expected one line for two threads on the same line, linking the first: %s", text)
+	}
+	if !strings.Contains(text, "reply requested in conversation — https://github.com/acme/demo/pull/6#issuecomment-9") {
+		t.Fatalf("expected the conversation comment to name its location and link: %s", text)
+	}
+	if withIDs := f.cli(t, "next", "--ids"); !strings.Contains(withIDs, "github:reply:PR0:T1:C1, github:reply:PR0:T2:C2]") {
+		t.Fatalf("expected the collapsed line to keep both item ids: %s", withIDs)
+	}
+
+	items := f.items(t)
+	replies, checks, conversationURL := 0, 0, ""
+	for _, item := range items {
+		if item.PullRequest.NodeID == "PR0" && item.Reason == "reply" {
+			replies++
+		}
+		if item.PullRequest.NodeID == "PR5" && item.Reason == "reply" {
+			conversationURL = item.Subject.URL
+		}
+		if item.Reason == "checks_failed" {
+			if failed, ok := item.Detail["failed_checks"].([]any); ok {
+				checks = len(failed)
+			}
+		}
+	}
+	if replies != 4 || checks != 20 {
+		t.Fatalf("JSON should keep every thread and the capped checks, got %d replies and %d checks", replies, checks)
+	}
+	if conversationURL != "https://github.com/acme/demo/pull/6#issuecomment-9" {
+		t.Fatalf("JSON should carry the conversation comment URL, got %q", conversationURL)
+	}
+
+	f.observations[3]["check_runs"] = failedRuns("lint", " lint ", "Lint")
+	f.save(t, f.observations[3])
+	if text := f.cli(t, "next"); !strings.Contains(text, "checks failed on abc123 (lint +1 more)") {
+		t.Fatalf("expected names trimmed before dedupe with case variants kept: %s", text)
+	}
+}
+
 func TestNextReportsStaleness(t *testing.T) {
 	f := newNextFixture(t)
 	f.observations[0]["detail_fetched_at"] = f.now.Add(-46 * time.Minute).Format(time.RFC3339Nano)
@@ -379,8 +465,8 @@ func TestNextReportsStaleness(t *testing.T) {
 	if items[4].Freshness.Access != "unreachable" || !strings.Contains(fmt.Sprint(items[4].Triage["unknown"]), "checks") {
 		t.Fatalf("unknown/access: %+v", items[4])
 	}
-	if !strings.Contains(f.cli(t, "next"), "unknown: checks") {
-		t.Fatal("unknown missing from text")
+	if text := f.cli(t, "next"); !strings.Contains(text, "(not yet known: check status)") || strings.Contains(text, "[unknown:") {
+		t.Fatalf("unknown dimensions should read as not yet known: %s", text)
 	}
 	f.runtime(t, "error")
 	for _, item := range f.project(t, f.config()) {

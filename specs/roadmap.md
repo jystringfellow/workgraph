@@ -173,6 +173,13 @@ Priority labels used below:
   across processes; the store uses WAL. [specs:
   `specs/capture-controls.md` and `specs/db-contracts.md`]
 
+- [x] Readable `next` detail lines: thread replies on one line collapse with a
+  count, failed checks are deduplicated and capped, conversation replies link
+  the comment, and unknown dimensions read in plain words. Fallback project
+  descriptions end at a word. `projects review` and `today` still list on a
+  read-only database, with one warning. [specs: `specs/next.md`,
+  `specs/projects.md`, and `specs/today.md`]
+
 - Signed-in client config-dir bindings shared by bridge workers and LLM
   profiles, with runtime enforcement and inspectable diagnostics. [spec:
   `specs/signed-in-client-binding.md`]

@@ -23,7 +23,8 @@ type helpTopic struct {
 }
 
 var helpDetails = map[string]string{
-	"ai handoff": "Handoff rejects unsupported newer source evidence. Source transcripts, environment, terminal output, arguments, file contents, and diffs are not persisted or transported. The tool retains normal child-process capabilities.",
+	"projects review": "Listing forms first apply deterministic links, such as container mappings, to units that have no link yet. On a read-only database they list without applying them and print a warning.",
+	"ai handoff":      "Handoff rejects unsupported newer source evidence. Source transcripts, environment, terminal output, arguments, file contents, and diffs are not persisted or transported. The tool retains normal child-process capabilities.",
 }
 
 var helpTopics = map[string]helpTopic{

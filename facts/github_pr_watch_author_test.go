@@ -138,6 +138,36 @@ func TestGitHubPRWatchFirstSightEmitsOneObservedEventPerPR(t *testing.T) {
 	if harness.observationCount() != 2 {
 		t.Fatalf("expected two observations, got %d", harness.observationCount())
 	}
+	output, err := harness.cli("next", "--stale", "--home", harness.homeDir)
+	if err != nil {
+		t.Fatalf("next: %v\n%s", err, output)
+	}
+	if !strings.Contains(output, "reply requested in conversation — https://github.com/acme/widget/pull/42#issuecomment-IC_bob") {
+		t.Fatalf("expected the baseline conversation comment to link to the comment, got:\n%s", output)
+	}
+	for _, line := range strings.Split(output, "\n") {
+		if strings.TrimSpace(line) == "reply requested" {
+			t.Fatalf("expected no bare reply line, got:\n%s", output)
+		}
+	}
+}
+
+func TestGitHubPRWatchBackfillsAMissingConversationCommentURL(t *testing.T) {
+	harness := newPRWatchHarness(t, authorParams)
+	detail := detailFixture{ID: watchPRNodeID, Timeline: []map[string]any{
+		issueComment(commentFixture{ID: "IC_bob", Author: "bob", Body: "Any update?", CreatedAt: watchTime(-2 * time.Hour)}),
+	}}
+	harness.mustPoll(watchBase, statusResponse(t, watchPR()), detailResponse(t, detail))
+	harness.exec(`UPDATE github_pr_observations SET observation_json = json_remove(observation_json, '$.conversation.last_human_comment_url')`)
+	if payloadString(harness.observation(watchPRNodeID), "conversation", "last_human_comment_url") != "" {
+		t.Fatal("expected the stored observation to lack the comment URL")
+	}
+
+	harness.mustPoll(watchBase.Add(time.Hour), statusResponse(t, watchPR()), detailResponse(t, detail))
+	want := "https://github.com/acme/widget/pull/42#issuecomment-IC_bob"
+	if got := payloadString(harness.observation(watchPRNodeID), "conversation", "last_human_comment_url"); got != want {
+		t.Fatalf("expected the same latest comment to backfill its URL, got %q", got)
+	}
 }
 
 func TestGitHubPRWatchObservationResetNeitherDuplicatesNorLoses(t *testing.T) {

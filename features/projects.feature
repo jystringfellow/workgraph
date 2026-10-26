@@ -258,3 +258,18 @@ Scenario: Decide many links at once
   Then each link is approved and a summary line follows
   When I run "workgraph projects review --approve-above 0.9 --target project"
   Then workgraph asks before approving and changes nothing without a yes
+
+Scenario: List projects and links when the database is read-only
+  Given a container is mapped to a project and a new unit in it has no link yet
+  And the workgraph database is read-only
+  When I run "workgraph projects review --json"
+  Then workgraph prints the review listing
+  And warns once that pending project links could not be refreshed
+  And "workgraph projects list", "workgraph next", and "workgraph today" still print their listings
+  When the database is writable again
+  Then the next "workgraph projects review" applies the pending link
+
+Scenario: Keep long fallback descriptions readable
+  Given a project memory file has no description and a long first paragraph
+  When I run "workgraph projects list"
+  Then the description ends at a whole word followed by "…"
