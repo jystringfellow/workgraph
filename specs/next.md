@@ -533,7 +533,7 @@ only. No fact invokes `gh`.
   that order and leaves the stale blocked PR to the `more` line.
 - **N8. MCP returns the same items read-only.** The `next_items` tool returns
   the same ids as `next --json` and has no write behavior.
-- **N13. Detail lines stay readable.** With two threads awaiting the user on
+- **N18. Detail lines stay readable.** With two threads awaiting the user on
   one `path:line`, two threads on the same path with no line, 20 failed
   `build` runs and one failed `lint` run, a PR whose threads are not loaded,
   and a baseline conversation comment, `next` prints one `(2 threads)` line

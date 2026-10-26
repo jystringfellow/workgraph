@@ -138,7 +138,7 @@ func TestGitHubPRWatchFirstSightEmitsOneObservedEventPerPR(t *testing.T) {
 	if harness.observationCount() != 2 {
 		t.Fatalf("expected two observations, got %d", harness.observationCount())
 	}
-	output, err := harness.cli("next", "--home", harness.homeDir)
+	output, err := harness.cli("next", "--stale", "--home", harness.homeDir)
 	if err != nil {
 		t.Fatalf("next: %v\n%s", err, output)
 	}
