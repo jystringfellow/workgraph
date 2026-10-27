@@ -486,9 +486,11 @@ func startNextWatch(t *testing.T, f *nextFixture, config workgraph.NextConfig) <
 	reader, writer := io.Pipe()
 	lines := make(chan workgraph.NextWatchEvent, 100)
 	config.WatchInterval = 10 * time.Millisecond
-	stopped := make(chan struct{})
-	go func() { defer close(stopped); defer writer.Close(); _ = workgraph.WatchNext(ctx, config, writer) }()
+	watchStopped := make(chan struct{})
+	decodeStopped := make(chan struct{})
+	go func() { defer close(watchStopped); defer writer.Close(); _ = workgraph.WatchNext(ctx, config, writer) }()
 	go func() {
+		defer close(decodeStopped)
 		defer close(lines)
 		decoder := json.NewDecoder(reader)
 		for {
@@ -496,10 +498,14 @@ func startNextWatch(t *testing.T, f *nextFixture, config workgraph.NextConfig) <
 			if err := decoder.Decode(&line); err != nil {
 				return
 			}
-			lines <- line
+			select {
+			case lines <- line:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
-	t.Cleanup(func() { cancel(); reader.Close(); <-stopped })
+	t.Cleanup(func() { cancel(); reader.Close(); <-watchStopped; <-decodeStopped })
 	return lines
 }
 func nextWatchLine(t *testing.T, lines <-chan workgraph.NextWatchEvent) workgraph.NextWatchEvent {
