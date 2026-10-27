@@ -311,3 +311,14 @@ func serveFakeGHMergeQuery(dir string, inputPath string) int {
 	fmt.Print(string(encoded))
 	return 0
 }
+
+func (fake *fakeGHGraphQL) mergeBatchStarted(size int) bool {
+	inputs, _ := filepath.Glob(filepath.Join(fake.dir, "gh-graphql-inputs", "*.json"))
+	for _, path := range inputs {
+		contents, err := os.ReadFile(path)
+		if err == nil && strings.Contains(string(contents), "mergeStateStatus") && strings.Count(string(contents), "node(id:") == size {
+			return true
+		}
+	}
+	return false
+}
