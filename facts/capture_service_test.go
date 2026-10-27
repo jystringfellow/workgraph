@@ -30,13 +30,17 @@ func TestCaptureServiceWorkerTracksSpacedHomeAndRejectsDuplicates(t *testing.T) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = worker.Process.Signal(syscall.SIGTERM); _ = worker.Wait() })
+	var status workgraph.DaemonStatus
 	eventually(t, func() bool {
-		_, err := os.Stat(filepath.Join(home, "daemon.pid"))
-		return err == nil
-	}, "worker did not become ready")
-	status, err := workgraph.DaemonStatusForHome(home)
-	if err != nil || !status.Running || status.PID != worker.Process.Pid {
-		t.Fatalf("worker status: %+v %v", status, err)
+		current, err := workgraph.DaemonStatusForHome(home)
+		if err != nil {
+			t.Fatalf("worker status: %v", err)
+		}
+		status = current
+		return !status.Starting && status.PID == worker.Process.Pid
+	}, "worker did not finish starting: %+v", &status)
+	if !status.Running {
+		t.Fatalf("worker status: %+v", status)
 	}
 	output, err := runWorkgraphCommandWithTimeout(nil, factWaitTimeout, args...)
 	if err == nil || !strings.Contains(output, "already locked") {

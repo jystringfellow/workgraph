@@ -186,10 +186,13 @@ func TestStartFindsLiveWorkerWhenDaemonStateIsMissing(t *testing.T) {
 			t.Fatalf("remove prior %s: %v", name, err)
 		}
 	}
-	statusOutput := runWorkgraphCommand(t, nil, "status", "--home", homeDir)
-	if !strings.Contains(statusOutput, "capture is running") || !strings.Contains(statusOutput, "PID: "+strconv.Itoa(priorPID)) {
-		t.Fatalf("expected status to recover live worker %d, got:\n%s", priorPID, statusOutput)
-	}
+	var statusOutput strings.Builder
+	eventually(t, func() bool {
+		output := runWorkgraphCommand(t, nil, "status", "--home", homeDir)
+		statusOutput.Reset()
+		statusOutput.WriteString(output)
+		return strings.Contains(output, "capture is running") && strings.Contains(output, "PID: "+strconv.Itoa(priorPID))
+	}, "expected status to recover live worker %d, got:\n%s", priorPID, &statusOutput)
 
 	startOutput := runWorkgraphCommand(t, nil, "start", "--home", homeDir, "--database", initResult.DatabasePath, "--watch", watchDir)
 	if !strings.Contains(startOutput, "capture is running") || !strings.Contains(startOutput, "PID: "+strconv.Itoa(priorPID)) {
