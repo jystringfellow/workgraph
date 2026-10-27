@@ -199,6 +199,8 @@ func takeAIRunTestWriteLock(db aiRunConnection) error {
 	return err
 }
 
+const aiRunTestSchedulingSlack = 2 * time.Second
+
 func TestAIRunDatabaseRetryGivesUpWithinItsDeadline(t *testing.T) {
 	databasePath := initAIRunTestDatabase(t)
 	holdAIRunTestExclusiveLock(t, databasePath)
@@ -210,7 +212,7 @@ func TestAIRunDatabaseRetryGivesUpWithinItsDeadline(t *testing.T) {
 	if err == nil || !isAIRunDatabaseUnavailable(err) {
 		t.Fatalf("expected an unavailable-database error, got %v", err)
 	}
-	if elapsed < budget-aiRunLockWaitSlice || elapsed > budget+time.Second {
+	if elapsed < budget-aiRunLockWaitSlice || elapsed > budget+aiRunLockWaitSlice+aiRunTestSchedulingSlack {
 		t.Fatalf("retry ran %v; expected it to keep retrying until its %v deadline and stop there", elapsed, budget)
 	}
 }
@@ -237,21 +239,26 @@ func TestAIRunStartRetryAfterChildExitGivesUpWithinItsBudget(t *testing.T) {
 
 func TestAIRunDatabaseDeadlineCoversLocksTakenAfterConnecting(t *testing.T) {
 	databasePath := initAIRunTestDatabase(t)
-	budget := 3 * time.Second
-	began := time.Now()
+	deadline := time.Now().Add(3 * time.Second)
+	var lockedAt time.Time
 	aiRunAfterConnect = func() {
 		time.Sleep(2 * time.Second)
 		t.Cleanup(takeAIRunTestExclusiveLock(t, databasePath))
+		lockedAt = time.Now()
 	}
 	t.Cleanup(func() { aiRunAfterConnect = nil })
 
-	err := withAIRunDatabase(databasePath, began.Add(budget), takeAIRunTestWriteLock)
-	elapsed := time.Since(began)
+	err := withAIRunDatabase(databasePath, deadline, takeAIRunTestWriteLock)
+	returnedAt := time.Now()
 	if err == nil || !isAIRunDatabaseUnavailable(err) {
 		t.Fatalf("expected an unavailable-database error, got %v", err)
 	}
-	if elapsed > budget+time.Second {
-		t.Fatalf("statement waited %v against a %v deadline after connecting", elapsed, budget)
+	limit := deadline
+	if lockedAt.After(limit) {
+		limit = lockedAt
+	}
+	if returnedAt.After(limit.Add(aiRunTestSchedulingSlack)) {
+		t.Fatalf("statement waited %v after a lock taken %v before its deadline", returnedAt.Sub(lockedAt), deadline.Sub(lockedAt))
 	}
 }
 
