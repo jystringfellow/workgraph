@@ -1327,6 +1327,7 @@ func TestGitHubPRWatchRateLimitsSetOneDeadline(t *testing.T) {
 			status = watchConnectorStatus(t, harness.homeDir)
 			return status.ConsecutiveFailures == 1
 		}, "timed out waiting for the rate-limited failure: %#v", &status)
+		pollWindow := time.Since(started)
 		if output, err := harness.cli("github", "prs", "hint", "--home", harness.homeDir); err != nil {
 			t.Fatalf("github prs hint: %v\n%s", err, output)
 		}
@@ -1337,8 +1338,8 @@ func TestGitHubPRWatchRateLimitsSetOneDeadline(t *testing.T) {
 		}
 
 		notBefore, err := workgraph.ConnectorPollNotBefore(harness.homeDir, "github.pr_watch")
-		if err != nil || notBefore.Before(resetAt.Add(-time.Second)) || notBefore.After(resetAt.Add(time.Second)) || !notBefore.After(started) {
-			t.Fatalf("expected the not-before deadline at the budget reset %s, got %s (%v)", resetAt, notBefore, err)
+		if err != nil || notBefore.Before(resetAt.Add(-time.Second)) || notBefore.After(resetAt.Add(pollWindow+time.Second)) || !notBefore.After(started) {
+			t.Fatalf("expected the not-before deadline at the budget reset %s, allowing for the %s poll window, got %s (%v)", resetAt, pollWindow, notBefore, err)
 		}
 		if !reflect.DeepEqual(harness.observation(watchPRNodeID), before) {
 			t.Fatalf("expected observations unchanged after a rate-limited poll")
