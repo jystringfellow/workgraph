@@ -1034,15 +1034,9 @@ func fmtInt(value int) string {
 func waitForGitHubEvent(t *testing.T, dbPath, eventType, repository string, number int) {
 	t.Helper()
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if githubEventExists(t, dbPath, eventType, repository, number) {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	t.Fatalf("timed out waiting for github event %s %s#%d", eventType, repository, number)
+	eventually(t, func() bool {
+		return githubEventExists(t, dbPath, eventType, repository, number)
+	}, "timed out waiting for github event %s %s#%d", eventType, repository, number)
 }
 
 func githubEventExists(t *testing.T, dbPath, eventType, repository string, number int) bool {
