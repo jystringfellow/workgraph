@@ -542,14 +542,7 @@ func signalProcess(pid int) {
 
 func waitForProcessExit(t *testing.T, pid int) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if err := syscall.Kill(pid, 0); err != nil {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("expected daemon process %d to exit", pid)
+	eventually(t, func() bool { return syscall.Kill(pid, 0) != nil }, "expected daemon process %d to exit", pid)
 }
 
 func waitForCapturedFileEvents(t *testing.T, databasePath string, minimum int) {
