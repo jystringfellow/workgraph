@@ -619,6 +619,29 @@ captures and constructs. The launched tool retains normal child-process
 capabilities, including whatever filesystem or network access it ordinarily
 has.
 
+### Agent-Initiated Checkpoints
+
+By default a wrapped agent records a checkpoint only when you ask, for example
+with `$workgraph-ai-checkpoint`. To keep every session ready for handoff
+without asking, opt in once:
+
+```sh
+workgraph settings enable-agent-checkpoints
+workgraph settings disable-agent-checkpoints
+```
+
+While enabled, `ai run`, `ai resume`, and `ai handoff` give the agent
+`WORKGRAPH_AI_CHECKPOINT_POLICY=agent`. The `workgraph-ai-checkpoint` skill
+then records short checkpoints with `workgraph ai checkpoint --agent-initiated
+--stdin` at milestones such as a commit, a pull request, a plan-changing test
+or review result, a task switch, or a nearly full context window. It never
+checkpoints on a timer. `ai show` reports whether the latest checkpoint was
+`Initiated by: user` or `Initiated by: agent`, and `ai handoff` uses the latest
+checkpoint either way. Workgraph records the setting in each session's start
+event at launch and checks `--agent-initiated` against that record, not the
+caller's environment, so it is rejected in sessions launched without the
+setting. Changing the setting applies only to sessions launched after it.
+
 ## Agent Plugin
 
 Install or update one logical `workgraph` plugin for Codex or Claude Code:

@@ -35,6 +35,18 @@ type SettingsIgnoreResult struct {
 	Message      string
 }
 
+type SettingsAgentCheckpointsConfig struct {
+	HomeDir string
+	Enabled bool
+}
+
+type SettingsAgentCheckpointsResult struct {
+	SettingsPath string
+	Enabled      bool
+	Changed      bool
+	Message      string
+}
+
 type SettingsGetConfig struct {
 	HomeDir string
 	Format  string
@@ -95,6 +107,7 @@ func GetSettings(config SettingsGetConfig) (SettingsGetResult, error) {
 		fmt.Sprintf("Repository scan directories: %d (user config)", len(settingsRepoDirs(localSettings))),
 		fmt.Sprintf("Ignore paths: %d (user config)", len(localSettings.IgnorePaths)),
 		fmt.Sprintf("Ignore names: %d (user config)", len(localSettings.IgnoreNames)),
+		"AI agent checkpoints: "+enabledText(localSettings.AIAgentCheckpoints)+" (user config)",
 	)
 	if managed.LLM.HostedEnabled.Value != nil {
 		state := "enabled"
@@ -162,12 +175,13 @@ type settingsGetJSONPayload struct {
 }
 
 type settingsJSONInfo struct {
-	Path            string `json:"path"`
-	WatchDirCount   int    `json:"watch_directory_count"`
-	RepoDirCount    int    `json:"repo_directory_count"`
-	IgnorePathCount int    `json:"ignore_path_count"`
-	IgnoreNameCount int    `json:"ignore_name_count"`
-	Source          string `json:"source"`
+	Path               string `json:"path"`
+	WatchDirCount      int    `json:"watch_directory_count"`
+	RepoDirCount       int    `json:"repo_directory_count"`
+	IgnorePathCount    int    `json:"ignore_path_count"`
+	IgnoreNameCount    int    `json:"ignore_name_count"`
+	AIAgentCheckpoints bool   `json:"ai_agent_checkpoints"`
+	Source             string `json:"source"`
 }
 
 type managedSettingsJSONInfo struct {
@@ -234,12 +248,13 @@ type managedStringSliceJSONInfo struct {
 func settingsGetJSON(settingsPath, managedPath string, managedPresent bool, localSettings settingsFile, managed managedSettingsFile) (SettingsGetResult, error) {
 	payload := settingsGetJSONPayload{
 		Settings: settingsJSONInfo{
-			Path:            settingsPath,
-			WatchDirCount:   len(userAddedWatchDirs(localSettings)),
-			RepoDirCount:    len(settingsRepoDirs(localSettings)),
-			IgnorePathCount: len(localSettings.IgnorePaths),
-			IgnoreNameCount: len(localSettings.IgnoreNames),
-			Source:          "user_config",
+			Path:               settingsPath,
+			WatchDirCount:      len(userAddedWatchDirs(localSettings)),
+			RepoDirCount:       len(settingsRepoDirs(localSettings)),
+			IgnorePathCount:    len(localSettings.IgnorePaths),
+			IgnoreNameCount:    len(localSettings.IgnoreNames),
+			AIAgentCheckpoints: localSettings.AIAgentCheckpoints,
+			Source:             "user_config",
 		},
 		ManagedSettings: managedSettingsJSONInfo{
 			Active: managedPresent,
@@ -448,6 +463,55 @@ func removePath(path string, paths []string) []string {
 		result = append(result, existing)
 	}
 	return result
+}
+
+func SetAIAgentCheckpoints(config SettingsAgentCheckpointsConfig) (SettingsAgentCheckpointsResult, error) {
+	homeDir, err := resolvedSettingsHome(config.HomeDir)
+	if err != nil {
+		return SettingsAgentCheckpointsResult{}, err
+	}
+	settingsPath := filepath.Join(homeDir, "settings.json")
+	localSettings, err := readSettings(settingsPath)
+	if err != nil {
+		return SettingsAgentCheckpointsResult{}, err
+	}
+	result := SettingsAgentCheckpointsResult{
+		SettingsPath: settingsPath,
+		Enabled:      config.Enabled,
+		Changed:      localSettings.AIAgentCheckpoints != config.Enabled,
+	}
+	if result.Changed {
+		localSettings.AIAgentCheckpoints = config.Enabled
+		if err := writeSettings(settingsPath, localSettings); err != nil {
+			return SettingsAgentCheckpointsResult{}, err
+		}
+	}
+	title := "workgraph settings unchanged"
+	if result.Changed {
+		title = "workgraph settings updated"
+	}
+	result.Message = strings.Join([]string{
+		title,
+		"Settings: " + settingsPath,
+		"AI agent checkpoints: " + enabledText(config.Enabled),
+		"Applies to AI sessions launched after this change.",
+	}, "\n")
+	return result, nil
+}
+
+func aiAgentCheckpointsEnabled(homeDir string) (bool, error) {
+	localSettings, err := readSettings(filepath.Join(homeDir, "settings.json"))
+	if err != nil {
+		return false, err
+	}
+	return localSettings.AIAgentCheckpoints, nil
+}
+
+func enabledText(enabled bool) string {
+	if enabled {
+		return "enabled"
+	}
+	return "disabled"
 }
 
 func AddIgnorePath(config SettingsIgnoreConfig) (SettingsIgnoreResult, error) {

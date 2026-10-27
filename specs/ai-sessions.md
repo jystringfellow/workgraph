@@ -33,7 +33,7 @@ manages worktrees.
 
 ```text
 workgraph ai run [--home <path>] [--database <path>] -- <agent-command>
-workgraph ai checkpoint [--home <path>] [--database <path>] [session-id] --stdin
+workgraph ai checkpoint [--home <path>] [--database <path>] [session-id] [--agent-initiated] --stdin
 workgraph ai sessions [--home <path>] [--database <path>] [--status <status>] [--limit <count>] [--all | --archived]
 workgraph ai archive [--home <path>] [--database <path>] <session-id> [<session-id>...]
 workgraph ai archive [--home <path>] [--database <path>] (--all | --status <status> [--before <date>]) (--dry-run | --yes)
@@ -407,6 +407,17 @@ inventing lineage.
 Launching through `ai run` is local consent to lifecycle events and cooperative
 checkpoints. It is not consent to transcript capture or any external action.
 
+When the user has turned on standing agent checkpoint consent (see
+[Agent-initiated checkpoints](#agent-initiated-checkpoints)), `ai run`,
+`ai resume`, and `ai handoff` also inject
+`WORKGRAPH_AI_CHECKPOINT_POLICY=agent` into the child. When the setting is
+off, workgraph injects nothing extra and removes any inherited
+`WORKGRAPH_AI_CHECKPOINT_POLICY` from the child environment, so a parent shell
+cannot pass the signal along. The setting is read once at launch and the
+decision is recorded as `agent_checkpoints` in the start event; changing the
+setting affects only sessions launched afterwards. An unreadable settings file
+stops the launch before the child starts.
+
 ## `workgraph ai checkpoint`
 
 Without a positional ID, checkpoint uses `WORKGRAPH_AI_SESSION_ID`. If neither
@@ -513,12 +524,55 @@ write path. It must:
   prompts, terminal output, file contents, and diffs
 - invoke the local `workgraph` executable directly when available, with
   `go run ./cmd/workgraph` allowed only while developing inside this repository
-- run only after an explicit user request and report validation or persistence
+- run only after an explicit user request, or on the agent's own judgment
+  when standing consent is injected, and report validation or persistence
   failures without claiming that a checkpoint was stored
 
-The skill does not add scheduled, implicit, shutdown, signal, or process-exit
-checkpoints. The explicit user invocation is the consent boundary for the
-agent-authored summary.
+Consent for an agent-authored summary is either an explicit user request or
+the user's standing agent checkpoint setting. Without the injected policy the
+skill keeps explicit-request-only behavior. The skill never adds scheduled,
+timer-driven, shutdown, signal, or process-exit checkpoints.
+
+### Agent-initiated checkpoints
+
+Standing consent lets a wrapped agent keep its session ready for `ai handoff`
+without the user asking each time. It is off by default and is managed with:
+
+```text
+workgraph settings enable-agent-checkpoints [--home <path>]
+workgraph settings disable-agent-checkpoints [--home <path>]
+```
+
+The setting is stored as `ai_agent_checkpoints` in the selected home's
+`settings.json`, as described in [Configuration](config.md).
+
+`ai checkpoint --agent-initiated` records that the agent, not the user,
+started the checkpoint. It is accepted only when the target session's start
+event records `"agent_checkpoints": true`; otherwise it fails and writes no
+event. The caller's environment never authorizes the flag, so a child that sets
+`WORKGRAPH_AI_CHECKPOINT_POLICY` itself, or that enables the setting from
+inside its session, gains no consent for that session. A start event without
+the field records no consent. The environment variable is only the signal the
+skill reads. A child that writes directly to the database or settings file is
+outside this boundary, consistent with wrapped tools keeping normal
+child-process capabilities. The flag changes nothing else: the six
+agent-stated fields, validation, the credential guardrail, size limits,
+storage and checkout binding, and the receipt are unchanged.
+
+With the policy injected, the skill checkpoints without asking at work
+milestones: after a commit, push, or pull request; after a review round or a
+test result that changes the plan; before switching tasks or stopping; and
+when the context window is nearly full or has just been compacted. It does not
+checkpoint on a timer or after trivial steps, records at most about one
+checkpoint per milestone, and keeps each one to terse bullets of roughly one to
+two kilobytes that restate the full current state rather than history. It does
+not read files or run commands only to write a checkpoint, and mentions each
+checkpoint to the user in at most one short line.
+
+Every agent-initiated checkpoint is an ordinary immutable checkpoint event
+whose payload records `"initiated_by": "agent"`, and `ai show` reports the
+initiator of the checkpoint it displays. `ai handoff` uses the latest valid
+checkpoint regardless of its initiator.
 
 After a successful append, `ai checkpoint` writes this receipt to stdout:
 
@@ -595,9 +649,14 @@ Every payload begins with the stable envelope fields `schema_version` and
   "pid": 1234,
   "boot_identity": "opaque-digest",
   "process_start_identity": "opaque-platform-value",
+  "agent_checkpoints": true,
   "observed": {}
 }
 ```
+
+`agent_checkpoints` records standing agent checkpoint consent read from
+settings at launch. It is omitted when consent was off, and an absent field
+means no consent.
 
 `boot_identity` and `process_start_identity` are omitted when unavailable;
 they are never written as `null`. Boot identity is an opaque one-way digest of
@@ -649,6 +708,11 @@ associated with another workgraph lifetime.
 
 Only fields present in accepted input need appear under `agent_stated`; absent
 optional fields are omitted. Present empty arrays remain empty arrays.
+
+An agent-initiated checkpoint adds `"initiated_by": "agent"` beside
+`agent_stated`. The field is omitted for user-requested checkpoints, and
+readers treat an absent field as `user`. It is an optional schema version 1
+field: readers that predate it ignore it.
 
 ### Ended payload
 
@@ -843,7 +907,8 @@ For a known session it renders:
 - latest native session ID and predecessor workgraph session ID when available
 - latest supported stored observed snapshot, whether from start, checkpoint,
   or end, with its observation time and source event
-- latest supported agent-stated checkpoint with its event time
+- latest supported agent-stated checkpoint with its event time and initiator
+  (`Initiated by: user` or `Initiated by: agent`)
 - end outcome when available
 - explicit integrity or compatibility warnings
 
@@ -999,7 +1064,11 @@ the explicitly selected local session and verified adapter command.
 - transcript scraping or transcript storage
 - editor and desktop-only integrations
 - arbitrary process discovery and `ai attach`
-- automatic checkpoints or automatically generated summaries
+- automatically generated summaries; every checkpoint is agent-stated text
+- agent-specific compaction hooks that trigger checkpoints
+- reading native agent transcripts, memory, or todo files to build a
+  checkpoint
+- rate limiting of agent-initiated checkpoints in code
 - `gh copilot` wrapper adaptation; the verified Copilot adapter targets the
   direct `copilot` executable
 - vendor-native selection by ambiguous prefix, name, picker, or "last session"

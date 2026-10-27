@@ -23,6 +23,8 @@ import (
 
 const aiSchemaVersion = 1
 const aiDirtyPathLimit = 500
+const aiCheckpointPolicyEnv = "WORKGRAPH_AI_CHECKPOINT_POLICY"
+const aiAgentCheckpointPolicy = "agent"
 
 type AIRunConfig struct {
 	HomeDir              string
@@ -65,6 +67,7 @@ type aiStartedPayload struct {
 	PID                  int             `json:"pid"`
 	BootIdentity         string          `json:"boot_identity,omitempty"`
 	ProcessStartIdentity string          `json:"process_start_identity,omitempty"`
+	AgentCheckpoints     bool            `json:"agent_checkpoints,omitempty"`
 	Observed             AIObservedState `json:"observed"`
 }
 
@@ -98,6 +101,7 @@ type AICheckpointConfig struct {
 	DatabaseExplicit bool
 	SessionID        string
 	WorkingDir       string
+	AgentInitiated   bool
 	Input            io.Reader
 }
 
@@ -111,6 +115,7 @@ type aiCheckpointPayload struct {
 	SessionID     string          `json:"session_id"`
 	Observed      AIObservedState `json:"observed"`
 	AgentStated   map[string]any  `json:"agent_stated"`
+	InitiatedBy   string          `json:"initiated_by,omitempty"`
 }
 
 type AIProcessInspection struct {
@@ -250,6 +255,10 @@ func runAISession(config AIRunConfig, permittedParentSessionID string) (AIRunRes
 	if err != nil {
 		return AIRunResult{}, err
 	}
+	agentCheckpoints, err := aiAgentCheckpointsEnabled(status.HomeDir)
+	if err != nil {
+		return AIRunResult{}, fmt.Errorf("read agent checkpoint setting: %w", err)
+	}
 	workingDir := config.WorkingDir
 	if workingDir == "" {
 		workingDir, err = os.Getwd()
@@ -312,7 +321,7 @@ func runAISession(config AIRunConfig, permittedParentSessionID string) (AIRunRes
 	command.Stdin = config.Stdin
 	command.Stdout = config.Stdout
 	command.Stderr = config.Stderr
-	command.Env = aiChildEnvironment(os.Environ(), sessionID, status.HomeDir, status.DatabasePath, nativeLaunch.Environment)
+	command.Env = aiChildEnvironment(os.Environ(), sessionID, status.HomeDir, status.DatabasePath, agentCheckpoints, nativeLaunch.Environment)
 	attachSignalRelay, stopSignalRelay := startAIRunSignalRelay()
 	defer stopSignalRelay()
 	if aiRunBeforeChildStart != nil {
@@ -344,6 +353,7 @@ func runAISession(config AIRunConfig, permittedParentSessionID string) (AIRunRes
 		PID:                  command.Process.Pid,
 		BootIdentity:         currentAIBootIdentity(),
 		ProcessStartIdentity: currentAIProcessStartIdentity(command.Process.Pid),
+		AgentCheckpoints:     agentCheckpoints,
 		Observed:             observed,
 	}
 	start := persistAIRunStart(status.DatabasePath, func(db aiRunConnection) error {
@@ -469,6 +479,13 @@ func CheckpointAISession(config AICheckpointConfig) (AICheckpointResult, error) 
 	if err := json.Unmarshal([]byte(startedJSON), &started); err != nil || started.SchemaVersion != aiSchemaVersion {
 		return AICheckpointResult{}, errors.New("AI session start payload is unsupported or invalid")
 	}
+	initiatedBy := ""
+	if config.AgentInitiated {
+		if !started.AgentCheckpoints {
+			return AICheckpointResult{}, errors.New("agent-initiated checkpoints were not enabled when this session launched; the user can run `workgraph settings enable-agent-checkpoints` and relaunch the agent")
+		}
+		initiatedBy = aiAgentCheckpointPolicy
+	}
 
 	workingDir := config.WorkingDir
 	if workingDir == "" {
@@ -506,7 +523,7 @@ func CheckpointAISession(config AICheckpointConfig) (AICheckpointResult, error) 
 		return AICheckpointResult{}, fmt.Errorf("create checkpoint event id: %w", err)
 	}
 	eventID := "ai.session_checkpointed:" + sessionID + ":" + eventUUID
-	payload := aiCheckpointPayload{SchemaVersion: aiSchemaVersion, SessionID: sessionID, Observed: observed, AgentStated: agentStated}
+	payload := aiCheckpointPayload{SchemaVersion: aiSchemaVersion, SessionID: sessionID, Observed: observed, AgentStated: agentStated, InitiatedBy: initiatedBy}
 	if err := insertAIEvent(db, eventID, "ai.session_checkpointed", now, project, "AI session checkpointed", payload); err != nil {
 		return AICheckpointResult{}, fmt.Errorf("persist AI checkpoint: %w", err)
 	}
@@ -1095,7 +1112,13 @@ func aiShowMessage(session *aiSessionProjection, location *time.Location) string
 	if session.LatestCheckpoint == nil {
 		lines = append(lines, "", "No agent-stated checkpoint recorded.")
 	} else {
-		lines = append(lines, "", "Agent-stated checkpoint", "Recorded: "+session.CheckpointAt.In(location).Format(time.RFC3339))
+		initiatedBy := "user"
+		if session.LatestCheckpoint.InitiatedBy != "" {
+			initiatedBy = session.LatestCheckpoint.InitiatedBy
+		}
+		lines = append(lines, "", "Agent-stated checkpoint",
+			"Recorded: "+session.CheckpointAt.In(location).Format(time.RFC3339),
+			"Initiated by: "+safeAITerminalText(initiatedBy))
 		for _, field := range []struct {
 			key   string
 			label string
@@ -1399,11 +1422,12 @@ func insertAIEvent(db aiEventStore, id string, eventType string, timestamp time.
 	return nil
 }
 
-func aiChildEnvironment(current []string, sessionID string, homeDir string, databasePath string, additional map[string]string) []string {
+func aiChildEnvironment(current []string, sessionID string, homeDir string, databasePath string, agentCheckpoints bool, additional map[string]string) []string {
 	blocked := map[string]bool{
 		"WORKGRAPH_AI_SESSION_ID": true,
 		"WORKGRAPH_AI_HOME":       true,
 		"WORKGRAPH_AI_DATABASE":   true,
+		aiCheckpointPolicyEnv:     true,
 	}
 	for name := range additional {
 		blocked[name] = true
@@ -1420,6 +1444,9 @@ func aiChildEnvironment(current []string, sessionID string, homeDir string, data
 		"WORKGRAPH_AI_HOME="+homeDir,
 		"WORKGRAPH_AI_DATABASE="+databasePath,
 	)
+	if agentCheckpoints {
+		environment = append(environment, aiCheckpointPolicyEnv+"="+aiAgentCheckpointPolicy)
+	}
 	names := make([]string, 0, len(additional))
 	for name := range additional {
 		names = append(names, name)

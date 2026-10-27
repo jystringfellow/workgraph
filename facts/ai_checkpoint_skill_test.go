@@ -29,9 +29,23 @@ func TestBundledAICheckpointSkillProvidesExplicitPrivateWorkflow(t *testing.T) {
 		"transcript",
 		"observed state",
 		"explicit",
+		"WORKGRAPH_AI_CHECKPOINT_POLICY=agent",
+		"--agent-initiated",
 	} {
 		if !strings.Contains(skill, expected) {
 			t.Fatalf("AI checkpoint skill is missing %q:\n%s", expected, skill)
+		}
+	}
+	if len(skillBytes) > 4096 {
+		t.Fatalf("AI checkpoint skill is %d bytes; keep it within 4096 because it loads into every session that uses it", len(skillBytes))
+	}
+	for _, client := range []string{"claude-code", "codex"} {
+		packaged, err := os.ReadFile(filepath.Join(root, "integrations", client, "plugins", "workgraph", "skills", "workgraph-ai-checkpoint", "SKILL.md"))
+		if err != nil {
+			t.Fatalf("read %s packaged AI checkpoint skill: %v", client, err)
+		}
+		if string(packaged) != skill {
+			t.Fatalf("%s packaged AI checkpoint skill differs from the canonical skill", client)
 		}
 	}
 

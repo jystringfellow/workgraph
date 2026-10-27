@@ -24,6 +24,7 @@ type helpTopic struct {
 
 var helpDetails = map[string]string{
 	"projects review": "Listing forms first apply deterministic links, such as container mappings, to units that have no link yet. On a read-only database they list without applying them and print a warning.",
+	"ai checkpoint":   "--agent-initiated is checked against the agent checkpoint consent recorded when the session launched, not the caller's environment; see `workgraph settings enable-agent-checkpoints`.",
 	"ai handoff":      "Handoff rejects unsupported newer source evidence. Source transcripts, environment, terminal output, arguments, file contents, and diffs are not persisted or transported. The tool retains normal child-process capabilities.",
 }
 
@@ -41,7 +42,7 @@ var helpTopics = map[string]helpTopic{
 	"service uninstall":       {"workgraph service uninstall [--home path]", "Stop and remove the user service, preserving captured data."},
 	"ai":                      {"workgraph ai <subcommand>", "Capture, hand off, and resume durable local CLI AI session context."},
 	"ai archive":              {"workgraph ai archive <session-id> [<session-id>...] [options]", "Hide AI sessions from the default list without deleting their events."},
-	"ai checkpoint":           {"workgraph ai checkpoint [session-id] --stdin [options]", "Append a validated structured checkpoint to an AI session."},
+	"ai checkpoint":           {"workgraph ai checkpoint [session-id] [--agent-initiated] --stdin [options]", "Append a validated structured checkpoint to an AI session."},
 	"ai handoff":              {"workgraph ai handoff <codex|claude|copilot|opencode> [--from <session-id>] [--stdin] [options]", "Launch a linked AI session with structured checkpoint and repository context."},
 	"ai resume":               {"workgraph ai resume <session-id> [options]", "Launch a verified native codex, claude, copilot, or opencode session as a linked lifetime."},
 	"ai run":                  {"workgraph ai run [options] -- <agent-command>", "Launch and record one CLI AI child-process lifetime; native adapters: codex, claude, copilot, opencode."},
@@ -146,15 +147,17 @@ var helpTopics = map[string]helpTopic{
 	"security":                {"workgraph security <subcommand>", "Inspect local security posture."},
 	"security report":         {"workgraph security report [--format text|json] [options]", "Produce a secret-free local endpoint security report."},
 
-	"connectors required-tools":   {"workgraph connectors required-tools [connector]", "Show canonical fetch and identity provider-tool requirements for bridged capture."},
-	"settings":                    {"workgraph settings <subcommand>", "Inspect and change local workgraph settings."},
-	"settings add-ignore-name":    {"workgraph settings add-ignore-name <name> [options]", "Ignore directories and files with an exact basename."},
-	"settings add-ignore-path":    {"workgraph settings add-ignore-path <path> [options]", "Ignore an absolute path and all of its descendants."},
-	"settings add-watch":          {"workgraph settings add-watch [path] [options]", "Add a directory to the configured watch roots."},
-	"settings doctor":             {"workgraph settings doctor [options]", "Diagnose local and managed settings."},
-	"settings get":                {"workgraph settings get [--format text|json] [options]", "Show effective non-secret settings and provenance."},
-	"settings remove-ignore-name": {"workgraph settings remove-ignore-name <name> [options]", "Remove an exact-basename ignore rule."},
-	"settings remove-ignore-path": {"workgraph settings remove-ignore-path <path> [options]", "Remove an absolute-path ignore rule."},
+	"connectors required-tools":          {"workgraph connectors required-tools [connector]", "Show canonical fetch and identity provider-tool requirements for bridged capture."},
+	"settings":                           {"workgraph settings <subcommand>", "Inspect and change local workgraph settings."},
+	"settings add-ignore-name":           {"workgraph settings add-ignore-name <name> [options]", "Ignore directories and files with an exact basename."},
+	"settings add-ignore-path":           {"workgraph settings add-ignore-path <path> [options]", "Ignore an absolute path and all of its descendants."},
+	"settings add-watch":                 {"workgraph settings add-watch [path] [options]", "Add a directory to the configured watch roots."},
+	"settings disable-agent-checkpoints": {"workgraph settings disable-agent-checkpoints [options]", "Disable agent-initiated checkpoints for AI sessions launched afterwards."},
+	"settings doctor":                    {"workgraph settings doctor [options]", "Diagnose local and managed settings."},
+	"settings enable-agent-checkpoints":  {"workgraph settings enable-agent-checkpoints [options]", "Let wrapped AI agents record their own checkpoints at work milestones."},
+	"settings get":                       {"workgraph settings get [--format text|json] [options]", "Show effective non-secret settings and provenance."},
+	"settings remove-ignore-name":        {"workgraph settings remove-ignore-name <name> [options]", "Remove an exact-basename ignore rule."},
+	"settings remove-ignore-path":        {"workgraph settings remove-ignore-path <path> [options]", "Remove an absolute-path ignore rule."},
 
 	"slack":                {"workgraph slack <subcommand>", "Connect, capture, and disconnect Slack workspaces."},
 	"slack capture":        {"workgraph slack capture [options]", "Capture normalized Slack events."},

@@ -126,6 +126,19 @@ Feature: Local AI coding session continuity
     And the command reports the stored session id and immutable event id
     And no checkpoint is generated on a schedule or merely because the process exits
 
+  Scenario: Let a wrapped agent checkpoint on its own after a one-time opt-in
+    Given I have not enabled agent checkpoints
+    When I launch a CLI agent with "workgraph ai run"
+    Then the agent receives no WORKGRAPH_AI_CHECKPOINT_POLICY, even if my shell exported one
+    And "workgraph ai checkpoint --agent-initiated --stdin" is rejected without writing an event
+    When I run "workgraph settings enable-agent-checkpoints"
+    And I launch a CLI agent with "workgraph ai run", "workgraph ai resume", or "workgraph ai handoff"
+    Then the agent receives WORKGRAPH_AI_CHECKPOINT_POLICY=agent
+    When the agent reaches a milestone and submits "workgraph ai checkpoint --agent-initiated --stdin"
+    Then workgraph stores the checkpoint with initiated_by "agent"
+    And "workgraph ai show" reports "Initiated by: agent"
+    And "workgraph ai handoff" uses the latest checkpoint whatever its initiator
+
   Scenario: Bind checkpoints to the original local working directory
     Given an AI session was started in one Git checkout
     When I submit its checkpoint from another checkout

@@ -184,6 +184,22 @@ Every ignore command reports the settings file and normalized rule. A command
 that changes settings tells the user to restart capture because an already
 running daemon keeps the rules loaded when it started.
 
+### ai_agent_checkpoints
+
+`ai_agent_checkpoints` is a boolean that grants standing consent for wrapped AI
+agents to record their own `workgraph ai checkpoint`s. It is absent and off by
+default. Users manage it with:
+
+```text
+workgraph settings enable-agent-checkpoints
+workgraph settings disable-agent-checkpoints
+```
+
+Enabling an enabled setting and disabling a disabled one are successful no-ops.
+The change applies to AI sessions launched afterwards. `workgraph settings get`
+reports whether it is enabled. See `specs/ai-sessions.md` for what the consent
+allows.
+
 ## Precedence
 
 Normal capture path configuration uses this order when no managed setting is

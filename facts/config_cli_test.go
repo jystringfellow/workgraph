@@ -142,6 +142,79 @@ func TestSettingsCommandsManageIgnoreNames(t *testing.T) {
 	}
 }
 
+func TestSettingsCommandsManageAgentCheckpointConsent(t *testing.T) {
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	settingsPath := filepath.Join(homeDir, "settings.json")
+	runWorkgraphCommand(t, nil, "init", "--home", homeDir)
+	agentCheckpointSetting := func() (bool, bool) {
+		t.Helper()
+		contents, err := os.ReadFile(settingsPath)
+		if err != nil {
+			t.Fatalf("read settings: %v", err)
+		}
+		var settings map[string]any
+		if err := json.Unmarshal(contents, &settings); err != nil {
+			t.Fatalf("parse settings: %v", err)
+		}
+		value, present := settings["ai_agent_checkpoints"]
+		return value == true, present
+	}
+	jsonReport := func() bool {
+		t.Helper()
+		var payload struct {
+			Settings struct {
+				AIAgentCheckpoints *bool `json:"ai_agent_checkpoints"`
+			} `json:"settings"`
+		}
+		output := runWorkgraphCommand(t, nil, "settings", "get", "--home", homeDir, "--format", "json")
+		if err := json.Unmarshal([]byte(output), &payload); err != nil {
+			t.Fatalf("parse settings JSON: %v\n%s", err, output)
+		}
+		if payload.Settings.AIAgentCheckpoints == nil {
+			t.Fatalf("settings JSON omitted ai_agent_checkpoints:\n%s", output)
+		}
+		return *payload.Settings.AIAgentCheckpoints
+	}
+
+	if _, present := agentCheckpointSetting(); present {
+		t.Fatal("fresh settings granted agent checkpoint consent")
+	}
+	if output := runWorkgraphCommand(t, nil, "settings", "get", "--home", homeDir); !strings.Contains(output, "AI agent checkpoints: disabled") {
+		t.Fatalf("settings get did not report disabled agent checkpoints:\n%s", output)
+	}
+	if jsonReport() {
+		t.Fatal("settings JSON reported agent checkpoints enabled by default")
+	}
+
+	output := runWorkgraphCommand(t, nil, "settings", "enable-agent-checkpoints", "--home", homeDir)
+	if !strings.Contains(output, "workgraph settings updated") || !strings.Contains(output, "AI agent checkpoints: enabled") || !strings.Contains(output, "AI sessions launched after this change") {
+		t.Fatalf("unexpected enable output:\n%s", output)
+	}
+	if enabled, _ := agentCheckpointSetting(); !enabled {
+		t.Fatal("enable-agent-checkpoints did not persist consent")
+	}
+	if output := runWorkgraphCommand(t, nil, "settings", "enable-agent-checkpoints", "--home", homeDir); !strings.Contains(output, "workgraph settings unchanged") {
+		t.Fatalf("repeated enable was not a no-op:\n%s", output)
+	}
+	if output := runWorkgraphCommand(t, nil, "settings", "get", "--home", homeDir); !strings.Contains(output, "AI agent checkpoints: enabled (user config)") {
+		t.Fatalf("settings get did not report enabled agent checkpoints:\n%s", output)
+	}
+	if !jsonReport() {
+		t.Fatal("settings JSON did not report enabled agent checkpoints")
+	}
+
+	output = runWorkgraphCommand(t, nil, "settings", "disable-agent-checkpoints", "--home", homeDir)
+	if !strings.Contains(output, "workgraph settings updated") || !strings.Contains(output, "AI agent checkpoints: disabled") {
+		t.Fatalf("unexpected disable output:\n%s", output)
+	}
+	if _, present := agentCheckpointSetting(); present {
+		t.Fatal("disable-agent-checkpoints left consent in settings")
+	}
+	if output := runWorkgraphCommand(t, nil, "settings", "disable-agent-checkpoints", "--home", homeDir); !strings.Contains(output, "workgraph settings unchanged") {
+		t.Fatalf("repeated disable was not a no-op:\n%s", output)
+	}
+}
+
 func countExactString(values []string, expected string) int {
 	count := 0
 	for _, value := range values {
