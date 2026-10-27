@@ -792,9 +792,6 @@ func TestRunCapturesGitHubPullRequestsThroughGHCLI(t *testing.T) {
 	}
 	connectGitHubForTest(t, homeDir, ghPath)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan error, 1)
 	capture, err := workgraph.StartRun(workgraph.RunConfig{
 		HomeDir:            homeDir,
 		DatabasePath:       initResult.DatabasePath,
@@ -805,14 +802,11 @@ func TestRunCapturesGitHubPullRequestsThroughGHCLI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run start failed: %v", err)
 	}
-	go func() {
-		done <- capture.Run(ctx)
-	}()
+	stop := runCaptureUntilStopped(t, capture)
 
 	waitForGitHubEvent(t, initResult.DatabasePath, "github.pull_request", "jystringfellow/Cupcake", 42)
 
-	cancel()
-	if err := <-done; err != nil {
+	if err := stop(); err != nil {
 		t.Fatalf("run returned error: %v", err)
 	}
 }
