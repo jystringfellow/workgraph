@@ -1,6 +1,7 @@
 package facts
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,15 +31,19 @@ func TestCaptureServiceWorkerTracksSpacedHomeAndRejectsDuplicates(t *testing.T) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = worker.Process.Signal(syscall.SIGTERM); _ = worker.Wait() })
+	eventually(t, func() bool {
+		_, err := os.Stat(filepath.Join(home, "daemon.pid"))
+		return err == nil
+	}, "worker did not write its pid file")
+	var lastStatus strings.Builder
 	var status workgraph.DaemonStatus
 	eventually(t, func() bool {
 		current, err := workgraph.DaemonStatusForHome(home)
-		if err != nil {
-			t.Fatalf("worker status: %v", err)
-		}
+		lastStatus.Reset()
+		fmt.Fprintf(&lastStatus, "%+v %v", current, err)
 		status = current
-		return !status.Starting && status.PID == worker.Process.Pid
-	}, "worker did not finish starting: %+v", &status)
+		return err == nil && !status.Starting && status.PID == worker.Process.Pid
+	}, "worker did not finish starting: %s", &lastStatus)
 	if !status.Running {
 		t.Fatalf("worker status: %+v", status)
 	}
