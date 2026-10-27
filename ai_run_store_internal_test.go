@@ -260,17 +260,21 @@ func (recorder *aiRunAttemptRecorder) opensFrom(at time.Time) int {
 	return count
 }
 
+func requireAIRunLockWaitsWithinASlice(t *testing.T, attempts []aiRunTestAttempt) {
+	t.Helper()
+	for index, attempt := range attempts {
+		if !attempt.refused && attempt.lockWait > aiRunLockWaitSlice {
+			t.Fatalf("attempt %d waited up to %v for the lock, longer than one %v slice", index, attempt.lockWait, aiRunLockWaitSlice)
+		}
+	}
+}
+
 func requireAIRunRetriesStopAt(t *testing.T, recorder *aiRunAttemptRecorder, attempts []aiRunTestAttempt, windowEnd time.Time) {
 	t.Helper()
-	if len(attempts) == 0 {
-		t.Fatalf("expected attempts within the window, got none")
-	}
+	requireAIRunLockWaitsWithinASlice(t, attempts)
 	for index, attempt := range attempts {
 		if !attempt.deadline.Equal(windowEnd) {
 			t.Fatalf("attempt %d ran against deadline %s, want the window end %s", index, attempt.deadline, windowEnd)
-		}
-		if !attempt.refused && attempt.lockWait > aiRunLockWaitSlice {
-			t.Fatalf("attempt %d waited up to %v for the lock, longer than one %v slice", index, attempt.lockWait, aiRunLockWaitSlice)
 		}
 	}
 	if late := recorder.opensFrom(windowEnd); late > 1 {
@@ -321,29 +325,44 @@ func TestAIRunStartRetryAfterChildExitGivesUpWithinItsBudget(t *testing.T) {
 
 func TestAIRunDatabaseDeadlineCoversLocksTakenAfterConnecting(t *testing.T) {
 	databasePath := initAIRunTestDatabase(t)
-	deadline := time.Now().Add(2 * aiRunLockWaitSlice)
-	var lockedAt time.Time
-	aiRunAfterConnect = func() {
-		time.Sleep(time.Until(deadline) - aiRunLockWaitSlice/2)
-		t.Cleanup(takeAIRunTestExclusiveLock(t, databasePath))
-		lockedAt = time.Now()
-	}
 	t.Cleanup(func() { aiRunAfterConnect = nil })
-
 	recorder := recordAIRunAttempts(t)
-	err := withAIRunDatabase(databasePath, deadline, recorder.takeWriteLock)
-	if err == nil || !isAIRunDatabaseUnavailable(err) {
-		t.Fatalf("expected an unavailable-database error, got %v", err)
-	}
-	if returnedAt := time.Now(); returnedAt.After(deadline.Add(aiRunTestWatchdog)) {
-		t.Fatalf("statement returned %v after its deadline", returnedAt.Sub(deadline))
-	}
-	attempts := recorder.recorded()
-	if len(attempts) != 1 {
-		t.Fatalf("expected one attempt, got %d", len(attempts))
-	}
-	if attempt := attempts[0]; !attempt.refused && attempt.lockWait > deadline.Sub(lockedAt)+time.Millisecond {
-		t.Fatalf("statement could wait %v for a lock taken %v before its deadline", attempt.lockWait, deadline.Sub(lockedAt))
+	began := time.Now()
+	for {
+		deadline := time.Now().Add(2 * aiRunLockWaitSlice)
+		connected := false
+		var lockedAt time.Time
+		aiRunAfterConnect = func() {
+			connected = true
+			time.Sleep(time.Until(deadline) - aiRunLockWaitSlice/2)
+			t.Cleanup(takeAIRunTestExclusiveLock(t, databasePath))
+			lockedAt = time.Now()
+		}
+		previousAttempts := len(recorder.recorded())
+		err := withAIRunDatabase(databasePath, deadline, recorder.takeWriteLock)
+		if !connected {
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("expected a connection that missed its deadline to report it, got %v", err)
+			}
+			if time.Since(began) > aiRunTestWatchdog {
+				t.Fatalf("no connection became ready before its %v deadline within %v", 2*aiRunLockWaitSlice, aiRunTestWatchdog)
+			}
+			continue
+		}
+		if err == nil || !isAIRunDatabaseUnavailable(err) {
+			t.Fatalf("expected an unavailable-database error, got %v", err)
+		}
+		if returnedAt := time.Now(); returnedAt.After(deadline.Add(aiRunTestWatchdog)) {
+			t.Fatalf("statement returned %v after its deadline", returnedAt.Sub(deadline))
+		}
+		attempts := recorder.recorded()[previousAttempts:]
+		if len(attempts) != 1 {
+			t.Fatalf("expected one statement after connecting, got %d", len(attempts))
+		}
+		if attempt := attempts[0]; !attempt.refused && attempt.lockWait > deadline.Sub(lockedAt)+time.Millisecond {
+			t.Fatalf("statement could wait %v for a lock taken %v before its deadline", attempt.lockWait, deadline.Sub(lockedAt))
+		}
+		return
 	}
 }
 
@@ -372,6 +391,7 @@ func TestAIRunStartWindowCountsFromChildExitDuringABlockedAttempt(t *testing.T) 
 		t.Fatalf("start retry ran %v after the child exited mid-attempt with a %v window", sinceExit, aiRunRetryBudget)
 	}
 	windowEnd := exitedAt.Add(aiRunRetryBudget)
+	requireAIRunLockWaitsWithinASlice(t, recorder.recorded())
 	var afterExit []aiRunTestAttempt
 	staleWindows := 0
 	for _, attempt := range recorder.recorded() {
