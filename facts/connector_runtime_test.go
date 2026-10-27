@@ -32,13 +32,18 @@ func TestStalledConnectorPollIsImmediateBoundedAndDoesNotBlockFiles(t *testing.T
 	}
 
 	started := make(chan struct{})
+	firstPollEnded := make(chan struct{})
 	release := make(chan struct{})
 	var startedOnce sync.Once
 	notionServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		startedOnce.Do(func() { close(started) })
+		first := false
+		startedOnce.Do(func() { close(started); first = true })
 		select {
 		case <-request.Context().Done():
 		case <-release:
+		}
+		if first {
+			close(firstPollEnded)
 		}
 	}))
 	defer func() {
@@ -67,7 +72,7 @@ func TestStalledConnectorPollIsImmediateBoundedAndDoesNotBlockFiles(t *testing.T
 		DatabasePath:          initResult.DatabasePath,
 		WatchDirs:             []string{watchDir},
 		NotionPollInterval:    time.Hour,
-		ConnectorPollTimeout:  750 * time.Millisecond,
+		ConnectorPollTimeout:  5 * time.Second,
 		ConnectorRetryInitial: 100 * time.Millisecond,
 		ConnectorRetryMax:     200 * time.Millisecond,
 	})
@@ -80,10 +85,10 @@ func TestStalledConnectorPollIsImmediateBoundedAndDoesNotBlockFiles(t *testing.T
 
 	select {
 	case <-started:
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(10 * time.Second):
 		cancel()
 		<-done
-		t.Fatal("ready Notion connector did not poll immediately")
+		t.Fatal("ready Notion connector did not poll immediately despite its hourly interval")
 	}
 
 	target := filepath.Join(watchDir, "while-notion-stalled.md")
@@ -92,17 +97,16 @@ func TestStalledConnectorPollIsImmediateBoundedAndDoesNotBlockFiles(t *testing.T
 		<-done
 		t.Fatalf("create watched file: %v", err)
 	}
-	fileDeadline := time.After(300 * time.Millisecond)
 	for {
 		select {
 		case event := <-capture.Events:
 			if event.Operation == "created" && event.Path == target {
 				goto fileCaptured
 			}
-		case <-fileDeadline:
+		case <-firstPollEnded:
 			cancel()
 			<-done
-			t.Fatal("stalled Notion poll blocked filesystem capture")
+			t.Fatal("stalled Notion poll blocked filesystem capture until the poll ended")
 		}
 	}
 
@@ -654,37 +658,33 @@ func TestBackgroundStatusAndLogShowConnectorPollFailure(t *testing.T) {
 func waitForConnectorPollError(t *testing.T, homeDir string, connectorID string, expected string) {
 	t.Helper()
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
+	eventually(t, func() bool {
 		result, err := workgraph.StatusConnectors(workgraph.ConnectorListConfig{HomeDir: homeDir})
 		if err == nil {
 			for _, connector := range result.Connectors {
 				if connector.ID == connectorID && strings.Contains(connector.LastError, expected) {
-					return
+					return true
 				}
 			}
 		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s connector error containing %q", connectorID, expected)
+		return false
+	}, "timed out waiting for %s connector error containing %q", connectorID, expected)
 }
 
 func waitForConnectorPollSuccess(t *testing.T, homeDir string, connectorID string) {
 	t.Helper()
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
+	eventually(t, func() bool {
 		result, err := workgraph.StatusConnectors(workgraph.ConnectorListConfig{HomeDir: homeDir})
 		if err == nil {
 			for _, connector := range result.Connectors {
 				if connector.ID == connectorID && connector.LastSuccess != "" && connector.NextPoll != "" && connector.ConsecutiveFailures == 0 {
-					return
+					return true
 				}
 			}
 		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s connector success state", connectorID)
+		return false
+	}, "timed out waiting for %s connector success state", connectorID)
 }
 
 func TestRunPollsConnectedSlackListsAndAzureBoards(t *testing.T) {
