@@ -66,56 +66,47 @@ func TestStalledConnectorPollIsImmediateBoundedAndDoesNotBlockFiles(t *testing.T
 		t.Fatalf("write connector runtime config: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	capture, err := workgraph.StartRun(workgraph.RunConfig{
-		HomeDir:               homeDir,
-		DatabasePath:          initResult.DatabasePath,
-		WatchDirs:             []string{watchDir},
-		NotionPollInterval:    time.Hour,
-		ConnectorPollTimeout:  5 * time.Second,
-		ConnectorRetryInitial: 100 * time.Millisecond,
-		ConnectorRetryMax:     200 * time.Millisecond,
-	})
-	if err != nil {
-		cancel()
-		t.Fatalf("run start failed: %v", err)
+	startCapture := func(pollTimeout time.Duration) (*workgraph.RunCapture, func() error) {
+		t.Helper()
+		capture, err := workgraph.StartRun(workgraph.RunConfig{
+			HomeDir:               homeDir,
+			DatabasePath:          initResult.DatabasePath,
+			WatchDirs:             []string{watchDir},
+			NotionPollInterval:    time.Hour,
+			ConnectorPollTimeout:  pollTimeout,
+			ConnectorRetryInitial: 100 * time.Millisecond,
+			ConnectorRetryMax:     200 * time.Millisecond,
+		})
+		if err != nil {
+			t.Fatalf("run start failed: %v", err)
+		}
+		return capture, runCaptureUntilStopped(t, capture)
 	}
-	done := make(chan error, 1)
-	go func() { done <- capture.Run(ctx) }()
 
+	capture, stop := startCapture(2 * factWaitTimeout)
 	select {
 	case <-started:
 	case <-time.After(10 * time.Second):
-		cancel()
-		<-done
 		t.Fatal("ready Notion connector did not poll immediately despite its hourly interval")
 	}
-
 	target := filepath.Join(watchDir, "while-notion-stalled.md")
 	if err := os.WriteFile(target, []byte("still responsive\n"), 0o644); err != nil {
-		cancel()
-		<-done
 		t.Fatalf("create watched file: %v", err)
 	}
-	for {
-		select {
-		case event := <-capture.Events:
-			if event.Operation == "created" && event.Path == target {
-				goto fileCaptured
-			}
-		case <-firstPollEnded:
-			cancel()
-			<-done
-			t.Fatal("stalled Notion poll blocked filesystem capture until the poll ended")
-		}
+	waitForReportedEvent(t, capture.Events, "created", target)
+	select {
+	case <-firstPollEnded:
+		t.Fatal("expected the Notion poll to still be stalled when the file was captured")
+	default:
+	}
+	if err := stop(); err != nil {
+		t.Fatalf("capture run failed after cancellation: %v", err)
 	}
 
-fileCaptured:
+	_, stop = startCapture(750 * time.Millisecond)
 	waitForConnectorPollError(t, homeDir, "notion", "deadline exceeded")
 	contents, err := os.ReadFile(filepath.Join(homeDir, "connectors.json"))
 	if err != nil {
-		cancel()
-		<-done
 		t.Fatalf("read connector runtime state: %v", err)
 	}
 	var state struct {
@@ -126,19 +117,13 @@ fileCaptured:
 		} `json:"connectors"`
 	}
 	if err := json.Unmarshal(contents, &state); err != nil {
-		cancel()
-		<-done
 		t.Fatalf("parse connector runtime state: %v", err)
 	}
 	notion := state.Connectors["notion"]
 	if notion.LastSuccess != "" || notion.NextPoll == "" || notion.ConsecutiveFailures < 1 {
-		cancel()
-		<-done
 		t.Fatalf("expected timeout backoff state, got %+v", notion)
 	}
-
-	cancel()
-	if err := <-done; err != nil {
+	if err := stop(); err != nil {
 		t.Fatalf("capture run failed after cancellation: %v", err)
 	}
 }
