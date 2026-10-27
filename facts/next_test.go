@@ -486,7 +486,8 @@ func startNextWatch(t *testing.T, f *nextFixture, config workgraph.NextConfig) <
 	reader, writer := io.Pipe()
 	lines := make(chan workgraph.NextWatchEvent, 100)
 	config.WatchInterval = 10 * time.Millisecond
-	go func() { defer writer.Close(); _ = workgraph.WatchNext(ctx, config, writer) }()
+	stopped := make(chan struct{})
+	go func() { defer close(stopped); defer writer.Close(); _ = workgraph.WatchNext(ctx, config, writer) }()
 	go func() {
 		defer close(lines)
 		decoder := json.NewDecoder(reader)
@@ -498,7 +499,7 @@ func startNextWatch(t *testing.T, f *nextFixture, config workgraph.NextConfig) <
 			lines <- line
 		}
 	}()
-	t.Cleanup(func() { cancel(); reader.Close() })
+	t.Cleanup(func() { cancel(); reader.Close(); <-stopped })
 	return lines
 }
 func nextWatchLine(t *testing.T, lines <-chan workgraph.NextWatchEvent) workgraph.NextWatchEvent {
@@ -509,8 +510,8 @@ func nextWatchLine(t *testing.T, lines <-chan workgraph.NextWatchEvent) workgrap
 			t.Fatal("watch stopped")
 		}
 		return line
-	case <-time.After(2 * time.Second):
-		t.Fatal("watch did not emit within two seconds")
+	case <-time.After(factWaitTimeout):
+		t.Fatalf("watch did not emit within %s", factWaitTimeout)
 		return workgraph.NextWatchEvent{}
 	}
 }
