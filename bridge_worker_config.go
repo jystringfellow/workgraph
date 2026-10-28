@@ -42,7 +42,7 @@ func readBridgeWorkerConfig(homeDir string) (bridgeWorkerConfigFile, error) {
 	return config, nil
 }
 
-func configureBridgeWorkerSettings(homeDir string, client string, model string, clearModel bool, configDir string, clearConfigDir bool, addProviderTools []string) (bridgeWorkerSettings, error) {
+func configureBridgeWorkerSettings(homeDir string, client string, model string, clearModel bool, configDir string, clearConfigDir bool, clearProviderTools bool, addProviderTools []string) (bridgeWorkerSettings, error) {
 	model = strings.TrimSpace(model)
 	configDir = strings.TrimSpace(configDir)
 	if model != "" && clearModel {
@@ -85,6 +85,10 @@ func configureBridgeWorkerSettings(homeDir string, client string, model string, 
 			changed = true
 		}
 	}
+	if clearProviderTools && len(settings.ProviderTools) > 0 {
+		settings.ProviderTools = nil
+		changed = true
+	}
 	for _, tool := range addProviderTools {
 		if !slices.Contains(settings.ProviderTools, tool) {
 			settings.ProviderTools = append(settings.ProviderTools, tool)
@@ -92,6 +96,9 @@ func configureBridgeWorkerSettings(homeDir string, client string, model string, 
 		}
 	}
 	slices.Sort(settings.ProviderTools)
+	if err := validateStoredProviderTools(client, settings.ProviderTools); err != nil {
+		return bridgeWorkerSettings{}, err
+	}
 	if changed {
 		if settings.Model == "" && settings.ConfigDir == "" && len(settings.ProviderTools) == 0 {
 			delete(config.Workers, client)
@@ -120,7 +127,25 @@ func bridgeWorkerSettingsFor(homeDir string, client string) (bridgeWorkerSetting
 	settings := config.Workers[client]
 	settings.Model = strings.TrimSpace(settings.Model)
 	settings.ConfigDir = strings.TrimSpace(settings.ConfigDir)
+	if err := validateStoredProviderTools(client, settings.ProviderTools); err != nil {
+		return bridgeWorkerSettings{}, err
+	}
 	return settings, nil
+}
+
+func validateStoredProviderTools(client string, tools []string) error {
+	if len(tools) == 0 {
+		return nil
+	}
+	if client != "copilot" {
+		return fmt.Errorf("bridge worker config stores provider tools for %s; only copilot provider tools are supported", client)
+	}
+	for _, tool := range tools {
+		if _, err := validateProviderTools(client, []string{tool}); err != nil || strings.TrimSpace(tool) != tool {
+			return fmt.Errorf("bridge worker config stores invalid Copilot provider tool %q; reinstall with --clear-provider-tools and re-approve exact server(tool) names", tool)
+		}
+	}
+	return nil
 }
 
 func bridgeWorkerModelLabel(model string) string {

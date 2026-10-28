@@ -22,16 +22,17 @@ import (
 var agentPluginAssets embed.FS
 
 type PluginInstallConfig struct {
-	HomeDir        string
-	Client         string
-	ClientCommand  string
-	InstallRoot    string
-	SkipLaunchd    bool
-	ProviderTools  []string
-	Model          string
-	ClearModel     bool
-	ConfigDir      string
-	ClearConfigDir bool
+	HomeDir            string
+	Client             string
+	ClientCommand      string
+	InstallRoot        string
+	SkipLaunchd        bool
+	ProviderTools      []string
+	Model              string
+	ClearModel         bool
+	ConfigDir          string
+	ClearConfigDir     bool
+	ClearProviderTools bool
 }
 
 type PluginInstallResult struct {
@@ -69,6 +70,9 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 	if strings.TrimSpace(config.ConfigDir) != "" && config.ClearConfigDir {
 		return PluginInstallResult{}, fmt.Errorf("--config-dir and --clear-config-dir cannot be used together")
 	}
+	if config.ClearProviderTools && client != "copilot" {
+		return PluginInstallResult{}, fmt.Errorf("--clear-provider-tools is supported only for copilot")
+	}
 	providerTools, err := validateProviderTools(client, config.ProviderTools)
 	if err != nil {
 		return PluginInstallResult{}, err
@@ -103,7 +107,7 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 	if client == "copilot" {
 		copilotProviderTools = providerTools
 	}
-	workerSettings, err := configureBridgeWorkerSettings(homeDir, client, config.Model, config.ClearModel, config.ConfigDir, config.ClearConfigDir, copilotProviderTools)
+	workerSettings, err := configureBridgeWorkerSettings(homeDir, client, config.Model, config.ClearModel, config.ConfigDir, config.ClearConfigDir, config.ClearProviderTools, copilotProviderTools)
 	if err != nil {
 		return PluginInstallResult{}, err
 	}
@@ -250,6 +254,28 @@ func validateProviderTools(client string, tools []string) ([]string, error) {
 }
 
 var copilotReservedPermissionKinds = map[string]bool{"shell": true, "write": true, "read": true, "url": true, "memory": true}
+
+var copilotDeniedPermissionKinds = []string{"shell", "write", "url", "memory"}
+
+func copilotToolName(permission string) string {
+	match := copilotProviderToolPattern.FindStringSubmatch(permission)
+	if match == nil {
+		return permission
+	}
+	return match[1] + "-" + match[2]
+}
+
+func withoutCopilotOverrides(environment []string) []string {
+	filtered := make([]string, 0, len(environment))
+	for _, entry := range environment {
+		name, _, _ := strings.Cut(entry, "=")
+		if upper := strings.ToUpper(name); upper == "COPILOT_ALLOW_ALL" || upper == "COPILOT_CUSTOM_INSTRUCTIONS_DIRS" {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
+}
 
 func copilotBridgeDrainPermissions() []string {
 	permissions := make([]string, 0, len(claudeBridgeDrainPermissions))
@@ -557,7 +583,11 @@ func registerAgentPlugin(client string, commandName string, installRoot string, 
 	case "codex":
 		commands = [][]string{{"plugin", "marketplace", "add", installRoot}, {"plugin", "add", "workgraph@workgraph"}}
 	case "copilot":
-		commands = [][]string{{"plugin", "marketplace", "add", installRoot}, {"plugin", "install", "workgraph@workgraph"}}
+		commands = [][]string{
+			{"plugin", "marketplace", "remove", "workgraph"},
+			{"plugin", "marketplace", "add", installRoot},
+			{"plugin", "install", "workgraph@workgraph"},
+		}
 	default:
 		commands = [][]string{
 			{"plugin", "marketplace", "add", "--scope", "user", installRoot},
@@ -571,7 +601,7 @@ func registerAgentPlugin(client string, commandName string, installRoot string, 
 		output, err := command.CombinedOutput()
 		if err != nil {
 			details := strings.ToLower(strings.TrimSpace(string(output)))
-			if !strings.Contains(details, "already") && !strings.Contains(details, "exist") {
+			if !strings.Contains(details, "already") && !strings.Contains(details, "exist") && !strings.Contains(details, "not registered") {
 				return fmt.Errorf("register %s workgraph plugin: %s", client, strings.TrimSpace(string(output)))
 			}
 		}
@@ -791,14 +821,20 @@ func DrainBridge(homeDir string, client string, clientCommand string, timeout ti
 		}
 		args = append(args, prompt)
 	case "copilot":
-		args = []string{"-s", "--no-ask-user", "--sync-session=off"}
-		for _, permission := range copilotBridgeDrainPermissions() {
-			args = append(args, "--allow-tool="+permission)
+		args = []string{"-s", "--no-ask-user", "--sync-session=off", "--no-custom-instructions", "--disallow-temp-dir"}
+		for _, kind := range copilotDeniedPermissionKinds {
+			args = append(args, "--deny-tool="+kind)
 		}
+		permissions := copilotBridgeDrainPermissions()
 		if drainKind == captureRequestKindCapture {
-			for _, permission := range workerSettings.ProviderTools {
-				args = append(args, "--allow-tool="+permission)
-			}
+			permissions = append(permissions, workerSettings.ProviderTools...)
+		}
+		args = append(args, "--available-tools=skill")
+		for _, permission := range permissions {
+			args = append(args, "--available-tools="+copilotToolName(permission))
+		}
+		for _, permission := range permissions {
+			args = append(args, "--allow-tool="+permission)
 		}
 		if model != "" {
 			args = append(args, "--model="+model)
@@ -817,7 +853,11 @@ func DrainBridge(homeDir string, client string, clientCommand string, timeout ti
 	if err != nil {
 		return "", fmt.Errorf("resolve workgraph executable: %w", err)
 	}
-	command.Env = applySignedInClientBinding(os.Environ(), client, signedInClientBinding{ConfigDir: configDir})
+	environment := os.Environ()
+	if client == "copilot" {
+		environment = withoutCopilotOverrides(environment)
+	}
+	command.Env = applySignedInClientBinding(environment, client, signedInClientBinding{ConfigDir: configDir})
 	command.Env = append(command.Env, "WORKGRAPH_HOME="+homeDir, "WORKGRAPH_EXECUTABLE="+executable, "WORKGRAPH_BRIDGE_WORKER="+drainWorker)
 	output, err := command.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {

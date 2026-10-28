@@ -939,10 +939,13 @@ func TestCopilotBridgeDrainAllowsOnlyWorkgraphDrainToolsAndExplicitProviderTools
 	homeDir := initBridgedCaptureHome(t)
 	fixtureDir := t.TempDir()
 	logPath := filepath.Join(fixtureDir, "drain.log")
+	environmentPath := filepath.Join(fixtureDir, "drain.env")
 	clientPath := filepath.Join(fixtureDir, "copilot")
-	if err := os.WriteFile(clientPath, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \""+logPath+"\"\n"), 0o700); err != nil {
+	if err := os.WriteFile(clientPath, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \""+logPath+"\"\nprintf '%s|%s' \"${COPILOT_ALLOW_ALL-unset}\" \"${COPILOT_CUSTOM_INSTRUCTIONS_DIRS-unset}\" > \""+environmentPath+"\"\n"), 0o700); err != nil {
 		t.Fatalf("write fake Copilot: %v", err)
 	}
+	t.Setenv("COPILOT_ALLOW_ALL", "true")
+	t.Setenv("COPILOT_CUSTOM_INSTRUCTIONS_DIRS", fixtureDir)
 	if output, err := runworkgraph(t, repoRoot(t), "plugin", "install", "--home", homeDir,
 		"--client", "copilot", "--client-command", clientPath, "--install-root", filepath.Join(fixtureDir, "installed"),
 		"--no-launchd", "--model", "copilot-bridge-pinned",
@@ -967,10 +970,24 @@ func TestCopilotBridgeDrainAllowsOnlyWorkgraphDrainToolsAndExplicitProviderTools
 		"--allow-tool=workgraph(capture_requests_claim)", "--allow-tool=workgraph(capture_ingest)",
 		"--allow-tool=workgraph(connector_required_tools)", "--allow-tool=workgraph(llm_task_submit)",
 		"--allow-tool=slack(slack_list_user_channels)", "-p",
+		"--no-custom-instructions", "--disallow-temp-dir",
+		"--deny-tool=shell", "--deny-tool=write", "--deny-tool=url", "--deny-tool=memory",
+		"--available-tools=skill", "--available-tools=workgraph-capture_requests_claim",
+		"--available-tools=workgraph-llm_task_submit", "--available-tools=slack-slack_list_user_channels",
 	} {
 		if !slices.Contains(arguments, expected) {
 			t.Fatalf("Copilot drain invocation omitted %q:\n%s", expected, contents)
 		}
+	}
+	for _, argument := range arguments {
+		tool, found := strings.CutPrefix(argument, "--available-tools=")
+		if found && tool != "skill" && tool != "slack-slack_list_user_channels" && !strings.HasPrefix(tool, "workgraph-") {
+			t.Fatalf("Copilot drain exposed unapproved tool %q:\n%s", tool, contents)
+		}
+	}
+	environment, err := os.ReadFile(environmentPath)
+	if err != nil || string(environment) != "unset|unset" {
+		t.Fatalf("Copilot drain inherited permission or instruction overrides %q: %v", environment, err)
 	}
 	prompt := arguments[len(arguments)-1]
 	if arguments[len(arguments)-2] != "-p" || !strings.Contains(prompt, "List pending requests before claiming") || !strings.Contains(prompt, "Claim with worker name copilot-drain-") {
@@ -1010,5 +1027,108 @@ func TestCopilotBridgeDrainLeavesCaptureRequestsPendingWithoutProviderTools(t *t
 	var status string
 	if err := openBridgedCaptureDatabase(t, homeDir).QueryRow(`SELECT status FROM capture_requests WHERE connector_id = 'slack'`).Scan(&status); err != nil || status != "pending" {
 		t.Fatalf("expected request to remain pending, got %q err=%v", status, err)
+	}
+}
+
+func TestCopilotPluginReinstallRepointsTheMarketplaceAtTheCurrentInstallRoot(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	fixtureDir := t.TempDir()
+	statePath := filepath.Join(fixtureDir, "marketplace")
+	clientPath := filepath.Join(fixtureDir, "copilot")
+	script := `#!/bin/sh
+case "$1 $2 $3" in
+  "plugin marketplace add")
+    if [ -f "` + statePath + `" ]; then echo 'Marketplace "workgraph" already registered' >&2; exit 1; fi
+    printf '%s' "$4" > "` + statePath + `" ;;
+  "plugin marketplace remove")
+    if [ ! -f "` + statePath + `" ]; then echo 'Marketplace "workgraph" is not registered' >&2; exit 1; fi
+    rm -f "` + statePath + `" ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(clientPath, []byte(script), 0o700); err != nil {
+		t.Fatalf("write fake Copilot: %v", err)
+	}
+	for _, installRoot := range []string{filepath.Join(fixtureDir, "first"), filepath.Join(fixtureDir, "second"), filepath.Join(fixtureDir, "second")} {
+		if output, err := runworkgraph(t, repoRoot(t), "plugin", "install", "--home", homeDir, "--client", "copilot",
+			"--client-command", clientPath, "--install-root", installRoot, "--no-launchd"); err != nil {
+			t.Fatalf("install Copilot plugin at %s: %v\n%s", installRoot, err, output)
+		}
+		registered, err := os.ReadFile(statePath)
+		if err != nil || string(registered) != installRoot {
+			t.Fatalf("Copilot marketplace points at %q, want %q: %v", registered, installRoot, err)
+		}
+	}
+}
+
+func TestCopilotBridgeDrainRejectsHandEditedProviderToolsWithoutLaunching(t *testing.T) {
+	for _, tool := range []string{"shell(rm)", "workgraph(capture_ingest)", "slack"} {
+		t.Run(tool, func(t *testing.T) {
+			homeDir := initBridgedCaptureHome(t)
+			fixtureDir := t.TempDir()
+			markerPath := filepath.Join(fixtureDir, "launched")
+			clientPath := filepath.Join(fixtureDir, "copilot")
+			if err := os.WriteFile(clientPath, []byte("#!/bin/sh\ncase \"$1\" in plugin) exit 0 ;; esac\ntouch \""+markerPath+"\"\n"), 0o700); err != nil {
+				t.Fatalf("write fake Copilot: %v", err)
+			}
+			if output, err := runworkgraph(t, repoRoot(t), "plugin", "install", "--home", homeDir,
+				"--client", "copilot", "--client-command", clientPath, "--install-root", filepath.Join(fixtureDir, "installed"),
+				"--no-launchd", "--allow-provider-tool", "slack(slack_list_user_channels)"); err != nil {
+				t.Fatalf("install Copilot plugin: %v\n%s", err, output)
+			}
+			configPath := filepath.Join(homeDir, "bridge", "workers.json")
+			if err := os.WriteFile(configPath, []byte(`{"workers":{"copilot":{"provider_tools":["`+tool+`"]}}}`), 0o600); err != nil {
+				t.Fatalf("edit worker config: %v", err)
+			}
+			connectBridgedConnector(t, repoRoot(t), homeDir, "slack")
+			if output, err := runworkgraph(t, repoRoot(t), "connectors", "poll", "--home", homeDir, "--once", "--connector", "slack"); err != nil {
+				t.Fatalf("emit request: %v\n%s", err, output)
+			}
+			output, err := runworkgraph(t, repoRoot(t), "bridge", "drain", "--home", homeDir, "--client", "copilot", "--client-command", clientPath)
+			if err == nil || !strings.Contains(string(output), "--clear-provider-tools") {
+				t.Fatalf("drain accepted stored provider tool %q: %v\n%s", tool, err, output)
+			}
+			if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
+				t.Fatalf("drain launched Copilot with stored provider tool %q: %v", tool, err)
+			}
+		})
+	}
+}
+
+func TestCopilotPluginInstallClearProviderToolsReplacesTheStoredSet(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	fixtureDir := t.TempDir()
+	clientPath := filepath.Join(fixtureDir, "copilot")
+	if err := os.WriteFile(clientPath, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("write fake Copilot: %v", err)
+	}
+	install := func(extra ...string) string {
+		t.Helper()
+		args := append([]string{"plugin", "install", "--home", homeDir, "--client", "copilot", "--client-command", clientPath,
+			"--install-root", filepath.Join(fixtureDir, "installed"), "--no-launchd"}, extra...)
+		output, err := runworkgraph(t, repoRoot(t), args...)
+		if err != nil {
+			t.Fatalf("install Copilot plugin %v: %v\n%s", extra, err, output)
+		}
+		return string(output)
+	}
+	install("--allow-provider-tool", "slack(slack_list_user_channels)", "--allow-provider-tool", "slack(slack_read_channel)")
+	if output := install("--clear-provider-tools", "--allow-provider-tool", "azure-devops(wit_query)"); !strings.Contains(output, "Provider tools: 1") {
+		t.Fatalf("replacing provider tools did not report one tool:\n%s", output)
+	}
+	contents, err := os.ReadFile(filepath.Join(homeDir, "bridge", "workers.json"))
+	if err != nil || strings.Contains(string(contents), "slack(") || !strings.Contains(string(contents), "azure-devops(wit_query)") {
+		t.Fatalf("worker config did not replace provider tools: %v\n%s", err, contents)
+	}
+	if output := install("--clear-provider-tools"); !strings.Contains(output, "Provider tools: 0") {
+		t.Fatalf("clearing provider tools did not report zero tools:\n%s", output)
+	}
+	if contents, err := os.ReadFile(filepath.Join(homeDir, "bridge", "workers.json")); err == nil && strings.Contains(string(contents), "provider_tools") {
+		t.Fatalf("worker config kept provider tools after clearing:\n%s", contents)
+	}
+	output, err := runworkgraph(t, repoRoot(t), "plugin", "install", "--home", homeDir, "--client", "codex", "--client-command", clientPath,
+		"--install-root", filepath.Join(fixtureDir, "codex"), "--no-launchd", "--clear-provider-tools")
+	if err == nil || !strings.Contains(string(output), "--clear-provider-tools is supported only for copilot") {
+		t.Fatalf("codex accepted --clear-provider-tools: %v\n%s", err, output)
 	}
 }

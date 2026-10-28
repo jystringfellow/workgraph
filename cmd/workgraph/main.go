@@ -153,6 +153,7 @@ func runPluginInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 	clearConfigDir := flags.Bool("clear-config-dir", false, "clear the persisted client configuration directory binding")
 	var providerTools repeatedStringFlags
 	flags.Var(&providerTools, "allow-provider-tool", "exact provider MCP tool name to allow for the unattended Claude Code or Copilot worker; repeatable")
+	clearProviderTools := flags.Bool("clear-provider-tools", false, "remove all stored Copilot provider tools before applying --allow-provider-tool")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -164,6 +165,7 @@ func runPluginInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 		HomeDir: *homeDir, Client: *client, ClientCommand: *clientCommand,
 		InstallRoot: *installRoot, SkipLaunchd: *noLaunchd, ProviderTools: providerTools,
 		Model: *model, ClearModel: *clearModel, ConfigDir: *configDir, ClearConfigDir: *clearConfigDir,
+		ClearProviderTools: *clearProviderTools,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph plugin install: %v\n", err)
@@ -324,6 +326,7 @@ func runBridgeInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 	clearConfigDir := flags.Bool("clear-config-dir", false, "clear the persisted client configuration directory binding")
 	var providerTools repeatedStringFlags
 	flags.Var(&providerTools, "allow-provider-tool", "exact provider MCP tool name to allow for the unattended Claude Code or Copilot worker; repeatable")
+	clearProviderTools := flags.Bool("clear-provider-tools", false, "remove all stored Copilot provider tools before applying --allow-provider-tool")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -335,6 +338,7 @@ func runBridgeInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 		HomeDir: *homeDir, Client: *client, ClientCommand: *clientCommand,
 		InstallRoot: *installRoot, SkipLaunchd: *noLaunchd, ProviderTools: providerTools,
 		Model: *model, ClearModel: *clearModel, ConfigDir: *configDir, ClearConfigDir: *clearConfigDir,
+		ClearProviderTools: *clearProviderTools,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph bridge install: %v\n", err)

@@ -82,7 +82,9 @@ printf '%s\n%s\n%s' "$WORKGRAPH_AI_SESSION_ID" "$WORKGRAPH_AI_HOME" "$WORKGRAPH_
 				}
 			}
 			argumentLines := strings.Split(strings.TrimSuffix(arguments, "\n"), "\n")
-			if test.destination == "copilot" && !slices.Contains(argumentLines, "--plugin-dir="+filepath.Join(homeDir, "ai-adapters", "copilot", "workgraph-session")) {
+			if test.destination == "copilot" && !slices.ContainsFunc(argumentLines, func(line string) bool {
+				return strings.HasPrefix(line, "--plugin-dir="+filepath.Join(homeDir, "ai-adapters", "copilot")+string(filepath.Separator))
+			}) {
 				t.Fatalf("Copilot handoff did not load the session checkpoint plugin:\n%s", arguments)
 			}
 			for _, argument := range argumentLines {

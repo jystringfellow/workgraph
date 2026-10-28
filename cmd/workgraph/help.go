@@ -201,6 +201,7 @@ var helpExamples = map[string][]string{
 		"workgraph plugin install --client claude-code --model <approved-model>",
 		"workgraph plugin install --client claude-code --allow-provider-tool mcp__provider__exact_read_tool",
 		"workgraph plugin install --client copilot --allow-provider-tool 'provider(exact_read_tool)'",
+		"workgraph plugin install --client copilot --clear-provider-tools --allow-provider-tool 'provider(exact_read_tool)'",
 	},
 	"capture requests": {
 		"workgraph capture requests --list",

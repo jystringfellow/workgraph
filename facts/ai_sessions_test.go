@@ -1402,8 +1402,8 @@ func TestAIRunAssignsExactCopilotSessionID(t *testing.T) {
 		t.Fatalf("read Copilot args: %v", err)
 	}
 	arguments := strings.Split(strings.TrimSpace(string(argsBytes)), "\n")
-	expectedPluginDir := "--plugin-dir=" + filepath.Join(homeDir, "ai-adapters", "copilot", "workgraph-session")
-	if len(arguments) != 2 || !strings.HasPrefix(arguments[0], "--session-id=") || arguments[1] != expectedPluginDir {
+	expectedPluginDirPrefix := "--plugin-dir=" + filepath.Join(homeDir, "ai-adapters", "copilot") + string(filepath.Separator)
+	if len(arguments) != 2 || !strings.HasPrefix(arguments[0], "--session-id=") || !strings.HasPrefix(arguments[1], expectedPluginDirPrefix) {
 		t.Fatalf("expected exact Copilot session assignment and session plugin, got %q", arguments)
 	}
 	nativeID := strings.TrimPrefix(arguments[0], "--session-id=")
@@ -1435,35 +1435,46 @@ func TestAICopilotLaunchesLoadSessionOnlyCheckpointSkill(t *testing.T) {
 	}
 	workingDir := t.TempDir()
 	argsPath := filepath.Join(workingDir, "args.txt")
-	copilotPath := writeAIFactExecutable(t, workingDir, "copilot", `printf '%s\n' "$@" > "$WORKGRAPH_AI_TEST_ARGS"`)
-	pluginDir := filepath.Join(homeDir, "ai-adapters", "copilot", "workgraph-session")
-	readArguments := func(label string) []string {
+	snapshotDir := filepath.Join(workingDir, "snapshot")
+	copilotPath := writeAIFactExecutable(t, workingDir, "copilot", `printf '%s\n' "$@" > "$WORKGRAPH_AI_TEST_ARGS"
+for argument in "$@"; do
+  case "$argument" in
+    --plugin-dir=*) rm -rf "$WORKGRAPH_AI_TEST_SNAPSHOT"; cp -Rp "${argument#--plugin-dir=}" "$WORKGRAPH_AI_TEST_SNAPSHOT" ;;
+  esac
+done`)
+	adapterDir := filepath.Join(homeDir, "ai-adapters", "copilot")
+	launchPluginDir := func(label string, wantLast string) string {
 		t.Helper()
 		argsBytes, err := os.ReadFile(argsPath)
 		if err != nil {
 			t.Fatalf("read %s Copilot args: %v", label, err)
 		}
-		return strings.Split(strings.TrimSpace(string(argsBytes)), "\n")
-	}
-	countPluginDirs := func(arguments []string) int {
-		count := 0
+		arguments := strings.Split(strings.TrimSpace(string(argsBytes)), "\n")
+		var pluginDirs []string
 		for _, argument := range arguments {
-			if argument == "--plugin-dir="+pluginDir {
-				count++
+			if value, found := strings.CutPrefix(argument, "--plugin-dir="); found {
+				pluginDirs = append(pluginDirs, value)
 			}
 		}
-		return count
+		if len(pluginDirs) != 1 || arguments[len(arguments)-1] != wantLast {
+			t.Fatalf("%s did not keep its argv with one session plugin: %q", label, arguments)
+		}
+		if filepath.Dir(pluginDirs[0]) != adapterDir {
+			t.Fatalf("%s session plugin %q is outside the private Copilot adapter directory", label, pluginDirs[0])
+		}
+		if _, err := os.Stat(pluginDirs[0]); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s session plugin outlived its launch: %v", label, err)
+		}
+		return pluginDirs[0]
 	}
-	environment := []string{"WORKGRAPH_AI_TEST_ARGS=" + argsPath}
+	environment := []string{"WORKGRAPH_AI_TEST_ARGS=" + argsPath, "WORKGRAPH_AI_TEST_SNAPSHOT=" + snapshotDir}
 
 	if output, err := runWorkgraphCommandAllowError(environment,
 		"ai", "run", "--home", homeDir, "--database", initialized.DatabasePath, "--", copilotPath, "--resume=short-prefix",
 	); err != nil {
 		t.Fatalf("run Copilot with explicit selection: %v\n%s", err, output)
 	}
-	if arguments := readArguments("explicit selection"); countPluginDirs(arguments) != 1 || arguments[len(arguments)-1] != "--resume=short-prefix" {
-		t.Fatalf("explicit Copilot selection did not keep its argv with one session plugin: %q", arguments)
-	}
+	firstPluginDir := launchPluginDir("explicit selection", "--resume=short-prefix")
 
 	sessionID := "00000000-0000-4000-8000-000000000090"
 	nativeID := "42222222-2222-4222-8222-222222222222"
@@ -1473,11 +1484,11 @@ func TestAICopilotLaunchesLoadSessionOnlyCheckpointSkill(t *testing.T) {
 	); err != nil {
 		t.Fatalf("resume Copilot session: %v\n%s", err, output)
 	}
-	if arguments := readArguments("resume"); countPluginDirs(arguments) != 1 || arguments[len(arguments)-1] != "--resume="+nativeID {
-		t.Fatalf("Copilot resume did not load the session plugin once: %q", arguments)
+	if secondPluginDir := launchPluginDir("resume", "--resume="+nativeID); secondPluginDir == firstPluginDir {
+		t.Fatalf("separate Copilot launches shared session plugin directory %q", firstPluginDir)
 	}
 
-	manifestBytes, err := os.ReadFile(filepath.Join(pluginDir, "plugin.json"))
+	manifestBytes, err := os.ReadFile(filepath.Join(snapshotDir, "plugin.json"))
 	if err != nil {
 		t.Fatalf("read Copilot session plugin manifest: %v", err)
 	}
@@ -1498,7 +1509,7 @@ func TestAICopilotLaunchesLoadSessionOnlyCheckpointSkill(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read canonical checkpoint %s: %v", relative, err)
 		}
-		packaged, err := os.ReadFile(filepath.Join(pluginDir, "skills", "workgraph-ai-checkpoint", relative))
+		packaged, err := os.ReadFile(filepath.Join(snapshotDir, "skills", "workgraph-ai-checkpoint", relative))
 		if err != nil {
 			t.Fatalf("read session checkpoint %s: %v", relative, err)
 		}
@@ -1507,12 +1518,12 @@ func TestAICopilotLaunchesLoadSessionOnlyCheckpointSkill(t *testing.T) {
 		}
 	}
 	var packagedFiles []string
-	if err := filepath.WalkDir(pluginDir, func(path string, entry os.DirEntry, walkErr error) error {
+	if err := filepath.WalkDir(snapshotDir, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 		if !entry.IsDir() {
-			relative, _ := filepath.Rel(pluginDir, path)
+			relative, _ := filepath.Rel(snapshotDir, path)
 			packagedFiles = append(packagedFiles, relative)
 		}
 		return nil
@@ -1525,25 +1536,10 @@ func TestAICopilotLaunchesLoadSessionOnlyCheckpointSkill(t *testing.T) {
 	if !reflect.DeepEqual(packagedFiles, expectedFiles) {
 		t.Fatalf("Copilot session plugin carries unexpected files: %q", packagedFiles)
 	}
-	info, err := os.Stat(pluginDir)
-	if err != nil || info.Mode().Perm() != 0o700 {
-		t.Fatalf("Copilot session plugin directory is not private: info=%v err=%v", info, err)
-	}
-
-	stalePath := filepath.Join(pluginDir, "skills", "stale", "SKILL.md")
-	if err := os.MkdirAll(filepath.Dir(stalePath), 0o700); err != nil {
-		t.Fatalf("create stale skill directory: %v", err)
-	}
-	if err := os.WriteFile(stalePath, []byte("stale"), 0o600); err != nil {
-		t.Fatalf("write stale skill: %v", err)
-	}
-	if output, err := runWorkgraphCommandAllowError(environment,
-		"ai", "run", "--home", homeDir, "--database", initialized.DatabasePath, "--", copilotPath,
-	); err != nil {
-		t.Fatalf("rerun Copilot: %v\n%s", err, output)
-	}
-	if _, err := os.Stat(stalePath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("Copilot session plugin kept an unmanaged skill: %v", err)
+	for _, path := range []string{snapshotDir, adapterDir} {
+		if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o700 {
+			t.Fatalf("Copilot session plugin directory %s is not private: info=%v err=%v", path, info, err)
+		}
 	}
 }
 

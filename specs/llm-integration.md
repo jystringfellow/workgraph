@@ -169,9 +169,12 @@ AI-client execution must:
 Copilot is invoked as `copilot -s --no-color --no-custom-instructions
 --no-ask-user --disable-builtin-mcps --available-tools=workgraph-no-tools
 --sync-session=off`, with an optional `--model`. Naming a nonexistent tool as
-the only available tool disables every built-in, MCP, and plugin tool. Its
-inherited authentication environment is limited to `COPILOT_*`, `GH_TOKEN`, and
-`GITHUB_TOKEN`. Copilot offers no option to skip local session history, so
+the only available tool disables every built-in, MCP, and plugin tool; this was
+verified against Copilot CLI 1.0.105, where the tool list stays empty even with
+`--allow-all-tools`. Its inherited authentication environment is limited to
+`COPILOT_*`, `GH_TOKEN`, and `GITHUB_TOKEN`, minus `COPILOT_ALLOW_ALL` and
+`COPILOT_CUSTOM_INSTRUCTIONS_DIRS`, which would otherwise grant every
+permission, trust the working directory, or load instructions. Copilot offers no option to skip local session history, so
 each prompt is recorded in Copilot's local session store; cloud session sync is
 disabled.
 

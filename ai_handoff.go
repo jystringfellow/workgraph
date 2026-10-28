@@ -218,6 +218,7 @@ func aiHandoffContextBudget(homeDir, databasePath, destination, destinationPath 
 	if err != nil {
 		return 0, fmt.Errorf("prepare destination native binding: %w", err)
 	}
+	prepared.Release()
 	overhead := aiWindowsCommandLineCost(append([]string{invokedPath}, prepared.Args...)) - aiWindowsArgumentCost("")
 	return min(aiHandoffContextLimit, aiWindowsCommandLineLimit-overhead), nil
 }

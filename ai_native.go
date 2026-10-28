@@ -405,6 +405,13 @@ type aiNativeLaunchPreparation struct {
 	Args            []string
 	Environment     map[string]string
 	NativeSessionID string
+	Cleanup         func()
+}
+
+func (preparation aiNativeLaunchPreparation) Release() {
+	if preparation.Cleanup != nil {
+		preparation.Cleanup()
+	}
 }
 
 func aiPrepareNativeLaunch(tool string, args []string, homeDir string) (aiNativeLaunchPreparation, error) {
@@ -418,10 +425,6 @@ func aiPrepareNativeLaunch(tool string, args []string, homeDir string) (aiNative
 
 	switch adapter.BindingStrategy {
 	case "assigned-id":
-		pluginDir, err := ensureAICopilotSessionPlugin(homeDir)
-		if err != nil {
-			return aiNativeLaunchPreparation{}, err
-		}
 		injected := []string{}
 		if !selectionPresent {
 			generatedID, err := newAIUUID()
@@ -431,6 +434,11 @@ func aiPrepareNativeLaunch(tool string, args []string, homeDir string) (aiNative
 			result.NativeSessionID = generatedID
 			injected = append(injected, "--session-id="+generatedID)
 		}
+		pluginDir, cleanup, err := createAICopilotSessionPlugin(homeDir)
+		if err != nil {
+			return aiNativeLaunchPreparation{}, err
+		}
+		result.Cleanup = cleanup
 		injected = append(injected, "--plugin-dir="+pluginDir)
 		result.Args = append(injected, result.Args...)
 		return result, nil

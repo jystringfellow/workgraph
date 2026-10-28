@@ -88,17 +88,31 @@ The Claude Code package contains `.claude-plugin/plugin.json`, `.mcp.json`, and
 The Copilot package contains `.github/plugin/marketplace.json` at the install
 root and `plugins/workgraph/plugin.json`, `.mcp.json`, and `skills/`. The MCP
 registration uses Copilot's `local` server type with all workgraph tools
-exposed to the plugin. Installation runs `copilot plugin marketplace add
-<install-root>` followed by `copilot plugin install workgraph@workgraph`.
+exposed to the plugin. Installation runs `copilot plugin marketplace remove
+workgraph` (tolerating an unregistered marketplace), `copilot plugin
+marketplace add <install-root>`, and `copilot plugin install
+workgraph@workgraph`. Copilot loads local-marketplace plugins live from the
+install root rather than copying them, so reinstalling into the same root takes
+effect without a plugin update, and the remove step re-points the marketplace
+when the install root changes. Inside a Copilot session the plugin's MCP tools
+are named `workgraph-<tool>`, and their permissions are `workgraph(<tool>)`.
 
 Copilot has no persistent per-project permission settings comparable to
 Claude Code's, so its unattended drain grants permissions per invocation:
 `--allow-tool=workgraph(<tool>)` for each required workgraph drain tool, never
 the whole `workgraph` server, shell, file write, or `--allow-all-tools`.
+Because `--allow-tool` only adds approvals, the drain also fixes the visible
+tool set with one `--available-tools=` per granted tool (`server(tool)` becomes
+`server-tool`) plus `skill`, which Copilot needs to load plugin skills. It
+denies `shell`, `write`, `url`, and `memory`, passes `--no-custom-instructions`
+and `--disallow-temp-dir`, and removes `COPILOT_ALLOW_ALL` and
+`COPILOT_CUSTOM_INSTRUCTIONS_DIRS` from the worker environment, so saved
+approvals and environment overrides cannot widen the drain.
 Optional provider tools use the exact `server(tool)` form, reject wildcards and
 reserved Copilot permission kinds, and are stored in
 `<workgraph-home>/bridge/workers.json`. Reinstalling merges newly allowed
-provider tools with stored ones. Provider tools are granted only to capture
+provider tools with stored ones; `--clear-provider-tools` empties the stored
+set first. Stored tools are revalidated before every drain. Provider tools are granted only to capture
 drains; LLM-task drains receive only workgraph tools. With no approved provider
 tool, the Copilot worker leaves capture requests pending rather than attempting
 provider reads.

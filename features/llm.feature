@@ -59,6 +59,7 @@ Scenario: Summarize through signed-in GitHub Copilot CLI without tools
   And copilot runs with every built-in, MCP, and plugin tool unavailable
   And copilot skips custom instructions, interactive questions, and cloud session sync
   And workgraph passes only Copilot and GitHub authentication environment variables
+  And workgraph drops COPILOT_ALLOW_ALL and COPILOT_CUSTOM_INSTRUCTIONS_DIRS
 
 Scenario: Bind a signed-in LLM profile to one client account context
   Given Claude Code has a dedicated configuration directory for a work organization

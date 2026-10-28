@@ -288,7 +288,7 @@ func TestLLMSummarizeTodayUsesSignedInCopilotClientWithoutTools(t *testing.T) {
 	writeLLMClientFixture(t, fixtureDir, "copilot", `
 printf '%s\n' "$@" > "`+argsPath+`"
 cat > "`+promptPath+`"
-printf '%s|%s|%s|%s' "${COPILOT_HOME:-missing}" "${GH_TOKEN:-missing}" "${COPILOT_GITHUB_TOKEN:-missing}" "${WORKGRAPH_SLACK_TOKEN:-missing}" > "`+environmentPath+`"
+printf '%s|%s|%s|%s|%s|%s' "${COPILOT_HOME:-missing}" "${GH_TOKEN:-missing}" "${COPILOT_GITHUB_TOKEN:-missing}" "${WORKGRAPH_SLACK_TOKEN:-missing}" "${COPILOT_ALLOW_ALL:-missing}" "${COPILOT_CUSTOM_INSTRUCTIONS_DIRS:-missing}" > "`+environmentPath+`"
 printf '%s' 'Copilot summarized the client-backed day.'
 `)
 	t.Setenv("PATH", fixtureDir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -296,6 +296,8 @@ printf '%s' 'Copilot summarized the client-backed day.'
 	t.Setenv("GH_TOKEN", "fake-gh-auth")
 	t.Setenv("COPILOT_GITHUB_TOKEN", "fake-copilot-auth")
 	t.Setenv("WORKGRAPH_SLACK_TOKEN", "fake-connector-secret")
+	t.Setenv("COPILOT_ALLOW_ALL", "true")
+	t.Setenv("COPILOT_CUSTOM_INSTRUCTIONS_DIRS", fixtureDir)
 
 	insertLLMEvent(t, filepath.Join(homeDir, "workgraph.db"), "copilot-summary-event", "notion.page_updated",
 		time.Now().UTC().Format(time.RFC3339Nano), "workgraph", "Shipped Copilot profiles",
@@ -333,8 +335,8 @@ printf '%s' 'Copilot summarized the client-backed day.'
 	if err != nil {
 		t.Fatalf("read Copilot environment: %v", err)
 	}
-	if string(environment) != configDir+"|fake-gh-auth|fake-copilot-auth|missing" {
-		t.Fatalf("expected bound COPILOT_HOME, preserved client auth, and scrubbed connector secrets, got %q", environment)
+	if string(environment) != configDir+"|fake-gh-auth|fake-copilot-auth|missing|missing|missing" {
+		t.Fatalf("expected bound COPILOT_HOME, preserved client auth, and scrubbed connector secrets and permission overrides, got %q", environment)
 	}
 }
 

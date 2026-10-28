@@ -288,16 +288,21 @@ invented exact native identity. Workgraph never enables Copilot remote export
 or remote control.
 
 Every Copilot launch through `ai run`, `ai resume`, or `ai handoff` also
-prepends `--plugin-dir=<home>/ai-adapters/copilot/workgraph-session`, including
-launches that already select a session. That directory is a session-only
+prepends `--plugin-dir=<home>/ai-adapters/copilot/workgraph-session-<random>`,
+including launches that already select a session. Each launch gets its own
+freshly created directory, removed when the wrapped Copilot process exits, so
+concurrent launches never share or rewrite one another's plugin. That directory
+is a session-only
 Copilot plugin named `workgraph-session` containing exactly a `plugin.json`
 manifest and the canonical `workgraph-ai-checkpoint` skill. It declares no MCP
 servers, hooks, agents, or commands, so the wrapped session gains the
 checkpoint workflow without any new tool permission and without changing
-Copilot's user or project configuration. Workgraph rewrites the directory
-before launch when its content differs from the embedded skill, replaces it as
-a whole rather than editing it in place, keeps it private (`0700` directories,
-`0600` files), and refuses symlinked adapter parent directories.
+Copilot's user or project configuration. Workgraph keeps it private (`0700`
+directories, `0600` files) and refuses symlinked adapter parent directories.
+When the `workgraph` plugin is also installed, Copilot namespaces skills by
+plugin, so `workgraph-session:workgraph-ai-checkpoint` and
+`workgraph:workgraph-ai-checkpoint` coexist with identical content and no
+conflict.
 
 For OpenCode, `ai run` writes a small, inspectable adapter plugin beneath the
 resolved workgraph home and adds its absolute path to the child's inline

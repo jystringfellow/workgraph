@@ -670,9 +670,12 @@ workgraph plugin install --client claude-code \
 ```
 
 Copilot registers the packaged plugin through a local marketplace
-(`copilot plugin marketplace add` then `copilot plugin install
-workgraph@workgraph`). Its unattended worker grants permissions per drain
-invocation: only the explicit workgraph drain tools, never shell or file write.
+(`copilot plugin marketplace remove`, `copilot plugin marketplace add`, then
+`copilot plugin install workgraph@workgraph`), so reinstalling from a new
+install root re-points it. Its unattended worker grants permissions per drain
+invocation and can see only the explicit workgraph drain tools, approved
+provider tools, and the skill loader. It never gets shell, file write, or URL
+access, and `COPILOT_ALLOW_ALL` is ignored.
 Provider tools use Copilot's exact `server(tool)` form and are stored in
 `<workgraph-home>/bridge/workers.json`. Without any approved provider tool, the
 Copilot worker leaves capture requests pending:
@@ -684,7 +687,9 @@ workgraph plugin install --client copilot \
 ```
 
 Wildcards are rejected. Reinstalling preserves previously allowed provider
-tools and reloads an existing launchd worker.
+tools and reloads an existing launchd worker. For Copilot,
+`--clear-provider-tools` removes the stored tools before applying any
+`--allow-provider-tool` flags in the same command.
 
 `--model <model>` pins the unattended drain worker for that client. The choice
 is stored in `<workgraph-home>/bridge/workers.json`, appears in install and

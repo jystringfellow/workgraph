@@ -33,5 +33,11 @@ when a selection exists.
 
 The same per-client entry may hold `provider_tools`, the exact Copilot
 `server(tool)` permissions approved with `--allow-provider-tool`. Reinstalling
-merges newly approved tools with stored ones; an entry is removed only when it
-has no model, config directory, or provider tools.
+merges newly approved tools with stored ones. `--clear-provider-tools`
+(Copilot only) removes every stored tool before applying any
+`--allow-provider-tool` in the same command, so the two together replace the
+set. Stored tools are revalidated whenever the config is read: an entry that is
+not an exact provider `server(tool)` name, names `workgraph`, or names a
+reserved Copilot permission kind makes drain and install fail before launching
+Copilot. An entry is removed only when it has no model, config directory, or
+provider tools.

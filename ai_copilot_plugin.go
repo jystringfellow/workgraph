@@ -1,9 +1,7 @@
 package workgraph
 
 import (
-	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -44,87 +42,34 @@ func aiCopilotSessionPluginFiles() (map[string][]byte, error) {
 	return files, nil
 }
 
-func ensureAICopilotSessionPlugin(homeDir string) (string, error) {
+func createAICopilotSessionPlugin(homeDir string) (string, func(), error) {
 	adapters := filepath.Join(homeDir, "ai-adapters")
 	if err := ensureAIPrivateAdapterDirectory(adapters, "AI"); err != nil {
-		return "", err
+		return "", nil, err
 	}
 	parent := filepath.Join(adapters, "copilot")
 	if err := ensureAIPrivateAdapterDirectory(parent, "Copilot"); err != nil {
-		return "", err
+		return "", nil, err
 	}
 	files, err := aiCopilotSessionPluginFiles()
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	target := filepath.Join(parent, aiCopilotSessionPluginName)
-	if aiPluginDirectoryMatches(target, files) {
-		return target, nil
-	}
-
-	staging, err := os.MkdirTemp(parent, ".workgraph-session-*")
+	pluginDir, err := os.MkdirTemp(parent, aiCopilotSessionPluginName+"-*")
 	if err != nil {
-		return "", fmt.Errorf("create Copilot session plugin: %w", err)
+		return "", nil, fmt.Errorf("create Copilot session plugin: %w", err)
 	}
-	defer os.RemoveAll(staging)
+	cleanup := func() { _ = os.RemoveAll(pluginDir) }
 	for relative, contents := range files {
-		path := filepath.Join(staging, relative)
+		path := filepath.Join(pluginDir, relative)
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			return "", fmt.Errorf("create Copilot session plugin directory: %w", err)
+			cleanup()
+			return "", nil, fmt.Errorf("create Copilot session plugin directory: %w", err)
 		}
 		if err := os.WriteFile(path, contents, 0o600); err != nil {
-			return "", fmt.Errorf("write Copilot session plugin file: %w", err)
+			cleanup()
+			return "", nil, fmt.Errorf("write Copilot session plugin file: %w", err)
 		}
 	}
-
-	retired, err := os.MkdirTemp(parent, ".workgraph-session-retired-*")
-	if err != nil {
-		return "", fmt.Errorf("prepare Copilot session plugin replacement: %w", err)
-	}
-	defer os.RemoveAll(retired)
-	retiredPlugin := filepath.Join(retired, aiCopilotSessionPluginName)
-	if err := os.Rename(target, retiredPlugin); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("retire Copilot session plugin: %w", err)
-	}
-	if err := os.Rename(staging, target); err != nil {
-		if aiPluginDirectoryMatches(target, files) {
-			return target, nil
-		}
-		return "", fmt.Errorf("install Copilot session plugin: %w", err)
-	}
-	return target, nil
-}
-
-func aiPluginDirectoryMatches(root string, expected map[string][]byte) bool {
-	info, err := os.Lstat(root)
-	if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
-		return false
-	}
-	seen := 0
-	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		if !entry.Type().IsRegular() {
-			return errors.New("unexpected entry")
-		}
-		relative, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		want, ok := expected[relative]
-		if !ok {
-			return errors.New("unexpected file")
-		}
-		contents, err := os.ReadFile(path)
-		if err != nil || !bytes.Equal(contents, want) {
-			return errors.New("changed file")
-		}
-		seen++
-		return nil
-	})
-	return err == nil && seen == len(expected)
+	return pluginDir, cleanup, nil
 }

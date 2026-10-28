@@ -292,6 +292,9 @@ func readBoundedAIClientResponse(path string) (string, error) {
 }
 
 func filteredAIClientEnvironment(environment []string, client string) []string {
+	if client == "copilot" {
+		environment = withoutCopilotOverrides(environment)
+	}
 	filtered := make([]string, 0, len(environment))
 	for _, entry := range environment {
 		name, _, ok := strings.Cut(entry, "=")
