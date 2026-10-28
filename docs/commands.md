@@ -644,7 +644,8 @@ setting. Changing the setting applies only to sessions launched after it.
 
 ## Agent Plugin
 
-Install or update one logical `workgraph` plugin for Codex or Claude Code:
+Install or update one logical `workgraph` plugin for Codex, Claude Code, or
+GitHub Copilot CLI:
 
 ```sh
 workgraph plugin install --client codex
@@ -652,6 +653,7 @@ workgraph plugin install --client codex
 workgraph plugin install --client claude-code
 workgraph plugin install --client claude-code --model <approved-model>
 workgraph plugin install --client claude-code --config-dir "$HOME/.claude-enterprise"
+workgraph plugin install --client copilot
 ```
 
 Claude's unattended worker trusts the workgraph home and discovers its local
@@ -665,6 +667,20 @@ provider tool:
 workgraph plugin install --client claude-code \
   --allow-provider-tool mcp__claude_ai_Slack__slack_read_channel \
   --allow-provider-tool mcp__claude_ai_Slack__slack_read_thread
+```
+
+Copilot registers the packaged plugin through a local marketplace
+(`copilot plugin marketplace add` then `copilot plugin install
+workgraph@workgraph`). Its unattended worker grants permissions per drain
+invocation: only the explicit workgraph drain tools, never shell or file write.
+Provider tools use Copilot's exact `server(tool)` form and are stored in
+`<workgraph-home>/bridge/workers.json`. Without any approved provider tool, the
+Copilot worker leaves capture requests pending:
+
+```sh
+workgraph plugin install --client copilot \
+  --allow-provider-tool 'slack(slack_read_channel)' \
+  --allow-provider-tool 'slack(slack_read_thread)'
 ```
 
 Wildcards are rejected. Reinstalling preserves previously allowed provider
@@ -692,10 +708,11 @@ provider:
 ```sh
 workgraph plugin doctor --client codex
 workgraph plugin doctor --client claude-code
+workgraph plugin doctor --client copilot
 ```
 
 Rerun `plugin install` after upgrading workgraph to refresh the package. Start a
-new Codex or Claude Code session after installation so the client discovers the
+new Codex, Claude Code, or Copilot session after installation so the client discovers the
 new skills and MCP tools. If the daemon was already running when its executable
 was upgraded, also run `workgraph stop` followed by `workgraph start`; plugin
 installation reloads the bridge worker, not the daemon. Installing the plugin
@@ -712,8 +729,9 @@ compatibility aliases that operate on this same broader plugin.
 
 ## Bridged Capture
 
-Bridged capture is for remote sources that are already approved through Codex
-or Claude Code but cannot be connected to workgraph with direct OAuth. workgraph
+Bridged capture is for remote sources that are already approved through Codex,
+Claude Code, or GitHub Copilot CLI but cannot be connected to workgraph with
+direct OAuth. workgraph
 keeps the schedule, cursor, retries, and local event store; the signed-in client
 performs the provider reads and returns normalized events. `git` always remains
 local and direct.
@@ -724,6 +742,8 @@ Install the workgraph plugin for one macOS reference client:
 workgraph plugin install --client codex
 # or
 workgraph plugin install --client claude-code
+# or
+workgraph plugin install --client copilot
 ```
 
 Verify the local package, MCP server, worker, and client executable without
@@ -861,7 +881,7 @@ workgraph llm doctor --profile local-gemma
 whether the configured model is advertised. It does not print API key
 environment variable names or connector data.
 
-### Signed-in Codex and Claude Code
+### Signed-in Codex, Claude Code, and Copilot
 
 Instead of running a local model or configuring another API credential, use an
 already signed-in AI client as an LLM profile:
@@ -870,9 +890,11 @@ already signed-in AI client as an LLM profile:
 workgraph llm connect codex --for summarize
 # or
 workgraph llm connect claude-code --for summarize
+# or
+workgraph llm connect copilot --for summarize
 ```
 
-The default profile name is `codex` or `claude-code`. Multiple profiles and
+The default profile name is `codex`, `claude-code`, or `copilot`. Multiple profiles and
 task-specific routes can coexist:
 
 ```sh
@@ -885,9 +907,14 @@ workgraph llm use personal-codex --for summarize
 ```
 
 `--config-dir` stores the signed-in client account context with the profile:
-`CODEX_HOME` for Codex or `CLAUDE_CONFIG_DIR` for Claude Code. `llm list` and
+`CODEX_HOME` for Codex, `CLAUDE_CONFIG_DIR` for Claude Code, or `COPILOT_HOME`
+for Copilot. `llm list` and
 `llm doctor` report the binding, and later invocations do not depend on the
 ambient shell selecting the same account.
+
+Copilot runs with every tool disabled, no custom instructions, and session
+cloud sync off. Copilot has no option to skip local session history, so each
+client-backed prompt is recorded in Copilot's local session store.
 
 `categorize` is a reserved task route; the project-categorization suggestion
 workflow is not implemented yet. Current client-backed execution supports

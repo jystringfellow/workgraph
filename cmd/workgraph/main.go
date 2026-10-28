@@ -143,7 +143,7 @@ func runPluginInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags := flag.NewFlagSet("plugin install", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	homeDir := flags.String("home", "", "workgraph home directory")
-	client := flags.String("client", "", "client to install into: codex or claude-code")
+	client := flags.String("client", "", "client to install into: codex, claude-code, or copilot")
 	clientCommand := flags.String("client-command", "", "client executable override")
 	installRoot := flags.String("install-root", "", "package installation root override")
 	noLaunchd := flags.Bool("no-launchd", false, "skip installing the macOS bridge drain worker")
@@ -152,12 +152,12 @@ func runPluginInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 	configDir := flags.String("config-dir", "", "bind the worker to this signed-in client configuration directory")
 	clearConfigDir := flags.Bool("clear-config-dir", false, "clear the persisted client configuration directory binding")
 	var providerTools repeatedStringFlags
-	flags.Var(&providerTools, "allow-provider-tool", "exact provider MCP tool name to allow for the unattended Claude worker; repeatable")
+	flags.Var(&providerTools, "allow-provider-tool", "exact provider MCP tool name to allow for the unattended Claude Code or Copilot worker; repeatable")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
 	if flags.NArg() != 0 || strings.TrimSpace(*client) == "" {
-		fmt.Fprintln(stderr, "usage: workgraph plugin install --client <codex|claude-code>")
+		fmt.Fprintln(stderr, "usage: workgraph plugin install --client <codex|claude-code|copilot>")
 		return 2
 	}
 	result, err := workgraph.InstallPlugin(workgraph.PluginInstallConfig{
@@ -177,14 +177,14 @@ func runPluginDoctor(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags := flag.NewFlagSet("plugin doctor", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	homeDir := flags.String("home", "", "workgraph home directory")
-	client := flags.String("client", "", "client to diagnose: codex or claude-code")
+	client := flags.String("client", "", "client to diagnose: codex, claude-code, or copilot")
 	clientCommand := flags.String("client-command", "", "client executable override")
 	installRoot := flags.String("install-root", "", "package installation root override")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
 	if flags.NArg() != 0 || strings.TrimSpace(*client) == "" {
-		fmt.Fprintln(stderr, "usage: workgraph plugin doctor --client <codex|claude-code>")
+		fmt.Fprintln(stderr, "usage: workgraph plugin doctor --client <codex|claude-code|copilot>")
 		return 2
 	}
 	message, err := workgraph.DoctorPlugin(workgraph.PluginDoctorConfig{
@@ -264,14 +264,14 @@ func runBridgeDoctor(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags := flag.NewFlagSet("bridge doctor", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	homeDir := flags.String("home", "", "workgraph home directory")
-	client := flags.String("client", "", "reference client: codex or claude-code")
+	client := flags.String("client", "", "reference client: codex, claude-code, or copilot")
 	clientCommand := flags.String("client-command", "", "client executable override")
 	installRoot := flags.String("install-root", "", "package installation root override")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
 	if flags.NArg() != 0 || strings.TrimSpace(*client) == "" {
-		fmt.Fprintln(stderr, "usage: workgraph bridge doctor --client <codex|claude-code>")
+		fmt.Fprintln(stderr, "usage: workgraph bridge doctor --client <codex|claude-code|copilot>")
 		return 2
 	}
 	message, err := workgraph.DoctorBridge(workgraph.BridgeDoctorConfig{
@@ -289,14 +289,14 @@ func runBridgeDrain(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags := flag.NewFlagSet("bridge drain", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	homeDir := flags.String("home", "", "workgraph home directory")
-	client := flags.String("client", "", "reference client: codex or claude-code")
+	client := flags.String("client", "", "reference client: codex, claude-code, or copilot")
 	clientCommand := flags.String("client-command", "", "client executable override")
 	timeout := flags.Duration("timeout", workgraph.DefaultBridgeDrainTimeout, "maximum client session runtime")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
 	if flags.NArg() != 0 || strings.TrimSpace(*client) == "" || *timeout <= 0 {
-		fmt.Fprintln(stderr, "usage: workgraph bridge drain --client <codex|claude-code> [--timeout <duration>]")
+		fmt.Fprintln(stderr, "usage: workgraph bridge drain --client <codex|claude-code|copilot> [--timeout <duration>]")
 		return 2
 	}
 	message, err := workgraph.DrainBridge(*homeDir, *client, *clientCommand, *timeout)
@@ -314,7 +314,7 @@ func runBridgeInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 	flags := flag.NewFlagSet("bridge install", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	homeDir := flags.String("home", "", "workgraph home directory")
-	client := flags.String("client", "", "reference client: codex or claude-code")
+	client := flags.String("client", "", "reference client: codex, claude-code, or copilot")
 	clientCommand := flags.String("client-command", "", "client executable override")
 	installRoot := flags.String("install-root", "", "package installation root override")
 	noLaunchd := flags.Bool("no-launchd", false, "skip installing the macOS drain worker")
@@ -323,12 +323,12 @@ func runBridgeInstall(args []string, stdout io.Writer, stderr io.Writer) int {
 	configDir := flags.String("config-dir", "", "bind the worker to this signed-in client configuration directory")
 	clearConfigDir := flags.Bool("clear-config-dir", false, "clear the persisted client configuration directory binding")
 	var providerTools repeatedStringFlags
-	flags.Var(&providerTools, "allow-provider-tool", "exact provider MCP tool name to allow for the unattended Claude worker; repeatable")
+	flags.Var(&providerTools, "allow-provider-tool", "exact provider MCP tool name to allow for the unattended Claude Code or Copilot worker; repeatable")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
 	if flags.NArg() != 0 || strings.TrimSpace(*client) == "" {
-		fmt.Fprintln(stderr, "usage: workgraph bridge install --client <codex|claude-code>")
+		fmt.Fprintln(stderr, "usage: workgraph bridge install --client <codex|claude-code|copilot>")
 		return 2
 	}
 	result, err := workgraph.InstallBridge(workgraph.BridgeInstallConfig{
@@ -855,7 +855,7 @@ func runLLMAdd(args []string, stdout io.Writer, stderr io.Writer) int {
 
 	homeDir := flags.String("home", "", "workgraph home directory")
 	provider := flags.String("provider", "", "LLM provider")
-	client := flags.String("client", "", "Signed-in AI client: codex or claude-code")
+	client := flags.String("client", "", "Signed-in AI client: codex, claude-code, or copilot")
 	baseURL := flags.String("base-url", "", "OpenAI-compatible or system-one base URL")
 	model := flags.String("model", "", "LLM model")
 	apiKeyEnv := flags.String("api-key-env", "", "Environment variable containing the API key")
@@ -941,7 +941,7 @@ func runLLMSet(args []string, stdout io.Writer, stderr io.Writer) int {
 
 func runLLMConnect(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: workgraph llm connect <codex|claude-code> [options]")
+		fmt.Fprintln(stderr, "usage: workgraph llm connect <codex|claude-code|copilot> [options]")
 		return 2
 	}
 	client := args[0]
@@ -956,7 +956,7 @@ func runLLMConnect(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 2
 	}
 	if flags.NArg() != 0 {
-		fmt.Fprintln(stderr, "usage: workgraph llm connect <codex|claude-code> [options]")
+		fmt.Fprintln(stderr, "usage: workgraph llm connect <codex|claude-code|copilot> [options]")
 		return 2
 	}
 	result, err := workgraph.ConnectLLMClient(workgraph.LLMConnectClientConfig{

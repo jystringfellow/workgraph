@@ -4,7 +4,7 @@ Feature: Agent plugin installation
   So that I can start using workgraph without assembling MCP and skill files
 
   Scenario: Install the workgraph plugin for a supported client
-    Given Codex or Claude Code is installed
+    Given Codex, Claude Code, or GitHub Copilot CLI is installed
     When I install the workgraph plugin for that client
     Then workgraph registers one local plugin named workgraph
     And the plugin contains the bridge, memory, and AI checkpoint skills
@@ -17,6 +17,15 @@ Feature: Agent plugin installation
     And the launchd worker receives an explicit non-secret HOME and executable PATH
     And install output says to restart the daemon after an executable upgrade
     And install output says to start a new client session for the MCP server
+
+  Scenario: Grant Copilot drain permissions per invocation
+    Given the workgraph plugin is installed for GitHub Copilot CLI
+    And I approved exact provider tools in server(tool) form
+    When the unattended worker drains capture requests
+    Then Copilot is allowed only the workgraph drain tools and the approved provider tools
+    And Copilot is never allowed shell, file write, or all tools
+    When no provider tool has been approved
+    Then capture requests remain pending
 
   Scenario: Update an existing plugin installation
     Given the workgraph plugin was already installed

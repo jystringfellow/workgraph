@@ -15,7 +15,7 @@ const (
 	DefaultBridgeDrainTimeout = 20 * time.Minute
 )
 
-var bridgeClients = []string{"codex", "claude-code"}
+var bridgeClients = []string{"codex", "claude-code", "copilot"}
 
 type bridgeStall struct {
 	Age    string
@@ -102,7 +102,7 @@ func bridgeClientHint(homeDir string) string {
 	if len(present) == 1 {
 		return present[0]
 	}
-	return "<codex|claude-code>"
+	return "<codex|claude-code|copilot>"
 }
 
 func freshestBridgeHeartbeat(homeDir string) (time.Time, bool) {

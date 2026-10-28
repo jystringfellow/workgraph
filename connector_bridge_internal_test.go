@@ -130,10 +130,13 @@ func TestValidatedBridgeParamsAllowExplicitParticipantStrategies(t *testing.T) {
 	}
 }
 
-func TestClaudeProviderToolsRequireExactExplicitNames(t *testing.T) {
-	tools, err := validateClaudeProviderTools("claude-code", []string{"mcp__provider__read", "mcp__provider__read"})
+func TestProviderToolsRequireExactExplicitNames(t *testing.T) {
+	tools, err := validateProviderTools("claude-code", []string{"mcp__provider__read", "mcp__provider__read"})
 	if err != nil || len(tools) != 1 {
 		t.Fatalf("validate exact provider tool: tools=%v error=%v", tools, err)
+	}
+	if tools, err := validateProviderTools("copilot", []string{"slack(slack_read_channel)"}); err != nil || len(tools) != 1 {
+		t.Fatalf("validate exact copilot provider tool: tools=%v error=%v", tools, err)
 	}
 	for _, test := range []struct {
 		client string
@@ -143,8 +146,13 @@ func TestClaudeProviderToolsRequireExactExplicitNames(t *testing.T) {
 		{"claude-code", "Bash(workgraph *)"},
 		{"claude-code", "mcp__plugin_workgraph_workgraph__capture_ingest"},
 		{"codex", "mcp__provider__read"},
+		{"copilot", "slack(*)"},
+		{"copilot", "slack"},
+		{"copilot", "workgraph(capture_ingest)"},
+		{"copilot", "shell(git)"},
+		{"copilot", "write(file)"},
 	} {
-		if _, err := validateClaudeProviderTools(test.client, []string{test.tool}); err == nil {
+		if _, err := validateProviderTools(test.client, []string{test.tool}); err == nil {
 			t.Fatalf("expected %s provider tool %q to fail", test.client, test.tool)
 		}
 	}

@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
 type bridgeWorkerSettings struct {
-	Model     string `json:"model,omitempty"`
-	ConfigDir string `json:"config_dir,omitempty"`
+	Model         string   `json:"model,omitempty"`
+	ConfigDir     string   `json:"config_dir,omitempty"`
+	ProviderTools []string `json:"provider_tools,omitempty"`
 }
 
 type bridgeWorkerConfigFile struct {
@@ -40,7 +42,7 @@ func readBridgeWorkerConfig(homeDir string) (bridgeWorkerConfigFile, error) {
 	return config, nil
 }
 
-func configureBridgeWorkerSettings(homeDir string, client string, model string, clearModel bool, configDir string, clearConfigDir bool) (bridgeWorkerSettings, error) {
+func configureBridgeWorkerSettings(homeDir string, client string, model string, clearModel bool, configDir string, clearConfigDir bool, addProviderTools []string) (bridgeWorkerSettings, error) {
 	model = strings.TrimSpace(model)
 	configDir = strings.TrimSpace(configDir)
 	if model != "" && clearModel {
@@ -83,8 +85,15 @@ func configureBridgeWorkerSettings(homeDir string, client string, model string, 
 			changed = true
 		}
 	}
+	for _, tool := range addProviderTools {
+		if !slices.Contains(settings.ProviderTools, tool) {
+			settings.ProviderTools = append(settings.ProviderTools, tool)
+			changed = true
+		}
+	}
+	slices.Sort(settings.ProviderTools)
 	if changed {
-		if settings.Model == "" && settings.ConfigDir == "" {
+		if settings.Model == "" && settings.ConfigDir == "" && len(settings.ProviderTools) == 0 {
 			delete(config.Workers, client)
 		} else {
 			config.Workers[client] = settings

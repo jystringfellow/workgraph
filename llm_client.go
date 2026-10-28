@@ -99,8 +99,10 @@ func normalizeAIClient(client string) (string, error) {
 		return "codex", nil
 	case "claude", "claude-code":
 		return "claude-code", nil
+	case "copilot":
+		return "copilot", nil
 	default:
-		return "", fmt.Errorf("ai client must be codex or claude-code")
+		return "", fmt.Errorf("ai client must be codex, claude-code, or copilot")
 	}
 }
 
@@ -191,6 +193,8 @@ func callAIClient(parent context.Context, profile llmProfile, messages []openAIC
 	return response, nil
 }
 
+const copilotNoToolsSentinel = "workgraph-no-tools"
+
 func aiClientArguments(client string, model string, workingDir string) ([]string, string) {
 	model = strings.TrimSpace(model)
 	if client == "codex" {
@@ -209,6 +213,21 @@ func aiClientArguments(client string, model string, workingDir string) ([]string
 			args = append(args, "--model", model)
 		}
 		return append(args, "-"), responsePath
+	}
+	if client == "copilot" {
+		args := []string{
+			"-s",
+			"--no-color",
+			"--no-custom-instructions",
+			"--no-ask-user",
+			"--disable-builtin-mcps",
+			"--available-tools=" + copilotNoToolsSentinel,
+			"--sync-session=off",
+		}
+		if model != "" {
+			args = append(args, "--model="+model)
+		}
+		return args, ""
 	}
 	args := []string{
 		"--print",
@@ -295,6 +314,8 @@ func aiClientAuthenticationEnvironmentName(client string, name string) bool {
 				return true
 			}
 		}
+	case "copilot":
+		return strings.HasPrefix(upper, "COPILOT_") || upper == "GH_TOKEN" || upper == "GITHUB_TOKEN"
 	}
 	return false
 }

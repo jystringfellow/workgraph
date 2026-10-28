@@ -11,13 +11,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
 )
 
-//go:embed all:integrations/codex all:integrations/claude-code all:.agents/skills/workgraph-bridge all:.agents/skills/workgraph-memory all:.agents/skills/workgraph-ai-checkpoint
+//go:embed all:integrations/codex all:integrations/claude-code all:integrations/copilot all:.agents/skills/workgraph-bridge all:.agents/skills/workgraph-memory all:.agents/skills/workgraph-ai-checkpoint
 var agentPluginAssets embed.FS
 
 type PluginInstallConfig struct {
@@ -58,9 +59,9 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 	if err != nil {
 		return PluginInstallResult{}, err
 	}
-	client := strings.ToLower(strings.TrimSpace(config.Client))
-	if client != "codex" && client != "claude-code" {
-		return PluginInstallResult{}, fmt.Errorf("plugin client must be codex or claude-code")
+	client, err := normalizePluginClient(config.Client)
+	if err != nil {
+		return PluginInstallResult{}, err
 	}
 	if strings.TrimSpace(config.Model) != "" && config.ClearModel {
 		return PluginInstallResult{}, fmt.Errorf("--model and --clear-model cannot be used together")
@@ -68,17 +69,11 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 	if strings.TrimSpace(config.ConfigDir) != "" && config.ClearConfigDir {
 		return PluginInstallResult{}, fmt.Errorf("--config-dir and --clear-config-dir cannot be used together")
 	}
-	providerTools, err := validateClaudeProviderTools(client, config.ProviderTools)
+	providerTools, err := validateProviderTools(client, config.ProviderTools)
 	if err != nil {
 		return PluginInstallResult{}, err
 	}
-	commandName := strings.TrimSpace(config.ClientCommand)
-	if commandName == "" {
-		commandName = client
-		if client == "claude-code" {
-			commandName = "claude"
-		}
-	}
+	commandName := pluginClientCommand(client, config.ClientCommand)
 	if _, err := exec.LookPath(commandName); err != nil {
 		return PluginInstallResult{}, fmt.Errorf("find %s client: %w", client, err)
 	}
@@ -104,7 +99,11 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 	if err != nil {
 		return PluginInstallResult{}, err
 	}
-	workerSettings, err := configureBridgeWorkerSettings(homeDir, client, config.Model, config.ClearModel, config.ConfigDir, config.ClearConfigDir)
+	copilotProviderTools := []string(nil)
+	if client == "copilot" {
+		copilotProviderTools = providerTools
+	}
+	workerSettings, err := configureBridgeWorkerSettings(homeDir, client, config.Model, config.ClearModel, config.ConfigDir, config.ClearConfigDir, copilotProviderTools)
 	if err != nil {
 		return PluginInstallResult{}, err
 	}
@@ -121,6 +120,9 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 			return PluginInstallResult{}, err
 		}
 	}
+	if client == "copilot" {
+		providerToolCount = len(workerSettings.ProviderTools)
+	}
 	launchStatus := "launchd setup skipped"
 	if !config.SkipLaunchd {
 		if err := installBridgeLaunchAgent(client, commandName, executable, homeDir); err != nil {
@@ -128,10 +130,7 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 		}
 		launchStatus = "launchd worker installed"
 	}
-	clientLabel := "Codex"
-	if client == "claude-code" {
-		clientLabel = "Claude Code"
-	}
+	clientLabel := pluginClientLabel(client)
 	result := PluginInstallResult{Client: client, InstallRoot: installRoot, Version: pluginVersion, Model: workerSettings.Model, ConfigDir: workerSettings.ConfigDir}
 	lines := []string{
 		"workgraph plugin installed",
@@ -146,6 +145,11 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 	if client == "claude-code" {
 		lines = append(lines, "Permissions: unattended workgraph MCP drain only")
 		lines = append(lines, "Workspace trust: ready")
+	}
+	if client == "copilot" {
+		lines = append(lines, "Permissions: unattended workgraph MCP drain only, granted per drain invocation")
+	}
+	if client == "claude-code" || client == "copilot" {
 		lines = append(lines, fmt.Sprintf("Provider tools: %d explicitly allowed", providerToolCount))
 	}
 	lines = append(lines,
@@ -172,19 +176,70 @@ var claudeBridgeDrainPermissions = []string{
 	"mcp__plugin_workgraph_workgraph__llm_task_submit",
 }
 
-func validateClaudeProviderTools(client string, tools []string) ([]string, error) {
-	if len(tools) > 0 && client != "claude-code" {
-		return nil, fmt.Errorf("--allow-provider-tool is supported only for claude-code")
+func normalizePluginClient(client string) (string, error) {
+	client = strings.ToLower(strings.TrimSpace(client))
+	switch client {
+	case "codex", "claude-code", "copilot":
+		return client, nil
+	}
+	return "", fmt.Errorf("plugin client must be codex, claude-code, or copilot")
+}
+
+func pluginClientCommand(client string, override string) string {
+	if command := strings.TrimSpace(override); command != "" {
+		return command
+	}
+	if client == "claude-code" {
+		return "claude"
+	}
+	return client
+}
+
+func pluginClientLabel(client string) string {
+	switch client {
+	case "claude-code":
+		return "Claude Code"
+	case "copilot":
+		return "GitHub Copilot CLI"
+	}
+	return "Codex"
+}
+
+func installedPluginManifestPath(client string, pluginRoot string) string {
+	switch client {
+	case "claude-code":
+		return filepath.Join(pluginRoot, ".claude-plugin", "plugin.json")
+	case "copilot":
+		return filepath.Join(pluginRoot, "plugin.json")
+	}
+	return filepath.Join(pluginRoot, ".codex-plugin", "plugin.json")
+}
+
+var copilotProviderToolPattern = regexp.MustCompile(`^([A-Za-z0-9_.-]+)\(([A-Za-z0-9_.-]+)\)$`)
+
+func validateProviderTools(client string, tools []string) ([]string, error) {
+	if len(tools) > 0 && client != "claude-code" && client != "copilot" {
+		return nil, fmt.Errorf("--allow-provider-tool is supported only for claude-code and copilot")
 	}
 	validated := make([]string, 0, len(tools))
 	seen := map[string]bool{}
 	for _, tool := range tools {
 		tool = strings.TrimSpace(tool)
-		if !strings.HasPrefix(tool, "mcp__") || strings.Contains(tool, "*") {
-			return nil, fmt.Errorf("provider tool permissions must use an exact MCP tool name")
-		}
-		if strings.HasPrefix(tool, "mcp__plugin_workgraph_workgraph__") {
-			return nil, fmt.Errorf("workgraph MCP permissions are managed by the installer")
+		if client == "copilot" {
+			match := copilotProviderToolPattern.FindStringSubmatch(tool)
+			if match == nil {
+				return nil, fmt.Errorf("Copilot provider tool permissions must use an exact server(tool) MCP tool name")
+			}
+			if match[1] == "workgraph" || copilotReservedPermissionKinds[match[1]] {
+				return nil, fmt.Errorf("Copilot provider tool permissions must name a provider MCP server; workgraph MCP permissions are managed by the installer")
+			}
+		} else {
+			if !strings.HasPrefix(tool, "mcp__") || strings.Contains(tool, "*") {
+				return nil, fmt.Errorf("provider tool permissions must use an exact MCP tool name")
+			}
+			if strings.HasPrefix(tool, "mcp__plugin_workgraph_workgraph__") {
+				return nil, fmt.Errorf("workgraph MCP permissions are managed by the installer")
+			}
 		}
 		if !seen[tool] {
 			validated = append(validated, tool)
@@ -192,6 +247,16 @@ func validateClaudeProviderTools(client string, tools []string) ([]string, error
 		}
 	}
 	return validated, nil
+}
+
+var copilotReservedPermissionKinds = map[string]bool{"shell": true, "write": true, "read": true, "url": true, "memory": true}
+
+func copilotBridgeDrainPermissions() []string {
+	permissions := make([]string, 0, len(claudeBridgeDrainPermissions))
+	for _, permission := range claudeBridgeDrainPermissions {
+		permissions = append(permissions, "workgraph("+strings.TrimPrefix(permission, claudeWorkgraphServerRule+"__")+")")
+	}
+	return permissions
 }
 
 func installClaudeBridgePermissions(homeDir string, providerTools []string) (int, error) {
@@ -346,20 +411,25 @@ func countClaudeProviderPermissions(allowed map[string]bool) int {
 }
 
 func stampInstalledPluginVersion(client string, installRoot string, installedAt time.Time) (string, error) {
-	versionOwner := "codex"
-	manifest := filepath.Join(installRoot, "plugins", "workgraph", ".codex-plugin", "plugin.json")
+	versionOwner := client
 	if client == "claude-code" {
 		versionOwner = "claude"
-		manifest = filepath.Join(installRoot, "plugins", "workgraph", ".claude-plugin", "plugin.json")
 	}
+	manifest := installedPluginManifestPath(client, filepath.Join(installRoot, "plugins", "workgraph"))
 	version := "0.2.0+" + versionOwner + ".local-" + installedAt.UTC().Format("20060102-150405.000000000")
 	if err := setJSONVersion(manifest, version); err != nil {
 		return "", fmt.Errorf("stamp plugin manifest: %w", err)
 	}
-	if client == "claude-code" {
-		marketplace := filepath.Join(installRoot, ".claude-plugin", "marketplace.json")
-		if err := setClaudeMarketplacePluginVersion(marketplace, version); err != nil {
-			return "", fmt.Errorf("stamp Claude Code marketplace: %w", err)
+	marketplace := ""
+	switch client {
+	case "claude-code":
+		marketplace = filepath.Join(installRoot, ".claude-plugin", "marketplace.json")
+	case "copilot":
+		marketplace = filepath.Join(installRoot, ".github", "plugin", "marketplace.json")
+	}
+	if marketplace != "" {
+		if err := setMarketplacePluginVersion(marketplace, version); err != nil {
+			return "", fmt.Errorf("stamp %s marketplace: %w", pluginClientLabel(client), err)
 		}
 	}
 	return version, nil
@@ -378,7 +448,7 @@ func setJSONVersion(path string, version string) error {
 	return writeJSONFile(path, document)
 }
 
-func setClaudeMarketplacePluginVersion(path string, version string) error {
+func setMarketplacePluginVersion(path string, version string) error {
 	contents, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -465,7 +535,12 @@ func copyEmbeddedPluginTree(prefix string, destination string) error {
 func writeInstalledPluginMCP(client string, installRoot string, executable string, homeDir string) error {
 	server := map[string]any{"command": executable, "args": []string{"bridge", "mcp", "--home", homeDir}}
 	var document any = map[string]any{"workgraph": server}
-	if client == "codex" {
+	switch client {
+	case "codex":
+		document = map[string]any{"mcpServers": map[string]any{"workgraph": server}}
+	case "copilot":
+		server["type"] = "local"
+		server["tools"] = []string{"*"}
 		document = map[string]any{"mcpServers": map[string]any{"workgraph": server}}
 	}
 	contents, _ := json.MarshalIndent(document, "", "  ")
@@ -478,9 +553,12 @@ func writeInstalledPluginMCP(client string, installRoot string, executable strin
 
 func registerAgentPlugin(client string, commandName string, installRoot string, binding signedInClientBinding) error {
 	commands := [][]string{}
-	if client == "codex" {
+	switch client {
+	case "codex":
 		commands = [][]string{{"plugin", "marketplace", "add", installRoot}, {"plugin", "add", "workgraph@workgraph"}}
-	} else {
+	case "copilot":
+		commands = [][]string{{"plugin", "marketplace", "add", installRoot}, {"plugin", "install", "workgraph@workgraph"}}
+	default:
 		commands = [][]string{
 			{"plugin", "marketplace", "add", "--scope", "user", installRoot},
 			{"plugin", "install", "--scope", "user", "workgraph@workgraph"},
@@ -619,9 +697,9 @@ func DrainBridge(homeDir string, client string, clientCommand string, timeout ti
 	if err != nil {
 		return "", err
 	}
-	client = strings.ToLower(strings.TrimSpace(client))
-	if client != "codex" && client != "claude-code" {
-		return "", fmt.Errorf("bridge client must be codex or claude-code")
+	client, err = normalizePluginClient(client)
+	if err != nil {
+		return "", err
 	}
 	llmProfile, llmRouted := bridgeLLMTaskProfile(homeDir, client)
 	captureClaimable, llmClaimable := false, false
@@ -667,20 +745,21 @@ func DrainBridge(homeDir string, client string, clientCommand string, timeout ti
 			}
 		}
 	}
-	if timeout <= 0 {
-		timeout = DefaultBridgeDrainTimeout
-	}
 	workerSettings, err := bridgeWorkerSettingsFor(homeDir, client)
 	if err != nil {
 		return "", err
 	}
-	commandName := strings.TrimSpace(clientCommand)
-	if commandName == "" {
-		commandName = client
-		if client == "claude-code" {
-			commandName = "claude"
+	if client == "copilot" && len(workerSettings.ProviderTools) == 0 {
+		captureClaimable = false
+		if !llmClaimable {
+			recordBridgeDrainHeartbeat(homeDir, client)
+			return "No Copilot provider tools are explicitly allowed; active capture requests remain pending.", nil
 		}
 	}
+	if timeout <= 0 {
+		timeout = DefaultBridgeDrainTimeout
+	}
+	commandName := pluginClientCommand(client, clientCommand)
 	drainWorker, err := newBridgeDrainWorker(client)
 	if err != nil {
 		return "", err
@@ -711,6 +790,20 @@ func DrainBridge(homeDir string, client string, clientCommand string, timeout ti
 			args = append(args, "--model", model)
 		}
 		args = append(args, prompt)
+	case "copilot":
+		args = []string{"-s", "--no-ask-user", "--sync-session=off"}
+		for _, permission := range copilotBridgeDrainPermissions() {
+			args = append(args, "--allow-tool="+permission)
+		}
+		if drainKind == captureRequestKindCapture {
+			for _, permission := range workerSettings.ProviderTools {
+				args = append(args, "--allow-tool="+permission)
+			}
+		}
+		if model != "" {
+			args = append(args, "--model="+model)
+		}
+		args = append(args, "-p", prompt)
 	}
 	if err := recordBridgeDrainKind(homeDir, client, drainKind); err != nil {
 		return "", fmt.Errorf("record bridge drain kind: %w", err)
@@ -765,17 +858,11 @@ func DoctorPlugin(config PluginDoctorConfig) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	client := strings.ToLower(strings.TrimSpace(config.Client))
-	if client != "codex" && client != "claude-code" {
-		return "", fmt.Errorf("plugin client must be codex or claude-code")
+	client, err := normalizePluginClient(config.Client)
+	if err != nil {
+		return "", err
 	}
-	commandName := strings.TrimSpace(config.ClientCommand)
-	if commandName == "" {
-		commandName = client
-		if client == "claude-code" {
-			commandName = "claude"
-		}
-	}
+	commandName := pluginClientCommand(client, config.ClientCommand)
 	clientPath, err := exec.LookPath(commandName)
 	if err != nil {
 		return "", fmt.Errorf("find %s client: %w", client, err)
@@ -785,10 +872,7 @@ func DoctorPlugin(config PluginDoctorConfig) (string, error) {
 		installRoot = filepath.Join(homeDir, "bridge", "integrations", client)
 	}
 	pluginRoot := filepath.Join(installRoot, "plugins", "workgraph")
-	manifest := filepath.Join(pluginRoot, ".codex-plugin", "plugin.json")
-	if client == "claude-code" {
-		manifest = filepath.Join(pluginRoot, ".claude-plugin", "plugin.json")
-	}
+	manifest := installedPluginManifestPath(client, pluginRoot)
 	if _, err := os.Stat(manifest); err != nil {
 		return "", fmt.Errorf("workgraph plugin is not installed: %w", err)
 	}
@@ -826,6 +910,9 @@ func DoctorPlugin(config PluginDoctorConfig) (string, error) {
 			return "", fmt.Errorf("verify Claude bridge workspace trust: %w", err)
 		}
 		permissionStatus = "ready"
+	}
+	if client == "copilot" {
+		permissionStatus = "granted per drain invocation"
 	}
 	providerToolCount := 0
 	if client == "claude-code" {
@@ -875,8 +962,13 @@ func DoctorPlugin(config PluginDoctorConfig) (string, error) {
 		"Model: " + bridgeWorkerModelLabel(workerSettings.Model),
 		"Config dir: " + signedInClientBindingLabel(signedInClientBinding{ConfigDir: workerSettings.ConfigDir}),
 	}
+	if client == "copilot" {
+		providerToolCount = len(workerSettings.ProviderTools)
+	}
 	if client == "claude-code" {
 		lines = append(lines, "Workspace trust: ready")
+	}
+	if client == "claude-code" || client == "copilot" {
 		lines = append(lines, fmt.Sprintf("Provider tools: %d explicitly allowed", providerToolCount))
 	}
 	lines = append(lines,

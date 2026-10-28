@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-func TestAgentPluginInstallPackagesEveryCanonicalSkillForBothClients(t *testing.T) {
-	for _, client := range []string{"codex", "claude-code"} {
+func TestAgentPluginInstallPackagesEveryCanonicalSkillForEveryClient(t *testing.T) {
+	for _, client := range []string{"codex", "claude-code", "copilot"} {
 		t.Run(client, func(t *testing.T) {
 			homeDir := initBridgedCaptureHome(t)
 			fixtureDir := t.TempDir()
@@ -47,6 +47,9 @@ func TestAgentPluginInstallPackagesEveryCanonicalSkillForBothClients(t *testing.
 			if client == "claude-code" {
 				manifestPath = filepath.Join(pluginRoot, ".claude-plugin", "plugin.json")
 			}
+			if client == "copilot" {
+				manifestPath = filepath.Join(pluginRoot, "plugin.json")
+			}
 			manifestBytes, err := os.ReadFile(manifestPath)
 			if err != nil {
 				t.Fatalf("read installed %s manifest: %v", client, err)
@@ -64,6 +67,9 @@ func TestAgentPluginInstallPackagesEveryCanonicalSkillForBothClients(t *testing.
 			versionMarker := "+codex."
 			if client == "claude-code" {
 				versionMarker = "+claude."
+			}
+			if client == "copilot" {
+				versionMarker = "+copilot."
 			}
 			if !strings.Contains(manifest.Version, versionMarker) {
 				t.Fatalf("installed %s plugin version %q lacks update cachebuster %q", client, manifest.Version, versionMarker)
@@ -117,6 +123,46 @@ func TestAgentPluginInstallPackagesEveryCanonicalSkillForBothClients(t *testing.
 			if client == "claude-code" && !strings.Contains(string(registration), "plugin update --scope user workgraph@workgraph") {
 				t.Fatalf("Claude Code reinstall omitted plugin update:\n%s", registration)
 			}
+			if client == "copilot" {
+				for _, expected := range []string{"plugin marketplace add " + installRoot, "plugin install workgraph@workgraph"} {
+					if !strings.Contains(string(registration), expected) {
+						t.Fatalf("Copilot registration omitted %q:\n%s", expected, registration)
+					}
+				}
+				var marketplace struct {
+					Name    string `json:"name"`
+					Plugins []struct {
+						Name    string `json:"name"`
+						Source  string `json:"source"`
+						Version string `json:"version"`
+					} `json:"plugins"`
+				}
+				marketplaceBytes, err := os.ReadFile(filepath.Join(installRoot, ".github", "plugin", "marketplace.json"))
+				if err != nil {
+					t.Fatalf("read installed Copilot marketplace: %v", err)
+				}
+				if err := json.Unmarshal(marketplaceBytes, &marketplace); err != nil {
+					t.Fatalf("parse installed Copilot marketplace: %v", err)
+				}
+				if marketplace.Name != "workgraph" || len(marketplace.Plugins) != 1 || marketplace.Plugins[0].Name != "workgraph" ||
+					marketplace.Plugins[0].Source != "./plugins/workgraph" || marketplace.Plugins[0].Version != manifest.Version {
+					t.Fatalf("installed Copilot marketplace does not point at the stamped plugin:\n%s", marketplaceBytes)
+				}
+				var mcpDocument struct {
+					Servers map[string]struct {
+						Type    string   `json:"type"`
+						Command string   `json:"command"`
+						Args    []string `json:"args"`
+					} `json:"mcpServers"`
+				}
+				if err := json.Unmarshal(mcp, &mcpDocument); err != nil {
+					t.Fatalf("parse installed Copilot MCP config: %v", err)
+				}
+				server, found := mcpDocument.Servers["workgraph"]
+				if !found || server.Type != "local" || server.Command == "" || strings.Join(server.Args, " ") != "bridge mcp --home "+homeDir {
+					t.Fatalf("installed Copilot MCP config is not a local workgraph server:\n%s", mcp)
+				}
+			}
 		})
 	}
 }
@@ -169,6 +215,7 @@ func TestAgentPluginPackagesAndSetupAreDocumented(t *testing.T) {
 		for _, expected := range []string{
 			"workgraph plugin install --client codex",
 			"workgraph plugin install --client claude-code",
+			"workgraph plugin install --client copilot",
 			"workgraph plugin doctor",
 			"workgraph-memory",
 			"workgraph-ai-checkpoint",

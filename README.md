@@ -111,6 +111,8 @@ Install the workgraph agent plugin for the AI client you use:
 workgraph plugin install --client codex
 # or
 workgraph plugin install --client claude-code
+# or
+workgraph plugin install --client copilot
 workgraph plugin doctor --client codex
 ```
 
@@ -193,8 +195,9 @@ workgraph llm hosted enable
 workgraph llm summarize today
 ```
 
-Claude Code is supported equivalently with
-`workgraph llm connect claude-code --for summarize`. Multiple profiles can
+Claude Code and GitHub Copilot CLI are supported equivalently with
+`workgraph llm connect claude-code --for summarize` or
+`workgraph llm connect copilot --for summarize`. Multiple profiles can
 coexist and be selected per LLM task.
 
 ## Memory

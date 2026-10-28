@@ -50,6 +50,16 @@ Scenario: Connect signed-in AI clients as separate LLM profiles
   And future categorize tasks use Claude Code
   And hosted LLM consent is still required before captured context is sent
 
+Scenario: Summarize through signed-in GitHub Copilot CLI without tools
+  Given GitHub Copilot CLI is installed and signed in
+  When I run "workgraph llm connect copilot --for summarize"
+  And hosted LLM use is enabled
+  And I run "workgraph llm summarize today"
+  Then workgraph sends the filtered prompt to copilot through standard input
+  And copilot runs with every built-in, MCP, and plugin tool unavailable
+  And copilot skips custom instructions, interactive questions, and cloud session sync
+  And workgraph passes only Copilot and GitHub authentication environment variables
+
 Scenario: Bind a signed-in LLM profile to one client account context
   Given Claude Code has a dedicated configuration directory for a work organization
   When I run "workgraph llm connect claude-code --config-dir <work-config-dir> --for summarize"

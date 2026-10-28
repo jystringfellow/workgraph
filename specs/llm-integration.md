@@ -11,7 +11,7 @@ The LLM connector must support:
 - cloud-account models such as AWS Bedrock and Azure-hosted model endpoints
 - third-party model subscriptions such as OpenAI, Anthropic, Google, and other
   provider APIs when users bring their own credentials
-- signed-in AI clients such as Codex and Claude Code, without requiring a
+- signed-in AI clients such as Codex, Claude Code, and GitHub Copilot CLI, without requiring a
   separate model API key in workgraph
 
 ## Principles
@@ -103,7 +103,7 @@ workgraph llm summarize today --no-stream
 
 ## Signed-in AI client profiles
 
-Codex and Claude Code are supported as local execution clients for hosted LLM
+Codex, Claude Code, and GitHub Copilot CLI are supported as local execution clients for hosted LLM
 tasks. This is distinct from bridged capture: capture uses an asynchronous
 outbox because workgraph cannot call client-owned provider connectors, while an
 LLM task can synchronously invoke a signed-in local client process.
@@ -113,6 +113,7 @@ The guided setup is:
 ```text
 workgraph llm connect codex
 workgraph llm connect claude-code
+workgraph llm connect copilot
 workgraph llm connect codex --name personal-codex --for summarize
 workgraph llm use claude-code --for categorize
 ```
@@ -156,7 +157,7 @@ environment, and diagnostic contract is defined in
 
 AI-client execution must:
 
-- resolve only the registered `codex` or `claude` executable;
+- resolve only the registered `codex`, `claude`, or `copilot` executable;
 - pass the filtered prompt through standard input, never a process argument;
 - use a non-persistent invocation and a private empty working directory;
 - disable client tools and connector access where supported, and otherwise use
@@ -165,8 +166,18 @@ AI-client execution must:
 - return only the final model response, without client progress output;
 - preserve the existing hosted-LLM opt-in and managed-provider policy checks.
 
+Copilot is invoked as `copilot -s --no-color --no-custom-instructions
+--no-ask-user --disable-builtin-mcps --available-tools=workgraph-no-tools
+--sync-session=off`, with an optional `--model`. Naming a nonexistent tool as
+the only available tool disables every built-in, MCP, and plugin tool. Its
+inherited authentication environment is limited to `COPILOT_*`, `GH_TOKEN`, and
+`GITHUB_TOKEN`. Copilot offers no option to skip local session history, so
+each prompt is recorded in Copilot's local session store; cloud session sync is
+disabled.
+
 Managed deployments may additionally set
-`llm.ai_client.allowed_clients` to `codex`, `claude-code`, or both. This limits
+`llm.ai_client.allowed_clients` to any subset of `codex`, `claude-code`, and
+`copilot`. This limits
 which local signed-in client workgraph may invoke; it does not govern the
 client's behavior outside workgraph.
 
@@ -577,6 +588,7 @@ Dry-run behavior remains provider-independent and does not call Bedrock.
 - [x] Include captured content previews in summary context.
 - [x] Bedrock profile support through local AWS credentials.
 - [x] Signed-in Codex and Claude Code profiles with guided `llm connect` setup.
+- [x] Signed-in GitHub Copilot CLI profiles with every client tool disabled.
 - [x] Client-backed `test`, `doctor`, and `summarize today` execution.
 - [ ] Hosted provider support for OpenAI, Anthropic, Google, and similar APIs.
 - [x] `system-one` decision-model profiles for the `associate` route.

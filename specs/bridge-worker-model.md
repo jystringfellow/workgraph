@@ -5,6 +5,7 @@ The unattended bridged-capture worker may pin one model per supported client:
 ```text
 workgraph plugin install --client codex --model <model>
 workgraph plugin install --client claude-code --model <model>
+workgraph plugin install --client copilot --model <model>
 ```
 
 `workgraph bridge install` exposes the same compatibility flags. A model name
@@ -26,5 +27,11 @@ Install behavior is deliberate:
 
 Install and doctor output report either the exact selected model or `client
 default`. The worker config never contains provider credentials. Codex drain
-uses `codex exec ... --model <model>` and Claude Code drain uses `claude -p ...
---model <model>` when a selection exists.
+uses `codex exec ... --model <model>`, Claude Code drain uses `claude -p ...
+--model <model>`, and Copilot drain uses `copilot ... --model=<model> -p ...`
+when a selection exists.
+
+The same per-client entry may hold `provider_tools`, the exact Copilot
+`server(tool)` permissions approved with `--allow-provider-tool`. Reinstalling
+merges newly approved tools with stored ones; an entry is removed only when it
+has no model, config directory, or provider tools.

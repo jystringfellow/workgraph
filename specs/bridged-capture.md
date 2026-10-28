@@ -815,6 +815,7 @@ missing capabilities without falling back to workgraph-owned OAuth.
 |---|---|---|
 | Claude Code | `workgraph` plugin with the shared skills and local workgraph MCP registration | An explicitly enabled Claude-compatible scheduled worker drains the outbox and survives logout/login as supported by the client adapter |
 | Codex | `workgraph` plugin with the shared skills and local workgraph MCP registration | An explicitly enabled Codex-compatible automation or macOS worker drains the outbox and survives logout/login as supported by the client adapter |
+| GitHub Copilot CLI | `workgraph` plugin from a local Copilot marketplace with the shared skills and local workgraph MCP registration | The macOS worker drains with per-invocation `--allow-tool` grants for only the workgraph drain tools and explicitly approved `server(tool)` provider tools, and leaves capture pending when no provider tool is approved |
 
 Both integrations must use the same MCP schemas and normalized event contracts.
 Provider approvals do not transfer between clients: each integration discovers

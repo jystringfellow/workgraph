@@ -211,6 +211,11 @@ Priority labels used below:
   between lifecycle writes, keeps the agent running while the database is
   locked, and records the end event when the wrapper is signaled. [specs:
   `specs/ai-sessions.md`, `specs/ai-handoff.md`, and `specs/agent-plugin.md`]
+- GitHub Copilot CLI support: a session-only checkpoint skill plugin on wrapped
+  launches, the `workgraph` plugin package with per-drain permission grants,
+  and signed-in tool-free LLM profiles. [specs: `specs/ai-sessions.md`,
+  `specs/agent-plugin.md`, `specs/llm-integration.md`, and
+  `specs/signed-in-client-binding.md`]
 - Managed settings, enterprise security reporting, local LLM filtering, CI,
   and cross-platform release packaging. [specs:
   `specs/enterprise-security.md`, `specs/llm-integration.md`,
