@@ -39,7 +39,7 @@ func TestBundledAICheckpointSkillProvidesExplicitPrivateWorkflow(t *testing.T) {
 	if len(skillBytes) > 4096 {
 		t.Fatalf("AI checkpoint skill is %d bytes; keep it within 4096 because it loads into every session that uses it", len(skillBytes))
 	}
-	for _, client := range []string{"claude-code", "codex"} {
+	for _, client := range []string{"claude-code", "codex", "copilot"} {
 		packaged, err := os.ReadFile(filepath.Join(root, "integrations", client, "plugins", "workgraph", "skills", "workgraph-ai-checkpoint", "SKILL.md"))
 		if err != nil {
 			t.Fatalf("read %s packaged AI checkpoint skill: %v", client, err)

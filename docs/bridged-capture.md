@@ -1,7 +1,7 @@
 # Bridged Capture Operator Guide
 
 Bridged capture lets workgraph schedule and store connector activity while an
-approved Codex or Claude Code provider connector performs the provider reads.
+approved Codex, Claude Code, or GitHub Copilot CLI provider connector performs the provider reads.
 Workgraph stores only non-secret scope, request state, normalized events, and
 local credentials for any separately configured direct connectors. The bridge
 worker never receives the provider token on behalf of workgraph.
@@ -283,7 +283,7 @@ reload the client plugin when status reports a stale process:
 ```sh
 workgraph stop
 workgraph start
-workgraph plugin install --client <codex|claude-code>
+workgraph plugin install --client <codex|claude-code|copilot>
 ```
 
 An operator can permanently cancel one exact request locally:

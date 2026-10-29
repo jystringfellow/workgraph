@@ -12,6 +12,7 @@ environment variable at execution time:
 | --- | --- |
 | `claude-code` | `CLAUDE_CONFIG_DIR` |
 | `codex` | `CODEX_HOME` |
+| `copilot` | `COPILOT_HOME` |
 
 `workgraph plugin install --client <client> --config-dir <path>` stores the
 binding with that client's worker settings in `bridge/workers.json`.

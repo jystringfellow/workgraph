@@ -303,6 +303,7 @@ func runAISession(config AIRunConfig, permittedParentSessionID string) (AIRunRes
 	if err != nil {
 		return AIRunResult{}, fmt.Errorf("prepare AI native binding: %w", err)
 	}
+	defer nativeLaunch.Release()
 	nativeSessionID := nativeLaunch.NativeSessionID
 	if predecessorSessionID == "" && nativeSessionID != "" {
 		err = retryAIRunDatabase(status.DatabasePath, time.Now().Add(aiRunRetryBudget), func(db aiRunConnection) error {

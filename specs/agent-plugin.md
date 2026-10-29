@@ -8,10 +8,10 @@ workgraph ships one agent-facing plugin that makes its local capabilities easy
 to discover and use from supported AI coding clients. The plugin is named
 `workgraph`; individual skills remain separately named capabilities inside it.
 
-Codex and Claude Code are the first supported hosts. Their plugin formats and
-registration commands differ, so workgraph embeds one thin package per host,
-but both packages represent the same logical plugin and contain the same
-canonical workgraph skills.
+Codex, Claude Code, and GitHub Copilot CLI are the supported hosts. Their
+plugin formats and registration commands differ, so workgraph embeds one thin
+package per host, but every package represents the same logical plugin and
+contains the same canonical workgraph skills.
 
 ## Package contract
 
@@ -28,7 +28,7 @@ Each host package contains:
 
 The canonical skills live under `.agents/skills/`. Installation copies those
 directories into the selected host package so safety rules do not drift between
-Codex, Claude Code, and repository-local use.
+Codex, Claude Code, Copilot, and repository-local use.
 
 The MCP is currently limited to bridge capture and configuration tools. Bundling
 it in the broader plugin does not silently expose model execution, provider
@@ -38,9 +38,9 @@ Additional MCP tools require their own specs and facts.
 ## Command surface
 
 ```sh
-workgraph plugin install --client <codex|claude-code>
-workgraph plugin install --client <codex|claude-code> --model <model>
-workgraph plugin doctor --client <codex|claude-code>
+workgraph plugin install --client <codex|claude-code|copilot>
+workgraph plugin install --client <codex|claude-code|copilot> --model <model>
+workgraph plugin doctor --client <codex|claude-code|copilot>
 ```
 
 `plugin install`:
@@ -83,6 +83,40 @@ installation/authentication policy and Productivity category metadata.
 The Claude Code package contains `.claude-plugin/plugin.json`, `.mcp.json`, and
 `skills/`. Its marketplace entry is also `workgraph@workgraph`.
 
+### GitHub Copilot CLI
+
+The Copilot package contains `.github/plugin/marketplace.json` at the install
+root and `plugins/workgraph/plugin.json`, `.mcp.json`, and `skills/`. The MCP
+registration uses Copilot's `local` server type with all workgraph tools
+exposed to the plugin. Installation runs `copilot plugin marketplace remove
+workgraph` (tolerating an unregistered marketplace), `copilot plugin
+marketplace add <install-root>`, and `copilot plugin install
+workgraph@workgraph`. Copilot loads local-marketplace plugins live from the
+install root rather than copying them, so reinstalling into the same root takes
+effect without a plugin update, and the remove step re-points the marketplace
+when the install root changes. Inside a Copilot session the plugin's MCP tools
+are named `workgraph-<tool>`, and their permissions are `workgraph(<tool>)`.
+
+Copilot has no persistent per-project permission settings comparable to
+Claude Code's, so its unattended drain grants permissions per invocation:
+`--allow-tool=workgraph(<tool>)` for each required workgraph drain tool, never
+the whole `workgraph` server, shell, file write, or `--allow-all-tools`.
+Because `--allow-tool` only adds approvals, the drain also fixes the visible
+tool set with one `--available-tools=` per granted tool (`server(tool)` becomes
+`server-tool`) plus `skill`, which Copilot needs to load plugin skills. It
+denies `shell`, `write`, `url`, and `memory`, passes `--no-custom-instructions`
+and `--disallow-temp-dir`, and removes `COPILOT_ALLOW_ALL` and
+`COPILOT_CUSTOM_INSTRUCTIONS_DIRS` from the worker environment, so saved
+approvals and environment overrides cannot widen the drain.
+Optional provider tools use the exact `server(tool)` form, reject wildcards and
+reserved Copilot permission kinds, and are stored in
+`<workgraph-home>/bridge/workers.json`. Reinstalling merges newly allowed
+provider tools with stored ones; `--clear-provider-tools` empties the stored
+set first. Stored tools are revalidated before every drain. Provider tools are granted only to capture
+drains; LLM-task drains receive only workgraph tools. With no approved provider
+tool, the Copilot worker leaves capture requests pending rather than attempting
+provider reads.
+
 Host-specific manifests may present different supported metadata, but their
 plugin identity, semantic version, MCP command, and skill contents must remain
 equivalent.
@@ -90,7 +124,8 @@ equivalent.
 ## LLM execution boundary
 
 Installing the plugin is not required for `workgraph llm connect codex` or
-`workgraph llm connect claude-code`. Client-backed LLM profiles are initiated by
+`workgraph llm connect claude-code` or `workgraph llm connect copilot`.
+Client-backed LLM profiles are initiated by
 workgraph as bounded model calls; the plugin is initiated by an agent to use
 local workgraph capabilities. Keeping those paths independent avoids granting
 MCP or provider-tool access to summary prompts.
@@ -135,19 +170,24 @@ session. Each skill retains its own approval and safety boundaries.
 5. [x] Retain bridge install/doctor compatibility aliases.
 6. [x] Update help, onboarding, command, connector, and bridge documentation.
 7. [x] Validate both plugin packages, pass all facts, and cross off the roadmap.
+8. [x] Add the GitHub Copilot CLI package, marketplace registration, per-drain
+   permission grants, and persisted exact provider tools.
 
 ## Facts
 
-- Codex and Claude Code packages use the `workgraph` plugin identity and valid
-  host manifests.
+- Codex, Claude Code, and Copilot packages use the `workgraph` plugin identity
+  and valid host manifests.
 - Installing either package places all three canonical skills and the bridge
   event-contract reference under `plugins/workgraph/skills`.
 - Installed skill files exactly match their canonical `.agents/skills` source.
-- Both packages register the local MCP as `workgraph` with an absolute binary
+- Every package registers the local MCP as `workgraph` with an absolute binary
   path and explicit workgraph home.
-- Both clients are asked to install `workgraph@workgraph`.
+- Every client is asked to install `workgraph@workgraph`; Copilot first adds
+  the local marketplace.
+- Copilot drain grants only the explicit workgraph drain tools and explicitly
+  approved provider tools, and leaves capture pending without provider tools.
 - Reinstalling is successful and preserves unrelated files in the install root.
 - `plugin doctor` fails when any required skill is absent and succeeds without
   contacting a provider when the complete package is present.
 - Bridge install/doctor aliases operate on the same `workgraph` package.
-- Help and user documentation show the plugin-first setup path for both hosts.
+- Help and user documentation show the plugin-first setup path for every host.

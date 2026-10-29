@@ -405,6 +405,13 @@ type aiNativeLaunchPreparation struct {
 	Args            []string
 	Environment     map[string]string
 	NativeSessionID string
+	Cleanup         func()
+}
+
+func (preparation aiNativeLaunchPreparation) Release() {
+	if preparation.Cleanup != nil {
+		preparation.Cleanup()
+	}
 }
 
 func aiPrepareNativeLaunch(tool string, args []string, homeDir string) (aiNativeLaunchPreparation, error) {
@@ -418,15 +425,22 @@ func aiPrepareNativeLaunch(tool string, args []string, homeDir string) (aiNative
 
 	switch adapter.BindingStrategy {
 	case "assigned-id":
-		if selectionPresent {
-			return result, nil
+		injected := []string{}
+		if !selectionPresent {
+			generatedID, err := newAIUUID()
+			if err != nil {
+				return aiNativeLaunchPreparation{}, fmt.Errorf("create Copilot native session id: %w", err)
+			}
+			result.NativeSessionID = generatedID
+			injected = append(injected, "--session-id="+generatedID)
 		}
-		generatedID, err := newAIUUID()
+		pluginDir, cleanup, err := createAICopilotSessionPlugin(homeDir)
 		if err != nil {
-			return aiNativeLaunchPreparation{}, fmt.Errorf("create Copilot native session id: %w", err)
+			return aiNativeLaunchPreparation{}, err
 		}
-		result.NativeSessionID = generatedID
-		result.Args = append([]string{"--session-id=" + generatedID}, result.Args...)
+		result.Cleanup = cleanup
+		injected = append(injected, "--plugin-dir="+pluginDir)
+		result.Args = append(injected, result.Args...)
 		return result, nil
 	case "lifecycle-hook":
 		executable, err := aiCurrentExecutable()
@@ -601,20 +615,27 @@ const aiOpenCodePlugin = `export const WorkgraphSessionPlugin = async () => {
 }
 `
 
-func ensureAIOpenCodePlugin(homeDir string) (string, error) {
-	directory := filepath.Join(homeDir, "ai-adapters")
+func ensureAIPrivateAdapterDirectory(directory string, label string) error {
 	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return "", fmt.Errorf("create OpenCode adapter directory: %w", err)
+		return fmt.Errorf("create %s adapter directory: %w", label, err)
 	}
 	info, err := os.Lstat(directory)
 	if err != nil {
-		return "", fmt.Errorf("inspect OpenCode adapter directory: %w", err)
+		return fmt.Errorf("inspect %s adapter directory: %w", label, err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return "", errors.New("OpenCode adapter directory must be a real directory")
+		return fmt.Errorf("%s adapter directory must be a real directory", label)
 	}
 	if err := os.Chmod(directory, 0o700); err != nil {
-		return "", fmt.Errorf("secure OpenCode adapter directory: %w", err)
+		return fmt.Errorf("secure %s adapter directory: %w", label, err)
+	}
+	return nil
+}
+
+func ensureAIOpenCodePlugin(homeDir string) (string, error) {
+	directory := filepath.Join(homeDir, "ai-adapters")
+	if err := ensureAIPrivateAdapterDirectory(directory, "OpenCode"); err != nil {
+		return "", err
 	}
 
 	path := filepath.Join(directory, "workgraph-session.js")

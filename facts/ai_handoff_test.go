@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -81,6 +82,11 @@ printf '%s\n%s\n%s' "$WORKGRAPH_AI_SESSION_ID" "$WORKGRAPH_AI_HOME" "$WORKGRAPH_
 				}
 			}
 			argumentLines := strings.Split(strings.TrimSuffix(arguments, "\n"), "\n")
+			if test.destination == "copilot" && !slices.ContainsFunc(argumentLines, func(line string) bool {
+				return strings.HasPrefix(line, "--plugin-dir="+filepath.Join(homeDir, "ai-adapters", "copilot")+string(filepath.Separator))
+			}) {
+				t.Fatalf("Copilot handoff did not load the session checkpoint plugin:\n%s", arguments)
+			}
 			for _, argument := range argumentLines {
 				if strings.Contains(argument, test.sourceTool+"-native") || argument == "resume" || strings.HasPrefix(argument, "--resume") {
 					t.Fatalf("handoff selected the source native session %q:\n%s", argument, arguments)

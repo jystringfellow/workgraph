@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "workgraph": { "type": "local", "command": "workgraph", "args": ["bridge", "mcp"], "tools": ["*"] }
+  }
+}

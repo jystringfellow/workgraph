@@ -33,9 +33,12 @@ Feature: Local AI coding session continuity
   Scenario: Assign and resume a direct GitHub Copilot CLI session
     When I run "workgraph ai run -- copilot"
     Then workgraph supplies a fresh exact UUID with "--session-id"
+    And workgraph supplies a private per-launch "--plugin-dir" carrying only the canonical checkpoint skill
+    And workgraph removes that plugin directory when Copilot exits
     And the start event stores that native session id
     When I resume the ended workgraph session
     Then workgraph launches the stored Copilot executable with "--resume=<copilot-session-id>"
+    And the resumed Copilot session loads its own session-only checkpoint plugin
     And workgraph does not enable remote control or remote export
 
   Scenario: Bind and resume an OpenCode native session

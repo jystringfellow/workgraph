@@ -1,0 +1,13 @@
+{
+  "name": "workgraph",
+  "description": "Local workgraph integrations for GitHub Copilot CLI.",
+  "owner": { "name": "workgraph" },
+  "plugins": [
+    {
+      "name": "workgraph",
+      "source": "./plugins/workgraph",
+      "description": "Use workgraph capture, memory, and AI session continuity from GitHub Copilot CLI.",
+      "version": "0.2.0"
+    }
+  ]
+}

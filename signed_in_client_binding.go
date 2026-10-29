@@ -34,8 +34,11 @@ func normalizeSignedInClientBinding(client string, configDir string) (signedInCl
 }
 
 func signedInClientConfigEnvironmentName(client string) string {
-	if client == "claude-code" {
+	switch client {
+	case "claude-code":
 		return "CLAUDE_CONFIG_DIR"
+	case "copilot":
+		return "COPILOT_HOME"
 	}
 	return "CODEX_HOME"
 }

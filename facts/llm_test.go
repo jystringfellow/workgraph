@@ -269,6 +269,77 @@ printf '%s' 'Claude summarized the client-backed day.'
 	}
 }
 
+func TestLLMSummarizeTodayUsesSignedInCopilotClientWithoutTools(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("signed-in AI client reference integrations currently target macOS and Unix clients")
+	}
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	if output, err := runworkgraph(t, repoRoot(t), "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	fixtureDir := t.TempDir()
+	configDir := filepath.Join(fixtureDir, "copilot-work")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatalf("create Copilot config directory: %v", err)
+	}
+	argsPath := filepath.Join(fixtureDir, "copilot.args")
+	promptPath := filepath.Join(fixtureDir, "copilot.prompt")
+	environmentPath := filepath.Join(fixtureDir, "copilot.environment")
+	writeLLMClientFixture(t, fixtureDir, "copilot", `
+printf '%s\n' "$@" > "`+argsPath+`"
+cat > "`+promptPath+`"
+printf '%s|%s|%s|%s|%s|%s' "${COPILOT_HOME:-missing}" "${GH_TOKEN:-missing}" "${COPILOT_GITHUB_TOKEN:-missing}" "${WORKGRAPH_SLACK_TOKEN:-missing}" "${COPILOT_ALLOW_ALL:-missing}" "${COPILOT_CUSTOM_INSTRUCTIONS_DIRS:-missing}" > "`+environmentPath+`"
+printf '%s' 'Copilot summarized the client-backed day.'
+`)
+	t.Setenv("PATH", fixtureDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("COPILOT_HOME", filepath.Join(fixtureDir, "copilot-personal"))
+	t.Setenv("GH_TOKEN", "fake-gh-auth")
+	t.Setenv("COPILOT_GITHUB_TOKEN", "fake-copilot-auth")
+	t.Setenv("WORKGRAPH_SLACK_TOKEN", "fake-connector-secret")
+	t.Setenv("COPILOT_ALLOW_ALL", "true")
+	t.Setenv("COPILOT_CUSTOM_INSTRUCTIONS_DIRS", fixtureDir)
+
+	insertLLMEvent(t, filepath.Join(homeDir, "workgraph.db"), "copilot-summary-event", "notion.page_updated",
+		time.Now().UTC().Format(time.RFC3339Nano), "workgraph", "Shipped Copilot profiles",
+		`{"title":"Shipped Copilot profiles"}`)
+	output, err := runworkgraph(t, repoRoot(t), "llm", "connect", "copilot",
+		"--home", homeDir, "--model", "copilot-model", "--config-dir", configDir, "--for", "summarize")
+	if err != nil || !strings.Contains(string(output), "LLM client connected: copilot") || !strings.Contains(string(output), "Config dir: "+configDir) {
+		t.Fatalf("connect Copilot LLM client: %v\n%s", err, output)
+	}
+	if _, err := os.Stat(argsPath); !os.IsNotExist(err) {
+		t.Fatalf("LLM connect invoked Copilot: %v", err)
+	}
+	if output, err := runworkgraph(t, repoRoot(t), "llm", "hosted", "enable", "--home", homeDir); err != nil {
+		t.Fatalf("enable hosted LLM use: %v\n%s", err, output)
+	}
+	output, err = runworkgraph(t, repoRoot(t), "llm", "summarize", "today", "--home", homeDir, "--no-stream")
+	if err != nil || !strings.Contains(string(output), "Copilot summarized the client-backed day.") {
+		t.Fatalf("summarize with Copilot: %v\n%s", err, output)
+	}
+	argsBytes, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatalf("read Copilot arguments: %v", err)
+	}
+	arguments := strings.Split(strings.TrimSuffix(string(argsBytes), "\n"), "\n")
+	expected := []string{"-s", "--no-color", "--no-custom-instructions", "--no-ask-user", "--disable-builtin-mcps",
+		"--available-tools=workgraph-no-tools", "--sync-session=off", "--model=copilot-model"}
+	if strings.Join(arguments, " ") != strings.Join(expected, " ") {
+		t.Fatalf("Copilot invocation = %q, want exactly %q", arguments, expected)
+	}
+	prompt, err := os.ReadFile(promptPath)
+	if err != nil || !strings.Contains(string(prompt), "notion.page_updated Shipped Copilot profiles") {
+		t.Fatalf("Copilot prompt did not arrive on stdin: %v\n%s", err, prompt)
+	}
+	environment, err := os.ReadFile(environmentPath)
+	if err != nil {
+		t.Fatalf("read Copilot environment: %v", err)
+	}
+	if string(environment) != configDir+"|fake-gh-auth|fake-copilot-auth|missing|missing|missing" {
+		t.Fatalf("expected bound COPILOT_HOME, preserved client auth, and scrubbed connector secrets and permission overrides, got %q", environment)
+	}
+}
+
 func TestManagedSettingsRestrictSignedInAIClients(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("signed-in AI client reference integrations currently target macOS and Unix clients")

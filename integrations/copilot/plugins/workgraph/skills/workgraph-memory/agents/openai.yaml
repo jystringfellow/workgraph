@@ -1,0 +1,4 @@
+interface:
+  display_name: "workgraph Memory"
+  short_description: "Draft and edit workgraph project memory"
+  default_prompt: "Use $workgraph-memory to create or update durable workgraph project memory from the context I provide."
