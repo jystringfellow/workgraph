@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "workgraph": { "command": "workgraph", "args": ["bridge", "mcp"] }
+  }
+}

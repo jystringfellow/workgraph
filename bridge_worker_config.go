@@ -137,12 +137,16 @@ func validateStoredProviderTools(client string, tools []string) error {
 	if len(tools) == 0 {
 		return nil
 	}
-	if client != "copilot" {
-		return fmt.Errorf("bridge worker config stores provider tools for %s; only copilot provider tools are supported", client)
+	if !storesProviderTools(client) {
+		return fmt.Errorf("bridge worker config stores provider tools for %s; only copilot and agy provider tools are supported", client)
+	}
+	form := "server(tool)"
+	if client == "agy" {
+		form = "mcp(server/tool)"
 	}
 	for _, tool := range tools {
 		if _, err := validateProviderTools(client, []string{tool}); err != nil || strings.TrimSpace(tool) != tool {
-			return fmt.Errorf("bridge worker config stores invalid Copilot provider tool %q; reinstall with --clear-provider-tools and re-approve exact server(tool) names", tool)
+			return fmt.Errorf("bridge worker config stores invalid %s provider tool %q; reinstall with --clear-provider-tools and re-approve exact %s names", providerToolsClientLabel(client), tool, form)
 		}
 	}
 	return nil

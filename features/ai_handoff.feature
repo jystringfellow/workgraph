@@ -9,7 +9,7 @@ Feature: Privacy-bounded AI session handoff
   Scenario: Hand an active session to a verified destination
     Given a supported wrapped AI session has a structured checkpoint
     When I run "workgraph ai handoff <destination>"
-    Then workgraph launches codex, claude, copilot, or opencode with compact checkpoint and repository context
+    Then workgraph launches codex, claude, copilot, opencode, or agy with compact checkpoint and repository context
     And the destination session records the source session as its predecessor
     And the destination receives its own workgraph session environment
     And no event or continuation context contains transcripts, prompts, terminal output, environment values, complete arguments, file contents, or diffs

@@ -4,7 +4,7 @@ Feature: Agent plugin installation
   So that I can start using workgraph without assembling MCP and skill files
 
   Scenario: Install the workgraph plugin for a supported client
-    Given Codex, Claude Code, or GitHub Copilot CLI is installed
+    Given Codex, Claude Code, GitHub Copilot CLI, or Antigravity is installed
     When I install the workgraph plugin for that client
     Then workgraph registers one local plugin named workgraph
     And the plugin contains the bridge, memory, and AI checkpoint skills
@@ -40,6 +40,21 @@ Feature: Agent plugin installation
     Given the Copilot workgraph marketplace was registered from an earlier install root
     When I install the Copilot plugin into a new install root
     Then Copilot's workgraph marketplace points at the new install root
+
+  Scenario: Grant Antigravity drain permissions per invocation
+    Given the workgraph plugin is installed for Antigravity
+    And I approved exact provider tools in mcp(server/tool) form
+    When the unattended worker drains capture requests
+    Then agy runs headlessly with session-only allow rules for only the workgraph drain tools and the approved provider tools
+    And agy is never launched with --dangerously-skip-permissions
+    When no provider tool is approved
+    Then capture requests remain pending and agy is not launched
+
+  Scenario: Reinstall the Antigravity plugin
+    Given the workgraph plugin was installed into Antigravity from an earlier install root
+    When I install the Antigravity plugin again
+    Then workgraph uninstalls the earlier copy and installs the current package directory
+    And an Antigravity install failure is reported
 
   Scenario: Update an existing plugin installation
     Given the workgraph plugin was already installed

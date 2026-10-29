@@ -340,6 +340,68 @@ printf '%s' 'Copilot summarized the client-backed day.'
 	}
 }
 
+func TestLLMSummarizeTodayUsesSignedInAntigravityClientWithoutTools(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("signed-in AI client reference integrations currently target macOS and Unix clients")
+	}
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	if output, err := runworkgraph(t, repoRoot(t), "init", "--home", homeDir); err != nil {
+		t.Fatalf("workgraph init failed: %v\n%s", err, output)
+	}
+	fixtureDir := t.TempDir()
+	argsPath := filepath.Join(fixtureDir, "agy.args")
+	promptPath := filepath.Join(fixtureDir, "agy.prompt")
+	environmentPath := filepath.Join(fixtureDir, "agy.environment")
+	writeLLMClientFixture(t, fixtureDir, "agy", `
+printf '%s\n' "$@" > "`+argsPath+`"
+cat > "`+promptPath+`"
+printf '%s|%s' "${GEMINI_API_KEY:-missing}" "${WORKGRAPH_SLACK_TOKEN:-missing}" > "`+environmentPath+`"
+printf '%s' 'Antigravity summarized the client-backed day.'
+`)
+	t.Setenv("PATH", fixtureDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GEMINI_API_KEY", "fake-gemini-auth")
+	t.Setenv("WORKGRAPH_SLACK_TOKEN", "fake-connector-secret")
+
+	if output, err := runworkgraph(t, repoRoot(t), "llm", "connect", "agy", "--home", homeDir, "--config-dir", fixtureDir, "--for", "summarize"); err == nil || !strings.Contains(string(output), "--config-dir is not supported for agy") {
+		t.Fatalf("expected Antigravity config-dir binding to be rejected: %v\n%s", err, output)
+	}
+	insertLLMEvent(t, filepath.Join(homeDir, "workgraph.db"), "agy-summary-event", "notion.page_updated",
+		time.Now().UTC().Format(time.RFC3339Nano), "workgraph", "Shipped Antigravity profiles",
+		`{"title":"Shipped Antigravity profiles"}`)
+	output, err := runworkgraph(t, repoRoot(t), "llm", "connect", "agy",
+		"--home", homeDir, "--model", "agy-model", "--for", "summarize")
+	if err != nil || !strings.Contains(string(output), "LLM client connected: agy") {
+		t.Fatalf("connect Antigravity LLM client: %v\n%s", err, output)
+	}
+	if _, err := os.Stat(argsPath); !os.IsNotExist(err) {
+		t.Fatalf("LLM connect invoked Antigravity: %v", err)
+	}
+	if output, err := runworkgraph(t, repoRoot(t), "llm", "hosted", "enable", "--home", homeDir); err != nil {
+		t.Fatalf("enable hosted LLM use: %v\n%s", err, output)
+	}
+	output, err = runworkgraph(t, repoRoot(t), "llm", "summarize", "today", "--home", homeDir, "--no-stream")
+	if err != nil || !strings.Contains(string(output), "Antigravity summarized the client-backed day.") {
+		t.Fatalf("summarize with Antigravity: %v\n%s", err, output)
+	}
+	argsBytes, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatalf("read Antigravity arguments: %v", err)
+	}
+	arguments := strings.Split(strings.TrimSuffix(string(argsBytes), "\n"), "\n")
+	expected := []string{"--output-format", "text", "--disable-slash-commands", "--sandbox", "--model", "agy-model"}
+	if strings.Join(arguments, " ") != strings.Join(expected, " ") {
+		t.Fatalf("Antigravity invocation = %q, want exactly %q", arguments, expected)
+	}
+	prompt, err := os.ReadFile(promptPath)
+	if err != nil || !strings.Contains(string(prompt), "notion.page_updated Shipped Antigravity profiles") {
+		t.Fatalf("Antigravity prompt did not arrive on stdin: %v\n%s", err, prompt)
+	}
+	environment, err := os.ReadFile(environmentPath)
+	if err != nil || string(environment) != "fake-gemini-auth|missing" {
+		t.Fatalf("expected preserved Gemini auth and scrubbed connector secrets, got %q: %v", environment, err)
+	}
+}
+
 func TestManagedSettingsRestrictSignedInAIClients(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("signed-in AI client reference integrations currently target macOS and Unix clients")

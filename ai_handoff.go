@@ -71,7 +71,7 @@ func HandoffAISession(config AIHandoffConfig) (AIHandoffResult, error) {
 
 	destination := strings.TrimSpace(config.Destination)
 	if !IsAIHandoffDestination(destination) {
-		return AIHandoffResult{}, fmt.Errorf("destination %q is unsupported; choose codex, claude, copilot, or opencode", destination)
+		return AIHandoffResult{}, fmt.Errorf("destination %q is unsupported; choose codex, claude, copilot, opencode, or agy", destination)
 	}
 	destinationPath, err := exec.LookPath(destination)
 	if err != nil {
@@ -312,6 +312,8 @@ func aiHandoffArguments(destination, continuation string) []string {
 		return []string{"--interactive", continuation}
 	case "opencode":
 		return []string{"--prompt", continuation}
+	case "agy":
+		return []string{"-i", continuation}
 	default:
 		return []string{continuation}
 	}

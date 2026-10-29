@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-//go:embed all:integrations/codex all:integrations/claude-code all:integrations/copilot all:.agents/skills/workgraph-bridge all:.agents/skills/workgraph-memory all:.agents/skills/workgraph-ai-checkpoint
+//go:embed all:integrations/codex all:integrations/claude-code all:integrations/copilot all:integrations/agy all:.agents/skills/workgraph-bridge all:.agents/skills/workgraph-memory all:.agents/skills/workgraph-ai-checkpoint
 var agentPluginAssets embed.FS
 
 type PluginInstallConfig struct {
@@ -70,8 +70,8 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 	if strings.TrimSpace(config.ConfigDir) != "" && config.ClearConfigDir {
 		return PluginInstallResult{}, fmt.Errorf("--config-dir and --clear-config-dir cannot be used together")
 	}
-	if config.ClearProviderTools && client != "copilot" {
-		return PluginInstallResult{}, fmt.Errorf("--clear-provider-tools is supported only for copilot")
+	if config.ClearProviderTools && !storesProviderTools(client) {
+		return PluginInstallResult{}, fmt.Errorf("--clear-provider-tools is supported only for copilot and agy")
 	}
 	providerTools, err := validateProviderTools(client, config.ProviderTools)
 	if err != nil {
@@ -103,11 +103,11 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 	if err != nil {
 		return PluginInstallResult{}, err
 	}
-	copilotProviderTools := []string(nil)
-	if client == "copilot" {
-		copilotProviderTools = providerTools
+	storedProviderTools := []string(nil)
+	if storesProviderTools(client) {
+		storedProviderTools = providerTools
 	}
-	workerSettings, err := configureBridgeWorkerSettings(homeDir, client, config.Model, config.ClearModel, config.ConfigDir, config.ClearConfigDir, config.ClearProviderTools, copilotProviderTools)
+	workerSettings, err := configureBridgeWorkerSettings(homeDir, client, config.Model, config.ClearModel, config.ConfigDir, config.ClearConfigDir, config.ClearProviderTools, storedProviderTools)
 	if err != nil {
 		return PluginInstallResult{}, err
 	}
@@ -124,7 +124,7 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 			return PluginInstallResult{}, err
 		}
 	}
-	if client == "copilot" {
+	if storesProviderTools(client) {
 		providerToolCount = len(workerSettings.ProviderTools)
 	}
 	launchStatus := "launchd setup skipped"
@@ -150,10 +150,10 @@ func InstallPlugin(config PluginInstallConfig) (PluginInstallResult, error) {
 		lines = append(lines, "Permissions: unattended workgraph MCP drain only")
 		lines = append(lines, "Workspace trust: ready")
 	}
-	if client == "copilot" {
+	if storesProviderTools(client) {
 		lines = append(lines, "Permissions: unattended workgraph MCP drain only, granted per drain invocation")
 	}
-	if client == "claude-code" || client == "copilot" {
+	if client == "claude-code" || storesProviderTools(client) {
 		lines = append(lines, fmt.Sprintf("Provider tools: %d explicitly allowed", providerToolCount))
 	}
 	lines = append(lines,
@@ -183,10 +183,14 @@ var claudeBridgeDrainPermissions = []string{
 func normalizePluginClient(client string) (string, error) {
 	client = strings.ToLower(strings.TrimSpace(client))
 	switch client {
-	case "codex", "claude-code", "copilot":
+	case "codex", "claude-code", "copilot", "agy":
 		return client, nil
 	}
-	return "", fmt.Errorf("plugin client must be codex, claude-code, or copilot")
+	return "", fmt.Errorf("plugin client must be codex, claude-code, copilot, or agy")
+}
+
+func storesProviderTools(client string) bool {
+	return client == "copilot" || client == "agy"
 }
 
 func pluginClientCommand(client string, override string) string {
@@ -205,6 +209,8 @@ func pluginClientLabel(client string) string {
 		return "Claude Code"
 	case "copilot":
 		return "GitHub Copilot CLI"
+	case "agy":
+		return "Antigravity"
 	}
 	return "Codex"
 }
@@ -213,7 +219,7 @@ func installedPluginManifestPath(client string, pluginRoot string) string {
 	switch client {
 	case "claude-code":
 		return filepath.Join(pluginRoot, ".claude-plugin", "plugin.json")
-	case "copilot":
+	case "copilot", "agy":
 		return filepath.Join(pluginRoot, "plugin.json")
 	}
 	return filepath.Join(pluginRoot, ".codex-plugin", "plugin.json")
@@ -221,15 +227,25 @@ func installedPluginManifestPath(client string, pluginRoot string) string {
 
 var copilotProviderToolPattern = regexp.MustCompile(`^([A-Za-z0-9_.-]+)\(([A-Za-z0-9_.-]+)\)$`)
 
+var agyProviderToolPattern = regexp.MustCompile(`^mcp\(([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)\)$`)
+
 func validateProviderTools(client string, tools []string) ([]string, error) {
-	if len(tools) > 0 && client != "claude-code" && client != "copilot" {
-		return nil, fmt.Errorf("--allow-provider-tool is supported only for claude-code and copilot")
+	if len(tools) > 0 && client != "claude-code" && !storesProviderTools(client) {
+		return nil, fmt.Errorf("--allow-provider-tool is supported only for claude-code, copilot, and agy")
 	}
 	validated := make([]string, 0, len(tools))
 	seen := map[string]bool{}
 	for _, tool := range tools {
 		tool = strings.TrimSpace(tool)
-		if client == "copilot" {
+		if client == "agy" {
+			match := agyProviderToolPattern.FindStringSubmatch(tool)
+			if match == nil {
+				return nil, fmt.Errorf("Antigravity provider tool permissions must use an exact mcp(server/tool) name")
+			}
+			if match[1] == "workgraph" {
+				return nil, fmt.Errorf("Antigravity provider tool permissions must name a provider MCP server; workgraph MCP permissions are managed by the installer")
+			}
+		} else if client == "copilot" {
 			match := copilotProviderToolPattern.FindStringSubmatch(tool)
 			if match == nil {
 				return nil, fmt.Errorf("Copilot provider tool permissions must use an exact server(tool) MCP tool name")
@@ -275,6 +291,14 @@ func withoutCopilotOverrides(environment []string) []string {
 		filtered = append(filtered, entry)
 	}
 	return filtered
+}
+
+func agyBridgeDrainPermissions() []string {
+	permissions := make([]string, 0, len(claudeBridgeDrainPermissions))
+	for _, permission := range claudeBridgeDrainPermissions {
+		permissions = append(permissions, "mcp(workgraph/"+strings.TrimPrefix(permission, claudeWorkgraphServerRule+"__")+")")
+	}
+	return permissions
 }
 
 func copilotBridgeDrainPermissions() []string {
@@ -569,8 +593,12 @@ func writeInstalledPluginMCP(client string, installRoot string, executable strin
 		server["tools"] = []string{"*"}
 		document = map[string]any{"mcpServers": map[string]any{"workgraph": server}}
 	}
-	contents, _ := json.MarshalIndent(document, "", "  ")
 	path := filepath.Join(installRoot, "plugins", "workgraph", ".mcp.json")
+	if client == "agy" {
+		document = map[string]any{"mcpServers": map[string]any{"workgraph": server}}
+		path = filepath.Join(installRoot, "plugins", "workgraph", "mcp_config.json")
+	}
+	contents, _ := json.MarshalIndent(document, "", "  ")
 	if err := os.WriteFile(path, append(contents, '\n'), 0o600); err != nil {
 		return fmt.Errorf("write installed bridge MCP config: %w", err)
 	}
@@ -578,6 +606,9 @@ func writeInstalledPluginMCP(client string, installRoot string, executable strin
 }
 
 func registerAgentPlugin(client string, commandName string, installRoot string, binding signedInClientBinding) error {
+	if client == "agy" {
+		return registerAntigravityPlugin(commandName, filepath.Join(installRoot, "plugins", "workgraph"))
+	}
 	commands := [][]string{}
 	switch client {
 	case "codex":
@@ -605,6 +636,15 @@ func registerAgentPlugin(client string, commandName string, installRoot string, 
 				return fmt.Errorf("register %s workgraph plugin: %s", client, strings.TrimSpace(string(output)))
 			}
 		}
+	}
+	return nil
+}
+
+func registerAntigravityPlugin(commandName string, pluginRoot string) error {
+	_ = exec.Command(commandName, "plugin", "uninstall", "workgraph").Run()
+	output, err := exec.Command(commandName, "plugin", "install", pluginRoot).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("register agy workgraph plugin: %s", strings.TrimSpace(string(output)))
 	}
 	return nil
 }
@@ -779,11 +819,11 @@ func DrainBridge(homeDir string, client string, clientCommand string, timeout ti
 	if err != nil {
 		return "", err
 	}
-	if client == "copilot" && len(workerSettings.ProviderTools) == 0 {
+	if storesProviderTools(client) && len(workerSettings.ProviderTools) == 0 {
 		captureClaimable = false
 		if !llmClaimable {
 			recordBridgeDrainHeartbeat(homeDir, client)
-			return "No Copilot provider tools are explicitly allowed; active capture requests remain pending.", nil
+			return "No " + providerToolsClientLabel(client) + " provider tools are explicitly allowed; active capture requests remain pending.", nil
 		}
 	}
 	if timeout <= 0 {
@@ -840,6 +880,20 @@ func DrainBridge(homeDir string, client string, clientCommand string, timeout ti
 			args = append(args, "--model="+model)
 		}
 		args = append(args, "-p", prompt)
+	case "agy":
+		permissions := agyBridgeDrainPermissions()
+		if drainKind == captureRequestKindCapture {
+			permissions = append(permissions, workerSettings.ProviderTools...)
+		}
+		settings, err := json.Marshal(map[string]any{"permissions": map[string]any{"allow": permissions}})
+		if err != nil {
+			return "", fmt.Errorf("encode Antigravity drain permissions: %w", err)
+		}
+		args = []string{"--settings", string(settings)}
+		if model != "" {
+			args = append(args, "--model", model)
+		}
+		args = append(args, "-p", prompt)
 	}
 	if err := recordBridgeDrainKind(homeDir, client, drainKind); err != nil {
 		return "", fmt.Errorf("record bridge drain kind: %w", err)
@@ -875,6 +929,13 @@ func DrainBridge(homeDir string, client string, clientCommand string, timeout ti
 	clearBridgeDrainError(homeDir, client)
 	recordBridgeDrainHeartbeat(homeDir, client)
 	return strings.TrimSpace(string(output)), nil
+}
+
+func providerToolsClientLabel(client string) string {
+	if client == "agy" {
+		return "Antigravity"
+	}
+	return "Copilot"
 }
 
 func newBridgeDrainWorker(client string) (string, error) {
@@ -951,7 +1012,7 @@ func DoctorPlugin(config PluginDoctorConfig) (string, error) {
 		}
 		permissionStatus = "ready"
 	}
-	if client == "copilot" {
+	if storesProviderTools(client) {
 		permissionStatus = "granted per drain invocation"
 	}
 	providerToolCount := 0
@@ -1002,13 +1063,13 @@ func DoctorPlugin(config PluginDoctorConfig) (string, error) {
 		"Model: " + bridgeWorkerModelLabel(workerSettings.Model),
 		"Config dir: " + signedInClientBindingLabel(signedInClientBinding{ConfigDir: workerSettings.ConfigDir}),
 	}
-	if client == "copilot" {
+	if storesProviderTools(client) {
 		providerToolCount = len(workerSettings.ProviderTools)
 	}
 	if client == "claude-code" {
 		lines = append(lines, "Workspace trust: ready")
 	}
-	if client == "claude-code" || client == "copilot" {
+	if client == "claude-code" || storesProviderTools(client) {
 		lines = append(lines, fmt.Sprintf("Provider tools: %d explicitly allowed", providerToolCount))
 	}
 	lines = append(lines,

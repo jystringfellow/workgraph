@@ -67,6 +67,18 @@ Priority labels used below:
 
 ## Recently Delivered
 
+- [x] Antigravity (`agy`) support across sessions, handoff, plugin, and LLM:
+  wrapped `agy` launches bind the native conversation ID through a
+  session-only `SessionStart` hook and resume with `--conversation <id>`;
+  `workgraph ai handoff agy` launches with `-i` continuation context;
+  `plugin install/doctor --client agy` installs the workgraph plugin and MCP
+  server, and the unattended drain is limited to session-only allow rules for
+  the workgraph drain tools and approved `mcp(server/tool)` provider tools;
+  `llm connect agy` runs signed-in Antigravity headlessly with the prompt on
+  stdin. [specs: `specs/ai-handoff.md`, `specs/ai-sessions.md`,
+  `specs/agent-plugin.md`, `specs/bridged-capture.md`,
+  `specs/llm-integration.md`]
+
 - [x] Backlog verification and distinct decisions: `llm verify-backlog`
   sends waiting floor-to-threshold proposals to the `associate-verify`
   profile with dry run, limit, since, and resumable checks, and

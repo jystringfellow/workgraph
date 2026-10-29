@@ -49,11 +49,12 @@ type AIResumeResult struct {
 }
 
 type aiNativeLifecycleCallback struct {
-	SessionID     string `json:"session_id"`
-	CWD           string `json:"cwd"`
-	HookEventName string `json:"hook_event_name"`
-	Source        string `json:"source"`
-	Reason        string `json:"reason"`
+	SessionID      string `json:"session_id"`
+	ConversationID string `json:"conversationId"`
+	CWD            string `json:"cwd"`
+	HookEventName  string `json:"hook_event_name"`
+	Source         string `json:"source"`
+	Reason         string `json:"reason"`
 }
 
 type aiNativeAdapter struct {
@@ -68,6 +69,7 @@ var aiNativeAdapters = map[string]aiNativeAdapter{
 	"claude":   {Tool: "claude", ResumePrefix: []string{"--resume"}, BindingStrategy: "lifecycle-hook"},
 	"copilot":  {Tool: "copilot", ResumePrefix: []string{"--resume"}, ResumeWithEqual: true, BindingStrategy: "assigned-id"},
 	"opencode": {Tool: "opencode", ResumePrefix: []string{"--session"}, BindingStrategy: "opencode-plugin"},
+	"agy":      {Tool: "agy", ResumePrefix: []string{"--conversation"}, BindingStrategy: "lifecycle-hook"},
 }
 
 func BindAINativeSession(config AINativeSessionConfig) (AINativeSessionResult, error) {
@@ -238,6 +240,9 @@ func parseAINativeLifecycleCallback(tool string, input io.Reader) (aiNativeLifec
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return aiNativeLifecycleCallback{}, fmt.Errorf("%s lifecycle callback contains trailing JSON data", label)
 	}
+	if tool == "agy" {
+		callback = aiNativeLifecycleCallback{SessionID: callback.ConversationID, HookEventName: "SessionStart", Source: "startup"}
+	}
 	callback.SessionID = strings.TrimSpace(callback.SessionID)
 	if !validAINativeSessionID(callback.SessionID) {
 		return aiNativeLifecycleCallback{}, fmt.Errorf("%s lifecycle callback has an invalid session id", label)
@@ -268,6 +273,8 @@ func aiNativeAdapterLabel(tool string) string {
 		return "Copilot"
 	case "opencode":
 		return "OpenCode"
+	case "agy":
+		return "Antigravity"
 	default:
 		return "AI tool"
 	}
@@ -281,6 +288,8 @@ func validAINativeLifecycleSource(tool, source string) bool {
 		return source == "startup" || source == "resume" || source == "clear" || source == "compact" || source == "fork"
 	case "opencode":
 		return source == "startup" || source == "resume"
+	case "agy":
+		return source == "startup"
 	default:
 		return false
 	}
@@ -374,6 +383,20 @@ func aiRecognizeNativeResume(tool string, args []string) (string, bool) {
 				return validAINativeSelection(strings.TrimPrefix(argument, "-s="), false), true
 			}
 		}
+	case "agy":
+		for index, argument := range args {
+			switch {
+			case argument == "--continue" || argument == "-c":
+				return "", true
+			case argument == "--conversation":
+				if index+1 < len(args) && !strings.HasPrefix(args[index+1], "-") {
+					return validAINativeSelection(args[index+1], false), true
+				}
+				return "", true
+			case strings.HasPrefix(argument, "--conversation="):
+				return validAINativeSelection(strings.TrimPrefix(argument, "--conversation="), false), true
+			}
+		}
 	}
 	return "", false
 }
@@ -456,6 +479,15 @@ func aiPrepareNativeLaunch(tool string, args []string, homeDir string) (aiNative
 			startConfig := `hooks.SessionStart=[{matcher="^(startup|resume|clear)$",hooks=` + handler + `}]`
 			endConfig := `hooks.SessionEnd=[{hooks=` + handler + `}]`
 			result.Args = append([]string{"-c", startConfig, "-c", endConfig}, result.Args...)
+			return result, nil
+		}
+		if tool == "agy" {
+			sessionDir, cleanup, err := createAIAgySessionAdapter(homeDir, posixCommand, windowsCommand)
+			if err != nil {
+				return aiNativeLaunchPreparation{}, err
+			}
+			result.Cleanup = cleanup
+			result.Args = append([]string{"--add-dir=" + sessionDir}, result.Args...)
 			return result, nil
 		}
 		if hasAINativeOption(args, "--settings") {
@@ -767,4 +799,41 @@ func findLatestAISessionByNativeID(db aiEventQuerier, tool, nativeSessionID, exc
 		}
 	}
 	return selected, nil
+}
+
+func createAIAgySessionAdapter(homeDir, posixCommand, windowsCommand string) (string, func(), error) {
+	adapters := filepath.Join(homeDir, "ai-adapters")
+	if err := ensureAIPrivateAdapterDirectory(adapters, "AI"); err != nil {
+		return "", nil, err
+	}
+	parent := filepath.Join(adapters, "agy")
+	if err := ensureAIPrivateAdapterDirectory(parent, "Antigravity"); err != nil {
+		return "", nil, err
+	}
+	command := posixCommand
+	if runtime.GOOS == "windows" {
+		command = windowsCommand
+	}
+	handler := map[string]any{"type": "command", "command": command, "timeout": 3}
+	encoded, err := json.MarshalIndent(map[string]any{
+		"workgraph-session": map[string]any{"SessionStart": []any{handler}},
+	}, "", "  ")
+	if err != nil {
+		return "", nil, fmt.Errorf("encode Antigravity session hooks: %w", err)
+	}
+	sessionDir, err := os.MkdirTemp(parent, "workgraph-session-*")
+	if err != nil {
+		return "", nil, fmt.Errorf("create Antigravity session adapter: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(sessionDir) }
+	agentsDir := filepath.Join(sessionDir, ".agents")
+	if err := os.Mkdir(agentsDir, 0o700); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("create Antigravity session adapter directory: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "hooks.json"), append(encoded, '\n'), 0o600); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("write Antigravity session hooks: %w", err)
+	}
+	return sessionDir, cleanup, nil
 }

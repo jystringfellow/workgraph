@@ -30,6 +30,8 @@ func TestAIHandoffLaunchesVerifiedDestinationsWithLineageAndPrivateContext(t *te
 		{sourceTool: "codex", destination: "claude"},
 		{sourceTool: "claude", destination: "copilot", promptFlag: "--interactive"},
 		{sourceTool: "codex", destination: "opencode", promptFlag: "--prompt"},
+		{sourceTool: "claude", destination: "agy", promptFlag: "-i"},
+		{sourceTool: "agy", destination: "claude"},
 		{sourceTool: "claude", destination: "claude"},
 	} {
 		t.Run(test.sourceTool+"_to_"+test.destination, func(t *testing.T) {

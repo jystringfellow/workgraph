@@ -113,6 +113,8 @@ workgraph plugin install --client codex
 workgraph plugin install --client claude-code
 # or
 workgraph plugin install --client copilot
+# or
+workgraph plugin install --client agy
 workgraph plugin doctor --client codex
 ```
 
@@ -195,9 +197,10 @@ workgraph llm hosted enable
 workgraph llm summarize today
 ```
 
-Claude Code and GitHub Copilot CLI are supported equivalently with
-`workgraph llm connect claude-code --for summarize` or
-`workgraph llm connect copilot --for summarize`. Multiple profiles can
+Claude Code, GitHub Copilot CLI, and Antigravity are supported equivalently
+with `workgraph llm connect claude-code --for summarize`,
+`workgraph llm connect copilot --for summarize`, or
+`workgraph llm connect agy --for summarize`. Multiple profiles can
 coexist and be selected per LLM task.
 
 ## Memory

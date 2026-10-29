@@ -34,7 +34,7 @@ For the complete setup, bridgeability, recovery, and verification workflow,
 see the [bridged-capture operator guide](bridged-capture.md).
 
 When workgraph itself is not approved for a provider OAuth connection, a
-signed-in Codex, Claude Code, or GitHub Copilot CLI installation can execute capture through provider
+signed-in Codex, Claude Code, GitHub Copilot CLI, or Antigravity installation can execute capture through provider
 connectors already approved in that client. Install the workgraph agent plugin:
 
 ```sh
@@ -44,6 +44,8 @@ workgraph plugin install --client claude-code
 workgraph plugin install --client claude-code --model <approved-model>
 # or
 workgraph plugin install --client copilot
+# or
+workgraph plugin install --client agy
 workgraph plugin doctor --client codex
 ```
 
@@ -63,6 +65,15 @@ approved provider tool, the Copilot worker leaves capture requests pending:
 workgraph plugin install --client copilot \
   --allow-provider-tool 'azure-devops(wit_query)' \
   --allow-provider-tool 'azure-devops(wit_work_item)'
+```
+
+Antigravity uses its exact `mcp(server/tool)` permission rule form and has the
+same pending behavior without an approved provider tool:
+
+```sh
+workgraph plugin install --client agy \
+  --allow-provider-tool 'mcp(azure-devops/wit_query)' \
+  --allow-provider-tool 'mcp(azure-devops/wit_work_item)'
 ```
 
 The unattended worker otherwise uses the client's default model. Pin one with

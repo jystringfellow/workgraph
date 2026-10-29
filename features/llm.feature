@@ -61,6 +61,16 @@ Scenario: Summarize through signed-in GitHub Copilot CLI without tools
   And workgraph passes only Copilot and GitHub authentication environment variables
   And workgraph drops COPILOT_ALLOW_ALL and COPILOT_CUSTOM_INSTRUCTIONS_DIRS
 
+Scenario: Summarize through signed-in Antigravity (agy) CLI without tools
+  Given Antigravity (agy) CLI is installed and signed in
+  When I run "workgraph llm connect agy --for summarize"
+  And hosted LLM use is enabled
+  And I run "workgraph llm summarize today"
+  Then workgraph sends the filtered prompt to agy on standard input
+  And agy runs headlessly with text output, disabled slash commands, and its terminal sandbox
+  And workgraph passes only Antigravity, Gemini, and Google authentication environment variables
+  And a --config-dir binding for agy is rejected
+
 Scenario: Bind a signed-in LLM profile to one client account context
   Given Claude Code has a dedicated configuration directory for a work organization
   When I run "workgraph llm connect claude-code --config-dir <work-config-dir> --for summarize"

@@ -49,6 +49,13 @@ Feature: Local AI coding session continuity
     When I resume the ended workgraph session
     Then workgraph launches the stored OpenCode executable with "--session <opencode-session-id>"
 
+  Scenario: Bind and resume an Antigravity native session
+    Given Antigravity was launched by "workgraph ai run"
+    When agy reports a session lifecycle event
+    Then workgraph stores only its exact conversation id and bounded lifecycle source
+    When I resume the ended workgraph session
+    Then workgraph launches the stored agy executable with "--conversation <agy-conversation-id>"
+
   Scenario: Fail safely when a started child cannot be recorded
     Given the AI session start event fails with a nonretryable persistence error
     When I run "workgraph ai run -- codex"

@@ -36,7 +36,8 @@ The primary interface is:
 A handoff starts from the current/selected Workgraph AI session and launches
 the destination AI tool with compact continuation context.
 
-The supported destinations are `codex`, `claude`, `copilot`, and `opencode`.
+The supported destinations are `codex`, `claude`, `copilot`, `opencode`,
+and `agy`.
 An unknown destination is a CLI usage error (exit 2). Value-taking options
 `from`, `home`, and `database` accept one or two leading dashes, with a separate
 value or `=value`, before or after the destination.

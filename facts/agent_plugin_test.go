@@ -9,7 +9,7 @@ import (
 )
 
 func TestAgentPluginInstallPackagesEveryCanonicalSkillForEveryClient(t *testing.T) {
-	for _, client := range []string{"codex", "claude-code", "copilot"} {
+	for _, client := range []string{"codex", "claude-code", "copilot", "agy"} {
 		t.Run(client, func(t *testing.T) {
 			homeDir := initBridgedCaptureHome(t)
 			fixtureDir := t.TempDir()
@@ -47,7 +47,7 @@ func TestAgentPluginInstallPackagesEveryCanonicalSkillForEveryClient(t *testing.
 			if client == "claude-code" {
 				manifestPath = filepath.Join(pluginRoot, ".claude-plugin", "plugin.json")
 			}
-			if client == "copilot" {
+			if client == "copilot" || client == "agy" {
 				manifestPath = filepath.Join(pluginRoot, "plugin.json")
 			}
 			manifestBytes, err := os.ReadFile(manifestPath)
@@ -70,6 +70,9 @@ func TestAgentPluginInstallPackagesEveryCanonicalSkillForEveryClient(t *testing.
 			}
 			if client == "copilot" {
 				versionMarker = "+copilot."
+			}
+			if client == "agy" {
+				versionMarker = "+agy."
 			}
 			if !strings.Contains(manifest.Version, versionMarker) {
 				t.Fatalf("installed %s plugin version %q lacks update cachebuster %q", client, manifest.Version, versionMarker)
@@ -97,7 +100,11 @@ func TestAgentPluginInstallPackagesEveryCanonicalSkillForEveryClient(t *testing.
 				}
 			}
 
-			mcp, err := os.ReadFile(filepath.Join(pluginRoot, ".mcp.json"))
+			mcpFile := ".mcp.json"
+			if client == "agy" {
+				mcpFile = "mcp_config.json"
+			}
+			mcp, err := os.ReadFile(filepath.Join(pluginRoot, mcpFile))
 			if err != nil {
 				t.Fatalf("read installed MCP config: %v", err)
 			}
@@ -113,6 +120,30 @@ func TestAgentPluginInstallPackagesEveryCanonicalSkillForEveryClient(t *testing.
 			registration, err := os.ReadFile(logPath)
 			if err != nil {
 				t.Fatalf("read %s registration log: %v", client, err)
+			}
+			if client == "agy" {
+				for _, expected := range []string{"plugin uninstall workgraph", "plugin install " + pluginRoot} {
+					if !strings.Contains(string(registration), expected) {
+						t.Fatalf("Antigravity registration omitted %q:\n%s", expected, registration)
+					}
+				}
+				if _, err := os.Stat(filepath.Join(pluginRoot, ".mcp.json")); !os.IsNotExist(err) {
+					t.Fatalf("Antigravity package shipped a non-native .mcp.json: %v", err)
+				}
+				var mcpDocument struct {
+					Servers map[string]struct {
+						Command string   `json:"command"`
+						Args    []string `json:"args"`
+					} `json:"mcpServers"`
+				}
+				if err := json.Unmarshal(mcp, &mcpDocument); err != nil {
+					t.Fatalf("parse installed Antigravity MCP config: %v", err)
+				}
+				server, found := mcpDocument.Servers["workgraph"]
+				if !found || len(mcpDocument.Servers) != 1 || server.Command == "" || strings.Join(server.Args, " ") != "bridge mcp --home "+homeDir {
+					t.Fatalf("installed Antigravity MCP config is not a stdio workgraph server:\n%s", mcp)
+				}
+				return
 			}
 			if !strings.Contains(string(registration), "workgraph@workgraph") {
 				t.Fatalf("%s did not install workgraph plugin:\n%s", client, registration)
@@ -216,6 +247,7 @@ func TestAgentPluginPackagesAndSetupAreDocumented(t *testing.T) {
 			"workgraph plugin install --client codex",
 			"workgraph plugin install --client claude-code",
 			"workgraph plugin install --client copilot",
+			"workgraph plugin install --client agy",
 			"workgraph plugin doctor",
 			"workgraph-memory",
 			"workgraph-ai-checkpoint",
