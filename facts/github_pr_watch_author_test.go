@@ -1310,8 +1310,6 @@ func TestGitHubPRWatchRateLimitsSetOneDeadline(t *testing.T) {
 		calls := len(harness.gh.GraphQLInputs(t)) + 1
 
 		started := time.Now()
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
 		capture, err := workgraph.StartRun(workgraph.RunConfig{
 			HomeDir: harness.homeDir, DatabasePath: harness.dbPath, WatchDirs: []string{harness.watchDir}, GitHubCommand: harness.gh.Path,
 			ConnectorRetryInitial: 10 * time.Millisecond, ConnectorRetryMax: 20 * time.Millisecond,
@@ -1320,27 +1318,24 @@ func TestGitHubPRWatchRateLimitsSetOneDeadline(t *testing.T) {
 		if err != nil {
 			t.Fatalf("start run: %v", err)
 		}
-		done := make(chan error, 1)
-		go func() { done <- capture.Run(ctx) }()
-		deadline := time.Now().Add(3 * time.Second)
-		for watchConnectorStatus(t, harness.homeDir).ConsecutiveFailures != 1 {
-			if time.Now().After(deadline) {
-				t.Fatalf("timed out waiting for the rate-limited failure: %#v", watchConnectorStatus(t, harness.homeDir))
-			}
-			time.Sleep(20 * time.Millisecond)
-		}
+		stop := runCaptureUntilStopped(t, capture)
+		var status workgraph.ConnectorStatus
+		eventually(t, func() bool {
+			status = watchConnectorStatus(t, harness.homeDir)
+			return status.ConsecutiveFailures == 1
+		}, "timed out waiting for the rate-limited failure: %#v", &status)
+		pollWindow := time.Since(started)
 		if output, err := harness.cli("github", "prs", "hint", "--home", harness.homeDir); err != nil {
 			t.Fatalf("github prs hint: %v\n%s", err, output)
 		}
 		time.Sleep(200 * time.Millisecond)
-		cancel()
-		if err := <-done; err != nil {
+		if err := stop(); err != nil {
 			t.Fatalf("run returned error: %v", err)
 		}
 
 		notBefore, err := workgraph.ConnectorPollNotBefore(harness.homeDir, "github.pr_watch")
-		if err != nil || notBefore.Before(resetAt.Add(-time.Second)) || notBefore.After(resetAt.Add(time.Second)) || !notBefore.After(started) {
-			t.Fatalf("expected the not-before deadline at the budget reset %s, got %s (%v)", resetAt, notBefore, err)
+		if err != nil || notBefore.Before(resetAt.Add(-time.Second)) || notBefore.After(resetAt.Add(pollWindow+time.Second)) || !notBefore.After(started) {
+			t.Fatalf("expected the not-before deadline at the budget reset %s, allowing for the %s poll window, got %s (%v)", resetAt, pollWindow, notBefore, err)
 		}
 		if !reflect.DeepEqual(harness.observation(watchPRNodeID), before) {
 			t.Fatalf("expected observations unchanged after a rate-limited poll")
@@ -1589,8 +1584,6 @@ func TestGitHubPRWatchSearchTimeoutDefersWithoutFailures(t *testing.T) {
 	harness := newPRWatchHarness(t, authorParams)
 	queueSearchTimeouts(t, harness.gh)
 	started := time.Now()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	capture, err := workgraph.StartRun(workgraph.RunConfig{
 		HomeDir: harness.homeDir, DatabasePath: harness.dbPath, WatchDirs: []string{harness.watchDir}, GitHubCommand: harness.gh.Path,
 		ConnectorRetryInitial: 10 * time.Millisecond, ConnectorRetryMax: 20 * time.Millisecond,
@@ -1598,21 +1591,17 @@ func TestGitHubPRWatchSearchTimeoutDefersWithoutFailures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start run: %v", err)
 	}
-	done := make(chan error, 1)
-	go func() { done <- capture.Run(ctx) }()
-	deadline := time.Now().Add(3 * time.Second)
-	for !strings.Contains(watchConnectorStatus(t, harness.homeDir).DeferredReason, "GitHub timed out on the query (HTTP 502)") {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for the deferral: %#v", watchConnectorStatus(t, harness.homeDir))
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	stop := runCaptureUntilStopped(t, capture)
+	var status workgraph.ConnectorStatus
+	eventually(t, func() bool {
+		status = watchConnectorStatus(t, harness.homeDir)
+		return strings.Contains(status.DeferredReason, "GitHub timed out on the query (HTTP 502)")
+	}, "timed out waiting for the deferral: %#v", &status)
 	time.Sleep(300 * time.Millisecond)
-	cancel()
-	if err := <-done; err != nil {
+	if err := stop(); err != nil {
 		t.Fatalf("run returned error: %v", err)
 	}
-	status := watchConnectorStatus(t, harness.homeDir)
+	status = watchConnectorStatus(t, harness.homeDir)
 	notBefore, err := workgraph.ConnectorPollNotBefore(harness.homeDir, "github.pr_watch")
 	if err != nil || status.ConsecutiveFailures != 0 || notBefore.Before(started.Add(50*time.Second)) {
 		t.Fatalf("expected a deferral about a minute out without counting a failure, got %#v (not before %s, %v)", status, notBefore, err)
@@ -1625,32 +1614,53 @@ func TestGitHubPRWatchSearchTimeoutDefersWithoutFailures(t *testing.T) {
 func TestGitHubPRWatchBatchCeilingPersistsAcrossPollDeadlines(t *testing.T) {
 	harness := newPRWatchHarness(t, authorParams)
 	harness.gh.LimitMergeAliases(t, 1)
-	harness.gh.DelayTimeouts(t, 1200*time.Millisecond)
+	harness.gh.BlockMergeBatchOnce(t, 2)
 	harness.gh.AnswerDetailsEmpty(t)
 	prs := watchPRSet(4, nil)
-	committed := false
-	for attempt := 0; attempt < 6 && !committed; attempt++ {
-		harness.gh.Queue(t, statusResponse(t, prs...))
-		ctx, cancel := context.WithTimeout(context.Background(), 2300*time.Millisecond)
-		now := watchBase.Add(time.Duration(attempt) * 5 * time.Minute)
+	capture := func(ctx context.Context, now time.Time) error {
 		_, err := workgraph.CaptureGitHubPRWatch(workgraph.GitHubPRWatchCaptureConfig{
 			HomeDir: harness.homeDir, DatabasePath: harness.dbPath, WatchDirs: []string{harness.watchDir}, GitHubCommand: harness.gh.Path,
 			Context: ctx, Now: func() time.Time { return now },
 		})
-		cancel()
-		committed = err == nil && harness.observationCount() == 4
+		return err
 	}
-	sizes := []int{}
-	for _, input := range harness.gh.GraphQLInputs(t) {
-		if strings.Contains(input, "mergeStateStatus") {
-			sizes = append(sizes, strings.Count(input, "node(id:"))
+	mergeBatchSizes := func() []int {
+		sizes := []int{}
+		for _, input := range harness.gh.GraphQLInputs(t) {
+			if strings.Contains(input, "mergeStateStatus") {
+				sizes = append(sizes, strings.Count(input, "node(id:"))
+			}
 		}
+		return sizes
 	}
-	if !committed {
-		t.Fatalf("expected successive deadline-bound polls to converge and commit, merge batch sizes %v", sizes)
+
+	harness.gh.Queue(t, statusResponse(t, prs...))
+	pollDeadline := newDeadlineArmedLater()
+	armed := make(chan bool, 1)
+	go func() {
+		watchdog := time.Now().Add(factWaitTimeout)
+		for !harness.gh.mergeBatchBlocked() && time.Now().Before(watchdog) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		pollDeadline.arm(10 * time.Millisecond)
+		armed <- harness.gh.mergeBatchBlocked()
+	}()
+	err := capture(pollDeadline, watchBase)
+	if blocked := <-armed; !blocked {
+		t.Fatalf("expected the poll to reach the halved merge batch before its deadline, got %v with merge batch sizes %v", err, mergeBatchSizes())
 	}
-	if len(sizes) == 0 || sizes[0] != 4 || slices.Index(sizes[1:], 4) >= 0 {
-		t.Fatalf("expected later polls to start from the reduced batch size, got %v", sizes)
+	if !errors.Is(err, context.DeadlineExceeded) || harness.observationCount() != 0 {
+		t.Fatalf("expected the poll to end at its deadline during the halved batch without committing, got %v with %d observations", err, harness.observationCount())
+	}
+
+	harness.gh.Queue(t, statusResponse(t, prs...))
+	ctx, cancel := context.WithTimeout(context.Background(), factWaitTimeout)
+	defer cancel()
+	if err := capture(ctx, watchBase.Add(5*time.Minute)); err != nil || harness.observationCount() != 4 {
+		t.Fatalf("expected the next poll to commit every PR, got %v with %d observations", err, harness.observationCount())
+	}
+	if sizes := mergeBatchSizes(); !slices.Equal(sizes, []int{4, 2, 2, 1, 1, 1, 1}) {
+		t.Fatalf("expected the next poll to start from the reduced batch size, got %v", sizes)
 	}
 }
 

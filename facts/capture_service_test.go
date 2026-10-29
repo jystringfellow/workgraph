@@ -1,6 +1,7 @@
 package facts
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -8,7 +9,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 
 	workgraph "github.com/jystringfellow/workgraph"
 )
@@ -31,21 +31,23 @@ func TestCaptureServiceWorkerTracksSpacedHomeAndRejectsDuplicates(t *testing.T) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = worker.Process.Signal(syscall.SIGTERM); _ = worker.Wait() })
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if _, err := os.Stat(filepath.Join(home, "daemon.pid")); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("worker did not become ready")
-		}
-		time.Sleep(10 * time.Millisecond)
+	eventually(t, func() bool {
+		_, err := os.Stat(filepath.Join(home, "daemon.pid"))
+		return err == nil
+	}, "worker did not write its pid file")
+	var lastStatus strings.Builder
+	var status workgraph.DaemonStatus
+	eventually(t, func() bool {
+		current, err := workgraph.DaemonStatusForHome(home)
+		lastStatus.Reset()
+		fmt.Fprintf(&lastStatus, "%+v %v", current, err)
+		status = current
+		return err == nil && !status.Starting && status.PID == worker.Process.Pid
+	}, "worker did not finish starting: %s", &lastStatus)
+	if !status.Running {
+		t.Fatalf("worker status: %+v", status)
 	}
-	status, err := workgraph.DaemonStatusForHome(home)
-	if err != nil || !status.Running || status.PID != worker.Process.Pid {
-		t.Fatalf("worker status: %+v %v", status, err)
-	}
-	output, err := runWorkgraphCommandWithTimeout(nil, 2*time.Second, args...)
+	output, err := runWorkgraphCommandWithTimeout(nil, factWaitTimeout, args...)
 	if err == nil || !strings.Contains(output, "already locked") {
 		t.Fatalf("duplicate worker: %v %s", err, output)
 	}

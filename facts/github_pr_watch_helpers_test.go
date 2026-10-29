@@ -163,11 +163,16 @@ func (fake *fakeGHGraphQL) RegisterMergeStates(t *testing.T, statusResponse stri
 	fake.registerMergeStates(t, statusResponse)
 }
 
-func (fake *fakeGHGraphQL) DelayTimeouts(t *testing.T, delay time.Duration) {
+func (fake *fakeGHGraphQL) BlockMergeBatchOnce(t *testing.T, size int) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(fake.dir, "gh-timeout-delay"), []byte(delay.String()), 0o644); err != nil {
-		t.Fatalf("write timeout delay: %v", err)
+	if err := os.WriteFile(filepath.Join(fake.dir, "gh-merge-block"), []byte(fmt.Sprint(size)), 0o644); err != nil {
+		t.Fatalf("write merge batch block: %v", err)
 	}
+}
+
+func (fake *fakeGHGraphQL) mergeBatchBlocked() bool {
+	_, err := os.Stat(filepath.Join(fake.dir, "gh-merge-blocked"))
+	return err == nil
 }
 
 func (fake *fakeGHGraphQL) AnswerDetailsEmpty(t *testing.T) {
@@ -283,14 +288,14 @@ func serveFakeGHMergeQuery(dir string, inputPath string) int {
 		fmt.Print(string(encoded))
 		return 0
 	}
+	if block, err := os.ReadFile(filepath.Join(dir, "gh-merge-block")); err == nil && string(block) == fmt.Sprint(len(ids)) {
+		if os.Rename(filepath.Join(dir, "gh-merge-block"), filepath.Join(dir, "gh-merge-blocked")) == nil {
+			time.Sleep(factWaitTimeout)
+		}
+	}
 	if limit, err := os.ReadFile(filepath.Join(dir, "gh-merge-limit")); err == nil {
 		var max int
 		if _, scanErr := fmt.Sscan(string(limit), &max); scanErr == nil && len(ids) > max {
-			if raw, err := os.ReadFile(filepath.Join(dir, "gh-timeout-delay")); err == nil {
-				if delay, err := time.ParseDuration(string(raw)); err == nil {
-					time.Sleep(delay)
-				}
-			}
 			fmt.Fprintln(os.Stderr, "gh: HTTP 502: 502 Bad Gateway (https://api.github.com/graphql)")
 			return 1
 		}

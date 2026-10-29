@@ -1080,7 +1080,7 @@ func eventExists(t *testing.T, dbPath, operation, path string) bool {
 func waitForReportedEvent(t *testing.T, events <-chan workgraph.CapturedEvent, operation, path string) workgraph.CapturedEvent {
 	t.Helper()
 
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(factWaitTimeout)
 	for {
 		select {
 		case event := <-events:

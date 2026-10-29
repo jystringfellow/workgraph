@@ -1,6 +1,7 @@
 package workgraph
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"os"
@@ -199,20 +200,105 @@ func takeAIRunTestWriteLock(db aiRunConnection) error {
 	return err
 }
 
+const aiRunTestWatchdog = 10 * time.Second
+
+type aiRunTestAttempt struct {
+	deadline  time.Time
+	startedAt time.Time
+	lockWait  time.Duration
+	refused   bool
+}
+
+type aiRunAttemptRecorder struct {
+	mu       sync.Mutex
+	attempts []aiRunTestAttempt
+	opens    []time.Time
+}
+
+func recordAIRunAttempts(t *testing.T) *aiRunAttemptRecorder {
+	recorder := &aiRunAttemptRecorder{}
+	previousOpen := aiRunOpenDatabase
+	aiRunOpenDatabase = func(databasePath string, busyTimeout time.Duration) (*sql.DB, error) {
+		recorder.mu.Lock()
+		recorder.opens = append(recorder.opens, time.Now())
+		recorder.mu.Unlock()
+		return previousOpen(databasePath, busyTimeout)
+	}
+	t.Cleanup(func() { aiRunOpenDatabase = previousOpen })
+	return recorder
+}
+
+func (recorder *aiRunAttemptRecorder) takeWriteLock(connection aiRunConnection) error {
+	attempt := aiRunTestAttempt{deadline: connection.deadline, startedAt: time.Now()}
+	err := takeAIRunTestWriteLock(connection)
+	attempt.refused = errors.Is(err, context.DeadlineExceeded)
+	var millis int64
+	if scanErr := connection.conn.QueryRowContext(context.Background(), "PRAGMA busy_timeout").Scan(&millis); scanErr == nil {
+		attempt.lockWait = time.Duration(millis) * time.Millisecond
+	}
+	recorder.mu.Lock()
+	recorder.attempts = append(recorder.attempts, attempt)
+	recorder.mu.Unlock()
+	return err
+}
+
+func (recorder *aiRunAttemptRecorder) recorded() []aiRunTestAttempt {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	return append([]aiRunTestAttempt(nil), recorder.attempts...)
+}
+
+func (recorder *aiRunAttemptRecorder) opensFrom(at time.Time) int {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	count := 0
+	for _, opened := range recorder.opens {
+		if !opened.Before(at) {
+			count++
+		}
+	}
+	return count
+}
+
+func requireAIRunLockWaitsWithinASlice(t *testing.T, attempts []aiRunTestAttempt) {
+	t.Helper()
+	for index, attempt := range attempts {
+		if !attempt.refused && attempt.lockWait > aiRunLockWaitSlice {
+			t.Fatalf("attempt %d waited up to %v for the lock, longer than one %v slice", index, attempt.lockWait, aiRunLockWaitSlice)
+		}
+	}
+}
+
+func requireAIRunRetriesStopAt(t *testing.T, recorder *aiRunAttemptRecorder, attempts []aiRunTestAttempt, windowEnd time.Time) {
+	t.Helper()
+	requireAIRunLockWaitsWithinASlice(t, attempts)
+	for index, attempt := range attempts {
+		if !attempt.deadline.Equal(windowEnd) {
+			t.Fatalf("attempt %d ran against deadline %s, want the window end %s", index, attempt.deadline, windowEnd)
+		}
+	}
+	if late := recorder.opensFrom(windowEnd); late > 1 {
+		t.Fatalf("expected retries to stop at the window end, but %d attempts opened the database after it", late)
+	}
+}
+
 func TestAIRunDatabaseRetryGivesUpWithinItsDeadline(t *testing.T) {
 	databasePath := initAIRunTestDatabase(t)
 	holdAIRunTestExclusiveLock(t, databasePath)
 
 	budget := 1500 * time.Millisecond
 	began := time.Now()
-	err := retryAIRunDatabase(databasePath, began.Add(budget), takeAIRunTestWriteLock)
+	deadline := began.Add(budget)
+	recorder := recordAIRunAttempts(t)
+	err := retryAIRunDatabase(databasePath, deadline, recorder.takeWriteLock)
 	elapsed := time.Since(began)
 	if err == nil || !isAIRunDatabaseUnavailable(err) {
 		t.Fatalf("expected an unavailable-database error, got %v", err)
 	}
-	if elapsed < budget-aiRunLockWaitSlice || elapsed > budget+time.Second {
-		t.Fatalf("retry ran %v; expected it to keep retrying until its %v deadline and stop there", elapsed, budget)
+	if elapsed < budget-aiRunLockWaitSlice || elapsed > budget+aiRunTestWatchdog {
+		t.Fatalf("retry ran %v; expected it to keep retrying until its %v deadline", elapsed, budget)
 	}
+	requireAIRunRetriesStopAt(t, recorder, recorder.recorded(), deadline)
 }
 
 func TestAIRunStartRetryAfterChildExitGivesUpWithinItsBudget(t *testing.T) {
@@ -225,33 +311,58 @@ func TestAIRunStartRetryAfterChildExitGivesUpWithinItsBudget(t *testing.T) {
 	done := make(chan struct{})
 	exitedAt := time.Now()
 	close(done)
-	start := persistAIRunStart(databasePath, takeAIRunTestWriteLock, aiRunChildExit{done: done, at: &exitedAt})
+	recorder := recordAIRunAttempts(t)
+	start := persistAIRunStart(databasePath, recorder.takeWriteLock, aiRunChildExit{done: done, at: &exitedAt})
 	elapsed := time.Since(exitedAt)
 	if start.err == nil || !isAIRunDatabaseUnavailable(start.err) || !start.childExited {
 		t.Fatalf("expected an unavailable start after child exit, got %+v", start)
 	}
-	if elapsed < aiRunRetryBudget-aiRunLockWaitSlice || elapsed > aiRunRetryBudget+time.Second {
-		t.Fatalf("start retry ran %v after child exit; expected it to retry until its %v window ended and stop there", elapsed, aiRunRetryBudget)
+	if elapsed < aiRunRetryBudget-aiRunLockWaitSlice || elapsed > aiRunRetryBudget+aiRunTestWatchdog {
+		t.Fatalf("start retry ran %v after child exit; expected it to retry until its %v window ended", elapsed, aiRunRetryBudget)
 	}
+	requireAIRunRetriesStopAt(t, recorder, recorder.recorded(), exitedAt.Add(aiRunRetryBudget))
 }
 
 func TestAIRunDatabaseDeadlineCoversLocksTakenAfterConnecting(t *testing.T) {
 	databasePath := initAIRunTestDatabase(t)
-	budget := 3 * time.Second
-	began := time.Now()
-	aiRunAfterConnect = func() {
-		time.Sleep(2 * time.Second)
-		t.Cleanup(takeAIRunTestExclusiveLock(t, databasePath))
-	}
 	t.Cleanup(func() { aiRunAfterConnect = nil })
-
-	err := withAIRunDatabase(databasePath, began.Add(budget), takeAIRunTestWriteLock)
-	elapsed := time.Since(began)
-	if err == nil || !isAIRunDatabaseUnavailable(err) {
-		t.Fatalf("expected an unavailable-database error, got %v", err)
-	}
-	if elapsed > budget+time.Second {
-		t.Fatalf("statement waited %v against a %v deadline after connecting", elapsed, budget)
+	recorder := recordAIRunAttempts(t)
+	began := time.Now()
+	for {
+		deadline := time.Now().Add(2 * aiRunLockWaitSlice)
+		connected := false
+		var lockedAt time.Time
+		aiRunAfterConnect = func() {
+			connected = true
+			time.Sleep(time.Until(deadline) - aiRunLockWaitSlice/2)
+			t.Cleanup(takeAIRunTestExclusiveLock(t, databasePath))
+			lockedAt = time.Now()
+		}
+		previousAttempts := len(recorder.recorded())
+		err := withAIRunDatabase(databasePath, deadline, recorder.takeWriteLock)
+		if !connected {
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("expected a connection that missed its deadline to report it, got %v", err)
+			}
+			if time.Since(began) > aiRunTestWatchdog {
+				t.Fatalf("no connection became ready before its %v deadline within %v", 2*aiRunLockWaitSlice, aiRunTestWatchdog)
+			}
+			continue
+		}
+		if err == nil || !isAIRunDatabaseUnavailable(err) {
+			t.Fatalf("expected an unavailable-database error, got %v", err)
+		}
+		if returnedAt := time.Now(); returnedAt.After(deadline.Add(aiRunTestWatchdog)) {
+			t.Fatalf("statement returned %v after its deadline", returnedAt.Sub(deadline))
+		}
+		attempts := recorder.recorded()[previousAttempts:]
+		if len(attempts) != 1 {
+			t.Fatalf("expected one statement after connecting, got %d", len(attempts))
+		}
+		if attempt := attempts[0]; !attempt.refused && attempt.lockWait > deadline.Sub(lockedAt)+time.Millisecond {
+			t.Fatalf("statement could wait %v for a lock taken %v before its deadline", attempt.lockWait, deadline.Sub(lockedAt))
+		}
+		return
 	}
 }
 
@@ -269,13 +380,32 @@ func TestAIRunStartWindowCountsFromChildExitDuringABlockedAttempt(t *testing.T) 
 		exitedAt = time.Now()
 		close(done)
 	}()
-	start := persistAIRunStart(databasePath, takeAIRunTestWriteLock, aiRunChildExit{done: done, at: &exitedAt})
+	recorder := recordAIRunAttempts(t)
+	start := persistAIRunStart(databasePath, recorder.takeWriteLock, aiRunChildExit{done: done, at: &exitedAt})
 	<-done
 	sinceExit := time.Since(exitedAt)
 	if start.err == nil || !isAIRunDatabaseUnavailable(start.err) || !start.childExited {
 		t.Fatalf("expected an unavailable start after child exit, got %+v", start)
 	}
-	if sinceExit > aiRunRetryBudget+time.Second {
+	if sinceExit > aiRunRetryBudget+aiRunTestWatchdog {
 		t.Fatalf("start retry ran %v after the child exited mid-attempt with a %v window", sinceExit, aiRunRetryBudget)
 	}
+	windowEnd := exitedAt.Add(aiRunRetryBudget)
+	requireAIRunLockWaitsWithinASlice(t, recorder.recorded())
+	var afterExit []aiRunTestAttempt
+	staleWindows := 0
+	for _, attempt := range recorder.recorded() {
+		if attempt.startedAt.Before(exitedAt) {
+			continue
+		}
+		if attempt.deadline.Equal(windowEnd) {
+			afterExit = append(afterExit, attempt)
+		} else {
+			staleWindows++
+		}
+	}
+	if staleWindows > 1 {
+		t.Fatalf("expected attempts after the child exit to use the window from the exit, but %d used an earlier window", staleWindows)
+	}
+	requireAIRunRetriesStopAt(t, recorder, afterExit, windowEnd)
 }

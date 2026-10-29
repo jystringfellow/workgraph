@@ -186,10 +186,13 @@ func TestStartFindsLiveWorkerWhenDaemonStateIsMissing(t *testing.T) {
 			t.Fatalf("remove prior %s: %v", name, err)
 		}
 	}
-	statusOutput := runWorkgraphCommand(t, nil, "status", "--home", homeDir)
-	if !strings.Contains(statusOutput, "capture is running") || !strings.Contains(statusOutput, "PID: "+strconv.Itoa(priorPID)) {
-		t.Fatalf("expected status to recover live worker %d, got:\n%s", priorPID, statusOutput)
-	}
+	var statusOutput strings.Builder
+	eventually(t, func() bool {
+		output := runWorkgraphCommand(t, nil, "status", "--home", homeDir)
+		statusOutput.Reset()
+		statusOutput.WriteString(output)
+		return strings.Contains(output, "capture is running") && strings.Contains(output, "PID: "+strconv.Itoa(priorPID))
+	}, "expected status to recover live worker %d, got:\n%s", priorPID, &statusOutput)
 
 	startOutput := runWorkgraphCommand(t, nil, "start", "--home", homeDir, "--database", initResult.DatabasePath, "--watch", watchDir)
 	if !strings.Contains(startOutput, "capture is running") || !strings.Contains(startOutput, "PID: "+strconv.Itoa(priorPID)) {
@@ -542,14 +545,7 @@ func signalProcess(pid int) {
 
 func waitForProcessExit(t *testing.T, pid int) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if err := syscall.Kill(pid, 0); err != nil {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("expected daemon process %d to exit", pid)
+	eventually(t, func() bool { return syscall.Kill(pid, 0) != nil }, "expected daemon process %d to exit", pid)
 }
 
 func waitForCapturedFileEvents(t *testing.T, databasePath string, minimum int) {

@@ -486,8 +486,11 @@ func startNextWatch(t *testing.T, f *nextFixture, config workgraph.NextConfig) <
 	reader, writer := io.Pipe()
 	lines := make(chan workgraph.NextWatchEvent, 100)
 	config.WatchInterval = 10 * time.Millisecond
-	go func() { defer writer.Close(); _ = workgraph.WatchNext(ctx, config, writer) }()
+	watchStopped := make(chan struct{})
+	decodeStopped := make(chan struct{})
+	go func() { defer close(watchStopped); defer writer.Close(); _ = workgraph.WatchNext(ctx, config, writer) }()
 	go func() {
+		defer close(decodeStopped)
 		defer close(lines)
 		decoder := json.NewDecoder(reader)
 		for {
@@ -495,10 +498,26 @@ func startNextWatch(t *testing.T, f *nextFixture, config workgraph.NextConfig) <
 			if err := decoder.Decode(&line); err != nil {
 				return
 			}
-			lines <- line
+			select {
+			case lines <- line:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
-	t.Cleanup(func() { cancel(); reader.Close() })
+	t.Cleanup(func() {
+		cancel()
+		reader.Close()
+		watchdog := time.After(factWaitTimeout)
+		for _, stopped := range []<-chan struct{}{watchStopped, decodeStopped} {
+			select {
+			case <-stopped:
+			case <-watchdog:
+				t.Errorf("next watch did not stop within %s of cancellation", factWaitTimeout)
+				return
+			}
+		}
+	})
 	return lines
 }
 func nextWatchLine(t *testing.T, lines <-chan workgraph.NextWatchEvent) workgraph.NextWatchEvent {
@@ -509,8 +528,8 @@ func nextWatchLine(t *testing.T, lines <-chan workgraph.NextWatchEvent) workgrap
 			t.Fatal("watch stopped")
 		}
 		return line
-	case <-time.After(2 * time.Second):
-		t.Fatal("watch did not emit within two seconds")
+	case <-time.After(factWaitTimeout):
+		t.Fatalf("watch did not emit within %s", factWaitTimeout)
 		return workgraph.NextWatchEvent{}
 	}
 }
@@ -529,7 +548,7 @@ func nextWatchInitial(t *testing.T, lines <-chan workgraph.NextWatchEvent) {
 func TestNextWatchEmitsTheInitialSetThenDifferences(t *testing.T) {
 	f := newNextFixture(t)
 	t.Run("CLI initial JSON Lines", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), factWaitTimeout)
 		defer cancel()
 		command := exec.CommandContext(ctx, workgraphFactsBinary, "next", "--watch", "--json", "--home", f.home)
 		output, err := command.StdoutPipe()
