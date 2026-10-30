@@ -53,7 +53,9 @@ Feature: Agent plugin installation
   Scenario: Reinstall the Antigravity plugin
     Given the workgraph plugin was installed into Antigravity from an earlier install root
     When I install the Antigravity plugin again
-    Then workgraph uninstalls the earlier copy and installs the current package directory
+    Then workgraph validates the current package before replacing the installed plugin
+    And workgraph uninstalls the earlier copy and installs the current package directory
+    And an invalid package leaves the installed plugin unchanged
     And an Antigravity install failure is reported
 
   Scenario: Update an existing plugin installation

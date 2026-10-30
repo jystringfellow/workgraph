@@ -122,7 +122,7 @@ func TestAgentPluginInstallPackagesEveryCanonicalSkillForEveryClient(t *testing.
 				t.Fatalf("read %s registration log: %v", client, err)
 			}
 			if client == "agy" {
-				for _, expected := range []string{"plugin uninstall workgraph", "plugin install " + pluginRoot} {
+				for _, expected := range []string{"plugin validate " + pluginRoot + " --strict", "plugin uninstall workgraph", "plugin install " + pluginRoot} {
 					if !strings.Contains(string(registration), expected) {
 						t.Fatalf("Antigravity registration omitted %q:\n%s", expected, registration)
 					}

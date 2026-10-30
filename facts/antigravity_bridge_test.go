@@ -122,11 +122,24 @@ exit 0
 		}
 	}
 
+	invalidLogPath := filepath.Join(fixtureDir, "agy-invalid.log")
+	invalidPath := filepath.Join(fixtureDir, "agy-invalid")
+	if err := os.WriteFile(invalidPath, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \""+invalidLogPath+"\"\ncase \"$2\" in validate) echo 'plugin.json is malformed' >&2; exit 1 ;; esac\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("write invalid-package fake Antigravity: %v", err)
+	}
+	output, err := installAntigravityPlugin(t, homeDir, invalidPath, filepath.Join(fixtureDir, "invalid"))
+	if err == nil || !strings.Contains(string(output), "plugin.json is malformed") {
+		t.Fatalf("expected Antigravity package validation failure to surface: %v\n%s", err, output)
+	}
+	if invocations, _ := os.ReadFile(invalidLogPath); strings.Contains(string(invocations), "plugin uninstall") || strings.Contains(string(invocations), "plugin install") {
+		t.Fatalf("an invalid package must not replace the installed plugin:\n%s", invocations)
+	}
+
 	failingPath := filepath.Join(fixtureDir, "agy-failing")
 	if err := os.WriteFile(failingPath, []byte("#!/bin/sh\ncase \"$2\" in install) echo 'manifest is invalid' >&2; exit 1 ;; esac\nexit 0\n"), 0o700); err != nil {
 		t.Fatalf("write failing fake Antigravity: %v", err)
 	}
-	output, err := installAntigravityPlugin(t, homeDir, failingPath, filepath.Join(fixtureDir, "third"))
+	output, err = installAntigravityPlugin(t, homeDir, failingPath, filepath.Join(fixtureDir, "third"))
 	if err == nil || !strings.Contains(string(output), "manifest is invalid") {
 		t.Fatalf("expected Antigravity plugin install failure to surface: %v\n%s", err, output)
 	}
@@ -157,19 +170,18 @@ func TestAntigravityBridgeDrainAllowsOnlyWorkgraphDrainToolsAndExplicitProviderT
 	}
 	arguments := strings.Split(strings.TrimSuffix(string(contents), "\n"), "\n")
 	allow := antigravityDrainAllowRules(t, arguments)
-	for _, expected := range []string{
-		"mcp(workgraph_workgraph/capture_requests_claim)", "mcp(workgraph_workgraph/capture_ingest)",
-		"mcp(workgraph_workgraph/connector_required_tools)", "mcp(workgraph_workgraph/llm_task_submit)",
-		"mcp(slack/slack_list_user_channels)",
+	expected := []string{"mcp(slack/slack_list_user_channels)"}
+	for _, tool := range []string{
+		"capture_requests_list", "capture_requests_claim", "capture_request_renew", "capture_ingest",
+		"capture_request_fail", "capture_watermark", "connector_status", "connector_required_tools",
+		"bridge_worker_heartbeat", "llm_task_submit",
 	} {
-		if !slices.Contains(allow, expected) {
-			t.Fatalf("Antigravity drain settings omitted %q: %q", expected, allow)
-		}
+		expected = append(expected, "mcp(workgraph_workgraph/"+tool+")")
 	}
-	for _, rule := range allow {
-		if rule != "mcp(slack/slack_list_user_channels)" && !strings.HasPrefix(rule, "mcp(workgraph_workgraph/") || strings.Contains(rule, "*") {
-			t.Fatalf("Antigravity drain allowed unapproved rule %q: %q", rule, allow)
-		}
+	slices.Sort(expected)
+	sortedAllow := slices.Sorted(slices.Values(allow))
+	if !slices.Equal(sortedAllow, expected) {
+		t.Fatalf("Antigravity drain allow rules = %q, want exactly %q", sortedAllow, expected)
 	}
 	for _, expected := range []string{"--model", "agy-bridge-pinned"} {
 		if !slices.Contains(arguments, expected) {

@@ -643,6 +643,9 @@ func registerAgentPlugin(client string, commandName string, installRoot string, 
 }
 
 func registerAntigravityPlugin(commandName string, pluginRoot string) error {
+	if output, err := exec.Command(commandName, "plugin", "validate", pluginRoot, "--strict").CombinedOutput(); err != nil {
+		return fmt.Errorf("validate agy workgraph plugin; the installed plugin was left unchanged: %s", strings.TrimSpace(string(output)))
+	}
 	_ = exec.Command(commandName, "plugin", "uninstall", "workgraph").Run()
 	output, err := exec.Command(commandName, "plugin", "install", pluginRoot).CombinedOutput()
 	if err != nil {

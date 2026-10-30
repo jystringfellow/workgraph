@@ -180,11 +180,14 @@ each prompt is recorded in Copilot's local session store; cloud session sync is
 disabled.
 
 Antigravity is invoked as `agy --output-format text --disable-slash-commands
---sandbox`, with an optional `--model`, and reads the prompt from standard
-input; `-p` is never used because it carries the prompt as an argument.
-Headless Antigravity auto-denies every tool without an allow rule, and
-`--sandbox` adds its terminal restrictions. Its inherited authentication
-environment is limited to `ANTIGRAVITY_*`, `GEMINI_*`, and `GOOGLE_*`.
+--sandbox --settings '{"permissions":{"allow":[]}}'`, with an optional
+`--model`, and reads the prompt from standard input; `-p` is never used because
+it carries the prompt as an argument. Headless Antigravity auto-denies every
+tool without an allow rule, the empty session-only allow list keeps the user's
+own allow rules from granting tools to the run, and `--sandbox` adds its
+terminal restrictions. The only credential-like variable it inherits is
+`GEMINI_API_KEY`; other sensitive names, including `GOOGLE_APPLICATION_CREDENTIALS`
+and unrelated Google tokens, are removed.
 Antigravity has no option to skip local conversation history, so each prompt is
 recorded in Antigravity's local conversation store.
 

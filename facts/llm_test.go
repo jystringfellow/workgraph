@@ -355,11 +355,13 @@ func TestLLMSummarizeTodayUsesSignedInAntigravityClientWithoutTools(t *testing.T
 	writeLLMClientFixture(t, fixtureDir, "agy", `
 printf '%s\n' "$@" > "`+argsPath+`"
 cat > "`+promptPath+`"
-printf '%s|%s' "${GEMINI_API_KEY:-missing}" "${WORKGRAPH_SLACK_TOKEN:-missing}" > "`+environmentPath+`"
+printf '%s|%s|%s|%s' "${GEMINI_API_KEY:-missing}" "${WORKGRAPH_SLACK_TOKEN:-missing}" "${GOOGLE_APPLICATION_CREDENTIALS:-missing}" "${GOOGLE_UNRELATED_SERVICE_TOKEN:-missing}" > "`+environmentPath+`"
 printf '%s' 'Antigravity summarized the client-backed day.'
 `)
 	t.Setenv("PATH", fixtureDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("GEMINI_API_KEY", "fake-gemini-auth")
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "/private/service-account.json")
+	t.Setenv("GOOGLE_UNRELATED_SERVICE_TOKEN", "fake-unrelated-google-secret")
 	t.Setenv("WORKGRAPH_SLACK_TOKEN", "fake-connector-secret")
 
 	if output, err := runworkgraph(t, repoRoot(t), "llm", "connect", "agy", "--home", homeDir, "--config-dir", fixtureDir, "--for", "summarize"); err == nil || !strings.Contains(string(output), "--config-dir is not supported for agy") {
@@ -388,7 +390,7 @@ printf '%s' 'Antigravity summarized the client-backed day.'
 		t.Fatalf("read Antigravity arguments: %v", err)
 	}
 	arguments := strings.Split(strings.TrimSuffix(string(argsBytes), "\n"), "\n")
-	expected := []string{"--output-format", "text", "--disable-slash-commands", "--sandbox", "--model", "agy-model"}
+	expected := []string{"--output-format", "text", "--disable-slash-commands", "--sandbox", "--settings", `{"permissions":{"allow":[]}}`, "--model", "agy-model"}
 	if strings.Join(arguments, " ") != strings.Join(expected, " ") {
 		t.Fatalf("Antigravity invocation = %q, want exactly %q", arguments, expected)
 	}
@@ -397,8 +399,8 @@ printf '%s' 'Antigravity summarized the client-backed day.'
 		t.Fatalf("Antigravity prompt did not arrive on stdin: %v\n%s", err, prompt)
 	}
 	environment, err := os.ReadFile(environmentPath)
-	if err != nil || string(environment) != "fake-gemini-auth|missing" {
-		t.Fatalf("expected preserved Gemini auth and scrubbed connector secrets, got %q: %v", environment, err)
+	if err != nil || string(environment) != "fake-gemini-auth|missing|missing|missing" {
+		t.Fatalf("expected preserved Gemini auth and scrubbed connector and unrelated Google secrets, got %q: %v", environment, err)
 	}
 }
 

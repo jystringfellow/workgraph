@@ -689,16 +689,18 @@ workgraph plugin install --client copilot \
   --allow-provider-tool 'slack(slack_read_thread)'
 ```
 
-Antigravity installs the packaged plugin directory with `agy plugin uninstall
-workgraph` followed by `agy plugin install <install-root>/plugins/workgraph`, so
-reinstalling replaces the installed copy. The package carries Antigravity's
+Antigravity validates the packaged plugin with `agy plugin validate --strict`,
+then replaces the installed copy with `agy plugin uninstall workgraph` followed
+by `agy plugin install <install-root>/plugins/workgraph`. An invalid package
+leaves the installed plugin unchanged. The package carries Antigravity's
 native `plugin.json` and `mcp_config.json`. Its unattended worker runs
 `agy --settings <json> -p <prompt>`, where the session-only settings allow only
 the explicit workgraph drain tools as `mcp(workgraph_workgraph/<tool>)` rules
 (Antigravity names a plugin's MCP server `<plugin>_<server>`) plus approved
 provider tools. Headless Antigravity denies every tool without an allow
-rule; the worker never passes `--dangerously-skip-permissions`. Allow rules the
-user configured in Antigravity's own settings still apply. Provider tools use
+rule, and the session-only allow list replaces your own Antigravity allow rules
+for the run; the worker never passes `--dangerously-skip-permissions`. Provider
+tools use
 Antigravity's exact `mcp(server/tool)` form; without any approved provider
 tool, the worker leaves capture requests pending:
 
@@ -948,8 +950,9 @@ cloud sync off. Copilot has no option to skip local session history, so each
 client-backed prompt is recorded in Copilot's local session store.
 
 Antigravity runs headlessly with the prompt on standard input, slash commands
-and skill expansion disabled, and `--sandbox`; tools without an allow rule are
-denied. Each client-backed prompt is recorded in Antigravity's local
+and skill expansion disabled, `--sandbox`, and an empty session-only allow list,
+so no tool is permitted, including tools you allowed in Antigravity's own
+settings. Only `GEMINI_API_KEY` is passed among credential-like variables. Each client-backed prompt is recorded in Antigravity's local
 conversation history.
 
 `categorize` is a reserved task route; the project-categorization suggestion

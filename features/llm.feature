@@ -67,8 +67,8 @@ Scenario: Summarize through signed-in Antigravity (agy) CLI without tools
   And hosted LLM use is enabled
   And I run "workgraph llm summarize today"
   Then workgraph sends the filtered prompt to agy on standard input
-  And agy runs headlessly with text output, disabled slash commands, and its terminal sandbox
-  And workgraph passes only Antigravity, Gemini, and Google authentication environment variables
+  And agy runs headlessly with text output, disabled slash commands, its terminal sandbox, and an empty session-only allow list
+  And GEMINI_API_KEY is the only credential-like environment variable agy inherits
   And a --config-dir binding for agy is rejected
 
 Scenario: Bind a signed-in LLM profile to one client account context
