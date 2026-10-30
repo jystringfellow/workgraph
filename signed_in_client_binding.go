@@ -12,12 +12,16 @@ type signedInClientBinding struct {
 }
 
 func normalizeSignedInClientBinding(client string, configDir string) (signedInClientBinding, error) {
-	if _, err := normalizeAIClient(client); err != nil {
+	client, err := normalizeAIClient(client)
+	if err != nil {
 		return signedInClientBinding{}, err
 	}
 	configDir = strings.TrimSpace(configDir)
 	if configDir == "" {
 		return signedInClientBinding{}, nil
+	}
+	if client == "agy" {
+		return signedInClientBinding{}, fmt.Errorf("--config-dir is not supported for agy; Antigravity has no verified per-account configuration directory")
 	}
 	resolved, err := filepath.Abs(configDir)
 	if err != nil {
@@ -39,6 +43,8 @@ func signedInClientConfigEnvironmentName(client string) string {
 		return "CLAUDE_CONFIG_DIR"
 	case "copilot":
 		return "COPILOT_HOME"
+	case "agy":
+		return ""
 	}
 	return "CODEX_HOME"
 }
@@ -48,6 +54,9 @@ func applySignedInClientBinding(environment []string, client string, binding sig
 		return environment
 	}
 	name := signedInClientConfigEnvironmentName(client)
+	if name == "" {
+		return environment
+	}
 	prefix := name + "="
 	bound := make([]string, 0, len(environment)+1)
 	for _, entry := range environment {

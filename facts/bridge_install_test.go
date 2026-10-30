@@ -302,6 +302,7 @@ func TestSlackListsBridgeContractAllowsContentHashWithoutClaimingDeletion(t *tes
 		filepath.Join(root, "integrations", "claude-code", "plugins", "workgraph", "skills", "workgraph-bridge", "SKILL.md"),
 		filepath.Join(root, "integrations", "codex", "plugins", "workgraph", "skills", "workgraph-bridge", "SKILL.md"),
 		filepath.Join(root, "integrations", "copilot", "plugins", "workgraph", "skills", "workgraph-bridge", "SKILL.md"),
+		filepath.Join(root, "integrations", "agy", "plugins", "workgraph", "skills", "workgraph-bridge", "SKILL.md"),
 	}
 	var canonicalSkill string
 	for _, path := range skillPaths {
@@ -328,6 +329,7 @@ func TestSlackListsBridgeContractAllowsContentHashWithoutClaimingDeletion(t *tes
 		filepath.Join(root, "integrations", "claude-code", "plugins", "workgraph", "skills", "workgraph-bridge", "references", "event-contracts.md"),
 		filepath.Join(root, "integrations", "codex", "plugins", "workgraph", "skills", "workgraph-bridge", "references", "event-contracts.md"),
 		filepath.Join(root, "integrations", "copilot", "plugins", "workgraph", "skills", "workgraph-bridge", "references", "event-contracts.md"),
+		filepath.Join(root, "integrations", "agy", "plugins", "workgraph", "skills", "workgraph-bridge", "references", "event-contracts.md"),
 	}
 	for _, path := range paths {
 		contents, err := os.ReadFile(path)

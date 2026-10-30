@@ -1,0 +1,4 @@
+interface:
+  display_name: "workgraph AI Checkpoint"
+  short_description: "Record durable AI session restart context"
+  default_prompt: "Use $workgraph-ai-checkpoint to record a durable checkpoint for my current workgraph AI session."

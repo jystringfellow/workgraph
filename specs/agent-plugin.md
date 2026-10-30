@@ -8,10 +8,10 @@ workgraph ships one agent-facing plugin that makes its local capabilities easy
 to discover and use from supported AI coding clients. The plugin is named
 `workgraph`; individual skills remain separately named capabilities inside it.
 
-Codex, Claude Code, and GitHub Copilot CLI are the supported hosts. Their
-plugin formats and registration commands differ, so workgraph embeds one thin
-package per host, but every package represents the same logical plugin and
-contains the same canonical workgraph skills.
+Codex, Claude Code, GitHub Copilot CLI, and Antigravity (`agy`) are the
+supported hosts. Their plugin formats and registration commands differ, so
+workgraph embeds one thin package per host, but every package represents the
+same logical plugin and contains the same canonical workgraph skills.
 
 ## Package contract
 
@@ -38,9 +38,9 @@ Additional MCP tools require their own specs and facts.
 ## Command surface
 
 ```sh
-workgraph plugin install --client <codex|claude-code|copilot>
-workgraph plugin install --client <codex|claude-code|copilot> --model <model>
-workgraph plugin doctor --client <codex|claude-code|copilot>
+workgraph plugin install --client <codex|claude-code|copilot|agy>
+workgraph plugin install --client <codex|claude-code|copilot|agy> --model <model>
+workgraph plugin doctor --client <codex|claude-code|copilot|agy>
 ```
 
 `plugin install`:
@@ -116,6 +116,37 @@ set first. Stored tools are revalidated before every drain. Provider tools are g
 drains; LLM-task drains receive only workgraph tools. With no approved provider
 tool, the Copilot worker leaves capture requests pending rather than attempting
 provider reads.
+
+### Antigravity (`agy`)
+
+The Antigravity package contains `plugins/workgraph/plugin.json`,
+`mcp_config.json`, and `skills/`, the native plugin layout. The installed
+`mcp_config.json` registers only the local `workgraph` stdio server with the
+resolved workgraph executable and home. Installation first runs `agy plugin
+validate <install-root>/plugins/workgraph --strict`; a validation failure is
+reported and leaves the installed plugin unchanged. Only a valid package is
+registered, with best-effort `agy plugin uninstall workgraph` followed by `agy
+plugin install <install-root>/plugins/workgraph`. An install failure after a
+successful uninstall is reported and leaves no workgraph plugin until install
+is rerun; agy offers no atomic replacement.
+
+Unattended drains run headlessly as `agy --settings <json> [--model <model>] -p
+<prompt>`. The session-only settings contain only `permissions.allow` rules:
+`mcp(workgraph_workgraph/<tool>)` for each required workgraph drain tool and, for
+capture drains, each approved provider tool. Antigravity names an MCP server
+supplied by a plugin `<plugin>_<server>`, so the packaged `workgraph` server is
+`workgraph_workgraph`; this was verified against agy 1.4.10, where
+`mcp(workgraph/<tool>)` is auto-denied headlessly. Neither `workgraph` nor
+`workgraph_workgraph` may be approved as a provider server. Headless Antigravity auto-denies every
+tool without an allow rule, so the worker never passes
+`--dangerously-skip-permissions` or `--mode`. On agy 1.4.10 the session-only
+allow list replaced the user's own allow rules for the run: a globally allowed
+command was still denied. Optional
+provider tools use the exact `mcp(server/tool)` form, reject wildcards and the
+`workgraph` server, are stored in `<workgraph-home>/bridge/workers.json`, and
+follow the same merge, `--clear-provider-tools`, revalidation, and
+pending-without-provider-tool behavior as Copilot. Antigravity has no verified
+per-account configuration directory, so `--config-dir` is rejected for `agy`.
 
 Host-specific manifests may present different supported metadata, but their
 plugin identity, semantic version, MCP command, and skill contents must remain

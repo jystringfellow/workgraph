@@ -56,11 +56,11 @@ func runAIHandoff(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wr
 		explicit[option.Name] = true
 	})
 	if flags.NArg() != 0 || len(positional) != 1 {
-		fmt.Fprintln(stderr, "usage: workgraph ai handoff <codex|claude|copilot|opencode> [--from <session-id>] [--stdin]")
+		fmt.Fprintln(stderr, "usage: workgraph ai handoff <codex|claude|copilot|opencode|agy> [--from <session-id>] [--stdin]")
 		return 2
 	}
 	if !workgraph.IsAIHandoffDestination(positional[0]) {
-		fmt.Fprintf(stderr, "workgraph ai handoff: destination %q is unsupported; choose codex, claude, copilot, or opencode\n", positional[0])
+		fmt.Fprintf(stderr, "workgraph ai handoff: destination %q is unsupported; choose codex, claude, copilot, opencode, or agy\n", positional[0])
 		return 2
 	}
 	var checkpointInput io.Reader
@@ -394,7 +394,7 @@ func runAIResume(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wri
 	return result.ExitCode
 }
 
-func runAINativeSessionHook(args []string, stdin io.Reader, stderr io.Writer) int {
+func runAINativeSessionHook(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("__ai-native-session", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	tool := flags.String("tool", "", "native AI tool identity")
@@ -412,6 +412,9 @@ func runAINativeSessionHook(args []string, stdin io.Reader, stderr io.Writer) in
 	if err != nil {
 		fmt.Fprintf(stderr, "workgraph AI native session hook: %v\n", err)
 		return 1
+	}
+	if *tool == "agy" {
+		fmt.Fprintln(stdout, "{}")
 	}
 	return 0
 }

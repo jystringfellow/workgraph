@@ -1379,6 +1379,115 @@ func TestAINativeLifecycleCallbacksSupportClaudeAndOpenCode(t *testing.T) {
 	}
 }
 
+func TestAINativeLifecycleCallbackBindsAntigravityConversation(t *testing.T) {
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init workgraph: %v", err)
+	}
+	workingDir := t.TempDir()
+	sessionID := "00000000-0000-4000-8000-000000000045"
+	nativeID := "ec33ebf9-0cba-4100-8142-c61503f6c587"
+	insertAINativeFactSession(t, initialized.DatabasePath, sessionID, "agy", "/usr/local/bin/agy", "", "", workingDir, "2026-08-03T12:00:00Z", false)
+
+	callback := `{"conversationId":"` + nativeID + `","workspacePaths":["` + workingDir + `"],"transcriptPath":"/private/secret.jsonl","artifactDirectoryPath":"/private/artifacts","modelName":"auto","lastUserInput":"must-not-persist"}`
+	command := exec.Command(workgraphFactsBinary, "__ai-native-session", "--tool", "agy")
+	command.Env = append(os.Environ(), "WORKGRAPH_AI_HOME="+homeDir, "WORKGRAPH_AI_DATABASE="+initialized.DatabasePath, "WORKGRAPH_AI_SESSION_ID="+sessionID)
+	command.Stdin = strings.NewReader(callback)
+	var stdout, stderr bytes.Buffer
+	command.Stdout, command.Stderr = &stdout, &stderr
+	if err := command.Run(); err != nil || stderr.Len() != 0 {
+		t.Fatalf("bind Antigravity native session: %v\n%s", err, stderr.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "{}" {
+		t.Fatalf("Antigravity hooks must answer with one empty JSON object, got %q", stdout.String())
+	}
+
+	db, err := sql.Open("sqlite3", initialized.DatabasePath)
+	if err != nil {
+		t.Fatalf("open event database: %v", err)
+	}
+	defer db.Close()
+	var payloadText string
+	if err := db.QueryRow(`SELECT payload_json FROM events WHERE type = 'ai.session_native_bound' AND json_extract(payload_json, '$.session_id') = ?`, sessionID).Scan(&payloadText); err != nil {
+		t.Fatalf("read native binding: %v", err)
+	}
+	if !strings.Contains(payloadText, `"native_session_id":"`+nativeID+`"`) || !strings.Contains(payloadText, `"source":"startup"`) {
+		t.Fatalf("expected Antigravity conversation binding, got %s", payloadText)
+	}
+	for _, forbidden := range []string{"secret.jsonl", "artifacts", "must-not-persist", workingDir} {
+		if strings.Contains(payloadText, forbidden) {
+			t.Fatalf("native binding persisted callback extra %q: %s", forbidden, payloadText)
+		}
+	}
+}
+
+func TestAINativeLifecycleCallbackRejectsAntigravityFieldsFromOtherTools(t *testing.T) {
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init workgraph: %v", err)
+	}
+	sessionID := "00000000-0000-4000-8000-000000000046"
+	insertAINativeFactSession(t, initialized.DatabasePath, sessionID, "claude", "/usr/local/bin/claude", "", "", t.TempDir(), "2026-08-03T12:00:00Z", false)
+	command := exec.Command(workgraphFactsBinary, "__ai-native-session", "--tool", "claude")
+	command.Env = append(os.Environ(), "WORKGRAPH_AI_HOME="+homeDir, "WORKGRAPH_AI_DATABASE="+initialized.DatabasePath, "WORKGRAPH_AI_SESSION_ID="+sessionID)
+	command.Stdin = strings.NewReader(`{"conversationId":"ec33ebf9-0cba-4100-8142-c61503f6c587","hook_event_name":"SessionStart","source":"startup"}`)
+	output, err := command.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "invalid session id") {
+		t.Fatalf("expected Claude callback without session_id to be rejected, got %v\n%s", err, output)
+	}
+}
+
+func TestAIRunInjectsAntigravitySessionHook(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initialized, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init workgraph: %v", err)
+	}
+	fixtureDir := t.TempDir()
+	argsPath := filepath.Join(fixtureDir, "args.txt")
+	hooksPath := filepath.Join(fixtureDir, "hooks.json")
+	agyPath := writeAIFactExecutable(t, fixtureDir, "agy", `printf '%s\n' "$@" > "$WORKGRAPH_AI_TEST_ARGS"
+cat "${1#--add-dir=}/.agents/hooks.json" > "$WORKGRAPH_AI_TEST_HOOKS"`)
+	output, err := runWorkgraphCommandAllowError([]string{"WORKGRAPH_AI_TEST_ARGS=" + argsPath, "WORKGRAPH_AI_TEST_HOOKS=" + hooksPath},
+		"ai", "run", "--home", homeDir, "--database", initialized.DatabasePath, "--", agyPath, "--model", "auto",
+	)
+	if err != nil {
+		t.Fatalf("run Antigravity hook fixture: %v\n%s", err, output)
+	}
+	argsBytes, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatalf("read injected Antigravity args: %v", err)
+	}
+	arguments := strings.Split(strings.TrimSpace(string(argsBytes)), "\n")
+	adapterPrefix := "--add-dir=" + filepath.Join(homeDir, "ai-adapters", "agy") + string(filepath.Separator)
+	if len(arguments) != 3 || !strings.HasPrefix(arguments[0], adapterPrefix) || arguments[1] != "--model" || arguments[2] != "auto" {
+		t.Fatalf("expected one private session adapter directory before user args, got %q", arguments)
+	}
+	hooksBytes, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatalf("read injected Antigravity hooks: %v", err)
+	}
+	var hooks map[string]map[string][]map[string]any
+	if err := json.Unmarshal(hooksBytes, &hooks); err != nil {
+		t.Fatalf("parse injected Antigravity hooks: %v\n%s", err, hooksBytes)
+	}
+	handlers := hooks["workgraph-session"]["SessionStart"]
+	if len(hooks) != 1 || len(hooks["workgraph-session"]) != 1 || len(handlers) != 1 {
+		t.Fatalf("expected exactly one flat SessionStart handler, got %s", hooksBytes)
+	}
+	if command, _ := handlers[0]["command"].(string); !strings.Contains(command, "__ai-native-session") || !strings.Contains(command, "--tool agy") {
+		t.Fatalf("SessionStart handler does not call the workgraph binding hook: %s", hooksBytes)
+	}
+	if _, err := os.Stat(strings.TrimPrefix(arguments[0], "--add-dir=")); !os.IsNotExist(err) {
+		t.Fatalf("expected session adapter directory to be removed after exit, stat error %v", err)
+	}
+}
+
 func TestAIRunAssignsExactCopilotSessionID(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fixture")
@@ -1620,6 +1729,7 @@ func TestAIResumeSupportsVerifiedNativeAdapters(t *testing.T) {
 		{tool: "claude", nativeID: "11111111-1111-4111-8111-111111111111", expectedArgs: "--resume\n11111111-1111-4111-8111-111111111111\n"},
 		{tool: "copilot", nativeID: "22222222-2222-4222-8222-222222222222", expectedArgs: "--resume=22222222-2222-4222-8222-222222222222\n"},
 		{tool: "opencode", nativeID: "ses_opencode_native", expectedArgs: "--session\nses_opencode_native\n"},
+		{tool: "agy", nativeID: "44444444-4444-4444-8444-444444444444", expectedArgs: "--conversation\n44444444-4444-4444-8444-444444444444\n"},
 	} {
 		t.Run(test.tool, func(t *testing.T) {
 			homeDir := filepath.Join(t.TempDir(), ".workgraph")
@@ -1662,6 +1772,7 @@ func TestAIRunLinksExplicitVerifiedNativeResumes(t *testing.T) {
 		{tool: "claude", nativeID: "31111111-1111-4111-8111-111111111111", args: []string{"--resume", "31111111-1111-4111-8111-111111111111"}},
 		{tool: "copilot", nativeID: "32222222-2222-4222-8222-222222222222", args: []string{"--resume=32222222-2222-4222-8222-222222222222"}},
 		{tool: "opencode", nativeID: "ses_explicit_opencode", args: []string{"--session", "ses_explicit_opencode"}},
+		{tool: "agy", nativeID: "44444444-4444-4444-8444-444444444444", args: []string{"--conversation", "44444444-4444-4444-8444-444444444444"}},
 	} {
 		t.Run(test.tool, func(t *testing.T) {
 			homeDir := filepath.Join(t.TempDir(), ".workgraph")

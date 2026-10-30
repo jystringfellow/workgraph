@@ -231,7 +231,7 @@ func TestAIHandoffHelpExplainsContextAndPrivacy(t *testing.T) {
 	}
 	output := runWorkgraphCommand(t, nil, "help", "ai", "handoff")
 	for _, expected := range []string{
-		"workgraph ai handoff <codex|claude|copilot|opencode>",
+		"workgraph ai handoff <codex|claude|copilot|opencode|agy>",
 		"--from", "--stdin", "structured checkpoint", "transcripts", "environment", "diffs",
 		"unsupported newer source evidence", "normal child-process capabilities", "persisted or transported",
 	} {

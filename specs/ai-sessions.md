@@ -224,6 +224,9 @@ resume argv: <stored-tool-path> --resume=<native-session-id>
 
 tool: opencode
 resume argv: <stored-tool-path> --session <native-session-id>
+
+tool: agy
+resume argv: <stored-tool-path> --conversation <native-session-id>
 ```
 
 The Copilot adapter applies to the direct GitHub Copilot CLI executable named
@@ -315,6 +318,21 @@ diffs. Workgraph does not modify project or global OpenCode configuration.
 `--pure` disables OpenCode plugins, so a new session launched that way remains
 wrapped but cannot be natively bound unless an exact `--session` ID was already
 provided.
+
+For Antigravity (`agy`), every `ai run`, `ai resume`, and `ai handoff` launch
+prepends `--add-dir=<home>/ai-adapters/agy/workgraph-session-<random>`. That
+freshly created private directory contains only `.agents/hooks.json` with one
+hook named `workgraph-session` holding a single flat `SessionStart` command
+handler, and it is removed when the wrapped process exits. Antigravity supplies
+`conversationId` on stdin; the internal workgraph handler reads only that field,
+records it with source `startup`, ignores `workspacePaths`, `transcriptPath`,
+`artifactDirectoryPath`, `lastUserInput`, and every other field, and answers
+with `{}` on stdout as Antigravity's hook contract requires. The
+`conversationId`-only envelope is accepted only from the `agy` adapter. Explicit
+`--conversation <id>` and `--conversation=<id>` selections are recognized;
+`--continue` and `-c` remain wrapped but do not produce an invented exact
+native identity. Workspace, global, and plugin hooks remain active because
+Antigravity merges named hooks.
 
 Before launch, workgraph rejects the command if `WORKGRAPH_AI_SESSION_ID` is
 already present. Nested wrapped sessions are not supported in V1, except that
@@ -1052,6 +1070,7 @@ home and disposable sessions:
 | Claude Code | lifecycle callback binds the exact ID | `--resume <id>` creates a linked lifetime | ordinary settings remain active; explicit `--settings` conflicts fail before launch |
 | GitHub Copilot CLI | assigned `--session-id=<id>` is stored; a session-only `--plugin-dir` supplies the checkpoint skill | `--resume=<id>` creates a linked lifetime | remote control and export remain disabled |
 | OpenCode | the injected plugin binds a parent session ID | `--session <id>` creates a linked lifetime | valid inline plugins are preserved and invalid inline config fails before launch |
+| Antigravity (`agy`) | session-only `--add-dir` `SessionStart` hook binds the conversation ID | `--conversation <id>` creates a linked lifetime | ordinary workspace and global hooks remain active |
 
 The smoke run also verifies that a rejected or unavailable binding leaves the
 generic wrapped session usable, no transcript or callback extras are stored,

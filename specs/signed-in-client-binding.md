@@ -14,6 +14,10 @@ environment variable at execution time:
 | `codex` | `CODEX_HOME` |
 | `copilot` | `COPILOT_HOME` |
 
+Antigravity (`agy`) has no verified per-account configuration directory, so
+every `--config-dir` for `agy` is rejected before anything is stored, and a
+hand-edited binding is never mapped onto another client's variable.
+
 `workgraph plugin install --client <client> --config-dir <path>` stores the
 binding with that client's worker settings in `bridge/workers.json`.
 Reinstallation without a config-dir flag preserves the binding, while

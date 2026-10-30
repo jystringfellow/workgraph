@@ -567,9 +567,11 @@ workgraph ai handoff codex
 workgraph ai handoff claude --from <session-id>
 workgraph ai handoff copilot --stdin < checkpoint.json
 workgraph ai handoff opencode --from <session-id>
+workgraph ai handoff agy --from <session-id>
 ```
 
-The supported destinations are `codex`, `claude`, `copilot`, and `opencode`.
+The supported destinations are `codex`, `claude`, `copilot`, `opencode`, and
+`agy`.
 Without `--from`, handoff uses `WORKGRAPH_AI_SESSION_ID`. It reuses the source
 session's latest structured checkpoint, or `--stdin` can append a fresh
 checkpoint while the source is still active. Ended sessions cannot accept a
@@ -644,8 +646,8 @@ setting. Changing the setting applies only to sessions launched after it.
 
 ## Agent Plugin
 
-Install or update one logical `workgraph` plugin for Codex, Claude Code, or
-GitHub Copilot CLI:
+Install or update one logical `workgraph` plugin for Codex, Claude Code,
+GitHub Copilot CLI, or Antigravity (`agy`):
 
 ```sh
 workgraph plugin install --client codex
@@ -654,6 +656,7 @@ workgraph plugin install --client claude-code
 workgraph plugin install --client claude-code --model <approved-model>
 workgraph plugin install --client claude-code --config-dir "$HOME/.claude-enterprise"
 workgraph plugin install --client copilot
+workgraph plugin install --client agy
 ```
 
 Claude's unattended worker trusts the workgraph home and discovers its local
@@ -686,8 +689,28 @@ workgraph plugin install --client copilot \
   --allow-provider-tool 'slack(slack_read_thread)'
 ```
 
+Antigravity validates the packaged plugin with `agy plugin validate --strict`,
+then replaces the installed copy with `agy plugin uninstall workgraph` followed
+by `agy plugin install <install-root>/plugins/workgraph`. An invalid package
+leaves the installed plugin unchanged. The package carries Antigravity's
+native `plugin.json` and `mcp_config.json`. Its unattended worker runs
+`agy --settings <json> -p <prompt>`, where the session-only settings allow only
+the explicit workgraph drain tools as `mcp(workgraph_workgraph/<tool>)` rules
+(Antigravity names a plugin's MCP server `<plugin>_<server>`) plus approved
+provider tools. Headless Antigravity denies every tool without an allow
+rule, and the session-only allow list replaces your own Antigravity allow rules
+for the run; the worker never passes `--dangerously-skip-permissions`. Provider
+tools use
+Antigravity's exact `mcp(server/tool)` form; without any approved provider
+tool, the worker leaves capture requests pending:
+
+```sh
+workgraph plugin install --client agy \
+  --allow-provider-tool 'mcp(slack/slack_read_channel)'
+```
+
 Wildcards are rejected. Reinstalling preserves previously allowed provider
-tools and reloads an existing launchd worker. For Copilot,
+tools and reloads an existing launchd worker. For Copilot and Antigravity,
 `--clear-provider-tools` removes the stored tools before applying any
 `--allow-provider-tool` flags in the same command.
 
@@ -698,7 +721,7 @@ doctor output, and survives reinstall when model flags are omitted. Use
 launchd file does not contain the selected model.
 
 `--config-dir <path>` binds the worker to that signed-in client account context
-and stores the absolute path beside the model in `bridge/workers.json`.
+(not supported for Antigravity) and stores the absolute path beside the model in `bridge/workers.json`.
 Reinstalling without either config-dir flag preserves it. Use
 `--clear-config-dir` to return to the ambient client default. The generated
 launchd file does not contain the binding; drain reads it immediately before
@@ -714,10 +737,11 @@ provider:
 workgraph plugin doctor --client codex
 workgraph plugin doctor --client claude-code
 workgraph plugin doctor --client copilot
+workgraph plugin doctor --client agy
 ```
 
 Rerun `plugin install` after upgrading workgraph to refresh the package. Start a
-new Codex, Claude Code, or Copilot session after installation so the client discovers the
+new Codex, Claude Code, Copilot, or Antigravity session after installation so the client discovers the
 new skills and MCP tools. If the daemon was already running when its executable
 was upgraded, also run `workgraph stop` followed by `workgraph start`; plugin
 installation reloads the bridge worker, not the daemon. Installing the plugin
@@ -735,7 +759,7 @@ compatibility aliases that operate on this same broader plugin.
 ## Bridged Capture
 
 Bridged capture is for remote sources that are already approved through Codex,
-Claude Code, or GitHub Copilot CLI but cannot be connected to workgraph with
+Claude Code, GitHub Copilot CLI, or Antigravity but cannot be connected to workgraph with
 direct OAuth. workgraph
 keeps the schedule, cursor, retries, and local event store; the signed-in client
 performs the provider reads and returns normalized events. `git` always remains
@@ -749,6 +773,8 @@ workgraph plugin install --client codex
 workgraph plugin install --client claude-code
 # or
 workgraph plugin install --client copilot
+# or
+workgraph plugin install --client agy
 ```
 
 Verify the local package, MCP server, worker, and client executable without
@@ -886,7 +912,7 @@ workgraph llm doctor --profile local-gemma
 whether the configured model is advertised. It does not print API key
 environment variable names or connector data.
 
-### Signed-in Codex, Claude Code, and Copilot
+### Signed-in Codex, Claude Code, Copilot, and Antigravity
 
 Instead of running a local model or configuring another API credential, use an
 already signed-in AI client as an LLM profile:
@@ -897,9 +923,11 @@ workgraph llm connect codex --for summarize
 workgraph llm connect claude-code --for summarize
 # or
 workgraph llm connect copilot --for summarize
+# or
+workgraph llm connect agy --for summarize
 ```
 
-The default profile name is `codex`, `claude-code`, or `copilot`. Multiple profiles and
+The default profile name is `codex`, `claude-code`, `copilot`, or `agy`. Multiple profiles and
 task-specific routes can coexist:
 
 ```sh
@@ -913,13 +941,19 @@ workgraph llm use personal-codex --for summarize
 
 `--config-dir` stores the signed-in client account context with the profile:
 `CODEX_HOME` for Codex, `CLAUDE_CONFIG_DIR` for Claude Code, or `COPILOT_HOME`
-for Copilot. `llm list` and
+for Copilot. Antigravity does not support `--config-dir`. `llm list` and
 `llm doctor` report the binding, and later invocations do not depend on the
 ambient shell selecting the same account.
 
 Copilot runs with every tool disabled, no custom instructions, and session
 cloud sync off. Copilot has no option to skip local session history, so each
 client-backed prompt is recorded in Copilot's local session store.
+
+Antigravity runs headlessly with the prompt on standard input, slash commands
+and skill expansion disabled, `--sandbox`, and an empty session-only allow list,
+so no tool is permitted, including tools you allowed in Antigravity's own
+settings. Only `GEMINI_API_KEY` is passed among credential-like variables. Each client-backed prompt is recorded in Antigravity's local
+conversation history.
 
 `categorize` is a reserved task route; the project-categorization suggestion
 workflow is not implemented yet. Current client-backed execution supports

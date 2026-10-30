@@ -101,8 +101,10 @@ func normalizeAIClient(client string) (string, error) {
 		return "claude-code", nil
 	case "copilot":
 		return "copilot", nil
+	case "agy":
+		return "agy", nil
 	default:
-		return "", fmt.Errorf("ai client must be codex, claude-code, or copilot")
+		return "", fmt.Errorf("ai client must be codex, claude-code, copilot, or agy")
 	}
 }
 
@@ -195,6 +197,8 @@ func callAIClient(parent context.Context, profile llmProfile, messages []openAIC
 
 const copilotNoToolsSentinel = "workgraph-no-tools"
 
+const agyNoToolsSettings = `{"permissions":{"allow":[]}}`
+
 func aiClientArguments(client string, model string, workingDir string) ([]string, string) {
 	model = strings.TrimSpace(model)
 	if client == "codex" {
@@ -226,6 +230,13 @@ func aiClientArguments(client string, model string, workingDir string) ([]string
 		}
 		if model != "" {
 			args = append(args, "--model="+model)
+		}
+		return args, ""
+	}
+	if client == "agy" {
+		args := []string{"--output-format", "text", "--disable-slash-commands", "--sandbox", "--settings", agyNoToolsSettings}
+		if model != "" {
+			args = append(args, "--model", model)
 		}
 		return args, ""
 	}
@@ -319,6 +330,8 @@ func aiClientAuthenticationEnvironmentName(client string, name string) bool {
 		}
 	case "copilot":
 		return strings.HasPrefix(upper, "COPILOT_") || upper == "GH_TOKEN" || upper == "GITHUB_TOKEN"
+	case "agy":
+		return upper == "GEMINI_API_KEY"
 	}
 	return false
 }

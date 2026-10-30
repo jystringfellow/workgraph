@@ -114,6 +114,7 @@ The guided setup is:
 workgraph llm connect codex
 workgraph llm connect claude-code
 workgraph llm connect copilot
+workgraph llm connect agy
 workgraph llm connect codex --name personal-codex --for summarize
 workgraph llm use claude-code --for categorize
 ```
@@ -157,7 +158,7 @@ environment, and diagnostic contract is defined in
 
 AI-client execution must:
 
-- resolve only the registered `codex`, `claude`, or `copilot` executable;
+- resolve only the registered `codex`, `claude`, `copilot`, or `agy` executable;
 - pass the filtered prompt through standard input, never a process argument;
 - use a non-persistent invocation and a private empty working directory;
 - disable client tools and connector access where supported, and otherwise use
@@ -178,9 +179,21 @@ permission, trust the working directory, or load instructions. Copilot offers no
 each prompt is recorded in Copilot's local session store; cloud session sync is
 disabled.
 
+Antigravity is invoked as `agy --output-format text --disable-slash-commands
+--sandbox --settings '{"permissions":{"allow":[]}}'`, with an optional
+`--model`, and reads the prompt from standard input; `-p` is never used because
+it carries the prompt as an argument. Headless Antigravity auto-denies every
+tool without an allow rule, the empty session-only allow list keeps the user's
+own allow rules from granting tools to the run, and `--sandbox` adds its
+terminal restrictions. The only credential-like variable it inherits is
+`GEMINI_API_KEY`; other sensitive names, including `GOOGLE_APPLICATION_CREDENTIALS`
+and unrelated Google tokens, are removed.
+Antigravity has no option to skip local conversation history, so each prompt is
+recorded in Antigravity's local conversation store.
+
 Managed deployments may additionally set
-`llm.ai_client.allowed_clients` to any subset of `codex`, `claude-code`, and
-`copilot`. This limits
+`llm.ai_client.allowed_clients` to any subset of `codex`, `claude-code`,
+`copilot`, and `agy`. This limits
 which local signed-in client workgraph may invoke; it does not govern the
 client's behavior outside workgraph.
 
