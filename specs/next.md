@@ -424,7 +424,7 @@ into tool descriptions or instructions (`specs/llm-integration.md`).
 ## Dispatch Boundary
 
 `next` does not dispatch. `next --watch --json` and the MCP tool are the
-intended starting point for a later dispatch design (roadmap P2; an earlier
+intended starting point for a later dispatch design (issue #191; an earlier
 draft is parked on `agent/4f0e34fb/pr-routing-draft`), because they let
 routing be added or replaced without changing capture. That design makes its
 own choices.

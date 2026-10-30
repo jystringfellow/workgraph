@@ -1,7 +1,7 @@
 # Projects, Workstreams, And Categorization
 
-Status: D1 through D7 implemented. Slices are listed in
-`specs/roadmap.md`. Facts live in `facts/projects*_test.go`.
+Status: D1 through D7 implemented. Facts live in
+`facts/projects*_test.go`.
 
 ## Intent
 

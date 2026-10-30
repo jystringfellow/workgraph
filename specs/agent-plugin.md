@@ -200,7 +200,7 @@ session. Each skill retains its own approval and safety boundaries.
 4. [x] Add `plugin install` and `plugin doctor` over a shared implementation.
 5. [x] Retain bridge install/doctor compatibility aliases.
 6. [x] Update help, onboarding, command, connector, and bridge documentation.
-7. [x] Validate both plugin packages, pass all facts, and cross off the roadmap.
+7. [x] Validate both plugin packages, and pass all facts.
 8. [x] Add the GitHub Copilot CLI package, marketplace registration, per-drain
    permission grants, and persisted exact provider tools.
 

@@ -19,7 +19,7 @@ personalized execution assistance over time.
 
 ## Current Shape
 
-- `specs/` captures intent, principles, and the roadmap.
+- `specs/` captures intent and principles.
 - `features/` describes user-visible behavior.
 - `facts/` contains executable facts that define what must not regress.
 
@@ -34,7 +34,7 @@ as skipped placeholders until they are converted into executable failing tests.
 workgraph uses a facts-first development loop:
 
 ```text
-write spec -> write feature -> write failing fact -> implement -> pass -> cross off roadmap
+write spec -> write feature -> write failing fact -> implement -> pass
 ```
 
 Specs explain intent. Features describe user-visible behavior. Facts enforce
@@ -42,7 +42,6 @@ correctness.
 
 ```text
 principles = constraints (must stay true)
-roadmap = bets (likely to change)
 facts = enforcement (cannot regress)
 ```
 
@@ -254,7 +253,6 @@ workgraph associations explain <event-id>
   Boards, calendar, mail, and other capture sources.
 - [Bridged-capture operator guide](docs/bridged-capture.md) for approved
   AI-client capture setup, recovery, and verification.
-- [Roadmap](specs/roadmap.md) for current implementation direction.
 - [Init](specs/init.md), [start](specs/start.md), [today](specs/today.md),
   [resume](specs/resume.md), and [event associations](specs/event-associations.md)
   for core command contracts.

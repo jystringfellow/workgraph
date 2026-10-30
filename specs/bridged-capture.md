@@ -1042,7 +1042,7 @@ later increment.
     manual drain paths, heartbeat, and fully automated macOS workers. Package
     the bridge with memory and AI checkpoint under the one user-facing
     `workgraph` plugin described in `specs/agent-plugin.md`.
-10. Pass all facts and cross off the corresponding roadmap item.
+10. Pass all facts.
 
 ## Facts to add
 

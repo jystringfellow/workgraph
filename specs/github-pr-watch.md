@@ -1066,7 +1066,7 @@ is in use:
 ## Out Of Scope
 
 - Any provider write by the watch.
-- Dispatching attention items to agents (roadmap P2). `specs/next.md` defines
+- Dispatching attention items to agents (issue #191). `specs/next.md` defines
   the read-only feed that work can start from.
 - Receiving provider webhooks directly. The hint command is the integration
   point.
