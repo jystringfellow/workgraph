@@ -13,14 +13,14 @@ Agents contributing to this repo must follow the development model and principle
 For new or changed behavior, follow:
 
 ```text
-write spec → write feature → write failing fact → implement → pass → cross off roadmap
+write spec → write feature → write failing fact → implement → pass
 ```
 
 Facts are the source of truth for behavior.
 
 For refactors, documentation, tooling, and test-only changes, preserve behavior
-and run proportionate checks. Do not invent specs or roadmap items solely to
-satisfy the development loop.
+and run proportionate checks. Do not invent specs solely to satisfy the development
+loop.
 
 ## Architecture Overview
 

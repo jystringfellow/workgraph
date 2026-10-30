@@ -5,7 +5,7 @@
 workgraph uses a facts-first development loop:
 
 ```text
-write spec → write feature → write failing fact → implement → pass → cross off roadmap
+write spec → write feature → write failing fact → implement → pass
 ```
 
 Specs explain intent. Features describe user-visible behavior. Facts enforce correctness.
@@ -14,7 +14,6 @@ A failing fact must be executable and believable: it should contain assertions t
 
 ```text
 principles = constraints (must stay true)
-roadmap = bets (likely to change)
 facts = enforcement (cannot regress)
 ```
 
