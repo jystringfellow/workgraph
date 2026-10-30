@@ -227,6 +227,8 @@ func installedPluginManifestPath(client string, pluginRoot string) string {
 
 var copilotProviderToolPattern = regexp.MustCompile(`^([A-Za-z0-9_.-]+)\(([A-Za-z0-9_.-]+)\)$`)
 
+const agyWorkgraphMCPServer = "workgraph_workgraph"
+
 var agyProviderToolPattern = regexp.MustCompile(`^mcp\(([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)\)$`)
 
 func validateProviderTools(client string, tools []string) ([]string, error) {
@@ -242,7 +244,7 @@ func validateProviderTools(client string, tools []string) ([]string, error) {
 			if match == nil {
 				return nil, fmt.Errorf("Antigravity provider tool permissions must use an exact mcp(server/tool) name")
 			}
-			if match[1] == "workgraph" {
+			if match[1] == "workgraph" || match[1] == agyWorkgraphMCPServer {
 				return nil, fmt.Errorf("Antigravity provider tool permissions must name a provider MCP server; workgraph MCP permissions are managed by the installer")
 			}
 		} else if client == "copilot" {
@@ -296,7 +298,7 @@ func withoutCopilotOverrides(environment []string) []string {
 func agyBridgeDrainPermissions() []string {
 	permissions := make([]string, 0, len(claudeBridgeDrainPermissions))
 	for _, permission := range claudeBridgeDrainPermissions {
-		permissions = append(permissions, "mcp(workgraph/"+strings.TrimPrefix(permission, claudeWorkgraphServerRule+"__")+")")
+		permissions = append(permissions, "mcp("+agyWorkgraphMCPServer+"/"+strings.TrimPrefix(permission, claudeWorkgraphServerRule+"__")+")")
 	}
 	return permissions
 }

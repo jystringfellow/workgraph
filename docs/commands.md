@@ -694,8 +694,9 @@ workgraph` followed by `agy plugin install <install-root>/plugins/workgraph`, so
 reinstalling replaces the installed copy. The package carries Antigravity's
 native `plugin.json` and `mcp_config.json`. Its unattended worker runs
 `agy --settings <json> -p <prompt>`, where the session-only settings allow only
-the explicit workgraph drain tools as `mcp(workgraph/<tool>)` rules plus
-approved provider tools. Headless Antigravity denies every tool without an allow
+the explicit workgraph drain tools as `mcp(workgraph_workgraph/<tool>)` rules
+(Antigravity names a plugin's MCP server `<plugin>_<server>`) plus approved
+provider tools. Headless Antigravity denies every tool without an allow
 rule; the worker never passes `--dangerously-skip-permissions`. Allow rules the
 user configured in Antigravity's own settings still apply. Provider tools use
 Antigravity's exact `mcp(server/tool)` form; without any approved provider

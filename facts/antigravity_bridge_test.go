@@ -71,7 +71,7 @@ func TestAntigravityPluginInstallPersistsOnlyExplicitProviderTools(t *testing.T)
 	if err != nil || !strings.Contains(string(doctor), "Provider tools: 1 explicitly allowed") || !strings.Contains(string(doctor), "Permissions: granted per drain invocation") {
 		t.Fatalf("doctor did not report Antigravity worker settings: %v\n%s", err, doctor)
 	}
-	for _, rejected := range []string{"mcp(slack/*)", "mcp(*)", "mcp(slack)", "mcp(workgraph/capture_ingest)", "command(rm)", "write_file(*)", "slack(slack_read_channel)", "mcp__claude_ai_Slack__slack_read_channel"} {
+	for _, rejected := range []string{"mcp(slack/*)", "mcp(*)", "mcp(slack)", "mcp(workgraph/capture_ingest)", "mcp(workgraph_workgraph/capture_ingest)", "command(rm)", "write_file(*)", "slack(slack_read_channel)", "mcp__claude_ai_Slack__slack_read_channel"} {
 		if output, err := installAntigravityPlugin(t, homeDir, clientPath, installRoot, "--allow-provider-tool", rejected); err == nil {
 			t.Fatalf("expected Antigravity provider tool %q to be rejected:\n%s", rejected, output)
 		}
@@ -158,8 +158,8 @@ func TestAntigravityBridgeDrainAllowsOnlyWorkgraphDrainToolsAndExplicitProviderT
 	arguments := strings.Split(strings.TrimSuffix(string(contents), "\n"), "\n")
 	allow := antigravityDrainAllowRules(t, arguments)
 	for _, expected := range []string{
-		"mcp(workgraph/capture_requests_claim)", "mcp(workgraph/capture_ingest)",
-		"mcp(workgraph/connector_required_tools)", "mcp(workgraph/llm_task_submit)",
+		"mcp(workgraph_workgraph/capture_requests_claim)", "mcp(workgraph_workgraph/capture_ingest)",
+		"mcp(workgraph_workgraph/connector_required_tools)", "mcp(workgraph_workgraph/llm_task_submit)",
 		"mcp(slack/slack_list_user_channels)",
 	} {
 		if !slices.Contains(allow, expected) {
@@ -167,7 +167,7 @@ func TestAntigravityBridgeDrainAllowsOnlyWorkgraphDrainToolsAndExplicitProviderT
 		}
 	}
 	for _, rule := range allow {
-		if rule != "mcp(slack/slack_list_user_channels)" && !strings.HasPrefix(rule, "mcp(workgraph/") || strings.Contains(rule, "*") {
+		if rule != "mcp(slack/slack_list_user_channels)" && !strings.HasPrefix(rule, "mcp(workgraph_workgraph/") || strings.Contains(rule, "*") {
 			t.Fatalf("Antigravity drain allowed unapproved rule %q: %q", rule, allow)
 		}
 	}

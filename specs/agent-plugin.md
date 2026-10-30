@@ -129,8 +129,12 @@ reinstallation always replaces the installed copy.
 
 Unattended drains run headlessly as `agy --settings <json> [--model <model>] -p
 <prompt>`. The session-only settings contain only `permissions.allow` rules:
-`mcp(workgraph/<tool>)` for each required workgraph drain tool and, for capture
-drains, each approved provider tool. Headless Antigravity auto-denies every
+`mcp(workgraph_workgraph/<tool>)` for each required workgraph drain tool and, for
+capture drains, each approved provider tool. Antigravity names an MCP server
+supplied by a plugin `<plugin>_<server>`, so the packaged `workgraph` server is
+`workgraph_workgraph`; this was verified against agy 1.4.10, where
+`mcp(workgraph/<tool>)` is auto-denied headlessly. Neither `workgraph` nor
+`workgraph_workgraph` may be approved as a provider server. Headless Antigravity auto-denies every
 tool without an allow rule, so the worker never passes
 `--dangerously-skip-permissions` or `--mode`. Allow rules the user configured in
 Antigravity's own settings remain the user's choice and still apply. Optional

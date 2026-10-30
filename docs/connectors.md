@@ -68,7 +68,9 @@ workgraph plugin install --client copilot \
 ```
 
 Antigravity uses its exact `mcp(server/tool)` permission rule form and has the
-same pending behavior without an approved provider tool:
+same pending behavior without an approved provider tool. A provider server
+supplied by an Antigravity plugin is named `<plugin>_<server>`; use the name
+`agy mcp list` or `agy plugin list` reports:
 
 ```sh
 workgraph plugin install --client agy \
