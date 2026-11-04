@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+if ! command -v jq >/dev/null 2>&1; then
+  out="$(go test "$@" 2>&1)"
+  status=$?
+  printf '%s\n' "$out" | grep -vE '^(ok|\?)[[:space:]]|\[no tests to run\]'
+  exit "$status"
+fi
+
+go test -json "$@" 2>&1 | jq -njR '
+  [inputs | . as $line | (try fromjson catch {Action: "raw", Output: ($line + "\n")})] as $events
+  | ($events | map(select(.Action == "fail" and .Test != null) | "\(.Package) \(.Test)")) as $failed_tests
+  | ($events | map(select(.Action == "fail" and .Test != null) | .Package) | unique) as $packages_with_failed_tests
+  | ($events | map(select(.Action == "fail" and .Test == null) | .Package)) as $failed_packages
+  | $events[]
+  | if .Action == "raw" or .Action == "build-output" then .Output
+    elif .Action != "output" then empty
+    elif .Test != null then (if ("\(.Package) \(.Test)" | IN($failed_tests[])) then .Output else empty end)
+    elif (.Package | IN($failed_packages[])) | not then empty
+    elif (.Package | IN($packages_with_failed_tests[])) | not then .Output
+    elif .Output | test("^(FAIL|panic|fatal error|\\*\\*\\* Test killed)") then .Output
+    else empty end
+'
+exit "${PIPESTATUS[0]}"

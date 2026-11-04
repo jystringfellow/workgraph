@@ -1,7 +1,9 @@
 package facts
 
 import (
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -23,15 +25,68 @@ func TestCIRunsFullGoSuiteOnPullRequestsToMain(t *testing.T) {
 		"go-version-file: go.mod",
 		"ubuntu-latest",
 		"macos-latest",
-		"go vet ./...",
-		"go test ./...",
+		"run: scripts/verify",
 	} {
 		if !strings.Contains(workflow, expected) {
 			t.Fatalf("expected CI workflow to include %q, got:\n%s", expected, workflow)
 		}
 	}
 	if strings.Contains(workflow, "continue-on-error") {
-		t.Fatalf("expected vet and test failures to fail CI, got:\n%s", workflow)
+		t.Fatalf("expected verification failures to fail CI, got:\n%s", workflow)
+	}
+
+	verify, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts/verify"))
+	if err != nil {
+		t.Fatalf("read scripts/verify: %v", err)
+	}
+	for _, expected := range []string{"gofmt -l .", "go vet ./...", "scripts/go-test-failures ./..."} {
+		if !strings.Contains(string(verify), expected) {
+			t.Fatalf("expected scripts/verify to include %q, got:\n%s", expected, verify)
+		}
+	}
+}
+
+func TestGoTestFailuresReportsOnlyFailingTests(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("scripts/go-test-failures filters same-package output only when jq is installed")
+	}
+	module := t.TempDir()
+	files := map[string]string{
+		"go.mod": "module example.test/failures\n\ngo 1.21\n",
+		"x_test.go": `package failures
+
+import (
+	"log"
+	"testing"
+)
+
+func TestPassesNoisily(t *testing.T) { log.Printf("noise from a passing test") }
+
+func TestFails(t *testing.T) { t.Fatalf("want 2, got %d", 1) }
+`,
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(module, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cmd := exec.Command(filepath.Join(repoRoot(t), "scripts/go-test-failures"), "./...")
+	cmd.Dir = module
+	out, err := cmd.CombinedOutput()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		t.Fatalf("expected a non-zero exit, got err=%v\n%s", err, out)
+	}
+	for _, expected := range []string{"--- FAIL: TestFails", "want 2, got 1"} {
+		if !strings.Contains(string(out), expected) {
+			t.Fatalf("expected output to include %q, got:\n%s", expected, out)
+		}
+	}
+	for _, unexpected := range []string{"TestPassesNoisily", "noise from a passing test"} {
+		if strings.Contains(string(out), unexpected) {
+			t.Fatalf("expected output to leave out %q, got:\n%s", unexpected, out)
+		}
 	}
 }
 

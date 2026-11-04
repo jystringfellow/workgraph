@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -uo pipefail
+cd "$(dirname "$0")/.."
+unset WORKGRAPH_AI_SESSION_ID WORKGRAPH_AI_HOME WORKGRAPH_AI_DATABASE
+
+if [[ $# -eq 0 ]]; then
+  echo "usage: scripts/check <TestNamePattern | ./package> ..." >&2
+  exit 2
+fi
+packages=()
+patterns=()
+for arg in "$@"; do
+  if [[ "$arg" == . || "$arg" == ./* ]]; then
+    packages+=("$arg")
+  else
+    patterns+=("$arg")
+  fi
+done
+if [[ ${#packages[@]} -eq 0 ]]; then
+  packages=(./...)
+fi
+args=(-count=1)
+if [[ ${#patterns[@]} -gt 0 ]]; then
+  args+=(-run "$(IFS='|'; echo "${patterns[*]}")")
+fi
+if scripts/go-test-failures "${args[@]}" "${packages[@]}"; then
+  echo "check: pass"
+  exit 0
+fi
+exit 1

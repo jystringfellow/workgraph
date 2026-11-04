@@ -1,0 +1,3 @@
+[test]
+verify = "scripts/verify"
+check = "scripts/check {args}"
