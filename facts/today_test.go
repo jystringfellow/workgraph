@@ -13,6 +13,10 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+func localTodayAnchor(now time.Time) time.Time {
+	return time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, now.Location())
+}
+
 func TestTodayReturnsEventsFromCurrentDay(t *testing.T) {
 	tempDir := t.TempDir()
 	homeDir := filepath.Join(tempDir, ".workgraph")
@@ -64,7 +68,7 @@ func TestTodayExcludesNotionInventoryButEventsTodayKeepsItInspectable(t *testing
 		t.Fatalf("init failed: %v", err)
 	}
 
-	now := time.Now()
+	now := localTodayAnchor(time.Now())
 	insertEvent(t, result.DatabasePath, storedEvent{
 		ID:        "notion.page:other-page",
 		Source:    "notion",
@@ -114,7 +118,7 @@ func TestTodayAndEventsTodayFilterByExactActor(t *testing.T) {
 		t.Fatalf("init failed: %v", err)
 	}
 
-	now := time.Now()
+	now := localTodayAnchor(time.Now())
 	insertEvent(t, result.DatabasePath, storedEvent{
 		ID: "mine", Source: "notion", Type: "notion.page_updated", Actor: "user-me",
 		Timestamp: now.Add(-2 * time.Hour), Summary: "My attributed work", Payload: `{"id":"mine"}`,
@@ -357,7 +361,7 @@ func TestTodayCompactsLongMultilineEventSummariesAndPointsToDetails(t *testing.T
 		t.Fatalf("init failed: %v", err)
 	}
 
-	now := time.Now()
+	now := localTodayAnchor(time.Now())
 	longSummary := "Use this after clearing context:\n\n\tInvestigate the next roadmap slice. " +
 		strings.Repeat("Preserve deterministic local evidence. ", 8) + "TAIL-MARKER"
 	insertEvent(t, result.DatabasePath, storedEvent{
@@ -446,7 +450,7 @@ func TestTodayOutputIncludesExpectedSections(t *testing.T) {
 		t.Fatalf("init failed: %v", err)
 	}
 
-	now := time.Now()
+	now := localTodayAnchor(time.Now())
 	insertEvent(t, result.DatabasePath, storedEvent{
 		ID:        "section-event",
 		Type:      "file.modified",
