@@ -471,7 +471,7 @@ func TestTodayAssociationDoesNotMutateRawEvents(t *testing.T) {
 
 func TestTodayAssociationCLIOutput(t *testing.T) {
 	homeDir, dbPath := initAssociationStore(t)
-	now := time.Now().UTC()
+	now := localTodayAnchor(time.Now())
 	url := "https://github.com/acme/widget/pull/91"
 	insertAssociationEvent(t, dbPath, associationStoredEvent{ID: "github:cli-today", Source: "github", Type: "github.pull_request", Timestamp: now.Add(-10 * time.Minute), Payload: fmt.Sprintf(`{"url":%q}`, url)})
 	insertAssociationEvent(t, dbPath, associationStoredEvent{ID: "slack:cli-today", Source: "slack", Type: "slack.message", Timestamp: now.Add(-5 * time.Minute), Payload: fmt.Sprintf(`{"text":%q}`, url)})
