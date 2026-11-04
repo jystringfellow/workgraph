@@ -163,22 +163,15 @@ func aiCheckpointNextAction(raw json.RawMessage) string {
 
 func formatAICheckpointPreview(primary, next string) string {
 	label := "AI checkpoint"
-	if primary != "" {
+	switch {
+	case primary != "" && next != "":
+		label += ": " + primary + "; next: " + next
+	case primary != "":
 		label += ": " + primary
+	default:
+		label += " — next: " + next
 	}
-	if next != "" {
-		if primary != "" {
-			label += "; next: "
-		} else {
-			label += " next: "
-		}
-		label += next
-	}
-	runes := []rune(label)
-	if len(runes) > todayEventLabelMaxRunes {
-		label = strings.TrimSpace(string(runes[:todayEventLabelMaxRunes-1])) + "…"
-	}
-	return label
+	return boundEventLabel(label)
 }
 
 type AIProcessInspection struct {

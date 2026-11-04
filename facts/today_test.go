@@ -79,59 +79,49 @@ func TestTodayShowsAICheckpointPreviewInsteadOfGenericLabel(t *testing.T) {
 	}
 }
 
-func TestTodayBoundsAndFallsBackForAICheckpointPreview(t *testing.T) {
-	tempDir := t.TempDir()
-	homeDir := filepath.Join(tempDir, ".workgraph")
-	result, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+func TestTodayAICheckpointPreviewFallsBackAndStaysBounded(t *testing.T) {
+	longGoal, err := json.Marshal(strings.Repeat("long ", 60) + "\n\tend")
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2026, 5, 17, 15, 30, 0, 0, time.Local)
-	longGoal := strings.Repeat("long ", 60) + "\n\tend"
-	encodedGoal, err := json.Marshal(longGoal)
-	if err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{"goal only", `{"agent_stated":{"goal":"Ship\n\tcheckpoint   preview"}}`, "AI checkpoint: Ship checkpoint preview"},
+		{"current state when goal is missing", `{"agent_stated":{"current_state":"Recovering context","next_actions":["Resume implementation"]}}`, "AI checkpoint: Recovering context; next: Resume implementation"},
+		{"first non-empty next action", `{"agent_stated":{"next_actions":[" ", 7, "Resume implementation", "Later"]}}`, "AI checkpoint — next: Resume implementation"},
+		{"long goal", `{"agent_stated":{"goal":` + string(longGoal) + `}}`, "AI checkpoint: " + strings.Repeat("long ", 28) + "long…"},
+		{"no agent_stated", `{}`, "AI session checkpointed"},
+		{"only blank fields", `{"agent_stated":{"goal":"  ","current_state":"\n\t","next_actions":[" "]}}`, "AI session checkpointed"},
+		{"malformed payload", "", "AI session checkpointed"},
 	}
-	insertEvent(t, result.DatabasePath, storedEvent{ID: "long-checkpoint", Type: "ai.session_checkpointed", Timestamp: now, Project: "workgraph", Payload: `{"agent_stated":{"goal":` + string(encodedGoal) + `}}`, Summary: "AI session checkpointed"})
-	insertEvent(t, result.DatabasePath, storedEvent{ID: "bad-checkpoint", Type: "ai.session_checkpointed", Timestamp: now.Add(time.Minute), Project: "workgraph", Payload: `{}`, Summary: "AI session checkpointed"})
-	insertEvent(t, result.DatabasePath, storedEvent{ID: "empty-checkpoint", Type: "ai.session_checkpointed", Timestamp: now.Add(2 * time.Minute), Project: "workgraph", Payload: `{"agent_stated":{"goal":"  ","current_state":"\n\t","next_actions":[" "]}}`, Summary: "AI session checkpointed"})
-	insertEvent(t, result.DatabasePath, storedEvent{ID: "current-checkpoint", Type: "ai.session_checkpointed", Timestamp: now.Add(3 * time.Minute), Project: "workgraph", Payload: `{"agent_stated":{"current_state":"Recovering context"}}`, Summary: "AI session checkpointed"})
-	insertEvent(t, result.DatabasePath, storedEvent{ID: "next-checkpoint", Type: "ai.session_checkpointed", Timestamp: now.Add(4 * time.Minute), Project: "workgraph", Payload: `{"agent_stated":{"next_actions":["Resume implementation"]}}`, Summary: "AI session checkpointed"})
-	insertInvalidJSONCheckpoint(t, result.DatabasePath, now.Add(5*time.Minute))
-	today, err := workgraph.Today(workgraph.TodayConfig{HomeDir: homeDir, DatabasePath: result.DatabasePath, Now: now, IncludeAllEvidence: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	foundPreview := false
-	foundTruncatedPreview := false
-	for _, line := range strings.Split(today.Message, "\n") {
-		if strings.Contains(line, "AI checkpoint:") {
-			foundPreview = true
-			label := line[strings.Index(line, "AI checkpoint:"):]
-			if utf8.RuneCountInString(label) > 160 {
-				t.Fatalf("checkpoint label not bounded: %q", label)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			homeDir := filepath.Join(t.TempDir(), ".workgraph")
+			result, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+			if err != nil {
+				t.Fatal(err)
 			}
-			if strings.HasPrefix(label, "AI checkpoint: long") {
-				foundTruncatedPreview = strings.HasSuffix(label, "…")
+			now := time.Date(2026, 5, 17, 15, 30, 0, 0, time.Local)
+			if tc.payload == "" {
+				insertInvalidJSONCheckpoint(t, result.DatabasePath, now)
+			} else {
+				insertEvent(t, result.DatabasePath, storedEvent{ID: "checkpoint", Type: "ai.session_checkpointed", Timestamp: now, Project: "workgraph", Payload: tc.payload, Summary: "AI session checkpointed"})
 			}
-			if strings.ContainsAny(label, "\t\r") {
-				t.Fatalf("checkpoint label contains tab or carriage return: %q", label)
+			today, err := workgraph.Today(workgraph.TodayConfig{HomeDir: homeDir, DatabasePath: result.DatabasePath, Now: now, IncludeAllEvidence: true})
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
-	}
-	if !foundPreview {
-		t.Fatalf("expected checkpoint preview in output:\n%s", today.Message)
-	}
-	if !foundTruncatedPreview {
-		t.Fatalf("expected long preview to end with an ellipsis:\n%s", today.Message)
-	}
-	for _, expected := range []string{"AI checkpoint: Recovering context", "AI checkpoint next: Resume implementation"} {
-		if !strings.Contains(today.Message, expected) {
-			t.Fatalf("expected %q in output:\n%s", expected, today.Message)
-		}
-	}
-	if strings.Count(today.Message, "AI session checkpointed") != 3 {
-		t.Fatalf("expected generic fallback for unusable payloads, got:\n%s", today.Message)
+			wantLine := "15:30 ai.session_checkpointed " + tc.want
+			if !strings.Contains(today.Message, wantLine+"\n") {
+				t.Fatalf("expected line ending %q, got:\n%s", wantLine, today.Message)
+			}
+			if utf8.RuneCountInString(tc.want) > 160 {
+				t.Fatalf("expected label bounded to 160 runes, got %d", utf8.RuneCountInString(tc.want))
+			}
+		})
 	}
 }
 

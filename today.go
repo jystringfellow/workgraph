@@ -554,10 +554,15 @@ func eventLabel(event TodayEvent) string {
 }
 
 func todayEventLabel(event TodayEvent) string {
-	label := strings.Join(strings.Fields(checkpointEventLabel(event)), " ")
+	label := boundEventLabel(checkpointEventLabel(event))
 	if label == "" {
-		label = event.ID
+		return event.ID
 	}
+	return label
+}
+
+func boundEventLabel(label string) string {
+	label = strings.Join(strings.Fields(label), " ")
 	runes := []rune(label)
 	if len(runes) <= todayEventLabelMaxRunes {
 		return label
