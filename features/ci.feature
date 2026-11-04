@@ -6,9 +6,16 @@ Scenario: Run full tests on pull requests to main
   Then workgraph checks out the repository
   And workgraph installs the Go version from go.mod
   And workgraph runs CI on Linux and macOS
-  And workgraph runs "go vet ./..."
-  And workgraph runs "go test ./..."
-  And a vet or test failure fails the workflow
+  And workgraph runs "scripts/verify"
+  And scripts/verify checks gofmt, runs "go vet ./...", and runs "go test ./..."
+  And a formatting, vet, or test failure fails the workflow
+
+Scenario: Report only failures
+  Given a test run where one test fails and another passes with log output
+  When scripts/go-test-failures runs the tests
+  Then it prints the failing test and its output
+  And it leaves out the passing test's output
+  And it exits non-zero
 
 Scenario: Reuse one CLI build across command facts
   Given command facts execute the workgraph CLI many times

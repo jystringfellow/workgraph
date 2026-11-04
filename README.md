@@ -288,11 +288,14 @@ operation.
 
 ## Verification
 
-Run the facts with:
+Run the full verification (gofmt, `go vet`, and every test) with:
 
 ```sh
-go test ./...
+scripts/verify
 ```
+
+CI runs the same script. Run selected tests by name or package with
+`scripts/check TestName ./facts`. Both print only failures.
 
 Skipped tests mark facts that are specified but not active yet. Before
 implementation, replace a skipped placeholder with real assertions and verify

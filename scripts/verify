@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -uo pipefail
+cd "$(dirname "$0")/.."
+unset WORKGRAPH_AI_SESSION_ID WORKGRAPH_AI_HOME WORKGRAPH_AI_DATABASE
+
+status=0
+unformatted="$(gofmt -l .)"
+if [[ -n "$unformatted" ]]; then
+  printf 'gofmt: these files need formatting\n%s\n' "$unformatted"
+  status=1
+fi
+if ! vet="$(go vet ./... 2>&1)"; then
+  printf 'go vet:\n%s\n' "$vet"
+  status=1
+fi
+if ! scripts/go-test-failures ./...; then
+  status=1
+fi
+if [[ $status -eq 0 ]]; then
+  echo "verify: pass"
+fi
+exit "$status"
