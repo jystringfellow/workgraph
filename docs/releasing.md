@@ -20,8 +20,7 @@ skipped.
 Before tagging, run:
 
 ```sh
-go vet ./...
-go test ./...
+scripts/verify
 git status --short
 ```
 

@@ -10,6 +10,12 @@ Scenario: Run full tests on pull requests to main
   And scripts/verify checks gofmt, runs "go vet ./...", and runs "go test ./..."
   And a formatting, vet, or test failure fails the workflow
 
+Scenario: Verify release tags with the same checks as CI
+  Given a maintainer pushes a valid release tag
+  When the release workflow runs
+  Then its "Verify tagged source" job runs "scripts/verify"
+  And a formatting, vet, or test failure fails the job before any build or publish job starts
+
 Scenario: Report only failures
   Given a test run where one test fails and another passes with log output
   When scripts/go-test-failures runs the tests

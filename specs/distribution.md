@@ -48,9 +48,10 @@ missing values. The command never prints a local path.
 ## GitHub Releases
 
 Pushing a tag matching `vMAJOR.MINOR.PATCH` runs a dedicated release workflow.
-The workflow validates the tag and passes `go vet ./...` plus `go test ./...`
-before building. It has only the permissions it needs. Release builds run on
-native GitHub-hosted runners because workgraph's SQLite dependency uses CGO.
+The workflow validates the tag and passes `scripts/verify` (gofmt, vet and the
+full Go suite), the same verification CI runs, before building. It has only the
+permissions it needs. Release builds run on native GitHub-hosted runners
+because workgraph's SQLite dependency uses CGO.
 Linux release binaries are built on Ubuntu 22.04 runners to avoid unnecessarily
 raising the glibc baseline. macOS builds set a macOS 13 deployment target while
 still using currently supported runner images.
