@@ -554,15 +554,27 @@ func eventLabel(event TodayEvent) string {
 }
 
 func todayEventLabel(event TodayEvent) string {
-	label := strings.Join(strings.Fields(eventLabel(event)), " ")
+	label := boundEventLabel(checkpointEventLabel(event))
 	if label == "" {
-		label = event.ID
+		return event.ID
 	}
+	return label
+}
+
+func boundEventLabel(label string) string {
+	label = strings.Join(strings.Fields(label), " ")
 	runes := []rune(label)
 	if len(runes) <= todayEventLabelMaxRunes {
 		return label
 	}
 	return strings.TrimSpace(string(runes[:todayEventLabelMaxRunes-1])) + "…"
+}
+
+func checkpointEventLabel(event TodayEvent) string {
+	if label, ok := checkpointPreviewLabel(event); ok {
+		return label
+	}
+	return eventLabel(event)
 }
 
 func gitCommitEventLabel(event TodayEvent) string {

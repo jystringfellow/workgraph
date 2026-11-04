@@ -106,3 +106,8 @@ Scenario: Show a missing project state
   When I run "workgraph resume <project>"
   Then the output says no recent activity was found
   And the output suggests checking the project name or running capture
+
+Scenario: Preview AI session checkpoints
+  Given an AI session checkpoint for project "workgraph" with a goal and next actions
+  When I run "workgraph resume workgraph"
+  Then the checkpoint shows the same bounded preview as "workgraph today"

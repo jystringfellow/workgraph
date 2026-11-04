@@ -60,6 +60,10 @@ default overview's check-in. Calling the Go `Resume` query API also does not
 advance it; the CLI records the check-in after successful output. A failed
 render, query, or output does not advance the check-in.
 
+Checkpoint events in `Where you left off`, project activity, and open GitHub
+work show the same single-line preview as `today`, bounded to 160 Unicode
+characters.
+
 With `workgraph next` (`specs/next.md`) and the GitHub pull request watch
 (`specs/github-pr-watch.md`): the default overview shows a `Waiting on you` section after
 `Where you left off` with at most five `workgraph next` pull requests in

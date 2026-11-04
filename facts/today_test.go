@@ -2,6 +2,7 @@ package facts
 
 import (
 	"database/sql"
+	"encoding/json"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -57,6 +58,70 @@ func TestTodayReturnsEventsFromCurrentDay(t *testing.T) {
 	}
 	if strings.Contains(today.Message, "yesterday.md") {
 		t.Fatalf("expected previous-day event to be omitted, got:\n%s", today.Message)
+	}
+}
+
+func TestTodayShowsAICheckpointPreviewInsteadOfGenericLabel(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	result, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 5, 17, 15, 30, 0, 0, time.Local)
+	insertEvent(t, result.DatabasePath, storedEvent{ID: "checkpoint", Type: "ai.session_checkpointed", Timestamp: now, Project: "workgraph", Payload: `{"agent_stated":{"goal":"Ship checkpoint preview","next_actions":["Write facts"]}}`, Summary: "AI session checkpointed"})
+	today, err := workgraph.Today(workgraph.TodayConfig{HomeDir: homeDir, DatabasePath: result.DatabasePath, Now: now, IncludeAllEvidence: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(today.Message, "AI checkpoint: Ship checkpoint preview; next: Write facts") || strings.Contains(today.Message, "AI session checkpointed") {
+		t.Fatalf("unexpected checkpoint label:\n%s", today.Message)
+	}
+}
+
+func TestTodayAICheckpointPreviewFallsBackAndStaysBounded(t *testing.T) {
+	longGoal, err := json.Marshal(strings.Repeat("long ", 60) + "\n\tend")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{"goal only", `{"agent_stated":{"goal":"Ship\n\tcheckpoint   preview"}}`, "AI checkpoint: Ship checkpoint preview"},
+		{"current state when goal is missing", `{"agent_stated":{"current_state":"Recovering context","next_actions":["Resume implementation"]}}`, "AI checkpoint: Recovering context; next: Resume implementation"},
+		{"first non-empty next action", `{"agent_stated":{"next_actions":[" ", 7, "Resume implementation", "Later"]}}`, "AI checkpoint — next: Resume implementation"},
+		{"long goal", `{"agent_stated":{"goal":` + string(longGoal) + `}}`, "AI checkpoint: " + strings.Repeat("long ", 28) + "long…"},
+		{"no agent_stated", `{}`, "AI session checkpointed"},
+		{"only blank fields", `{"agent_stated":{"goal":"  ","current_state":"\n\t","next_actions":[" "]}}`, "AI session checkpointed"},
+		{"malformed payload", "", "AI session checkpointed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			homeDir := filepath.Join(t.TempDir(), ".workgraph")
+			result, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			now := time.Date(2026, 5, 17, 15, 30, 0, 0, time.Local)
+			if tc.payload == "" {
+				insertInvalidJSONCheckpoint(t, result.DatabasePath, now)
+			} else {
+				insertEvent(t, result.DatabasePath, storedEvent{ID: "checkpoint", Type: "ai.session_checkpointed", Timestamp: now, Project: "workgraph", Payload: tc.payload, Summary: "AI session checkpointed"})
+			}
+			today, err := workgraph.Today(workgraph.TodayConfig{HomeDir: homeDir, DatabasePath: result.DatabasePath, Now: now, IncludeAllEvidence: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantLine := "15:30 ai.session_checkpointed " + tc.want
+			if !strings.Contains(today.Message, wantLine+"\n") {
+				t.Fatalf("expected line ending %q, got:\n%s", wantLine, today.Message)
+			}
+			if utf8.RuneCountInString(tc.want) > 160 {
+				t.Fatalf("expected label bounded to 160 runes, got %d", utf8.RuneCountInString(tc.want))
+			}
+		})
 	}
 }
 
@@ -604,5 +669,21 @@ func insertEvent(t *testing.T, dbPath string, event storedEvent) {
 	)
 	if err != nil {
 		t.Fatalf("insert event %q: %v", event.ID, err)
+	}
+}
+
+func insertInvalidJSONCheckpoint(t *testing.T, dbPath string, timestamp time.Time) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("PRAGMA ignore_check_constraints = ON"); err != nil {
+		t.Fatalf("disable payload check for malformed legacy event: %v", err)
+	}
+	_, err = db.Exec(`INSERT INTO events (id, source, type, timestamp, payload_json, project, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "invalid-checkpoint", "file", "ai.session_checkpointed", timestamp.UTC().Format(time.RFC3339Nano), "not json", "workgraph", "AI session checkpointed", timestamp.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatalf("insert malformed checkpoint payload: %v", err)
 	}
 }
