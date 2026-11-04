@@ -5,7 +5,30 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	workgraph "github.com/jystringfellow/workgraph"
 )
+
+func TestEventsTodayKeepsCheckpointContentOutOfTheLabel(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	result, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	insertEvent(t, result.DatabasePath, storedEvent{ID: "checkpoint", Type: "ai.session_checkpointed", Timestamp: now, Project: "workgraph", Payload: `{"agent_stated":{"goal":"Private checkpoint context"}}`, Summary: "AI session checkpointed"})
+	output, err := runworkgraph(t, repoRoot(t), "events", "today", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("workgraph events today failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "ai.session_checkpointed AI session checkpointed") {
+		t.Fatalf("expected generic checkpoint label, got:\n%s", output)
+	}
+	if strings.Contains(string(output), "Private checkpoint context") {
+		t.Fatalf("expected checkpoint content to remain out of events today label, got:\n%s", output)
+	}
+}
 
 func TestEventsTodayFiltersByType(t *testing.T) {
 	tempDir := t.TempDir()

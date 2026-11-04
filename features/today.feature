@@ -158,3 +158,10 @@ Scenario: Group today's activity by workstream and project
   Then "orbit-segments" is listed under the "harbor" workstream with its link kind and auto-applied count
   And the unlinked container is listed under "harbor"
   And I see how to check automatic links with "workgraph projects review --auto"
+
+Scenario: Preview AI session checkpoints
+  Given an AI session checkpoint today with a goal and next actions
+  When I run "workgraph today"
+  Then the checkpoint shows "AI checkpoint:" with its goal and first next action on one bounded line
+  And a checkpoint without usable content keeps the generic "AI session checkpointed" label
+  And "workgraph events today" keeps the generic checkpoint label

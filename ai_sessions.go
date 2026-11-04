@@ -118,6 +118,69 @@ type aiCheckpointPayload struct {
 	InitiatedBy   string          `json:"initiated_by,omitempty"`
 }
 
+func checkpointPreviewLabel(event TodayEvent) (string, bool) {
+	if event.Type != "ai.session_checkpointed" {
+		return "", false
+	}
+	var payload struct {
+		AgentStated map[string]json.RawMessage `json:"agent_stated"`
+	}
+	if json.Unmarshal([]byte(event.Payload), &payload) != nil || payload.AgentStated == nil {
+		return "", false
+	}
+	readString := func(key string) string {
+		var value string
+		_ = json.Unmarshal(payload.AgentStated[key], &value)
+		return strings.Join(strings.Fields(value), " ")
+	}
+	primary := readString("goal")
+	if primary == "" {
+		primary = readString("current_state")
+	}
+	next := aiCheckpointNextAction(payload.AgentStated["next_actions"])
+	if primary == "" && next == "" {
+		return "", false
+	}
+	return formatAICheckpointPreview(primary, next), true
+}
+
+func aiCheckpointNextAction(raw json.RawMessage) string {
+	var actions []json.RawMessage
+	if json.Unmarshal(raw, &actions) != nil {
+		return ""
+	}
+	for _, action := range actions {
+		var value string
+		if json.Unmarshal(action, &value) == nil {
+			value = strings.Join(strings.Fields(value), " ")
+			if value != "" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func formatAICheckpointPreview(primary, next string) string {
+	label := "AI checkpoint"
+	if primary != "" {
+		label += ": " + primary
+	}
+	if next != "" {
+		if primary != "" {
+			label += "; next: "
+		} else {
+			label += " next: "
+		}
+		label += next
+	}
+	runes := []rune(label)
+	if len(runes) > todayEventLabelMaxRunes {
+		label = strings.TrimSpace(string(runes[:todayEventLabelMaxRunes-1])) + "…"
+	}
+	return label
+}
+
 type AIProcessInspection struct {
 	Exists        bool
 	StartIdentity string

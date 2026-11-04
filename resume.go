@@ -1173,7 +1173,7 @@ func resumeProjectMessage(result ResumeResult, location *time.Location) string {
 }
 
 func resumeEventLabel(event ResumeEvent) string {
-	return eventLabel(TodayEvent{
+	todayEvent := TodayEvent{
 		ID:        event.ID,
 		Type:      event.Type,
 		Timestamp: event.Timestamp,
@@ -1181,7 +1181,8 @@ func resumeEventLabel(event ResumeEvent) string {
 		Path:      event.Path,
 		Summary:   event.Summary,
 		Payload:   event.Payload,
-	})
+	}
+	return checkpointEventLabel(todayEvent)
 }
 
 func pluralizeOlderEvents(count int) string {

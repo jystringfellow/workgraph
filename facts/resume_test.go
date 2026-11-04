@@ -1,12 +1,14 @@
 package facts
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	workgraph "github.com/jystringfellow/workgraph"
 )
@@ -579,6 +581,59 @@ func TestResumeReturnsRecentEventsForProject(t *testing.T) {
 	}
 	if strings.Contains(resume.Message, "today.go") {
 		t.Fatalf("expected other project events to be omitted, got:\n%s", resume.Message)
+	}
+}
+
+func TestResumeShowsAICheckpointPreviewInRecentActivity(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	result, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 5, 20, 16, 0, 0, 0, time.Local)
+	insertEvent(t, result.DatabasePath, storedEvent{ID: "checkpoint", Type: "ai.session_checkpointed", Timestamp: now, Project: "Cupcake", Payload: `{"agent_stated":{"goal":"Ship checkpoint preview","next_actions":["Write facts"]}}`, Summary: "AI session checkpointed"})
+	resume, err := workgraph.Resume(workgraph.ResumeConfig{HomeDir: homeDir, DatabasePath: result.DatabasePath, Project: "Cupcake", Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resume.Message, "AI checkpoint: Ship checkpoint preview; next: Write facts") || strings.Contains(resume.Message, "AI session checkpointed") {
+		t.Fatalf("unexpected checkpoint label:\n%s", resume.Message)
+	}
+}
+
+func TestResumeBoundsAICheckpointPreviewToOneLine(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	result, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 5, 20, 16, 0, 0, 0, time.Local)
+	goal, err := json.Marshal(strings.Repeat("resume context ", 30) + "\n\tfinish")
+	if err != nil {
+		t.Fatal(err)
+	}
+	insertEvent(t, result.DatabasePath, storedEvent{ID: "long-checkpoint", Type: "ai.session_checkpointed", Timestamp: now, Project: "Cupcake", Payload: `{"agent_stated":{"goal":` + string(goal) + `}}`, Summary: "AI session checkpointed"})
+	resume, err := workgraph.Resume(workgraph.ResumeConfig{HomeDir: homeDir, DatabasePath: result.DatabasePath, Project: "Cupcake", Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundPreview := false
+	for _, line := range strings.Split(resume.Message, "\n") {
+		if strings.Contains(line, "AI checkpoint:") {
+			foundPreview = true
+			label := line[strings.Index(line, "AI checkpoint:"):]
+			if utf8.RuneCountInString(label) > 160 || !strings.HasSuffix(label, "…") {
+				t.Fatalf("resume checkpoint label not bounded: %q", label)
+			}
+			if strings.ContainsAny(label, "\t\r") {
+				t.Fatalf("resume checkpoint label contains tab or carriage return: %q", label)
+			}
+		}
+	}
+	if !foundPreview {
+		t.Fatalf("expected checkpoint preview in resume output:\n%s", resume.Message)
 	}
 }
 

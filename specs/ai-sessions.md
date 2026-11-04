@@ -743,6 +743,8 @@ associated with another workgraph lifetime.
 
 Only fields present in accepted input need appear under `agent_stated`; absent
 optional fields are omitted. Present empty arrays remain empty arrays.
+`today` and `resume` show a bounded preview of the goal or current state and
+first next action; `workgraph ai show` remains the full checkpoint view.
 
 An agent-initiated checkpoint adds `"initiated_by": "agent"` beside
 `agent_stated`. The field is omitted for user-requested checkpoints, and

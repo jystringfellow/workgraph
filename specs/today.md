@@ -91,6 +91,8 @@ by container.
 - git commits use the commit subject plus branch and short SHA when available
 - GitHub pull requests and issues use the title plus number and state when
   available in detailed event output
+- AI session checkpoints show a bounded preview of the goal or current state
+  and first next action; full content remains available in `workgraph ai show`
 - whitespace, including embedded newlines and tabs, is collapsed so each event occupies one physical line
 - the rendered label is capped at 160 Unicode characters including a trailing ellipsis when truncated
 
@@ -98,6 +100,7 @@ Compaction is presentation-only. `today` does not rewrite event summaries or
 payloads in SQLite. `workgraph events today` remains the detailed inspection
 path and renders the complete stored label, with optional `--type` and `--limit`
 filters. Detailed output also renders stored actor metadata when present.
+Checkpoint labels in `workgraph events today` remain unchanged.
 
 ## Sessions
 
