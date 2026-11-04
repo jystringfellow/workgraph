@@ -46,6 +46,38 @@ func TestCIRunsFullGoSuiteOnPullRequestsToMain(t *testing.T) {
 	}
 }
 
+func TestReleaseWorkflowVerifiesTaggedSourceWithScriptsVerify(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join(repoRoot(t), ".github/workflows/release.yaml"))
+	if err != nil {
+		t.Fatalf("read release workflow: %v", err)
+	}
+	workflow := string(contents)
+	verifyStart := strings.Index(workflow, "  verify:\n")
+	buildStart := strings.Index(workflow, "  build:\n")
+	if verifyStart < 0 || buildStart <= verifyStart {
+		t.Fatalf("expected verify job before build job in release workflow")
+	}
+	verify := workflow[verifyStart:buildStart]
+	for _, expected := range []string{
+		"run: scripts/verify",
+		"actions/checkout",
+		"actions/setup-go",
+		"go-version-file: go.mod",
+	} {
+		if !strings.Contains(verify, expected) {
+			t.Fatalf("expected release verify job to include %q, got:\n%s", expected, verify)
+		}
+	}
+	for _, unexpected := range []string{"go vet ./...", "go test ./...", "continue-on-error"} {
+		if strings.Contains(verify, unexpected) {
+			t.Fatalf("expected release verify job to omit %q, got:\n%s", unexpected, verify)
+		}
+	}
+	if !strings.Contains(workflow[buildStart:], "needs: [validate, verify]") {
+		t.Fatalf("expected build job to depend on verification, got:\n%s", workflow[buildStart:])
+	}
+}
+
 func TestGoTestFailuresReportsOnlyFailingTests(t *testing.T) {
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Skip("scripts/go-test-failures filters same-package output only when jq is installed")

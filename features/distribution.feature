@@ -15,7 +15,7 @@ Feature: Inspectable workgraph distribution
   Scenario: Publish versioned release archives
     Given a trusted maintainer pushes a valid semantic version tag
     When the release workflow runs
-    Then workgraph passes vet and the full Go suite before publishing
+    Then workgraph passes "scripts/verify" (gofmt, vet and the full Go suite), the same verification CI runs, before publishing
     Then native runners build macOS, Linux, and Windows archives
     And release metadata is injected into "workgraph version"
     And workgraph publishes SHA-256 checksums for every archive

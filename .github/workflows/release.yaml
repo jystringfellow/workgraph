@@ -40,11 +40,8 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Run vet
-        run: go vet ./...
-
-      - name: Run full Go suite
-        run: go test ./...
+      - name: Verify
+        run: scripts/verify
 
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}

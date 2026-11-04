@@ -11,8 +11,12 @@ verification used by CI, local development, and agent harnesses:
 ```text
 gofmt -l .
 go vet ./...
-go test ./...
+scripts/go-test-failures ./...
 ```
+
+The release workflow's "Verify tagged source" job runs `scripts/verify` before
+any build or publish job. A release tag must pass the same formatting, vet, and
+test checks as CI.
 
 Formatting, vet, and test failures must fail the workflow. CI steps must not
 use `continue-on-error` to turn those failures into successful checks.
