@@ -828,6 +828,20 @@ returns only the requests that drain's worker claimed to `pending`, and records 
 `connectors status`. `workgraph connectors disable <id>` cancels that
 connector's pending or claimed request.
 
+When a drain fails because the client's own sign-in expired, connector status
+reports `bridge signed out (<client>, <config dir>)` right away. Sign the
+worker's account back in with its stored config dir, then optionally resume
+immediately instead of waiting for the next scheduled drain:
+
+```sh
+workgraph bridge login --client claude-code
+workgraph bridge drain --client claude-code
+```
+
+`bridge login` runs `claude auth login`, `codex login`, or `copilot login`.
+Signing in directly with the client also works; the next successful drain
+clears the signed-out state.
+
 Claim output includes `Capture semantics`. Most connectors return
 `bounded_events`; `slack.lists` returns `complete_snapshot`. For Slack Lists,
 read every configured List with `slack_read_file`. An MCP worker handling a

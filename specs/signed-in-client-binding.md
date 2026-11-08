@@ -24,7 +24,9 @@ Reinstallation without a config-dir flag preserves the binding, while
 `--clear-config-dir` returns the worker to the ambient client default. The
 generated launch agent does not become configuration state; `bridge drain`
 resolves and applies the durable binding immediately before invoking the
-client.
+client. `workgraph bridge login --client <client>` applies the same binding
+when it runs the client's sign-in, so the account the worker drains with is
+the account that signs in again.
 
 `workgraph llm connect <client> --config-dir <path>` and `workgraph llm add
 <profile> --provider ai-client --client <client> --config-dir <path>` store the
