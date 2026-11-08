@@ -202,7 +202,7 @@ func runPluginDoctor(args []string, stdout io.Writer, stderr io.Writer) int {
 
 func runBridge(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: workgraph bridge <mcp|install|drain|doctor>")
+		fmt.Fprintln(stderr, "usage: workgraph bridge <mcp|install|drain|doctor|login>")
 		return 2
 	}
 	if args[0] == "install" {
@@ -213,6 +213,9 @@ func runBridge(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 	}
 	if args[0] == "doctor" {
 		return runBridgeDoctor(args[1:], stdout, stderr)
+	}
+	if args[0] == "login" {
+		return runBridgeLogin(args[1:], stdin, stdout, stderr)
 	}
 	if args[0] != "mcp" {
 		fmt.Fprintf(stderr, "unknown bridge command: %s\n", args[0])
@@ -309,6 +312,31 @@ func runBridgeDrain(args []string, stdout io.Writer, stderr io.Writer) int {
 	if message != "" {
 		fmt.Fprintln(stdout, message)
 	}
+	return 0
+}
+
+func runBridgeLogin(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("bridge login", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	homeDir := flags.String("home", "", "workgraph home directory")
+	client := flags.String("client", "", "reference client: codex, claude-code, or copilot")
+	clientCommand := flags.String("client-command", "", "client executable override")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 || strings.TrimSpace(*client) == "" {
+		fmt.Fprintln(stderr, "usage: workgraph bridge login --client <codex|claude-code|copilot>")
+		return 2
+	}
+	message, err := workgraph.BridgeLogin(workgraph.BridgeLoginConfig{
+		HomeDir: *homeDir, Client: *client, ClientCommand: *clientCommand,
+		Stdin: stdin, Stdout: stdout, Stderr: stderr,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph bridge login: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, message)
 	return 0
 }
 

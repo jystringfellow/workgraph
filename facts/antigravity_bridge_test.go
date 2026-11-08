@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	workgraph "github.com/jystringfellow/workgraph"
 )
 
 func installAntigravityPlugin(t *testing.T, homeDir, clientPath, installRoot string, extra ...string) ([]byte, error) {
@@ -224,5 +226,78 @@ func TestAntigravityBridgeDrainLeavesCaptureRequestsPendingWithoutProviderTools(
 	var status string
 	if err := openBridgedCaptureDatabase(t, homeDir).QueryRow(`SELECT status FROM capture_requests WHERE connector_id = 'slack'`).Scan(&status); err != nil || status != "pending" {
 		t.Fatalf("expected request to remain pending, got %q err=%v", status, err)
+	}
+}
+
+func TestSignedOutAntigravityBridgePointsAtDirectSignIn(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	fixtureDir := t.TempDir()
+	clientPath := filepath.Join(fixtureDir, "agy")
+	if err := os.WriteFile(clientPath, []byte("#!/bin/sh\ncase \"$1\" in plugin) exit 0 ;; esac\necho 'Failed to authenticate: session expired' >&2\nexit 1\n"), 0o700); err != nil {
+		t.Fatalf("write fake Antigravity: %v", err)
+	}
+	if output, err := installAntigravityPlugin(t, homeDir, clientPath, filepath.Join(fixtureDir, "installed"),
+		"--allow-provider-tool", "mcp(slack/slack_list_user_channels)"); err != nil {
+		t.Fatalf("install Antigravity plugin: %v\n%s", err, output)
+	}
+	connectBridgedConnector(t, repoRoot(t), homeDir, "slack")
+	if output, err := runworkgraph(t, repoRoot(t), "connectors", "poll", "--home", homeDir, "--once", "--connector", "slack"); err != nil {
+		t.Fatalf("emit request: %v\n%s", err, output)
+	}
+	if output, err := runworkgraph(t, repoRoot(t), "bridge", "drain", "--home", homeDir, "--client", "agy", "--client-command", clientPath); err == nil {
+		t.Fatalf("expected an expired Antigravity sign-in to fail the drain:\n%s", output)
+	}
+	status, err := runworkgraph(t, repoRoot(t), "connectors", "status", "--home", homeDir)
+	if err != nil {
+		t.Fatalf("connectors status: %v\n%s", err, status)
+	}
+	if !strings.Contains(string(status), "bridge signed out (agy, ambient default): Failed to authenticate: session expired; sign in with agy directly") {
+		t.Fatalf("expected status to point Antigravity at a direct sign-in:\n%s", status)
+	}
+	if strings.Contains(string(status), "bridge login --client agy") {
+		t.Fatalf("status recommended a bridge login that rejects Antigravity:\n%s", status)
+	}
+}
+
+func TestTodayGivesEachSignedOutBridgeClientItsOwnRemedy(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	fixtureDir := t.TempDir()
+	agyPath := filepath.Join(fixtureDir, "agy")
+	if err := os.WriteFile(agyPath, []byte("#!/bin/sh\ncase \"$1\" in plugin) exit 0 ;; esac\necho 'Failed to authenticate: session expired' >&2\nexit 1\n"), 0o700); err != nil {
+		t.Fatalf("write fake Antigravity: %v", err)
+	}
+	claudePath := filepath.Join(fixtureDir, "claude")
+	if err := os.WriteFile(claudePath, []byte("#!/bin/sh\nif [ \"$1\" = \"-p\" ]; then echo 'Failed to authenticate: OAuth session expired' >&2; exit 1; fi\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("write fake Claude: %v", err)
+	}
+	if output, err := installAntigravityPlugin(t, homeDir, agyPath, filepath.Join(fixtureDir, "agy-installed"),
+		"--allow-provider-tool", "mcp(slack/slack_list_user_channels)"); err != nil {
+		t.Fatalf("install Antigravity plugin: %v\n%s", err, output)
+	}
+	if output, err := runworkgraph(t, repoRoot(t), "plugin", "install", "--home", homeDir, "--client", "claude-code",
+		"--client-command", claudePath, "--install-root", filepath.Join(fixtureDir, "claude-installed"), "--no-launchd",
+		"--allow-provider-tool", "mcp__claude_ai_Slack__slack_list_user_channels"); err != nil {
+		t.Fatalf("install Claude bridge: %v\n%s", err, output)
+	}
+	connectBridgedConnector(t, repoRoot(t), homeDir, "slack")
+	if output, err := runworkgraph(t, repoRoot(t), "connectors", "poll", "--home", homeDir, "--once", "--connector", "slack"); err != nil {
+		t.Fatalf("emit request: %v\n%s", err, output)
+	}
+	for client, path := range map[string]string{"agy": agyPath, "claude-code": claudePath} {
+		if output, err := runworkgraph(t, repoRoot(t), "bridge", "drain", "--home", homeDir, "--client", client, "--client-command", path); err == nil {
+			t.Fatalf("expected an expired %s sign-in to fail the drain:\n%s", client, output)
+		}
+	}
+	today, err := workgraph.Today(workgraph.TodayConfig{HomeDir: homeDir, MemoryDir: filepath.Join(t.TempDir(), "memory")})
+	if err != nil {
+		t.Fatalf("today: %v", err)
+	}
+	for _, expected := range []string{"run workgraph bridge login --client claude-code", "sign in with agy directly"} {
+		if !strings.Contains(today.Message, expected) {
+			t.Fatalf("today omitted the remedy %q:\n%s", expected, today.Message)
+		}
+	}
+	if strings.Contains(today.Message, "--client agy") || strings.Contains(today.Message, "|agy") {
+		t.Fatalf("today recommended a bridge login that rejects Antigravity:\n%s", today.Message)
 	}
 }

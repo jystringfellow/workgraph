@@ -725,8 +725,14 @@ the last line of the client's output is appended as `last drain error`.
 While a drain is blocked by setup (see Claude permission verification below),
 every active bridged capture request is reported immediately, without waiting
 for the stall threshold, as `bridge drain blocked (<client>): <reason>`.
+While a bridge client is signed out (see Bridge sign-in below), every active
+bridged capture request is likewise reported immediately as `bridge signed out
+(<client>, <config dir>): <last drain error>; run workgraph bridge login
+--client <client>`, where the config dir is the one the failed session used or
+`ambient default`.
 `workgraph today` and `workgraph resume` print one warning line naming the
-stalled connectors and the hint `workgraph plugin doctor --client <client>`.
+stalled connectors and the hint `workgraph plugin doctor --client <client>`,
+or, when clients are signed out, each signed-out client's own remedy.
 
 `workgraph capture requests --list` and the `capture_requests_list` MCP tool
 show a claim whose lease has expired as `claimed (lease expired <age> ago)`;
@@ -913,6 +919,36 @@ unique worker name, `<client>-drain-<random>`, in the prompt and in
 with their original claim token return to `pending`, with the same backoff as a
 reported failure and the error `bridge drain timed out after <timeout>`. Claims
 held by other workers are never touched.
+
+### Bridge sign-in
+
+A bridge client's own sign-in can lapse, for example when a Claude Code OAuth
+session expires and cannot be refreshed. A failed drain whose output contains
+the client's sign-in failure (case-insensitive `failed to authenticate`,
+`not logged in`, `please run /login`, `oauth session expired`, `codex login`,
+or `copilot login`) records the last output line and the config dir that
+session used in `bridge/<client>.signed-out`, in addition to the last drain
+error. A categorization session uses its routed profile's config dir, so the
+recorded dir can differ from the worker's stored binding. A
+successful drain, or a failed drain without a sign-in failure, removes it only
+when that drain used the recorded config dir, so a working account never
+clears another account's sign-out.
+Drains keep running while a client is signed out, so signing in outside
+workgraph resumes capture on the next scheduled drain. Plugin doctor reports
+`Sign-in: expired at last drain; run workgraph bridge login --client
+<client>` while the marker exists, without invoking the client.
+
+`workgraph bridge login --client <client>` runs the client's native
+interactive sign-in with the signed-out config dir applied, or the worker's
+stored binding when no sign-out is recorded: `claude auth login`,
+`codex login`, or `copilot login`. Antigravity has no verified sign-in
+command, so `bridge login` rejects it before anything runs and its signed-out
+reason ends with `sign in with agy directly` instead of the login command,
+in status, doctor, today, and resume. A successful
+sign-in removes the signed-out marker and prints the config dir that was
+signed in plus the hint `workgraph bridge drain --client <client>` to resume
+pending capture immediately. A failed sign-in leaves the marker in place.
+workgraph never reads or stores the tokens the client writes.
 
 A drain session runs either capture or categorization (`llm_task`). When both
 are claimable for the client, drain alternates: it runs categorization unless

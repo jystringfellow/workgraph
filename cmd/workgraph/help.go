@@ -59,6 +59,7 @@ var helpTopics = map[string]helpTopic{
 	"bridge":                  {"workgraph bridge <subcommand>", "Install, diagnose, and run credential-free AI-client capture bridges."},
 	"bridge doctor":           {"workgraph bridge doctor --client <codex|claude-code|copilot|agy> [options]", "Compatibility alias for plugin doctor."},
 	"bridge drain":            {"workgraph bridge drain --client <codex|claude-code|copilot|agy> [options]", "Drain active daemon requests through a signed-in reference client."},
+	"bridge login":            {"workgraph bridge login --client <codex|claude-code|copilot> [options]", "Sign a bridge worker's client back in with its stored config dir."},
 	"bridge install":          {"workgraph bridge install --client <codex|claude-code|copilot|agy> [--model <model> | --clear-model] [options]", "Compatibility alias for plugin install."},
 	"bridge mcp":              {"workgraph bridge mcp [status|stop] [options]", "Serve, inspect, or stop local bridge tools over stdio MCP."},
 	"calendar":                {"workgraph calendar <subcommand>", "Connect, capture, or disconnect calendar providers."},

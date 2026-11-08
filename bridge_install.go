@@ -922,6 +922,7 @@ func DrainBridge(homeDir string, client string, clientCommand string, timeout ti
 	if ctx.Err() == context.DeadlineExceeded {
 		timeoutError := fmt.Sprintf("bridge drain timed out after %s", timeout)
 		recordBridgeDrainError(homeDir, client, timeoutError)
+		clearBridgeSignedOutFor(homeDir, client, configDir)
 		if releaseErr := releaseWorkerCaptureClaims(homeDir, drainWorker, timeoutError, time.Now()); releaseErr != nil {
 			return "", fmt.Errorf("%s; release claimed requests: %w", timeoutError, releaseErr)
 		}
@@ -929,9 +930,15 @@ func DrainBridge(homeDir string, client string, clientCommand string, timeout ti
 	}
 	if err != nil {
 		recordBridgeDrainError(homeDir, client, string(output))
+		if isBridgeSignInFailure(string(output)) {
+			recordBridgeSignedOut(homeDir, client, string(output), configDir)
+		} else {
+			clearBridgeSignedOutFor(homeDir, client, configDir)
+		}
 		return "", fmt.Errorf("drain bridge with %s: %s", client, strings.TrimSpace(string(output)))
 	}
 	clearBridgeDrainError(homeDir, client)
+	clearBridgeSignedOutFor(homeDir, client, configDir)
 	recordBridgeDrainHeartbeat(homeDir, client)
 	return strings.TrimSpace(string(output)), nil
 }
@@ -1085,6 +1092,9 @@ func DoctorPlugin(config PluginDoctorConfig) (string, error) {
 	)
 	if drainError := readBridgeDrainError(homeDir, client); drainError != "" {
 		lines = append(lines, "Last drain error: "+drainError)
+	}
+	if _, signedOut := readBridgeSignedOut(homeDir, client); signedOut {
+		lines = append(lines, "Sign-in: expired at last drain; "+bridgeSignInRemedy(client))
 	}
 	return strings.Join(lines, "\n"), nil
 }

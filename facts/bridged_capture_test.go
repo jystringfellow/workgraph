@@ -1653,11 +1653,11 @@ func TestStalledBridgeIsVisibleInConnectorsTodayAndResume(t *testing.T) {
 		t.Fatalf("emit stalled request: %v", err)
 	}
 	clientPath := filepath.Join(t.TempDir(), "codex")
-	if err := os.WriteFile(clientPath, []byte("#!/bin/sh\necho 'starting session'\necho 'Failed to authenticate: OAuth session expired' >&2\nexit 1\n"), 0o700); err != nil {
+	if err := os.WriteFile(clientPath, []byte("#!/bin/sh\necho 'starting session'\necho 'MCP server workgraph failed to start' >&2\nexit 1\n"), 0o700); err != nil {
 		t.Fatalf("write failing fake Codex: %v", err)
 	}
 	if output, err := runworkgraph(t, repoRoot, "bridge", "drain", "--home", homeDir, "--client", "codex", "--client-command", clientPath); err == nil {
-		t.Fatalf("expected expired client login to fail the drain:\n%s", output)
+		t.Fatalf("expected the failing client session to fail the drain:\n%s", output)
 	}
 
 	for _, command := range []string{"list", "status"} {
@@ -1665,7 +1665,7 @@ func TestStalledBridgeIsVisibleInConnectorsTodayAndResume(t *testing.T) {
 		if err != nil {
 			t.Fatalf("connectors %s: %v\n%s", command, err, output)
 		}
-		for _, expected := range []string{"bridge stalled 19d: no completed capture yet", "last drain error (codex): Failed to authenticate: OAuth session expired"} {
+		for _, expected := range []string{"bridge stalled 19d: no completed capture yet", "last drain error (codex): MCP server workgraph failed to start"} {
 			if !strings.Contains(string(output), expected) {
 				t.Fatalf("connectors %s omitted %q:\n%s", command, expected, output)
 			}

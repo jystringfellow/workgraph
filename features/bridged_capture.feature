@@ -98,6 +98,24 @@ Feature: Bridged connector capture
     And connector status and plugin doctor name the missing permission and the reinstall command
     And after reinstalling, a drain clears the blocked state
 
+  Scenario: Sign a bridge client back in
+    Given the Claude bridge worker is bound to a config dir whose sign-in has expired
+    When the bridge drains and Claude fails to authenticate
+    Then connector status reports the bridge as signed out immediately with the config dir and the login command
+    And plugin doctor, today, and resume point at workgraph bridge login
+    When I run workgraph bridge login --client claude-code
+    Then Claude's sign-in runs with the worker's config dir and the signed-out state clears
+
+  Scenario: Sign the categorization account back in
+    Given the routed categorization profile uses a different Claude config dir from the bridge worker
+    When a categorization drain fails to authenticate
+    Then connector status names the profile's config dir
+    And workgraph bridge login signs that config dir back in
+
+  Scenario: Point Antigravity at a direct sign-in
+    Given an Antigravity drain fails to authenticate
+    Then connector status tells me to sign in with agy directly rather than run bridge login
+
   Scenario: Bound an unattended drain session
     Given a bridge drain client session claims a request and hangs
     When the drain timeout elapses

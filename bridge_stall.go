@@ -1,6 +1,7 @@
 package workgraph
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -35,7 +36,7 @@ func detectBridgeStall(homeDir string, state connectorRuntimeFile, id string, re
 	}
 	threshold := bridgeStallThreshold(connectorInterval(state, id, defaultConnectorInterval(id)))
 	var stall bridgeStall
-	if blocked := bridgeDrainBlockedReasons(homeDir); len(blocked) > 0 {
+	if blocked := append(bridgeDrainBlockedReasons(homeDir), bridgeSignedOutReasons(homeDir)...); len(blocked) > 0 {
 		if created, err := time.Parse(time.RFC3339Nano, request.CreatedAt); err == nil {
 			stall.Age = formatBridgeAge(now.Sub(created))
 		}
@@ -86,6 +87,13 @@ func bridgeStallWarning(homeDir string, databasePath string, now time.Time) stri
 		return ""
 	}
 	sort.Strings(stalled)
+	if signedOut := bridgeSignedOutClients(homeDir); len(signedOut) > 0 {
+		remedies := make([]string, 0, len(signedOut))
+		for _, client := range signedOut {
+			remedies = append(remedies, bridgeSignInRemedy(client))
+		}
+		return fmt.Sprintf("\n\nBridge signed out: %s; %s", strings.Join(stalled, ", "), strings.Join(remedies, "; "))
+	}
 	return fmt.Sprintf("\n\nBridge stalled: %s; run workgraph plugin doctor --client %s", strings.Join(stalled, ", "), bridgeClientHint(homeDir))
 }
 
@@ -226,4 +234,92 @@ func recordBridgeDrainKind(homeDir string, client string, kind string) error {
 
 func bridgeDrainKindPath(homeDir string, client string) string {
 	return filepath.Join(homeDir, "bridge", client+".drain-kind")
+}
+
+var bridgeSignInFailurePhrases = []string{
+	"failed to authenticate",
+	"not logged in",
+	"please run /login",
+	"oauth session expired",
+	"codex login",
+	"copilot login",
+}
+
+func isBridgeSignInFailure(output string) bool {
+	lowered := strings.ToLower(output)
+	for _, phrase := range bridgeSignInFailurePhrases {
+		if strings.Contains(lowered, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+type bridgeSignOut struct {
+	Error     string `json:"error"`
+	ConfigDir string `json:"config_dir,omitempty"`
+}
+
+func recordBridgeSignedOut(homeDir string, client string, output string, configDir string) {
+	contents, err := json.Marshal(bridgeSignOut{Error: lastNonEmptyLine(output), ConfigDir: configDir})
+	if err != nil {
+		return
+	}
+	path := bridgeSignedOutPath(homeDir, client)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err == nil {
+		_ = os.WriteFile(path, append(contents, '\n'), 0o600)
+	}
+}
+
+func clearBridgeSignedOut(homeDir string, client string) {
+	_ = os.Remove(bridgeSignedOutPath(homeDir, client))
+}
+
+func clearBridgeSignedOutFor(homeDir string, client string, configDir string) {
+	if signOut, signedOut := readBridgeSignedOut(homeDir, client); signedOut && signOut.ConfigDir == configDir {
+		clearBridgeSignedOut(homeDir, client)
+	}
+}
+
+func readBridgeSignedOut(homeDir string, client string) (bridgeSignOut, bool) {
+	contents, err := os.ReadFile(bridgeSignedOutPath(homeDir, client))
+	if err != nil {
+		return bridgeSignOut{}, false
+	}
+	var signOut bridgeSignOut
+	if err := json.Unmarshal(contents, &signOut); err != nil {
+		signOut.Error = strings.TrimSpace(string(contents))
+	}
+	return signOut, true
+}
+
+func bridgeSignedOutClients(homeDir string) []string {
+	clients := []string{}
+	for _, client := range bridgeClients {
+		if _, signedOut := readBridgeSignedOut(homeDir, client); signedOut {
+			clients = append(clients, client)
+		}
+	}
+	return clients
+}
+
+func bridgeSignInRemedy(client string) string {
+	if _, err := bridgeLoginArgs(client); err != nil {
+		return "sign in with " + client + " directly"
+	}
+	return "run workgraph bridge login --client " + client
+}
+
+func bridgeSignedOutReasons(homeDir string) []string {
+	reasons := []string{}
+	for _, client := range bridgeSignedOutClients(homeDir) {
+		signOut, _ := readBridgeSignedOut(homeDir, client)
+		reasons = append(reasons, fmt.Sprintf("bridge signed out (%s, %s): %s; %s",
+			client, signedInClientBindingLabel(signedInClientBinding{ConfigDir: signOut.ConfigDir}), signOut.Error, bridgeSignInRemedy(client)))
+	}
+	return reasons
+}
+
+func bridgeSignedOutPath(homeDir string, client string) string {
+	return filepath.Join(homeDir, "bridge", client+".signed-out")
 }
