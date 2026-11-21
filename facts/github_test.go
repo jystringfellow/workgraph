@@ -1449,9 +1449,11 @@ func TestLegacyHashedBridgedGitHubSnapshotReconcilesAndPreservesReferences(t *te
 		VALUES ('ml-legacy-1', '/memory/projects/cupcake.md', ?, 'evidence', '2026-05-20T14:05:00Z')`, legacyID); err != nil {
 		t.Fatalf("insert memory_links reference: %v", err)
 	}
+	legacyPattern := `pair:["` + legacyID + `","slack.message:C1:1"]`
+	canonicalPattern := `pair:["` + canonicalID + `","slack.message:C1:1"]`
 	if _, err := db.Exec(`INSERT INTO suggestions (id, type, pattern_key, title, reason, confidence, lane, status, evidence_json, created_at, updated_at)
 		VALUES ('sug-legacy-1', 'association', ?, 'Related PR and Slack', 'Shared URL', 'high', 'baseline', 'proposed', ?, '2026-05-20T14:05:00Z', '2026-05-20T14:05:00Z')`,
-		legacyID+"|slack.message:C1:1", `{"event_ids":["`+legacyID+`","slack.message:C1:1"]}`); err != nil {
+		legacyPattern, `{"event_ids":["`+legacyID+`","slack.message:C1:1"]}`); err != nil {
 		t.Fatalf("insert suggestion reference: %v", err)
 	}
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS project_links (
@@ -1530,8 +1532,8 @@ func TestLegacyHashedBridgedGitHubSnapshotReconcilesAndPreservesReferences(t *te
 	if !strings.Contains(suggestionEvidence, canonicalID) || strings.Contains(suggestionEvidence, legacyID) {
 		t.Fatalf("expected suggestions.evidence_json rewritten to %q, got %s", canonicalID, suggestionEvidence)
 	}
-	if !strings.Contains(suggestionPattern, canonicalID) || strings.Contains(suggestionPattern, legacyID) {
-		t.Fatalf("expected suggestions.pattern_key rewritten to %q, got %q", canonicalID, suggestionPattern)
+	if suggestionPattern != canonicalPattern {
+		t.Fatalf("expected suggestions.pattern_key rewritten to %q, got %q", canonicalPattern, suggestionPattern)
 	}
 }
 
@@ -1550,9 +1552,9 @@ func TestLegacyHashedBridgedGitHubSnapshotPreservesSuppressionsLifecycleAndFeedb
 
 	legacyID := "11223344556677889900aabbccddeeff"
 	canonicalID := "github.pull_request:jystringfellow/Cupcake:77"
-	otherID := "slack.message:C1:1712345678.000100"
-	legacyPattern := legacyID + "|" + otherID
-	canonicalPattern := canonicalID + "|" + otherID
+	otherID := "calendar.event:google:primary:evt-77"
+	legacyPattern := `pair:["` + legacyID + `","` + otherID + `"]`
+	canonicalPattern := `pair:["` + otherID + `","` + canonicalID + `"]`
 
 	if _, err := db.Exec(`PRAGMA user_version = 4`); err != nil {
 		t.Fatalf("set user_version=4: %v", err)

@@ -1967,17 +1967,16 @@ func rewriteSuggestionPatternKey(pattern string, oldID string, newID string) str
 	if !strings.Contains(pattern, oldID) {
 		return pattern
 	}
-	if left, right, ok := strings.Cut(pattern, "|"); ok {
-		if left == oldID {
-			left = newID
+	if rawPair, ok := strings.CutPrefix(pattern, "pair:"); ok {
+		var ids []string
+		if err := json.Unmarshal([]byte(rawPair), &ids); err == nil {
+			rewritten, changed := replaceStringSliceValue(ids, oldID, newID)
+			if !changed {
+				return pattern
+			}
+			sort.Strings(rewritten)
+			return associationPatternKey(rewritten)
 		}
-		if right == oldID {
-			right = newID
-		}
-		if left > right {
-			left, right = right, left
-		}
-		return left + "|" + right
 	}
 	if pattern == oldID {
 		return newID
