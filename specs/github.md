@@ -120,9 +120,14 @@ With the GitHub pull request watch (`specs/github-pr-watch.md`):
   the incoming payload has none.
 - `gh` `HTTP 401: Bad credentials` is classified as an auth failure.
 
-Proposed, not yet implemented: the rate-limit pre-check reads the `search`
-bucket with a threshold sized to the poll's searches, and a pre-check command
-failure fails the poll instead of recording an empty success.
+- The rate-limit pre-check reads the `search` bucket with a threshold sized to
+  the poll's searches plus 2 (falling back to `core` when `search` is absent),
+  and a pre-check command failure fails the poll instead of recording an empty
+  success.
+- Bridged and direct GitHub PR and issue captures normalize onto the canonical
+  `github.pull_request:<repository>:<number>` and `github.issue:<repository>:<number>`
+  snapshot identity and payload keys (`repository`, `branch`, `commit`) with
+  newer-wins upsert.
 
 The first MVP ingests:
 

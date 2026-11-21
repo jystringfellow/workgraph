@@ -902,6 +902,9 @@ type preparedBridgedEvent struct {
 	InvolvementJSON    *string
 	Summary            string
 	WeakDedupe         bool
+	GitHubSnapshot     bool
+	GitHubRepository   string
+	GitHubNumber       int
 	SnapshotKey        string
 	SnapshotRevision   string
 	SnapshotExternalID string
@@ -1085,13 +1088,35 @@ func IngestBridgedCapture(config BridgedIngestConfig) (BridgedIngestResult, erro
 				event.ID = slackListRevisionEventID(event.SnapshotExternalID + ":after:" + previous.eventID)
 			}
 		}
-		insert, err := tx.Exec(`INSERT OR IGNORE INTO events (
-			id, source, type, timestamp, payload_json, project, actor, involvement_json, summary, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			event.ID, source, event.Type, event.Timestamp, event.PayloadJSON,
-			emptyStringAsNull(event.Project), emptyStringAsNull(event.Actor),
-			event.InvolvementJSON, emptyStringAsNull(event.Summary), createdAt,
-		)
+		var insert sql.Result
+		if event.GitHubSnapshot {
+			if err := enrichBridgedGitHubPullRequestHead(tx, &event); err != nil {
+				return BridgedIngestResult{}, fmt.Errorf("prepare event %s: %w", event.ID, err)
+			}
+			insert, err = tx.Exec(`INSERT INTO events (
+				id, source, type, timestamp, payload_json, project, actor, involvement_json, summary, created_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(id) DO UPDATE SET
+				timestamp = excluded.timestamp,
+				payload_json = excluded.payload_json,
+				project = COALESCE(excluded.project, events.project),
+				actor = COALESCE(excluded.actor, events.actor),
+				involvement_json = COALESCE(excluded.involvement_json, events.involvement_json),
+				summary = COALESCE(excluded.summary, events.summary)
+			WHERE excluded.timestamp > events.timestamp`,
+				event.ID, source, event.Type, event.Timestamp, event.PayloadJSON,
+				emptyStringAsNull(event.Project), emptyStringAsNull(event.Actor),
+				event.InvolvementJSON, emptyStringAsNull(event.Summary), createdAt,
+			)
+		} else {
+			insert, err = tx.Exec(`INSERT OR IGNORE INTO events (
+				id, source, type, timestamp, payload_json, project, actor, involvement_json, summary, created_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				event.ID, source, event.Type, event.Timestamp, event.PayloadJSON,
+				emptyStringAsNull(event.Project), emptyStringAsNull(event.Actor),
+				event.InvolvementJSON, emptyStringAsNull(event.Summary), createdAt,
+			)
+		}
 		if err != nil {
 			return BridgedIngestResult{}, fmt.Errorf("store event %s: %w", event.ID, err)
 		}
@@ -1341,7 +1366,139 @@ func prepareBridgedEvent(source string, envelope bridgedEventEnvelope) (prepared
 		}
 		event.Project = storedSlackContainer(event.Project, event.PayloadJSON)
 	}
+	if source == "github" && (eventType == "github.pull_request" || eventType == "github.issue") {
+		if err := normalizeBridgedGitHubSnapshot(&event); err != nil {
+			return preparedBridgedEvent{}, fmt.Errorf("payload: %w", err)
+		}
+	}
 	return event, nil
+}
+
+func normalizeBridgedGitHubSnapshot(event *preparedBridgedEvent) error {
+	var payload map[string]any
+	decoder := json.NewDecoder(strings.NewReader(event.PayloadJSON))
+	decoder.UseNumber()
+	if err := decoder.Decode(&payload); err != nil {
+		return err
+	}
+	repository := snapshotFieldText(payload["repository"])
+	if repositoryMap, ok := payload["repository"].(map[string]any); ok {
+		repository = snapshotFieldText(repositoryMap["nameWithOwner"])
+	}
+	if repository == "" {
+		repository = snapshotFieldText(payload["repo"])
+	}
+	delete(payload, "repo")
+	if repository != "" {
+		payload["repository"] = repository
+	}
+	number, _ := strconv.Atoi(snapshotFieldText(payload["number"]))
+	if number > 0 {
+		payload["number"] = number
+	}
+	if state := snapshotFieldText(payload["state"]); state != "" {
+		payload["state"] = strings.ToLower(state)
+	}
+	if event.Type == "github.pull_request" {
+		branch := snapshotFieldText(payload["branch"])
+		if branch == "" {
+			if headMap, ok := payload["head"].(map[string]any); ok {
+				branch = snapshotFieldText(headMap["ref"])
+				if snapshotFieldText(payload["commit"]) == "" {
+					if sha := snapshotFieldText(headMap["sha"]); sha != "" {
+						payload["commit"] = sha
+					}
+				}
+			} else {
+				branch = snapshotFieldText(payload["head"])
+			}
+		}
+		delete(payload, "head")
+		if branch != "" {
+			payload["branch"] = branch
+		}
+	}
+	actor := snapshotFieldText(payload["actor"])
+	if actor == "" {
+		if authorMap, ok := payload["author"].(map[string]any); ok {
+			actor = snapshotFieldText(authorMap["login"])
+		} else {
+			actor = snapshotFieldText(payload["author"])
+		}
+	}
+	if event.Actor == "" && actor != "" {
+		event.Actor = actor
+	}
+	if actor == "" && event.Actor != "" {
+		actor = event.Actor
+	}
+	if actor != "" {
+		payload["actor"] = actor
+	}
+	title := snapshotFieldText(payload["title"])
+	if event.Summary == "" && title != "" {
+		event.Summary = title
+	}
+	if title == "" && event.Summary != "" {
+		payload["title"] = event.Summary
+	}
+	if event.Project == "" && repository != "" {
+		parts := strings.Split(repository, "/")
+		if len(parts) == 2 && parts[1] != "" {
+			event.Project = parts[1]
+		} else {
+			event.Project = repository
+		}
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("encode canonical JSON: %w", err)
+	}
+	event.PayloadJSON = string(encoded)
+	if repository != "" && number > 0 {
+		event.ID = fmt.Sprintf("%s:%s:%d", event.Type, repository, number)
+		event.WeakDedupe = false
+		event.GitHubSnapshot = true
+		event.GitHubRepository = repository
+		event.GitHubNumber = number
+	}
+	return nil
+}
+
+func enrichBridgedGitHubPullRequestHead(db githubExecQueryRower, event *preparedBridgedEvent) error {
+	if event.Type != "github.pull_request" {
+		return nil
+	}
+	var payload map[string]any
+	decoder := json.NewDecoder(strings.NewReader(event.PayloadJSON))
+	decoder.UseNumber()
+	if err := decoder.Decode(&payload); err != nil {
+		return err
+	}
+	branch := snapshotFieldText(payload["branch"])
+	commit := snapshotFieldText(payload["commit"])
+	if branch != "" && commit != "" {
+		return nil
+	}
+	knownBranch, knownCommit := knownGitHubPullRequestHead(db, event.ID, event.GitHubRepository, event.GitHubNumber)
+	changed := false
+	if branch == "" && knownBranch != "" {
+		payload["branch"] = knownBranch
+		changed = true
+	}
+	if commit == "" && knownCommit != "" {
+		payload["commit"] = knownCommit
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("encode canonical JSON: %w", err)
+	}
+	event.PayloadJSON = string(encoded)
+	return nil
 }
 
 func stripBridgedSlackChannelKindPrefix(payloadJSON string) (string, error) {

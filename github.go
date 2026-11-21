@@ -101,11 +101,14 @@ type githubEventPayload struct {
 	MatchedScopes []string `json:"matched_scopes,omitempty"`
 }
 
+type githubRateLimitBucket struct {
+	Remaining int `json:"remaining"`
+}
+
 type githubRateLimit struct {
 	Resources struct {
-		Core struct {
-			Remaining int `json:"remaining"`
-		} `json:"core"`
+		Core   githubRateLimitBucket  `json:"core"`
+		Search *githubRateLimitBucket `json:"search"`
 	} `json:"resources"`
 }
 
@@ -201,6 +204,15 @@ func CaptureGitHubFromGH(config GitHubCaptureConfig) (GitHubCaptureResult, error
 		return GitHubCaptureResult{}, fmt.Errorf("prepare database schema: %w", err)
 	}
 
+	state, err := readConnectorRuntimeFile(status.HomeDir)
+	if err != nil {
+		return GitHubCaptureResult{}, err
+	}
+	params, err := parseGitHubCaptureParams(state.entry("github").BridgeParams)
+	if err != nil {
+		return GitHubCaptureResult{}, err
+	}
+
 	gh := config.GitHubCommand
 	if gh == "" {
 		gh = "gh"
@@ -209,20 +221,15 @@ func CaptureGitHubFromGH(config GitHubCaptureConfig) (GitHubCaptureResult, error
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if !githubRateLimitAllowsPolling(ctx, gh) {
+	allowed, err := githubRateLimitAllowsPolling(ctx, gh, params)
+	if err != nil {
 		if ctx.Err() != nil {
 			return GitHubCaptureResult{}, ctx.Err()
 		}
+		return GitHubCaptureResult{}, err
+	}
+	if !allowed {
 		return GitHubCaptureResult{HomeDir: status.HomeDir, DatabasePath: status.DatabasePath}, nil
-	}
-
-	state, err := readConnectorRuntimeFile(status.HomeDir)
-	if err != nil {
-		return GitHubCaptureResult{}, err
-	}
-	params, err := parseGitHubCaptureParams(state.entry("github").BridgeParams)
-	if err != nil {
-		return GitHubCaptureResult{}, err
 	}
 
 	until := time.Now().UTC()
@@ -298,16 +305,41 @@ func readGitHubCaptureCursor(db *sql.DB) (time.Time, bool, error) {
 	return parsed, true, nil
 }
 
-func githubRateLimitAllowsPolling(ctx context.Context, gh string) bool {
+func githubRateLimitAllowsPolling(ctx context.Context, gh string, params githubCaptureParams) (bool, error) {
 	output, err := exec.CommandContext(ctx, gh, "api", "rate_limit").Output()
 	if err != nil {
-		return false
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && len(bytesTrimSpace(exitErr.Stderr)) > 0 {
+			return false, fmt.Errorf("gh api rate_limit: %w: %s", err, bytesTrimSpace(exitErr.Stderr))
+		}
+		return false, fmt.Errorf("gh api rate_limit: %w", err)
 	}
 	var limit githubRateLimit
 	if err := json.Unmarshal(output, &limit); err != nil {
-		return false
+		return false, fmt.Errorf("parse gh api rate_limit output: %w", err)
 	}
-	return limit.Resources.Core.Remaining >= 100
+	if limit.Resources.Search != nil {
+		return limit.Resources.Search.Remaining >= githubPollSearchCount(params)+2, nil
+	}
+	return limit.Resources.Core.Remaining >= 100, nil
+}
+
+func githubPollSearchCount(params githubCaptureParams) int {
+	include := map[string]bool{}
+	for _, value := range params.Include {
+		include[strings.TrimSpace(value)] = true
+	}
+	count := 0
+	if include["involves"] {
+		count += 2
+	}
+	if include["review_requested"] {
+		count++
+	}
+	if len(params.AlwaysRepositories) > 0 {
+		count += 2
+	}
+	return count
 }
 
 func githubParticipantEvents(ctx context.Context, gh string, params githubCaptureParams, since, until time.Time) ([]githubExportEvent, error) {
@@ -472,8 +504,14 @@ func storeGitHubEvent(db githubExecQueryRower, event githubExportEvent, project 
 		return false, nil
 	}
 	id := fmt.Sprintf("%s:%s:%d", eventType, event.Repository, event.Number)
-	if eventType == "github.pull_request" && event.Branch == "" && event.Commit == "" {
-		event.Branch, event.Commit = knownGitHubPullRequestHead(db, id, event.Repository, event.Number)
+	if eventType == "github.pull_request" && (event.Branch == "" || event.Commit == "") {
+		knownBranch, knownCommit := knownGitHubPullRequestHead(db, id, event.Repository, event.Number)
+		if event.Branch == "" {
+			event.Branch = knownBranch
+		}
+		if event.Commit == "" {
+			event.Commit = knownCommit
+		}
 	}
 
 	payload, err := json.Marshal(githubEventPayload{

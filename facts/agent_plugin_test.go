@@ -1,11 +1,15 @@
 package facts
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	workgraph "github.com/jystringfellow/workgraph"
 )
 
 func TestAgentPluginInstallPackagesEveryCanonicalSkillForEveryClient(t *testing.T) {
@@ -257,4 +261,128 @@ func TestAgentPluginPackagesAndSetupAreDocumented(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestBridgeMCPExposesReadOnlyWorkIntelligenceTools(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	memoryDir := filepath.Join(t.TempDir(), "workgraph-memory")
+	projectsDir := filepath.Join(memoryDir, "projects")
+	if err := os.MkdirAll(projectsDir, 0o700); err != nil {
+		t.Fatalf("create project memory dir: %v", err)
+	}
+	memoryDoc := "---\nworkstream: core-platform\ndescription: Core workgraph substrate\n---\n# Workgraph Core\n\nShip read-only MCP intelligence tools.\n"
+	if err := os.WriteFile(filepath.Join(projectsDir, "workgraph-core.md"), []byte(memoryDoc), 0o600); err != nil {
+		t.Fatalf("write project memory: %v", err)
+	}
+
+	db := openBridgedCaptureDatabase(t, homeDir)
+	now := time.Now().UTC().Truncate(time.Second)
+	stamp := now.Format(time.RFC3339Nano)
+	if _, err := db.Exec(`INSERT INTO events (id, source, type, timestamp, created_at, project, actor, summary, payload_json, involvement_json)
+		VALUES ('git.commit:mcp-1', 'git', 'git.commit', ?, ?, 'workgraph-core', 'alice@example.com', 'Add intelligence tools', '{"commit":"abc1234","branch":"main","subject":"Add intelligence tools","author_email":"alice@example.com"}', '["authored"]')`,
+		stamp, stamp); err != nil {
+		t.Fatalf("insert test event: %v", err)
+	}
+
+	requests := []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"today_overview","arguments":{"actor":"alice@example.com","involvement":"authored"}}}`,
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"resume_project","arguments":{"project":"workgraph-core","memory_dir":` + mustJSON(t, memoryDir) + `}}}`,
+		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"resume_project","arguments":{"memory_dir":` + mustJSON(t, memoryDir) + `,"all":true}}}`,
+		`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"projects_list","arguments":{"memory_dir":` + mustJSON(t, memoryDir) + `}}}`,
+	}
+	var output bytes.Buffer
+	if err := workgraph.ServeBridgeMCP(workgraph.BridgeMCPConfig{
+		HomeDir: homeDir,
+		Input:   strings.NewReader(strings.Join(requests, "\n") + "\n"),
+		Output:  &output,
+	}); err != nil {
+		t.Fatalf("serve bridge MCP: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+	if len(lines) != len(requests) {
+		t.Fatalf("expected %d MCP responses, got %d:\n%s", len(requests), len(lines), output.String())
+	}
+
+	for _, tool := range []string{"next_items", "today_overview", "resume_project", "projects_list"} {
+		if !strings.Contains(lines[0], `"name":"`+tool+`"`) {
+			t.Fatalf("tools/list omitted %q:\n%s", tool, lines[0])
+		}
+	}
+
+	decodeStructured := func(line string) map[string]any {
+		t.Helper()
+		var response struct {
+			Result struct {
+				IsError           bool           `json:"isError"`
+				StructuredContent map[string]any `json:"structuredContent"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(line), &response); err != nil {
+			t.Fatalf("decode MCP response: %v\n%s", err, line)
+		}
+		if response.Result.IsError {
+			t.Fatalf("MCP tool call returned error:\n%s", line)
+		}
+		return response.Result.StructuredContent
+	}
+
+	todayStructured := decodeStructured(lines[1])
+	if todayEvents, ok := todayStructured["events"].([]any); !ok || len(todayEvents) != 1 {
+		t.Fatalf("expected 1 today event, got %#v", todayStructured["events"])
+	}
+	if todayProjects, ok := todayStructured["projects"].([]any); !ok || len(todayProjects) != 1 {
+		t.Fatalf("expected 1 today project count, got %#v", todayStructured["projects"])
+	}
+	if todaySessions, ok := todayStructured["sessions"].([]any); !ok || len(todaySessions) != 1 {
+		t.Fatalf("expected 1 today session, got %#v", todayStructured["sessions"])
+	}
+	if !strings.Contains(todayStructured["message"].(string), "Add intelligence tools") {
+		t.Fatalf("today_overview message omitted event summary:\n%s", todayStructured["message"])
+	}
+
+	resumeStructured := decodeStructured(lines[2])
+	if resumeStructured["project"] != "workgraph-core" {
+		t.Fatalf("expected project workgraph-core, got %#v", resumeStructured["project"])
+	}
+	if !strings.Contains(resumeStructured["message"].(string), "Resume workgraph-core") {
+		t.Fatalf("resume_project message omitted project heading:\n%s", resumeStructured["message"])
+	}
+	if resumeStructured["memory"] == nil {
+		t.Fatalf("expected resume_project to include project memory, got %#v", resumeStructured)
+	}
+
+	resumeOverview := decodeStructured(lines[3])
+	if resumable, ok := resumeOverview["projects"].([]any); !ok || len(resumable) != 1 {
+		t.Fatalf("expected 1 resumable project in overview, got %#v", resumeOverview["projects"])
+	}
+
+	var checkInCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM resume_checkins`).Scan(&checkInCount); err != nil {
+		t.Fatalf("query resume_checkins rows: %v", err)
+	}
+	if checkInCount != 0 {
+		t.Fatalf("expected resume_project MCP calls not to record check-ins, row count=%d", checkInCount)
+	}
+
+	projectsStructured := decodeStructured(lines[4])
+	if projects, ok := projectsStructured["projects"].([]any); !ok || len(projects) != 1 {
+		t.Fatalf("expected 1 declared project, got %#v", projectsStructured["projects"])
+	}
+	if workstreams, ok := projectsStructured["workstreams"].([]any); !ok || len(workstreams) != 1 || workstreams[0] != "core-platform" {
+		t.Fatalf("expected workstream core-platform, got %#v", projectsStructured["workstreams"])
+	}
+	if !strings.Contains(projectsStructured["message"].(string), "workgraph-core: Workgraph Core") {
+		t.Fatalf("projects_list message omitted declared project:\n%s", projectsStructured["message"])
+	}
+}
+
+func mustJSON(t *testing.T, value any) string {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal JSON: %v", err)
+	}
+	return string(encoded)
 }

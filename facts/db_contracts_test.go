@@ -277,6 +277,158 @@ func TestDraftTablesDocumentFutureIntent(t *testing.T) {
 	t.Skip("TBD: draft tables are documented but not required for Phase 0")
 }
 
+func TestDatabaseSchemaVersionAndSecondaryIndicesAfterInit(t *testing.T) {
+	db := openContractDatabase(t)
+
+	var userVersion int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&userVersion); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if userVersion <= 0 {
+		t.Fatalf("expected PRAGMA user_version > 0 after Init, got %d", userVersion)
+	}
+	if userVersion != workgraph.CurrentSchemaVersion {
+		t.Fatalf("expected PRAGMA user_version %d, got %d", workgraph.CurrentSchemaVersion, userVersion)
+	}
+
+	for _, indexName := range []string{
+		"idx_events_timestamp",
+		"idx_events_project",
+		"idx_events_source",
+		"idx_events_type",
+	} {
+		var name string
+		if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'events' AND name = ?`, indexName).Scan(&name); err != nil {
+			t.Fatalf("expected events index %q to exist: %v", indexName, err)
+		}
+	}
+}
+
+func TestLegacyV0DatabaseUpgradesThroughNumberedMigrations(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	dbPath := filepath.Join(homeDir, "workgraph.db")
+
+	result, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir:      homeDir,
+		DatabasePath: dbPath,
+		MemoryDir:    filepath.Join(tempDir, "workgraph-memory"),
+	})
+	if err != nil {
+		t.Fatalf("initial init failed: %v", err)
+	}
+
+	legacyDB, err := sql.Open("sqlite3", result.DatabasePath)
+	if err != nil {
+		t.Fatalf("open legacy database: %v", err)
+	}
+	for _, stmt := range []string{
+		`PRAGMA user_version = 0`,
+		`DROP TABLE events`,
+		`CREATE TABLE events (
+			id TEXT PRIMARY KEY,
+			source TEXT NOT NULL,
+			type TEXT NOT NULL,
+			timestamp TEXT NOT NULL,
+			payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+			project TEXT,
+			actor TEXT,
+			summary TEXT,
+			created_at TEXT NOT NULL
+		)`,
+		`INSERT INTO events (id, source, type, timestamp, payload_json, project, created_at)
+			VALUES ('legacy-slack', 'slack', 'slack.reply', '2026-05-25T12:00:00Z', '{"channel_id":"C0DEMO001","channel_name":"squad-demo","ts":"1789300800.000100","text":"Reply"}', '#squad-demo', '2026-05-25T12:00:00Z')`,
+		`DROP TABLE capture_requests`,
+		`CREATE TABLE capture_requests (
+			id TEXT PRIMARY KEY,
+			connector_id TEXT NOT NULL,
+			since TEXT NOT NULL,
+			until TEXT NOT NULL,
+			params_json TEXT NOT NULL CHECK (json_valid(params_json)),
+			status TEXT NOT NULL CHECK (status IN ('pending', 'claimed', 'completed', 'cancelled')),
+			attempts INTEGER NOT NULL DEFAULT 0,
+			available_at TEXT NOT NULL,
+			last_error TEXT,
+			created_at TEXT NOT NULL,
+			claim_token TEXT,
+			claimed_by TEXT,
+			claimed_at TEXT,
+			lease_expires_at TEXT,
+			completed_at TEXT,
+			cancelled_at TEXT
+		)`,
+		`DROP TABLE notion_index`,
+		`CREATE TABLE notion_index (
+			notion_id TEXT PRIMARY KEY,
+			object_type TEXT NOT NULL,
+			title TEXT,
+			url TEXT,
+			parent_json TEXT CHECK (parent_json IS NULL OR json_valid(parent_json)),
+			properties_json TEXT CHECK (properties_json IS NULL OR json_valid(properties_json)),
+			created_time TEXT,
+			created_by TEXT,
+			last_edited_time TEXT,
+			last_edited_by TEXT,
+			source TEXT NOT NULL,
+			first_seen_at TEXT NOT NULL,
+			last_seen_at TEXT NOT NULL,
+			last_synced_at TEXT NOT NULL
+		)`,
+	} {
+		if _, err := legacyDB.Exec(stmt); err != nil {
+			legacyDB.Close()
+			t.Fatalf("prepare legacy v0 fixture: %v", err)
+		}
+	}
+	if err := legacyDB.Close(); err != nil {
+		t.Fatalf("close legacy fixture: %v", err)
+	}
+
+	if _, err := workgraph.Init(workgraph.InitConfig{
+		HomeDir:      homeDir,
+		DatabasePath: dbPath,
+		MemoryDir:    filepath.Join(tempDir, "workgraph-memory"),
+	}); err != nil {
+		t.Fatalf("upgrade init failed: %v", err)
+	}
+
+	db, err := sql.Open("sqlite3", result.DatabasePath)
+	if err != nil {
+		t.Fatalf("open upgraded database: %v", err)
+	}
+	defer db.Close()
+
+	var userVersion int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&userVersion); err != nil {
+		t.Fatalf("read upgraded user_version: %v", err)
+	}
+	if userVersion != workgraph.CurrentSchemaVersion {
+		t.Fatalf("expected upgraded user_version %d, got %d", workgraph.CurrentSchemaVersion, userVersion)
+	}
+
+	if !tableColumns(t, db, "events")["involvement_json"] {
+		t.Fatalf("expected upgraded events table to include involvement_json")
+	}
+	if !tableColumns(t, db, "capture_requests")["kind"] {
+		t.Fatalf("expected upgraded capture_requests table to include kind")
+	}
+	notionCols := tableColumns(t, db, "notion_index")
+	if !notionCols["content_preview"] || !notionCols["content_synced_at"] {
+		t.Fatalf("expected upgraded notion_index table to include content_preview and content_synced_at")
+	}
+	if !tableColumns(t, db, "github_pr_watch_state")["reviewer_polled"] {
+		t.Fatalf("expected upgraded github_pr_watch_state table to include reviewer_polled")
+	}
+
+	var eventType, project string
+	if err := db.QueryRow(`SELECT type, project FROM events WHERE id = 'legacy-slack'`).Scan(&eventType, &project); err != nil {
+		t.Fatalf("read upgraded slack event: %v", err)
+	}
+	if eventType != "slack.thread_reply" || project != "squad-demo" {
+		t.Fatalf("expected legacy slack event to be backfilled during upgrade, got type=%q project=%q", eventType, project)
+	}
+}
+
 func openContractDatabase(t *testing.T) *sql.DB {
 	t.Helper()
 

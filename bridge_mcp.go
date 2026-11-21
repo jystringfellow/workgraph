@@ -284,6 +284,9 @@ func bridgeMCPTools() []bridgeMCPTool {
 	}
 	return []bridgeMCPTool{
 		{"next_items", "Read local attention items and their evidence. This tool does not change items or contact providers.", object(map[string]any{"project": str, "reason": str, "include_untrusted": map[string]any{"type": "boolean"}})},
+		{"today_overview", "Read today's local work overview, projects, sessions, and high-confidence associations. This tool is read-only and contacts no providers.", object(map[string]any{"actor": str, "involvement": str})},
+		{"resume_project", "Read local resume context, recent activity, and project memory without recording a check-in or contacting providers.", object(map[string]any{"project": str, "memory_dir": str, "all": boolean})},
+		{"projects_list", "List declared projects, workstreams, and mapped containers from local project memory and mappings.", object(map[string]any{"memory_dir": str})},
 		{"capture_requests_list", "List non-secret bridged capture outbox metadata.", object(map[string]any{"connector": str})},
 		{"capture_requests_claim", "Atomically claim daemon-scheduled capture work. Filter with connector. Without kind only capture requests are claimed; kind llm_task claims categorization work that returns a task to answer and submit with llm_task_submit. Every claim must end in capture_ingest, llm_task_submit, or capture_request_fail with a reason; never abandon it.", object(map[string]any{"connector": str, "kind": map[string]any{"type": "string", "enum": []string{"capture", "llm_task"}}, "worker": str, "max": integer}, "worker")},
 		{"capture_request_renew", "Renew an unexpired capture claim.", object(map[string]any{"request_id": str, "claim_token": str}, "request_id", "claim_token")},
@@ -345,6 +348,61 @@ func callBridgeMCPTool(config BridgeMCPConfig, name string, raw json.RawMessage)
 		_ = json.Unmarshal(args["include_untrusted"], &includeUntrusted)
 		result, err := Next(NextConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, Project: stringArg("project"), Reason: stringArg("reason"), IncludeUntrusted: includeUntrusted})
 		return map[string]any{"items": result.Items}, err
+	case "today_overview":
+		result, err := Today(TodayConfig{
+			HomeDir:      config.HomeDir,
+			DatabasePath: config.DatabasePath,
+			Actor:        stringArg("actor"),
+			Involvement:  stringArg("involvement"),
+		})
+		return map[string]any{
+			"date":         result.Date,
+			"events":       result.Events,
+			"projects":     todayProjectCounts(result.Events),
+			"sessions":     result.Sessions,
+			"associations": result.Associations,
+			"message":      result.Message,
+		}, err
+	case "resume_project":
+		var all bool
+		_ = json.Unmarshal(args["all"], &all)
+		result, err := Resume(ResumeConfig{
+			HomeDir:      config.HomeDir,
+			DatabasePath: config.DatabasePath,
+			MemoryDir:    stringArg("memory_dir"),
+			Project:      stringArg("project"),
+			AllProjects:  all,
+		})
+		return map[string]any{
+			"project":       result.Project,
+			"workstream":    result.Workstream,
+			"members":       result.Members,
+			"projects":      result.Projects,
+			"more_projects": result.MoreProjects,
+			"last_work":     result.LastWork,
+			"next_items":    result.NextItems,
+			"events":        result.Events,
+			"files":         result.Files,
+			"github":        result.GitHub,
+			"memory":        result.Memory,
+			"memory_path":   result.MemoryPath,
+			"omitted":       result.Omitted,
+			"message":       result.Message,
+		}, err
+	case "projects_list":
+		result, err := ListProjects(ProjectsListConfig{
+			HomeDir:      config.HomeDir,
+			DatabasePath: config.DatabasePath,
+			MemoryDir:    stringArg("memory_dir"),
+		})
+		return map[string]any{
+			"projects":      result.Catalog.Projects,
+			"workstreams":   projectCatalogWorkstreams(result.Catalog, result.Mappings),
+			"mappings":      result.Mappings,
+			"applied_units": result.AppliedUnits,
+			"problems":      result.Catalog.Problems,
+			"message":       result.Message,
+		}, err
 	case "capture_requests_list":
 		base.ConnectorID = stringArg("connector")
 		requests, err := ListCaptureRequests(base)

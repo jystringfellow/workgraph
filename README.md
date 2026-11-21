@@ -26,8 +26,9 @@ personalized execution assistance over time.
 Domain entity contracts live in `specs/domain-entities.md`. Durable database
 contracts live in `specs/db-contracts.md`.
 
-The repository is currently in early specification mode: many facts are present
-as skipped placeholders until they are converted into executable failing tests.
+Active executable facts in `facts/` enforce behavior across capture,
+connectors, bridged capture, projects and workstreams, attention items (`next`),
+AI session handoff, and security reporting.
 
 ## How This Project Is Built
 

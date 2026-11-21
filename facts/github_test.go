@@ -1098,7 +1098,88 @@ func githubEvent(t *testing.T, dbPath, eventType, repository string, number int)
 }
 
 func TestGitHubPollFailsVisiblyWhenRateLimitCheckFails(t *testing.T) {
-	t.Skip("TBD: a failing gh api rate_limit records a github poll error and increments consecutive_failures instead of a successful empty poll")
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	codeDir := filepath.Join(tempDir, "Code")
+	if err := os.MkdirAll(codeDir, 0o755); err != nil {
+		t.Fatalf("create code dir: %v", err)
+	}
+	ghPath := filepath.Join(tempDir, "gh")
+	script := `#!/bin/sh
+echo "$@" >> "` + filepath.Join(tempDir, "gh.log") + `"
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+  printf 'github.com\n  Logged in\n'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "rate_limit" ]; then
+  printf 'HTTP 502: rate_limit endpoint unavailable\n' >&2
+  exit 1
+fi
+printf 'unexpected gh args: %s\n' "$*" >&2
+exit 1
+`
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tempDir, "gh.log"), nil, 0o644); err != nil {
+		t.Fatalf("write gh log: %v", err)
+	}
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	connectGitHubForTest(t, homeDir, ghPath)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:               homeDir,
+		DatabasePath:          initResult.DatabasePath,
+		WatchDirs:             []string{codeDir},
+		GitHubPollInterval:    20 * time.Millisecond,
+		GitHubCommand:         ghPath,
+		ConnectorRetryInitial: 10 * time.Millisecond,
+		ConnectorRetryMax:     20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("run start failed: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- capture.Run(ctx) }()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		status, err := workgraph.StatusConnectors(workgraph.ConnectorListConfig{HomeDir: homeDir})
+		if err != nil {
+			t.Fatalf("connector status: %v", err)
+		}
+		var github workgraph.ConnectorStatus
+		for _, candidate := range status.Connectors {
+			if candidate.ID == "github" {
+				github = candidate
+			}
+		}
+		if github.ConsecutiveFailures > 0 && strings.Contains(github.LastError, "rate_limit") {
+			if github.LastSuccess != "" {
+				t.Fatalf("expected failing rate_limit check not to record last_success_at, got %q", github.LastSuccess)
+			}
+			if github.SetupState != "ready" {
+				t.Fatalf("expected non-auth rate_limit failure to keep setup ready, got %q", github.SetupState)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected failing gh api rate_limit to record a poll error and increment consecutive_failures, got %#v", github)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	if searches := len(searchInvocationLines(readGHLog(t, tempDir))); searches != 0 {
+		t.Fatalf("expected failing rate_limit check to skip gh search, got %d searches", searches)
+	}
 }
 
 func TestGitHubPollTreatsGHBadCredentialsAsAuthFailure(t *testing.T) {
@@ -1180,9 +1261,163 @@ exit 1
 }
 
 func TestGitHubPollGatesOnSearchRateLimitBucket(t *testing.T) {
-	t.Skip("TBD: resources.search.remaining below the poll search count plus 2 with high core skips gh search; search remaining 30 with core 0 polls")
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	dbPath := filepath.Join(homeDir, "workgraph.db")
+
+	writeSearchRateLimitGH := func(coreRemaining, searchRemaining int) string {
+		t.Helper()
+		ghPath := filepath.Join(tempDir, "gh")
+		script := `#!/bin/sh
+echo "$@" >> "` + filepath.Join(tempDir, "gh.log") + `"
+if [ "$1" = "api" ] && [ "$2" = "rate_limit" ]; then
+  printf '{"resources":{"core":{"remaining":` + fmtInt(coreRemaining) + `},"search":{"remaining":` + fmtInt(searchRemaining) + `}}}'
+  exit 0
+fi
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+  printf 'github.com\n  Logged in\n'
+  exit 0
+fi
+if [ "$1" = "search" ] && [ "$2" = "prs" ]; then
+  printf '[{"number":42,"url":"https://github.com/jystringfellow/Cupcake/pull/42","state":"open","author":{"login":"octocat"},"title":"Add cupcake API","updatedAt":"2026-05-20T14:30:00Z","repository":{"nameWithOwner":"jystringfellow/Cupcake"}}]'
+  exit 0
+fi
+if [ "$1" = "search" ] && [ "$2" = "issues" ]; then
+  printf '[]'
+  exit 0
+fi
+printf 'unexpected gh args: %s\n' "$*" >&2
+exit 1
+`
+		if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+			t.Fatalf("write fake gh: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(tempDir, "gh.log"), nil, 0o644); err != nil {
+			t.Fatalf("reset gh log: %v", err)
+		}
+		return ghPath
+	}
+
+	lowSearchGH := writeSearchRateLimitGH(5000, 4)
+	connectGitHubForTest(t, homeDir, lowSearchGH)
+	if _, err := workgraph.CaptureGitHubFromGH(workgraph.GitHubCaptureConfig{
+		HomeDir: homeDir, DatabasePath: dbPath, GitHubCommand: lowSearchGH,
+	}); err != nil {
+		t.Fatalf("github capture with low search budget failed: %v", err)
+	}
+	if searches := len(searchInvocationLines(readGHLog(t, tempDir))); searches != 0 {
+		t.Fatalf("expected search remaining 4 (< 3+2) with core 5000 to skip gh search, got %d searches", searches)
+	}
+	if count := githubEventCount(t, dbPath); count != 0 {
+		t.Fatalf("expected no stored events when search bucket is low, got %d", count)
+	}
+
+	paramsWithAlways := `{"scope":"participant","identity":"@me","include":["involves","review_requested"],"always_repositories":["jystringfellow/Alpha"],"bootstrap_lookback":"168h"}`
+	lowForAlwaysGH := writeSearchRateLimitGH(5000, 6)
+	connectGitHubForTestWithParams(t, homeDir, lowForAlwaysGH, paramsWithAlways)
+	if _, err := workgraph.CaptureGitHubFromGH(workgraph.GitHubCaptureConfig{
+		HomeDir: homeDir, DatabasePath: dbPath, GitHubCommand: lowForAlwaysGH,
+	}); err != nil {
+		t.Fatalf("github capture with always_repositories and search remaining 6 failed: %v", err)
+	}
+	if searches := len(searchInvocationLines(readGHLog(t, tempDir))); searches != 0 {
+		t.Fatalf("expected search remaining 6 (< 5+2) to skip gh search, got %d searches", searches)
+	}
+
+	highSearchZeroCoreGH := writeSearchRateLimitGH(0, 30)
+	connectGitHubForTest(t, homeDir, highSearchZeroCoreGH)
+	if _, err := workgraph.CaptureGitHubFromGH(workgraph.GitHubCaptureConfig{
+		HomeDir: homeDir, DatabasePath: dbPath, GitHubCommand: highSearchZeroCoreGH,
+	}); err != nil {
+		t.Fatalf("github capture with search 30 and core 0 failed: %v", err)
+	}
+	if searches := len(searchInvocationLines(readGHLog(t, tempDir))); searches != 3 {
+		t.Fatalf("expected search remaining 30 with core 0 to run 3 base searches, got %d", searches)
+	}
+	if count := githubEventCount(t, dbPath); count != 1 {
+		t.Fatalf("expected 1 stored event after polling with search remaining 30, got %d", count)
+	}
 }
 
 func TestGitHubBridgedAndDirectCaptureShareOnePullRequestIdentity(t *testing.T) {
-	t.Skip("TBD: two bridged revisions plus a direct capture of one PR leave exactly one github.pull_request row with the newest state, repository, and branch")
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	dbPath := filepath.Join(homeDir, "workgraph.db")
+	params := `{"scope":"participant","identity":"@me","include":["involves","review_requested"],"always_repositories":[],"bootstrap_lookback":"168h"}`
+	if _, err := workgraph.ConfigureBridgedConnector(workgraph.ConnectorBridgeConfig{
+		HomeDir: homeDir, ID: "github", BridgeParams: json.RawMessage(params),
+	}); err != nil {
+		t.Fatalf("configure bridged github: %v", err)
+	}
+
+	bridgedInput := strings.Join([]string{
+		`{"type":"github.pull_request","timestamp":"2026-05-20T14:00:00Z","external_id":"jystringfellow/Cupcake#pr:42:2026-05-20T14:00:00Z","project":"Cupcake","actor":"octocat","summary":"Add cupcake API","payload":{"repo":"jystringfellow/Cupcake","number":42,"state":"open","title":"Add cupcake API","author":"octocat","url":"https://github.com/jystringfellow/Cupcake/pull/42","head":"feature/cupcake-v1","base":"main","updated_at":"2026-05-20T14:00:00Z"}}`,
+		`{"type":"github.pull_request","timestamp":"2026-05-20T14:15:00Z","external_id":"jystringfellow/Cupcake#pr:42:2026-05-20T14:15:00Z","project":"Cupcake","actor":"octocat","summary":"Add cupcake API","payload":{"repo":"jystringfellow/Cupcake","number":42,"state":"open","title":"Add cupcake API","author":"octocat","url":"https://github.com/jystringfellow/Cupcake/pull/42","head":"feature/cupcake-api","base":"main","updated_at":"2026-05-20T14:15:00Z"}}`,
+	}, "\n") + "\n"
+	if _, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{
+		HomeDir: homeDir, DatabasePath: dbPath, Source: "github", Input: strings.NewReader(bridgedInput),
+	}); err != nil {
+		t.Fatalf("ingest bridged github revisions: %v", err)
+	}
+	if count := githubEventCount(t, dbPath); count != 1 {
+		t.Fatalf("expected two bridged revisions of one PR to share one row, got %d", count)
+	}
+
+	ghPath := filepath.Join(tempDir, "gh")
+	script := `#!/bin/sh
+if [ "$1" = "api" ] && [ "$2" = "rate_limit" ]; then
+  printf '{"resources":{"core":{"remaining":5000},"search":{"remaining":30}}}'
+  exit 0
+fi
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+  printf 'github.com\n  Logged in\n'
+  exit 0
+fi
+if [ "$1" = "search" ] && [ "$2" = "prs" ]; then
+  case "$*" in
+    *--review-requested*)
+      printf '[]'
+      ;;
+    *)
+      printf '[{"number":42,"url":"https://github.com/jystringfellow/Cupcake/pull/42","state":"closed","author":{"login":"octocat"},"title":"Add cupcake API","updatedAt":"2026-05-20T14:30:00Z","repository":{"nameWithOwner":"jystringfellow/Cupcake"}}]'
+      ;;
+  esac
+  exit 0
+fi
+if [ "$1" = "search" ] && [ "$2" = "issues" ]; then
+  printf '[]'
+  exit 0
+fi
+exit 1
+`
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	connectGitHubForTestWithParams(t, homeDir, ghPath, params)
+	if _, err := workgraph.CaptureGitHubFromGH(workgraph.GitHubCaptureConfig{
+		HomeDir: homeDir, DatabasePath: dbPath, GitHubCommand: ghPath,
+	}); err != nil {
+		t.Fatalf("direct github capture failed: %v", err)
+	}
+
+	if count := githubEventCount(t, dbPath); count != 1 {
+		t.Fatalf("expected bridged and direct capture of one PR to leave one row, got %d", count)
+	}
+	event := githubEvent(t, dbPath, "github.pull_request", "jystringfellow/Cupcake", 42)
+	for _, expected := range []string{
+		`"repository":"jystringfellow/Cupcake"`,
+		`"number":42`,
+		`"state":"closed"`,
+		`"branch":"feature/cupcake-api"`,
+	} {
+		if !strings.Contains(event.PayloadJSON, expected) {
+			t.Fatalf("expected unified PR payload to contain %s, got %s", expected, event.PayloadJSON)
+		}
+	}
 }

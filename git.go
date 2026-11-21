@@ -72,6 +72,15 @@ func CaptureGitCommits(config GitCaptureConfig) (GitCaptureResult, error) {
 		return GitCaptureResult{}, err
 	}
 
+	localSettings, err := readSettings(filepath.Join(status.HomeDir, "settings.json"))
+	if err != nil {
+		return GitCaptureResult{}, err
+	}
+	configuredWatchDirs, err := resolveIgnorePaths(userAddedWatchDirs(localSettings))
+	if err != nil {
+		return GitCaptureResult{}, err
+	}
+
 	maxCommits := config.MaxCommits
 	if maxCommits <= 0 {
 		maxCommits = 50
@@ -92,14 +101,21 @@ func CaptureGitCommits(config GitCaptureConfig) (GitCaptureResult, error) {
 			}
 			continue
 		}
+		repoEventIDs := make([]string, 0, len(commits))
 		for _, commit := range commits {
 			inserted, event, err := storeGitCommit(db, repo, branch, commit)
 			if err != nil {
 				return GitCaptureResult{}, err
 			}
+			repoEventIDs = append(repoEventIDs, "git.commit:"+commit.SHA)
 			if inserted {
 				stored++
 				events = append(events, event)
+			}
+		}
+		if len(repoEventIDs) > 0 && containingWatchRoot(configuredWatchDirs, repo) == "" {
+			if err := suggestGitWatchRoot(db, status.HomeDir, status.DatabasePath, repo, repoEventIDs); err != nil {
+				return GitCaptureResult{}, err
 			}
 		}
 	}
@@ -244,6 +260,75 @@ func storeGitCommit(db *sql.DB, repoPath, branch string, commit gitCommit) (bool
 		Summary: commit.Subject,
 	}
 	return rows > 0, event, nil
+}
+
+func suggestGitWatchRoot(db *sql.DB, homeDir, databasePath, repoPath string, eventIDs []string) error {
+	suppressed, err := suggestionScanSuppressed(db, "watch_root", repoPath, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	if suppressed {
+		return nil
+	}
+
+	mergedEventIDs := mergeWatchRootEventIDs(db, repoPath, eventIDs)
+	reason := fmt.Sprintf("Git activity (%d commit(s)) was captured in unwatched local repository %s.", len(mergedEventIDs), repoPath)
+	evidenceBytes, err := json.Marshal(map[string]any{
+		"source":      "git",
+		"sources":     []string{"git"},
+		"path":        repoPath,
+		"paths":       []string{repoPath},
+		"event_ids":   mergedEventIDs,
+		"event_count": len(mergedEventIDs),
+		"reasons":     []string{reason},
+	})
+	if err != nil {
+		return fmt.Errorf("encode watch root suggestion evidence: %w", err)
+	}
+
+	_, err = UpsertSuggestion(SuggestionUpsert{
+		HomeDir:      homeDir,
+		DatabasePath: databasePath,
+		Type:         "watch_root",
+		PatternKey:   repoPath,
+		Title:        "Watch " + filepath.Base(repoPath),
+		Reason:       reason,
+		Confidence:   "high",
+		Lane:         "baseline",
+		EvidenceJSON: string(evidenceBytes),
+	})
+	return err
+}
+
+func mergeWatchRootEventIDs(db *sql.DB, repoPath string, current []string) []string {
+	seen := make(map[string]bool, len(current))
+	merged := make([]string, 0, len(current))
+	for _, id := range current {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		merged = append(merged, id)
+	}
+
+	var existingEvidence string
+	if err := db.QueryRow(`SELECT evidence_json FROM suggestions WHERE type = 'watch_root' AND pattern_key = ?`, repoPath).Scan(&existingEvidence); err != nil {
+		return merged
+	}
+	var parsed struct {
+		EventIDs []string `json:"event_ids"`
+	}
+	if err := json.Unmarshal([]byte(existingEvidence), &parsed); err != nil {
+		return merged
+	}
+	for _, id := range parsed.EventIDs {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		merged = append(merged, id)
+	}
+	return merged
 }
 
 func gitCaptureMessage(result GitCaptureResult) string {
