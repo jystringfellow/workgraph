@@ -275,27 +275,53 @@ func TestBridgeMCPExposesReadOnlyWorkIntelligenceTools(t *testing.T) {
 		t.Fatalf("write project memory: %v", err)
 	}
 
+	outsideSecret := filepath.Join(t.TempDir(), "outside-secret.md")
+	if err := os.WriteFile(outsideSecret, []byte("# Secret Outside Root\n\nTOP-SECRET-OUTSIDE-MEMORY\n"), 0o600); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+	if err := os.Symlink(outsideSecret, filepath.Join(projectsDir, "escaped-link.md")); err != nil {
+		t.Fatalf("create symlink outside memory root: %v", err)
+	}
+
 	db := openBridgedCaptureDatabase(t, homeDir)
 	now := time.Now().UTC().Truncate(time.Second)
 	stamp := now.Format(time.RFC3339Nano)
 	if _, err := db.Exec(`INSERT INTO events (id, source, type, timestamp, created_at, project, actor, summary, payload_json, involvement_json)
-		VALUES ('git.commit:mcp-1', 'git', 'git.commit', ?, ?, 'workgraph-core', 'alice@example.com', 'Add intelligence tools', '{"commit":"abc1234","branch":"main","subject":"Add intelligence tools","author_email":"alice@example.com"}', '["authored"]')`,
+		VALUES ('git.commit:mcp-1', 'git', 'git.commit', ?, ?, 'workgraph-core', 'alice@example.com', 'Add intelligence tools', '{"commit":"abc1234","branch":"main","subject":"Add intelligence tools","author_email":"alice@example.com","raw_secret":"RAW-CAPTURED-PAYLOAD-TEXT"}', '["authored"]')`,
 		stamp, stamp); err != nil {
 		t.Fatalf("insert test event: %v", err)
+	}
+
+	expiredUntil := now.Add(-time.Hour).Format(time.RFC3339)
+	if _, err := db.Exec(`INSERT INTO suggestions (id, type, pattern_key, title, reason, confidence, lane, status, evidence_json, created_at, updated_at, resolved_at)
+		VALUES ('sug-snoozed-1', 'ignore_name', '.cache', 'Ignore .cache', 'Repeated generated noise', 'high', 'baseline', 'snoozed', '{"event_ids":["git.commit:mcp-1"]}', ?, ?, ?)`,
+		expiredUntil, expiredUntil, expiredUntil); err != nil {
+		t.Fatalf("insert snoozed suggestion: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO suggestion_suppressions (id, type, pattern_key, reason, until_at, created_at)
+		VALUES ('sup-snoozed-1', 'ignore_name', '.cache', 'later', ?, ?)`,
+		expiredUntil, expiredUntil); err != nil {
+		t.Fatalf("insert snooze suppression: %v", err)
 	}
 
 	requests := []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`,
 		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"today_overview","arguments":{"actor":"alice@example.com","involvement":"authored"}}}`,
-		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"resume_project","arguments":{"project":"workgraph-core","memory_dir":` + mustJSON(t, memoryDir) + `}}}`,
-		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"resume_project","arguments":{"memory_dir":` + mustJSON(t, memoryDir) + `,"all":true}}}`,
-		`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"projects_list","arguments":{"memory_dir":` + mustJSON(t, memoryDir) + `}}}`,
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"resume_project","arguments":{"project":"workgraph-core"}}}`,
+		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"resume_project","arguments":{"all":true}}}`,
+		`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"projects_list","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"resume_project","arguments":{"project":"workgraph-core","memory_dir":` + mustJSON(t, memoryDir) + `}}}`,
+		`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"projects_list","arguments":{"memory_dir":` + mustJSON(t, memoryDir) + `}}}`,
+		`{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"resume_project","arguments":{"project":"escaped-link"}}}`,
+		`{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"today_overview","arguments":{"actor":"alice@example.com","involvement":"authored","include_untrusted":true}}}`,
+		`{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"resume_project","arguments":{"project":"workgraph-core","include_untrusted":true}}}`,
 	}
 	var output bytes.Buffer
 	if err := workgraph.ServeBridgeMCP(workgraph.BridgeMCPConfig{
-		HomeDir: homeDir,
-		Input:   strings.NewReader(strings.Join(requests, "\n") + "\n"),
-		Output:  &output,
+		HomeDir:   homeDir,
+		MemoryDir: memoryDir,
+		Input:     strings.NewReader(strings.Join(requests, "\n") + "\n"),
+		Output:    &output,
 	}); err != nil {
 		t.Fatalf("serve bridge MCP: %v", err)
 	}
@@ -310,8 +336,11 @@ func TestBridgeMCPExposesReadOnlyWorkIntelligenceTools(t *testing.T) {
 			t.Fatalf("tools/list omitted %q:\n%s", tool, lines[0])
 		}
 	}
+	if strings.Contains(lines[0], `"memory_dir"`) {
+		t.Fatalf("tools/list must not advertise caller-supplied memory_dir:\n%s", lines[0])
+	}
 
-	decodeStructured := func(line string) map[string]any {
+	decodeResponse := func(line string) (bool, map[string]any) {
 		t.Helper()
 		var response struct {
 			Result struct {
@@ -322,15 +351,23 @@ func TestBridgeMCPExposesReadOnlyWorkIntelligenceTools(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &response); err != nil {
 			t.Fatalf("decode MCP response: %v\n%s", err, line)
 		}
-		if response.Result.IsError {
+		return response.Result.IsError, response.Result.StructuredContent
+	}
+	decodeStructured := func(line string) map[string]any {
+		t.Helper()
+		isErr, content := decodeResponse(line)
+		if isErr {
 			t.Fatalf("MCP tool call returned error:\n%s", line)
 		}
-		return response.Result.StructuredContent
+		return content
 	}
 
 	todayStructured := decodeStructured(lines[1])
 	if todayEvents, ok := todayStructured["events"].([]any); !ok || len(todayEvents) != 1 {
 		t.Fatalf("expected 1 today event, got %#v", todayStructured["events"])
+	}
+	if strings.Contains(lines[1], "RAW-CAPTURED-PAYLOAD-TEXT") {
+		t.Fatalf("today_overview leaked raw captured payload by default:\n%s", lines[1])
 	}
 	if todayProjects, ok := todayStructured["projects"].([]any); !ok || len(todayProjects) != 1 {
 		t.Fatalf("expected 1 today project count, got %#v", todayStructured["projects"])
@@ -342,9 +379,27 @@ func TestBridgeMCPExposesReadOnlyWorkIntelligenceTools(t *testing.T) {
 		t.Fatalf("today_overview message omitted event summary:\n%s", todayStructured["message"])
 	}
 
+	var suggestionStatus string
+	if err := db.QueryRow(`SELECT status FROM suggestions WHERE id = 'sug-snoozed-1'`).Scan(&suggestionStatus); err != nil {
+		t.Fatalf("query snoozed suggestion status: %v", err)
+	}
+	if suggestionStatus != "snoozed" {
+		t.Fatalf("expected today_overview to leave expired snoozed suggestion unchanged, got %q", suggestionStatus)
+	}
+	var suppressionCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM suggestion_suppressions WHERE id = 'sup-snoozed-1'`).Scan(&suppressionCount); err != nil {
+		t.Fatalf("query snooze suppression: %v", err)
+	}
+	if suppressionCount != 1 {
+		t.Fatalf("expected today_overview to leave suggestion_suppressions untouched, got count=%d", suppressionCount)
+	}
+
 	resumeStructured := decodeStructured(lines[2])
 	if resumeStructured["project"] != "workgraph-core" {
 		t.Fatalf("expected project workgraph-core, got %#v", resumeStructured["project"])
+	}
+	if strings.Contains(lines[2], "RAW-CAPTURED-PAYLOAD-TEXT") {
+		t.Fatalf("resume_project leaked raw captured payload by default:\n%s", lines[2])
 	}
 	if !strings.Contains(resumeStructured["message"].(string), "Resume workgraph-core") {
 		t.Fatalf("resume_project message omitted project heading:\n%s", resumeStructured["message"])
@@ -368,13 +423,42 @@ func TestBridgeMCPExposesReadOnlyWorkIntelligenceTools(t *testing.T) {
 
 	projectsStructured := decodeStructured(lines[4])
 	if projects, ok := projectsStructured["projects"].([]any); !ok || len(projects) != 1 {
-		t.Fatalf("expected 1 declared project, got %#v", projectsStructured["projects"])
+		t.Fatalf("expected 1 declared project (excluding symlink escape), got %#v", projectsStructured["projects"])
+	}
+	if strings.Contains(lines[4], "TOP-SECRET-OUTSIDE-MEMORY") || strings.Contains(lines[4], "escaped-link") {
+		t.Fatalf("projects_list read symlink pointing outside configured memory root:\n%s", lines[4])
 	}
 	if workstreams, ok := projectsStructured["workstreams"].([]any); !ok || len(workstreams) != 1 || workstreams[0] != "core-platform" {
 		t.Fatalf("expected workstream core-platform, got %#v", projectsStructured["workstreams"])
 	}
 	if !strings.Contains(projectsStructured["message"].(string), "workgraph-core: Workgraph Core") {
 		t.Fatalf("projects_list message omitted declared project:\n%s", projectsStructured["message"])
+	}
+
+	if isErr, _ := decodeResponse(lines[5]); !isErr {
+		t.Fatalf("expected resume_project to reject caller-supplied memory_dir:\n%s", lines[5])
+	}
+	if isErr, _ := decodeResponse(lines[6]); !isErr {
+		t.Fatalf("expected projects_list to reject caller-supplied memory_dir:\n%s", lines[6])
+	}
+	if strings.Contains(lines[7], "TOP-SECRET-OUTSIDE-MEMORY") {
+		t.Fatalf("resume_project leaked content through symlink outside configured memory root:\n%s", lines[7])
+	}
+
+	todayUntrusted := decodeStructured(lines[8])
+	if !strings.Contains(lines[8], "RAW-CAPTURED-PAYLOAD-TEXT") || !strings.Contains(lines[8], `"trust":"untrusted"`) {
+		t.Fatalf("expected include_untrusted=true on today_overview to include delimited untrusted payload:\n%s", lines[8])
+	}
+	if todayUntrusted["events"] == nil {
+		t.Fatalf("expected events in today_overview with include_untrusted=true")
+	}
+
+	resumeUntrusted := decodeStructured(lines[9])
+	if !strings.Contains(lines[9], "RAW-CAPTURED-PAYLOAD-TEXT") || !strings.Contains(lines[9], `"trust":"untrusted"`) {
+		t.Fatalf("expected include_untrusted=true on resume_project to include delimited untrusted payload:\n%s", lines[9])
+	}
+	if resumeUntrusted["events"] == nil {
+		t.Fatalf("expected events in resume_project with include_untrusted=true")
 	}
 }
 

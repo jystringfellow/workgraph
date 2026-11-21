@@ -31,6 +31,7 @@ type TodayConfig struct {
 	Actor              string
 	Involvement        string
 	IncludeAllEvidence bool
+	ReadOnly           bool
 	GitEmails          []string
 }
 
@@ -140,12 +141,12 @@ func Today(config TodayConfig) (TodayResult, error) {
 		Events: events,
 	}
 	result.Sessions = groupTodaySessions(events)
-	if len(events) > 0 {
+	if len(events) > 0 && !config.ReadOnly {
 		if result.Warnings, err = refreshSnoozedSuggestions(db, now.UTC()); err != nil {
 			return TodayResult{}, err
 		}
 	}
-	associations, err := loadTodayAssociations(db, events, now.UTC())
+	associations, err := loadTodayAssociations(db, events, now.UTC(), config.ReadOnly)
 	if err != nil {
 		return TodayResult{}, err
 	}
@@ -322,7 +323,7 @@ func newTodaySession(event TodayEvent) TodaySession {
 	}
 }
 
-func loadTodayAssociations(db *sql.DB, events []TodayEvent, now time.Time) ([]TodayAssociation, error) {
+func loadTodayAssociations(db *sql.DB, events []TodayEvent, now time.Time, readOnly bool) ([]TodayAssociation, error) {
 	if len(events) == 0 {
 		return nil, nil
 	}
@@ -368,12 +369,15 @@ func loadTodayAssociations(db *sql.DB, events []TodayEvent, now time.Time) ([]To
 			if err != nil {
 				return nil, err
 			}
-			if todayAssociationStatusHidden(status) {
-				continue
-			}
 			suppressed, err := associationPatternSuppressed(db, candidate.PatternKey, now)
 			if err != nil {
 				return nil, err
+			}
+			if readOnly && status == "snoozed" && !suppressed {
+				status = "proposed"
+			}
+			if todayAssociationStatusHidden(status) {
+				continue
 			}
 			if suppressed {
 				continue

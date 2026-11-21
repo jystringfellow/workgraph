@@ -45,15 +45,17 @@ providers or mutating check-in state:
 
 - `next_items` (`project`, `reason`, `include_untrusted`): returns open local
   attention items and their evidence (`items`).
-- `today_overview` (`actor`, `involvement`): returns today's local work
-  overview (`date`, `events`, `projects`, `sessions`, `associations`,
-  `message`) without exposing connector secrets.
-- `resume_project` (`project`, `memory_dir`, `all`): returns local resume
-  context, recent activity, resumable projects, and project memory without
-  recording a check-in or contacting providers.
-- `projects_list` (`memory_dir`): returns declared projects, workstreams,
-  mapped containers, applied unit counts, and formatted summary from local
-  project memory and mappings.
+- `today_overview` (`actor`, `involvement`, `include_untrusted`): returns
+  today's local work overview (`date`, `events`, `projects`, `sessions`,
+  `associations`, `message`) read-only without mutating suggestion state or
+  exposing raw captured payloads unless `include_untrusted` is set.
+- `resume_project` (`project`, `all`, `include_untrusted`): returns local
+  resume context, recent activity, resumable projects, and project memory
+  from the server-configured memory root without recording a check-in or
+  exposing raw captured payloads unless `include_untrusted` is set.
+- `projects_list` (`{}`): returns declared projects, workstreams, mapped
+  containers, applied unit counts, and formatted summary from the
+  server-configured project memory root and mappings.
 
 ## Command surface
 

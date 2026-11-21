@@ -122,11 +122,12 @@ func runBridge(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 	flags.SetOutput(stderr)
 	homeDir := flags.String("home", "", "workgraph home directory")
 	databasePath := flags.String("database", "", "workgraph SQLite database path")
+	memoryDir := flags.String("memory", "", "workgraph memory directory")
 	if err := flags.Parse(mcpArgs); err != nil {
 		return 2
 	}
 	if flags.NArg() != 0 {
-		fmt.Fprintln(stderr, "usage: workgraph bridge mcp [status|stop] [--home <path>] [--database <path>]")
+		fmt.Fprintln(stderr, "usage: workgraph bridge mcp [status|stop] [--home <path>] [--database <path>] [--memory <path>]")
 		return 2
 	}
 	if action == "status" {
@@ -149,7 +150,7 @@ func runBridge(args []string, stdin io.Reader, stdout io.Writer, stderr io.Write
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := workgraph.ServeBridgeMCP(workgraph.BridgeMCPConfig{HomeDir: *homeDir, DatabasePath: *databasePath, Input: stdin, Output: stdout, Context: ctx}); err != nil {
+	if err := workgraph.ServeBridgeMCP(workgraph.BridgeMCPConfig{HomeDir: *homeDir, DatabasePath: *databasePath, MemoryDir: *memoryDir, Input: stdin, Output: stdout, Context: ctx}); err != nil {
 		fmt.Fprintf(stderr, "workgraph bridge mcp: %v\n", err)
 		return 1
 	}

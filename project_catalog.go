@@ -67,6 +67,13 @@ func LoadProjectCatalog(memoryDir string) (ProjectCatalog, error) {
 			continue
 		}
 		path := filepath.Join(dir, entry.Name())
+		allowed, err := memoryFileWithinRoot(dir, path)
+		if err != nil {
+			return ProjectCatalog{}, fmt.Errorf("check project memory: %w", err)
+		}
+		if !allowed {
+			continue
+		}
 		content, err := os.ReadFile(path)
 		if err != nil {
 			return ProjectCatalog{}, fmt.Errorf("read project memory: %w", err)

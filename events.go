@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -197,11 +198,11 @@ func QueryEvents(config EventsQueryConfig) (EventsQueryResult, error) {
 
 	if !config.Since.IsZero() {
 		sqlQuery += ` AND timestamp >= ?`
-		args = append(args, config.Since.UTC().Format(time.RFC3339Nano))
+		args = append(args, config.Since.UTC().Add(-24*time.Hour).Format("2006-01-02"))
 	}
 	if !config.Until.IsZero() {
 		sqlQuery += ` AND timestamp < ?`
-		args = append(args, config.Until.UTC().Format(time.RFC3339Nano))
+		args = append(args, config.Until.UTC().Add(48*time.Hour).Format("2006-01-02"))
 	}
 	if source != "" {
 		sqlQuery += ` AND source = ?`
@@ -257,6 +258,12 @@ func QueryEvents(config EventsQueryConfig) (EventsQueryResult, error) {
 		if err != nil {
 			return EventsQueryResult{}, fmt.Errorf("parse event timestamp %q: %w", stored.ID, err)
 		}
+		if !config.Since.IsZero() && timestamp.Before(config.Since) {
+			continue
+		}
+		if !config.Until.IsZero() && !timestamp.Before(config.Until) {
+			continue
+		}
 
 		event := TodayEvent{
 			ID:        stored.ID,
@@ -291,6 +298,13 @@ func QueryEvents(config EventsQueryConfig) (EventsQueryResult, error) {
 	if err := rows.Err(); err != nil {
 		return EventsQueryResult{}, fmt.Errorf("query events: %w", err)
 	}
+
+	sort.Slice(events, func(i, j int) bool {
+		if !events[i].Timestamp.Equal(events[j].Timestamp) {
+			return events[i].Timestamp.Before(events[j].Timestamp)
+		}
+		return events[i].ID < events[j].ID
+	})
 
 	if config.Limit > 0 && len(events) > config.Limit {
 		events = events[len(events)-config.Limit:]

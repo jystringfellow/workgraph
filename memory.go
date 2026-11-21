@@ -185,6 +185,13 @@ func loadProjectMemory(memoryDir string, project string) (*MemoryDoc, string, er
 	if !ok {
 		return nil, "", nil
 	}
+	allowed, err := memoryFileWithinRoot(projectMemoryDir(memoryDir), path)
+	if err != nil {
+		return nil, path, err
+	}
+	if !allowed {
+		return nil, path, fmt.Errorf("project memory %q escapes configured memory root", path)
+	}
 
 	info, err := os.Stat(path)
 	if err != nil {
@@ -209,6 +216,47 @@ func loadProjectMemory(memoryDir string, project string) (*MemoryDoc, string, er
 		Content:   string(content),
 		UpdatedAt: info.ModTime(),
 	}, path, nil
+}
+
+func memoryFileWithinRoot(rootDir string, candidatePath string) (bool, error) {
+	absRoot, err := filepath.Abs(rootDir)
+	if err != nil {
+		return false, fmt.Errorf("resolve memory root: %w", err)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(absRoot)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			resolvedRoot = absRoot
+		} else {
+			return false, fmt.Errorf("resolve memory root symlinks: %w", err)
+		}
+	}
+	absCandidate, err := filepath.Abs(candidatePath)
+	if err != nil {
+		return false, fmt.Errorf("resolve memory file: %w", err)
+	}
+	if !pathInsideDirectory(absRoot, absCandidate) {
+		return false, nil
+	}
+	resolvedCandidate, err := filepath.EvalSymlinks(absCandidate)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return true, nil
+		}
+		return false, fmt.Errorf("resolve memory file symlinks: %w", err)
+	}
+	return pathInsideDirectory(resolvedRoot, resolvedCandidate), nil
+}
+
+func pathInsideDirectory(root string, target string) bool {
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return false
+	}
+	if rel == "." || rel == ".." {
+		return false
+	}
+	return !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func SuggestMemoryUpdates(config MemorySuggestConfig) (MemorySuggestResult, error) {

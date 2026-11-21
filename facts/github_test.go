@@ -1421,3 +1421,116 @@ exit 1
 		}
 	}
 }
+
+func TestLegacyHashedBridgedGitHubSnapshotReconcilesAndPreservesReferences(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	dbPath := filepath.Join(homeDir, "workgraph.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	legacyID := "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+	canonicalID := "github.pull_request:jystringfellow/Cupcake:42"
+	if _, err := db.Exec(`PRAGMA user_version = 4`); err != nil {
+		t.Fatalf("set legacy user_version: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO events (id, source, type, timestamp, payload_json, project, actor, summary, created_at)
+		VALUES (?, 'github', 'github.pull_request', '2026-05-20T14:00:00Z', '{"repo":"jystringfellow/Cupcake","number":42,"state":"open","title":"Add cupcake API","author":"octocat","url":"https://github.com/jystringfellow/Cupcake/pull/42","head":"feature/legacy-cupcake"}', 'Cupcake', 'octocat', 'Add cupcake API', '2026-05-20T14:00:00Z')`,
+		legacyID); err != nil {
+		t.Fatalf("insert legacy hashed github snapshot: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO memory_links (id, memory_doc_path, event_id, relation, created_at)
+		VALUES ('ml-legacy-1', '/memory/projects/cupcake.md', ?, 'evidence', '2026-05-20T14:05:00Z')`, legacyID); err != nil {
+		t.Fatalf("insert memory_links reference: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO suggestions (id, type, pattern_key, title, reason, confidence, lane, status, evidence_json, created_at, updated_at)
+		VALUES ('sug-legacy-1', 'association', ?, 'Related PR and Slack', 'Shared URL', 'high', 'baseline', 'proposed', ?, '2026-05-20T14:05:00Z', '2026-05-20T14:05:00Z')`,
+		legacyID+"|slack.message:C1:1", `{"event_ids":["`+legacyID+`","slack.message:C1:1"]}`); err != nil {
+		t.Fatalf("insert suggestion reference: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS project_links (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		unit_id TEXT NOT NULL,
+		unit_kind TEXT NOT NULL,
+		container TEXT NOT NULL,
+		target TEXT NOT NULL,
+		project TEXT NOT NULL DEFAULT '',
+		proposed_project_json TEXT NOT NULL DEFAULT '',
+		source TEXT NOT NULL,
+		kind TEXT NOT NULL DEFAULT '',
+		summary TEXT NOT NULL DEFAULT '',
+		confidence REAL NOT NULL,
+		evidence_json TEXT NOT NULL,
+		state TEXT NOT NULL,
+		auto INTEGER NOT NULL DEFAULT 0,
+		rule TEXT NOT NULL DEFAULT '',
+		profile TEXT NOT NULL DEFAULT '',
+		run_id TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		decided_at TEXT NOT NULL DEFAULT '',
+		decision TEXT NOT NULL DEFAULT ''
+	)`); err != nil {
+		t.Fatalf("create project_links: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO project_links (unit_id, unit_kind, container, target, project, source, confidence, evidence_json, state, created_at)
+		VALUES ('github.pr:jystringfellow/cupcake#42', 'github.pr', 'Cupcake', 'project', 'cupcake', 'user', 1, ?, 'applied', '2026-05-20T14:05:00Z')`,
+		`["`+legacyID+`"]`); err != nil {
+		t.Fatalf("insert project_links reference: %v", err)
+	}
+
+	params := `{"scope":"participant","identity":"@me","include":["involves"],"always_repositories":[],"bootstrap_lookback":"168h"}`
+	if _, err := workgraph.ConfigureBridgedConnector(workgraph.ConnectorBridgeConfig{
+		HomeDir: homeDir, ID: "github", BridgeParams: json.RawMessage(params),
+	}); err != nil {
+		t.Fatalf("configure bridged github: %v", err)
+	}
+	bridgedUpdate := `{"type":"github.pull_request","timestamp":"2026-05-20T14:30:00Z","external_id":"jystringfellow/Cupcake#pr:42:2026-05-20T14:30:00Z","project":"Cupcake","actor":"octocat","summary":"Add cupcake API","payload":{"repo":"jystringfellow/Cupcake","number":42,"state":"closed","title":"Add cupcake API","author":"octocat","url":"https://github.com/jystringfellow/Cupcake/pull/42","updated_at":"2026-05-20T14:30:00Z"}}` + "\n"
+	if _, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{
+		HomeDir: homeDir, DatabasePath: dbPath, Source: "github", Input: strings.NewReader(bridgedUpdate),
+	}); err != nil {
+		t.Fatalf("ingest bridged update after legacy row: %v", err)
+	}
+
+	if count := githubEventCount(t, dbPath); count != 1 {
+		t.Fatalf("expected legacy hashed row and new capture to reconcile into 1 row, got %d", count)
+	}
+	event := githubEvent(t, dbPath, "github.pull_request", "jystringfellow/Cupcake", 42)
+	for _, expected := range []string{`"repository":"jystringfellow/Cupcake"`, `"state":"closed"`, `"branch":"feature/legacy-cupcake"`} {
+		if !strings.Contains(event.PayloadJSON, expected) {
+			t.Fatalf("expected reconciled snapshot payload to contain %s, got %s", expected, event.PayloadJSON)
+		}
+	}
+
+	var linkedEventID string
+	if err := db.QueryRow(`SELECT event_id FROM memory_links WHERE id = 'ml-legacy-1'`).Scan(&linkedEventID); err != nil {
+		t.Fatalf("query memory_links: %v", err)
+	}
+	if linkedEventID != canonicalID {
+		t.Fatalf("expected memory_links.event_id rewritten to %q, got %q", canonicalID, linkedEventID)
+	}
+
+	var projectEvidence string
+	if err := db.QueryRow(`SELECT evidence_json FROM project_links WHERE unit_id = 'github.pr:jystringfellow/cupcake#42'`).Scan(&projectEvidence); err != nil {
+		t.Fatalf("query project_links: %v", err)
+	}
+	if !strings.Contains(projectEvidence, canonicalID) || strings.Contains(projectEvidence, legacyID) {
+		t.Fatalf("expected project_links.evidence_json rewritten to %q, got %s", canonicalID, projectEvidence)
+	}
+
+	var suggestionPattern, suggestionEvidence string
+	if err := db.QueryRow(`SELECT pattern_key, evidence_json FROM suggestions WHERE id = 'sug-legacy-1'`).Scan(&suggestionPattern, &suggestionEvidence); err != nil {
+		t.Fatalf("query suggestions: %v", err)
+	}
+	if !strings.Contains(suggestionEvidence, canonicalID) || strings.Contains(suggestionEvidence, legacyID) {
+		t.Fatalf("expected suggestions.evidence_json rewritten to %q, got %s", canonicalID, suggestionEvidence)
+	}
+	if !strings.Contains(suggestionPattern, canonicalID) || strings.Contains(suggestionPattern, legacyID) {
+		t.Fatalf("expected suggestions.pattern_key rewritten to %q, got %q", canonicalID, suggestionPattern)
+	}
+}

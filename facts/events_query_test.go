@@ -1,6 +1,7 @@
 package facts
 
 import (
+	"database/sql"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -302,5 +303,82 @@ func TestQueryEventsAcrossMultiDayRangeWithFiltersAndLimit(t *testing.T) {
 	}
 	if len(parsed.Events) != 1 || parsed.Events[0].ID != "range-2" {
 		t.Fatalf("expected range-2 in QueryEvents JSON, got %+v", parsed)
+	}
+}
+
+func TestQueryEventsOrdersAndBoundsFractionalRFC3339NanoTimestamps(t *testing.T) {
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initRes, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	db, err := sql.Open("sqlite3", initRes.DatabasePath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	rows := []struct {
+		id        string
+		timestamp string
+	}{
+		{"ts-whole", "2026-06-01T12:00:00Z"},
+		{"ts-offset-quarter", "2026-06-01T08:00:00.25-04:00"},
+		{"ts-half", "2026-06-01T12:00:00.5Z"},
+	}
+	for _, row := range rows {
+		if _, err := db.Exec(`INSERT INTO events (id, source, type, timestamp, payload_json, project, actor, summary, created_at)
+			VALUES (?, 'git', 'git.commit', ?, '{"commit":"abc","subject":"ts test"}', 'workgraph', 'alice', 'ts test', ?)`,
+			row.id, row.timestamp, row.timestamp); err != nil {
+			t.Fatalf("insert %s: %v", row.id, err)
+		}
+	}
+
+	since := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	untilHalf := time.Date(2026, 6, 1, 12, 0, 0, 500_000_000, time.UTC)
+	untilAfter := time.Date(2026, 6, 1, 12, 0, 1, 0, time.UTC)
+
+	all, err := workgraph.QueryEvents(workgraph.EventsQueryConfig{
+		HomeDir:      homeDir,
+		DatabasePath: initRes.DatabasePath,
+		Since:        since,
+		Until:        untilAfter,
+	})
+	if err != nil {
+		t.Fatalf("QueryEvents all failed: %v", err)
+	}
+	if len(all.Events) != 3 {
+		t.Fatalf("expected all 3 fractional/offset events in [%s, %s), got %d: %+v", since, untilAfter, len(all.Events), all.Events)
+	}
+	if all.Events[0].ID != "ts-whole" || all.Events[1].ID != "ts-offset-quarter" || all.Events[2].ID != "ts-half" {
+		t.Fatalf("expected chronological order [ts-whole, ts-offset-quarter, ts-half], got [%s, %s, %s]", all.Events[0].ID, all.Events[1].ID, all.Events[2].ID)
+	}
+
+	bounded, err := workgraph.QueryEvents(workgraph.EventsQueryConfig{
+		HomeDir:      homeDir,
+		DatabasePath: initRes.DatabasePath,
+		Since:        since,
+		Until:        untilHalf,
+	})
+	if err != nil {
+		t.Fatalf("QueryEvents bounded failed: %v", err)
+	}
+	if len(bounded.Events) != 2 || bounded.Events[0].ID != "ts-whole" || bounded.Events[1].ID != "ts-offset-quarter" {
+		t.Fatalf("expected [ts-whole, ts-offset-quarter] in [12:00:00Z, 12:00:00.5Z), got %+v", bounded.Events)
+	}
+
+	limited, err := workgraph.QueryEvents(workgraph.EventsQueryConfig{
+		HomeDir:      homeDir,
+		DatabasePath: initRes.DatabasePath,
+		Since:        since,
+		Until:        untilAfter,
+		Limit:        1,
+	})
+	if err != nil {
+		t.Fatalf("QueryEvents limited failed: %v", err)
+	}
+	if len(limited.Events) != 1 || limited.Events[0].ID != "ts-half" {
+		t.Fatalf("expected Limit:1 to keep newest event ts-half, got %+v", limited.Events)
 	}
 }

@@ -75,10 +75,7 @@ func Init(config InitConfig) (InitResult, error) {
 		return InitResult{}, fmt.Errorf("initialize database: %w", err)
 	}
 
-	if err := createSchema(db); err != nil {
-		return InitResult{}, fmt.Errorf("create database schema: %w", err)
-	}
-	if err := migrateBackfills(db); err != nil {
+	if err := createSchemaWithBackfills(db); err != nil {
 		return InitResult{}, fmt.Errorf("create database schema: %w", err)
 	}
 	if err := ensureUserOnlyFile(dbPath); err != nil {
@@ -268,7 +265,7 @@ func initMessage(result InitResult, fileWatchingOff bool) string {
 	return strings.Join(lines, "\n")
 }
 
-const CurrentSchemaVersion = 4
+const CurrentSchemaVersion = 5
 
 type migration struct {
 	version int
@@ -280,12 +277,17 @@ var schemaMigrations = []migration{
 	{version: 2, apply: migrateAdditiveColumns},
 	{version: 3, apply: migrateIndices},
 	{version: 4, apply: migrateBackfills},
+	{version: 5, apply: migrateLegacyGitHubSnapshots},
 }
 
 func migrateSchema(db *sql.DB) error {
 	var userVersion int
 	if err := db.QueryRow(`PRAGMA user_version`).Scan(&userVersion); err != nil {
 		return fmt.Errorf("read schema version: %w", err)
+	}
+
+	if userVersion >= CurrentSchemaVersion && schemaCoreUpToDate(db) {
+		return nil
 	}
 
 	if err := migrateBaseTables(db); err != nil {
@@ -313,6 +315,32 @@ func migrateSchema(db *sql.DB) error {
 		userVersion = step.version
 	}
 	return nil
+}
+
+func schemaCoreUpToDate(db *sql.DB) bool {
+	hasColumn := func(table, column string) bool {
+		rows, err := db.Query("PRAGMA table_info(" + table + ")")
+		if err != nil {
+			return false
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var cid, notNull, pk int
+			var name, colType string
+			var def any
+			if err := rows.Scan(&cid, &name, &colType, &notNull, &def, &pk); err != nil {
+				return false
+			}
+			if name == column {
+				return true
+			}
+		}
+		return false
+	}
+	return hasColumn("capture_requests", "kind") &&
+		hasColumn("events", "involvement_json") &&
+		hasColumn("github_pr_watch_state", "reviewer_polled") &&
+		hasColumn("notion_index", "content_synced_at")
 }
 
 func migrateBaseTables(db *sql.DB) error {
