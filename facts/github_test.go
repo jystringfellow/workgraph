@@ -1534,3 +1534,97 @@ func TestLegacyHashedBridgedGitHubSnapshotReconcilesAndPreservesReferences(t *te
 		t.Fatalf("expected suggestions.pattern_key rewritten to %q, got %q", canonicalID, suggestionPattern)
 	}
 }
+
+func TestLegacyHashedBridgedGitHubSnapshotPreservesSuppressionsLifecycleAndFeedback(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	dbPath := filepath.Join(homeDir, "workgraph.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	legacyID := "11223344556677889900aabbccddeeff"
+	canonicalID := "github.pull_request:jystringfellow/Cupcake:77"
+	otherID := "slack.message:C1:1712345678.000100"
+	legacyPattern := legacyID + "|" + otherID
+	canonicalPattern := canonicalID + "|" + otherID
+
+	if _, err := db.Exec(`PRAGMA user_version = 4`); err != nil {
+		t.Fatalf("set user_version=4: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO events (id, source, type, timestamp, payload_json, project, actor, summary, created_at)
+		VALUES (?, 'github', 'github.pull_request', '2026-05-20T14:00:00Z', '{"repo":"jystringfellow/Cupcake","number":77,"state":"open","title":"PR 77","author":"octocat","head":"feature/pr-77"}', 'Cupcake', 'octocat', 'PR 77', '2026-05-20T14:00:00Z')`,
+		legacyID); err != nil {
+		t.Fatalf("insert legacy github row: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO suggestions (id, type, pattern_key, title, reason, confidence, lane, status, evidence_json, created_at, updated_at, resolved_at)
+		VALUES ('sug-legacy-dismissed', 'association', ?, 'Related PR and Slack', 'Shared URL', 'high', 'baseline', 'dismissed', ?, '2026-05-20T14:05:00Z', '2026-05-20T14:10:00Z', '2026-05-20T14:10:00Z')`,
+		legacyPattern, `{"event_ids":["`+legacyID+`","`+otherID+`"]}`); err != nil {
+		t.Fatalf("insert dismissed legacy suggestion: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO suggestion_feedback (id, suggestion_id, action, reason_code, note, created_at)
+		VALUES ('fb-legacy-dismiss', 'sug-legacy-dismissed', 'dismissed', 'unrelated', 'Different thread', '2026-05-20T14:10:00Z')`); err != nil {
+		t.Fatalf("insert legacy feedback: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO suggestion_suppressions (id, type, pattern_key, reason, until_at, created_at)
+		VALUES ('sup-legacy-assoc', 'association', ?, 'unrelated', NULL, '2026-05-20T14:10:00Z')`,
+		legacyPattern); err != nil {
+		t.Fatalf("insert legacy suppression: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO suggestions (id, type, pattern_key, title, reason, confidence, lane, status, evidence_json, created_at, updated_at)
+		VALUES ('sug-canonical-proposed', 'association', ?, 'Related PR and Slack', 'Shared URL', 'high', 'baseline', 'proposed', ?, '2026-05-20T14:15:00Z', '2026-05-20T14:15:00Z')`,
+		canonicalPattern, `{"event_ids":["`+canonicalID+`","`+otherID+`"]}`); err != nil {
+		t.Fatalf("insert conflicting proposed canonical suggestion: %v", err)
+	}
+
+	params := `{"scope":"participant","identity":"@me","include":["involves"],"always_repositories":[],"bootstrap_lookback":"168h"}`
+	if _, err := workgraph.ConfigureBridgedConnector(workgraph.ConnectorBridgeConfig{
+		HomeDir: homeDir, ID: "github", BridgeParams: json.RawMessage(params),
+	}); err != nil {
+		t.Fatalf("configure bridged github: %v", err)
+	}
+	bridgedUpdate := `{"type":"github.pull_request","timestamp":"2026-05-20T14:30:00Z","external_id":"jystringfellow/Cupcake#pr:77:2026-05-20T14:30:00Z","project":"Cupcake","actor":"octocat","summary":"PR 77","payload":{"repo":"jystringfellow/Cupcake","number":77,"state":"open","title":"PR 77","author":"octocat","updated_at":"2026-05-20T14:30:00Z"}}` + "\n"
+	if _, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{
+		HomeDir: homeDir, DatabasePath: dbPath, Source: "github", Input: strings.NewReader(bridgedUpdate),
+	}); err != nil {
+		t.Fatalf("ingest bridged update: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM suggestions WHERE type = 'association'`).Scan(&count); err != nil {
+		t.Fatalf("count association suggestions: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 converged association suggestion, got %d", count)
+	}
+	var survivingID, status, patternKey string
+	var resolvedAt sql.NullString
+	if err := db.QueryRow(`SELECT id, status, pattern_key, resolved_at FROM suggestions WHERE type = 'association'`).Scan(&survivingID, &status, &patternKey, &resolvedAt); err != nil {
+		t.Fatalf("read surviving suggestion: %v", err)
+	}
+	if status != "dismissed" || patternKey != canonicalPattern || !resolvedAt.Valid || resolvedAt.String == "" {
+		t.Fatalf("expected surviving suggestion to preserve dismissed lifecycle at canonical pattern, got id=%q status=%q pattern=%q resolved_at=%v", survivingID, status, patternKey, resolvedAt)
+	}
+
+	var feedbackSuggestionID string
+	if err := db.QueryRow(`SELECT suggestion_id FROM suggestion_feedback WHERE id = 'fb-legacy-dismiss'`).Scan(&feedbackSuggestionID); err != nil {
+		t.Fatalf("read preserved feedback: %v", err)
+	}
+	if feedbackSuggestionID != survivingID {
+		t.Fatalf("expected feedback to point to surviving suggestion %q, got %q", survivingID, feedbackSuggestionID)
+	}
+
+	var suppressionPattern string
+	var suppressionUntil sql.NullString
+	if err := db.QueryRow(`SELECT pattern_key, until_at FROM suggestion_suppressions WHERE type = 'association'`).Scan(&suppressionPattern, &suppressionUntil); err != nil {
+		t.Fatalf("read rewritten suppression: %v", err)
+	}
+	if suppressionPattern != canonicalPattern || suppressionUntil.Valid {
+		t.Fatalf("expected permanent suppression rewritten to %q, got pattern=%q until=%v", canonicalPattern, suppressionPattern, suppressionUntil)
+	}
+}

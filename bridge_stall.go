@@ -63,11 +63,15 @@ func detectBridgeStall(homeDir string, state connectorRuntimeFile, id string, re
 }
 
 func bridgeStallWarning(homeDir string, databasePath string, now time.Time) string {
+	return bridgeStallWarningWithReadOnly(homeDir, databasePath, now, false)
+}
+
+func bridgeStallWarningWithReadOnly(homeDir string, databasePath string, now time.Time, readOnly bool) string {
 	state, err := readConnectorRuntimeFile(homeDir)
 	if err != nil {
 		return ""
 	}
-	requests, err := ListCaptureRequests(CaptureRequestListConfig{HomeDir: homeDir, DatabasePath: databasePath, Now: now})
+	requests, err := ListCaptureRequests(CaptureRequestListConfig{HomeDir: homeDir, DatabasePath: databasePath, Now: now, ReadOnly: readOnly})
 	if errors.Is(err, ErrDatabaseUpgradeInProgress) {
 		return "\n\n" + databaseUpgradeInProgressNotice
 	}

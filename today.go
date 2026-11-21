@@ -171,7 +171,7 @@ func Today(config TodayConfig) (TodayResult, error) {
 	} else if lines := todayNextLines(next.Items); len(lines) > 0 {
 		result.Message += "\n\n" + strings.Join(lines, "\n")
 	}
-	result.Message += bridgeStallWarning(homeDir, dbPath, now)
+	result.Message += bridgeStallWarningWithReadOnly(homeDir, dbPath, now, config.ReadOnly)
 
 	return result, nil
 }

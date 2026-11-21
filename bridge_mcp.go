@@ -382,6 +382,7 @@ func callBridgeMCPTool(config BridgeMCPConfig, name string, raw json.RawMessage)
 			MemoryDir:    config.MemoryDir,
 			Project:      stringArg("project"),
 			AllProjects:  all,
+			ReadOnly:     true,
 		})
 		if err != nil {
 			return nil, err

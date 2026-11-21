@@ -77,6 +77,7 @@ type CaptureRequestListConfig struct {
 	DatabasePath string
 	ConnectorID  string
 	Now          time.Time
+	ReadOnly     bool
 }
 
 type CaptureRequestCapabilityConfig struct {
@@ -114,9 +115,20 @@ func ListCaptureRequests(config CaptureRequestListConfig) ([]CaptureRequest, err
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
-	preparing := createSchemaUnlessUpgrading(db)
-	if preparing != nil && !errors.Is(preparing, ErrDatabaseUpgradeInProgress) {
-		return nil, fmt.Errorf("prepare capture outbox: %w", preparing)
+	var preparing error
+	if config.ReadOnly {
+		var name string
+		if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'capture_requests'`).Scan(&name); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("check capture outbox: %w", err)
+		}
+	} else {
+		preparing = createSchemaUnlessUpgrading(db)
+		if preparing != nil && !errors.Is(preparing, ErrDatabaseUpgradeInProgress) {
+			return nil, fmt.Errorf("prepare capture outbox: %w", preparing)
+		}
 	}
 	query := `SELECT ` + captureRequestColumns + ` FROM capture_requests`
 	args := []any{}
@@ -1818,17 +1830,25 @@ func rewriteProjectLinksEventID(tx *sql.Tx, oldID string, newID string) error {
 }
 
 func rewriteSuggestionsEventID(tx *sql.Tx, oldID string, newID string) error {
-	rows, err := tx.Query(`SELECT id, type, COALESCE(pattern_key, ''), evidence_json FROM suggestions WHERE evidence_json LIKE ? OR pattern_key LIKE ?`, "%"+oldID+"%", "%"+oldID+"%")
+	if sqliteTableExists(tx, "suggestion_suppressions") {
+		if err := rewriteSuggestionSuppressionsEventID(tx, oldID, newID); err != nil {
+			return err
+		}
+	}
+	hasFeedback := sqliteTableExists(tx, "suggestion_feedback")
+
+	rows, err := tx.Query(`SELECT id, type, COALESCE(pattern_key, ''), status, evidence_json, updated_at, COALESCE(resolved_at, '')
+		FROM suggestions WHERE evidence_json LIKE ? OR pattern_key LIKE ?`, "%"+oldID+"%", "%"+oldID+"%")
 	if err != nil {
 		return fmt.Errorf("query suggestions for %s: %w", oldID, err)
 	}
 	type sugRow struct {
-		id, typ, patternKey, evidence string
+		id, typ, patternKey, status, evidence, updatedAt, resolvedAt string
 	}
 	var suggestions []sugRow
 	for rows.Next() {
 		var row sugRow
-		if err := rows.Scan(&row.id, &row.typ, &row.patternKey, &row.evidence); err != nil {
+		if err := rows.Scan(&row.id, &row.typ, &row.patternKey, &row.status, &row.evidence, &row.updatedAt, &row.resolvedAt); err != nil {
 			rows.Close()
 			return err
 		}
@@ -1842,52 +1862,35 @@ func rewriteSuggestionsEventID(tx *sql.Tx, oldID string, newID string) error {
 		return err
 	}
 	for _, sug := range suggestions {
-		newEvidence := sug.evidence
-		var evidenceObj map[string]any
-		if err := json.Unmarshal([]byte(sug.evidence), &evidenceObj); err == nil {
-			if rawIDs, ok := evidenceObj["event_ids"].([]any); ok {
-				ids := make([]string, 0, len(rawIDs))
-				for _, item := range rawIDs {
-					if text, ok := item.(string); ok {
-						ids = append(ids, text)
-					}
-				}
-				if rewritten, changed := replaceStringSliceValue(ids, oldID, newID); changed {
-					evidenceObj["event_ids"] = rewritten
-					if encoded, err := json.Marshal(evidenceObj); err == nil {
-						newEvidence = string(encoded)
-					}
-				}
-			}
-		}
-
-		newPattern := sug.patternKey
-		if strings.Contains(newPattern, oldID) {
-			if left, right, ok := strings.Cut(newPattern, "|"); ok {
-				if left == oldID {
-					left = newID
-				}
-				if right == oldID {
-					right = newID
-				}
-				if left > right {
-					left, right = right, left
-				}
-				newPattern = left + "|" + right
-			} else if newPattern == oldID {
-				newPattern = newID
-			}
-		}
+		newEvidence := rewriteSuggestionEvidenceEventID(sug.evidence, oldID, newID)
+		newPattern := rewriteSuggestionPatternKey(sug.patternKey, oldID, newID)
 
 		if newEvidence == sug.evidence && newPattern == sug.patternKey {
 			continue
 		}
 		if newPattern != sug.patternKey {
-			var conflict int
-			if err := tx.QueryRow(`SELECT COUNT(*) FROM suggestions WHERE type = ? AND pattern_key = ? AND id <> ?`, sug.typ, newPattern, sug.id).Scan(&conflict); err != nil {
+			var existing sugRow
+			err := tx.QueryRow(`SELECT id, type, COALESCE(pattern_key, ''), status, evidence_json, updated_at, COALESCE(resolved_at, '')
+				FROM suggestions WHERE type = ? AND pattern_key = ? AND id <> ?`, sug.typ, newPattern, sug.id).
+				Scan(&existing.id, &existing.typ, &existing.patternKey, &existing.status, &existing.evidence, &existing.updatedAt, &existing.resolvedAt)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return err
 			}
-			if conflict > 0 {
+			if err == nil {
+				mergedStatus, mergedUpdated, mergedResolved := mergeSuggestionLifecycle(
+					existing.status, existing.updatedAt, existing.resolvedAt,
+					sug.status, sug.updatedAt, sug.resolvedAt,
+				)
+				mergedEvidence := mergeSuggestionEvidenceJSON(existing.evidence, newEvidence)
+				if _, err := tx.Exec(`UPDATE suggestions SET status = ?, evidence_json = ?, updated_at = ?, resolved_at = ? WHERE id = ?`,
+					mergedStatus, mergedEvidence, mergedUpdated, nullableString(mergedResolved), existing.id); err != nil {
+					return err
+				}
+				if hasFeedback {
+					if _, err := tx.Exec(`UPDATE suggestion_feedback SET suggestion_id = ? WHERE suggestion_id = ?`, existing.id, sug.id); err != nil {
+						return err
+					}
+				}
 				if _, err := tx.Exec(`DELETE FROM suggestions WHERE id = ?`, sug.id); err != nil {
 					return err
 				}
@@ -1899,6 +1902,220 @@ func rewriteSuggestionsEventID(tx *sql.Tx, oldID string, newID string) error {
 		}
 	}
 	return nil
+}
+
+func rewriteSuggestionSuppressionsEventID(tx *sql.Tx, oldID string, newID string) error {
+	rows, err := tx.Query(`SELECT id, type, pattern_key, COALESCE(reason, ''), COALESCE(until_at, '')
+		FROM suggestion_suppressions WHERE pattern_key LIKE ?`, "%"+oldID+"%")
+	if err != nil {
+		return fmt.Errorf("query suggestion_suppressions for %s: %w", oldID, err)
+	}
+	type supRow struct {
+		id, typ, patternKey, reason, untilAt string
+	}
+	var suppressions []supRow
+	for rows.Next() {
+		var row supRow
+		if err := rows.Scan(&row.id, &row.typ, &row.patternKey, &row.reason, &row.untilAt); err != nil {
+			rows.Close()
+			return err
+		}
+		suppressions = append(suppressions, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, sup := range suppressions {
+		newPattern := rewriteSuggestionPatternKey(sup.patternKey, oldID, newID)
+		if newPattern == sup.patternKey {
+			continue
+		}
+		var existing supRow
+		err := tx.QueryRow(`SELECT id, type, pattern_key, COALESCE(reason, ''), COALESCE(until_at, '')
+			FROM suggestion_suppressions WHERE type = ? AND pattern_key = ? AND id <> ?`, sup.typ, newPattern, sup.id).
+			Scan(&existing.id, &existing.typ, &existing.patternKey, &existing.reason, &existing.untilAt)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if err == nil {
+			mergedReason := existing.reason
+			if mergedReason == "" {
+				mergedReason = sup.reason
+			}
+			mergedUntil := mergeSuppressionUntil(existing.untilAt, sup.untilAt)
+			if _, err := tx.Exec(`UPDATE suggestion_suppressions SET reason = ?, until_at = ? WHERE id = ?`,
+				nullableString(mergedReason), nullableString(mergedUntil), existing.id); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`DELETE FROM suggestion_suppressions WHERE id = ?`, sup.id); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := tx.Exec(`UPDATE suggestion_suppressions SET pattern_key = ? WHERE id = ?`, newPattern, sup.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rewriteSuggestionPatternKey(pattern string, oldID string, newID string) string {
+	if !strings.Contains(pattern, oldID) {
+		return pattern
+	}
+	if left, right, ok := strings.Cut(pattern, "|"); ok {
+		if left == oldID {
+			left = newID
+		}
+		if right == oldID {
+			right = newID
+		}
+		if left > right {
+			left, right = right, left
+		}
+		return left + "|" + right
+	}
+	if pattern == oldID {
+		return newID
+	}
+	return pattern
+}
+
+func rewriteSuggestionEvidenceEventID(evidence string, oldID string, newID string) string {
+	var evidenceObj map[string]any
+	if err := json.Unmarshal([]byte(evidence), &evidenceObj); err != nil {
+		return evidence
+	}
+	rawIDs, ok := evidenceObj["event_ids"].([]any)
+	if !ok {
+		return evidence
+	}
+	ids := make([]string, 0, len(rawIDs))
+	for _, item := range rawIDs {
+		if text, ok := item.(string); ok {
+			ids = append(ids, text)
+		}
+	}
+	rewritten, changed := replaceStringSliceValue(ids, oldID, newID)
+	if !changed {
+		return evidence
+	}
+	evidenceObj["event_ids"] = rewritten
+	encoded, err := json.Marshal(evidenceObj)
+	if err != nil {
+		return evidence
+	}
+	return string(encoded)
+}
+
+func mergeSuggestionEvidenceJSON(primary string, secondary string) string {
+	var primaryObj, secondaryObj map[string]any
+	if err := json.Unmarshal([]byte(primary), &primaryObj); err != nil {
+		return primary
+	}
+	if err := json.Unmarshal([]byte(secondary), &secondaryObj); err != nil {
+		return primary
+	}
+	seen := map[string]bool{}
+	var merged []string
+	appendIDs := func(obj map[string]any) {
+		rawIDs, ok := obj["event_ids"].([]any)
+		if !ok {
+			return
+		}
+		for _, item := range rawIDs {
+			text, ok := item.(string)
+			if !ok || seen[text] {
+				continue
+			}
+			seen[text] = true
+			merged = append(merged, text)
+		}
+	}
+	appendIDs(primaryObj)
+	appendIDs(secondaryObj)
+	if len(merged) == 0 {
+		return primary
+	}
+	primaryObj["event_ids"] = merged
+	encoded, err := json.Marshal(primaryObj)
+	if err != nil {
+		return primary
+	}
+	return string(encoded)
+}
+
+func suggestionStatusPriority(status string) int {
+	switch status {
+	case "acted":
+		return 4
+	case "approved", "dismissed":
+		return 3
+	case "snoozed":
+		return 2
+	case "reviewed":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func mergeSuggestionLifecycle(statusA, updatedA, resolvedA, statusB, updatedB, resolvedB string) (string, string, string) {
+	prioA := suggestionStatusPriority(statusA)
+	prioB := suggestionStatusPriority(statusB)
+	updated := newerRFC3339(updatedA, updatedB)
+	if prioB > prioA {
+		return statusB, updated, resolvedB
+	}
+	if prioA > prioB {
+		return statusA, updated, resolvedA
+	}
+	if isNewerRFC3339(resolvedB, resolvedA) || (resolvedA == "" && resolvedB != "") {
+		return statusB, updated, resolvedB
+	}
+	if resolvedA == "" && resolvedB == "" && isNewerRFC3339(updatedB, updatedA) {
+		return statusB, updated, resolvedB
+	}
+	return statusA, updated, resolvedA
+}
+
+func mergeSuppressionUntil(untilA, untilB string) string {
+	if strings.TrimSpace(untilA) == "" || strings.TrimSpace(untilB) == "" {
+		return ""
+	}
+	if isNewerRFC3339(untilB, untilA) {
+		return untilB
+	}
+	return untilA
+}
+
+func newerRFC3339(a, b string) string {
+	if isNewerRFC3339(b, a) {
+		return b
+	}
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+func isNewerRFC3339(candidate, current string) bool {
+	if candidate == "" {
+		return false
+	}
+	if current == "" {
+		return true
+	}
+	tCand, errCand := time.Parse(time.RFC3339Nano, candidate)
+	tCurr, errCurr := time.Parse(time.RFC3339Nano, current)
+	if errCand != nil || errCurr != nil {
+		return candidate > current
+	}
+	return tCand.After(tCurr)
 }
 
 func replaceStringSliceValue(values []string, oldValue string, newValue string) ([]string, bool) {

@@ -470,3 +470,102 @@ func mustJSON(t *testing.T, value any) string {
 	}
 	return string(encoded)
 }
+
+func TestBridgeMCPRefusesSymlinkedProjectsDirectory(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	memoryDir := filepath.Join(t.TempDir(), "workgraph-memory")
+	if err := os.MkdirAll(memoryDir, 0o700); err != nil {
+		t.Fatalf("create memory dir: %v", err)
+	}
+	outsideDir := filepath.Join(t.TempDir(), "outside-projects")
+	if err := os.MkdirAll(outsideDir, 0o700); err != nil {
+		t.Fatalf("create outside dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(outsideDir, "secret-proj.md"), []byte("# Secret Project\n\nOUTSIDE-PROJECTS-SYMLINK-SECRET\n"), 0o600); err != nil {
+		t.Fatalf("write outside project file: %v", err)
+	}
+	if err := os.Symlink(outsideDir, filepath.Join(memoryDir, "projects")); err != nil {
+		t.Fatalf("symlink projects dir outside memory root: %v", err)
+	}
+
+	requests := []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"resume_project","arguments":{"project":"secret-proj"}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"projects_list","arguments":{}}}`,
+	}
+	var output bytes.Buffer
+	if err := workgraph.ServeBridgeMCP(workgraph.BridgeMCPConfig{
+		HomeDir:   homeDir,
+		MemoryDir: memoryDir,
+		Input:     strings.NewReader(strings.Join(requests, "\n") + "\n"),
+		Output:    &output,
+	}); err != nil {
+		t.Fatalf("serve bridge MCP: %v", err)
+	}
+	if strings.Contains(output.String(), "OUTSIDE-PROJECTS-SYMLINK-SECRET") || strings.Contains(output.String(), "secret-proj") && !strings.Contains(output.String(), `"isError":true`) {
+		t.Fatalf("MCP read through symlinked projects directory outside memory root:\n%s", output.String())
+	}
+	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 responses, got %d:\n%s", len(lines), output.String())
+	}
+	for index, line := range lines {
+		if strings.Contains(line, "OUTSIDE-PROJECTS-SYMLINK-SECRET") {
+			t.Fatalf("response %d leaked secret content:\n%s", index+1, line)
+		}
+		if !strings.Contains(line, `"isError":true`) {
+			t.Fatalf("expected response %d to reject symlinked projects dir with isError=true:\n%s", index+1, line)
+		}
+	}
+}
+
+func TestBridgeMCPReadOnlyToolsDoNotMigrateOlderSchema(t *testing.T) {
+	homeDir := initBridgedCaptureHome(t)
+	memoryDir := filepath.Join(t.TempDir(), "workgraph-memory")
+	if err := os.MkdirAll(filepath.Join(memoryDir, "projects"), 0o700); err != nil {
+		t.Fatalf("create memory dir: %v", err)
+	}
+	db := openBridgedCaptureDatabase(t, homeDir)
+	legacyID := "feedfacecafebeef0123456789abcdef"
+	now := time.Now().UTC().Truncate(time.Second)
+	stamp := now.Format(time.RFC3339Nano)
+	if _, err := db.Exec(`INSERT INTO events (id, source, type, timestamp, payload_json, project, actor, summary, created_at)
+		VALUES (?, 'github', 'github.pull_request', ?, '{"repo":"acme/widget","number":99,"state":"open","title":"Legacy PR","author":"alice","head":"feature/legacy"}', 'widget', 'alice', 'Legacy PR', ?)`,
+		legacyID, stamp, stamp); err != nil {
+		t.Fatalf("insert legacy github row: %v", err)
+	}
+	if _, err := db.Exec(`PRAGMA user_version = 4`); err != nil {
+		t.Fatalf("set user_version=4: %v", err)
+	}
+
+	requests := []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"today_overview","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"resume_project","arguments":{"project":"widget"}}}`,
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"resume_project","arguments":{"all":true}}}`,
+		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"projects_list","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"next_items","arguments":{}}}`,
+	}
+	var output bytes.Buffer
+	if err := workgraph.ServeBridgeMCP(workgraph.BridgeMCPConfig{
+		HomeDir:   homeDir,
+		MemoryDir: memoryDir,
+		Input:     strings.NewReader(strings.Join(requests, "\n") + "\n"),
+		Output:    &output,
+	}); err != nil {
+		t.Fatalf("serve bridge MCP: %v", err)
+	}
+
+	var version int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != 4 {
+		t.Fatalf("expected read-only MCP calls to leave user_version at 4, got %d", version)
+	}
+	var legacyCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE id = ?`, legacyID).Scan(&legacyCount); err != nil {
+		t.Fatalf("count legacy row: %v", err)
+	}
+	if legacyCount != 1 {
+		t.Fatalf("expected read-only MCP calls to leave legacy row %q untouched, got count=%d", legacyID, legacyCount)
+	}
+}

@@ -287,7 +287,8 @@ func migrateSchema(db *sql.DB) error {
 	}
 
 	if userVersion >= CurrentSchemaVersion && schemaCoreUpToDate(db) {
-		return nil
+		_, err := db.Exec(slackListSnapshotChunksAbandonedSweep)
+		return err
 	}
 
 	if err := migrateBaseTables(db); err != nil {

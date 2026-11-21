@@ -185,17 +185,21 @@ func loadProjectMemory(memoryDir string, project string) (*MemoryDoc, string, er
 	if !ok {
 		return nil, "", nil
 	}
-	allowed, err := memoryFileWithinRoot(projectMemoryDir(memoryDir), path)
-	if err != nil {
-		return nil, path, err
-	}
-	if !allowed {
-		return nil, path, fmt.Errorf("project memory %q escapes configured memory root", path)
-	}
+	slug := projectSlug(project)
+	relPath := filepath.Join(projectMemoryDirName, slug+".md")
 
-	info, err := os.Stat(path)
+	root, err := os.OpenRoot(memoryDir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, path, nil
+		}
+		return nil, path, fmt.Errorf("open memory root: %w", err)
+	}
+	defer root.Close()
+
+	info, err := root.Stat(relPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, path, nil
 		}
 		return nil, path, fmt.Errorf("check project memory: %w", err)
@@ -204,7 +208,7 @@ func loadProjectMemory(memoryDir string, project string) (*MemoryDoc, string, er
 		return nil, path, fmt.Errorf("project memory %q is a directory", path)
 	}
 
-	content, err := os.ReadFile(path)
+	content, err := root.ReadFile(relPath)
 	if err != nil {
 		return nil, path, fmt.Errorf("read project memory: %w", err)
 	}
@@ -218,45 +222,8 @@ func loadProjectMemory(memoryDir string, project string) (*MemoryDoc, string, er
 	}, path, nil
 }
 
-func memoryFileWithinRoot(rootDir string, candidatePath string) (bool, error) {
-	absRoot, err := filepath.Abs(rootDir)
-	if err != nil {
-		return false, fmt.Errorf("resolve memory root: %w", err)
-	}
-	resolvedRoot, err := filepath.EvalSymlinks(absRoot)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			resolvedRoot = absRoot
-		} else {
-			return false, fmt.Errorf("resolve memory root symlinks: %w", err)
-		}
-	}
-	absCandidate, err := filepath.Abs(candidatePath)
-	if err != nil {
-		return false, fmt.Errorf("resolve memory file: %w", err)
-	}
-	if !pathInsideDirectory(absRoot, absCandidate) {
-		return false, nil
-	}
-	resolvedCandidate, err := filepath.EvalSymlinks(absCandidate)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return true, nil
-		}
-		return false, fmt.Errorf("resolve memory file symlinks: %w", err)
-	}
-	return pathInsideDirectory(resolvedRoot, resolvedCandidate), nil
-}
-
-func pathInsideDirectory(root string, target string) bool {
-	rel, err := filepath.Rel(root, target)
-	if err != nil {
-		return false
-	}
-	if rel == "." || rel == ".." {
-		return false
-	}
-	return !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+func isRootEscapeError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "escapes from parent")
 }
 
 func SuggestMemoryUpdates(config MemorySuggestConfig) (MemorySuggestResult, error) {
