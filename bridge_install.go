@@ -468,7 +468,7 @@ func stampInstalledPluginVersion(client string, installRoot string, installedAt 
 		versionOwner = "claude"
 	}
 	manifest := installedPluginManifestPath(client, filepath.Join(installRoot, "plugins", "workgraph"))
-	version := "0.2.0+" + versionOwner + ".local-" + installedAt.UTC().Format("20060102-150405.000000000")
+	version := "0.3.0+" + versionOwner + ".local-" + installedAt.UTC().Format("20060102-150405.000000000")
 	if err := setJSONVersion(manifest, version); err != nil {
 		return "", fmt.Errorf("stamp plugin manifest: %w", err)
 	}

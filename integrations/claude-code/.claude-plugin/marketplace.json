@@ -7,7 +7,7 @@
       "name": "workgraph",
       "source": "./plugins/workgraph",
       "description": "Use workgraph capture, memory, and AI session continuity from Claude Code.",
-      "version": "0.2.0"
+      "version": "0.3.0"
     }
   ]
 }

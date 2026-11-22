@@ -294,18 +294,27 @@ Inspect captured events without opening SQLite:
 ```sh
 workgraph events today
 workgraph events today --type notion.page_updated
+workgraph events today --project workgraph --query release --format json
 workgraph events today --actor user-me
 workgraph events today --involvement review_requested
 workgraph events today --type slack.message --limit 10
+workgraph events query --since 7d --source git --type 'git.*' --project workgraph --query migration
+workgraph events query --since 2026-06-01 --until 2026-06-08 --format json
 ```
 
-`workgraph events today` is the drill-down view: it shows complete stored event
-labels, event IDs, actor metadata, and involvement classification, and can be
-narrowed by exact actor, involvement, event type, or recent result count. The
-compact overview supports the same exact filters with `workgraph today --actor
-<actor>` and `workgraph today --involvement <kind>`. `today` includes direct and
-legacy-unclassified evidence while hiding evidence explicitly classified with
-no direct involvement; `events today` retains the complete evidence view.
+`workgraph events today` is the current-day drill-down view: it shows complete
+stored event labels, event IDs, actor metadata, and involvement classification,
+and can be narrowed by exact actor, involvement, event type (exact or
+`<prefix>.*` wildcard), project, case-insensitive text query, or recent result
+count, and rendered as `text` or `json`. `workgraph events query` runs the same
+filters
+across multi-day time ranges using `--since` (RFC3339, `YYYY-MM-DD`, or a
+positive duration such as `24h` or `7d`) and `--until` (exclusive RFC3339 or
+`YYYY-MM-DD`), plus `--source`. The compact overview supports exact actor and
+involvement filters with `workgraph today --actor <actor>` and `workgraph today
+--involvement <kind>`. `today` includes direct and legacy-unclassified evidence
+while hiding evidence explicitly classified with no direct involvement; `events
+today` and `events query` retain the complete evidence view.
 
 Inspect and optionally accept project evidence mappings:
 
@@ -752,6 +761,13 @@ Successful capture and connector-status MCP results contain a `runtime` record
 with running and on-disk build identities. `stale: true` means the current
 client session still owns an MCP process started from the previous executable;
 start a new client session after reinstalling the plugin.
+
+The local stdio MCP server (`workgraph bridge mcp [--memory <path>]`) also
+exposes read-only work intelligence tools (`next_items`, `today_overview`,
+`resume_project`, and `projects_list`) alongside bridged capture tools. They
+read local state without mutating suggestions or running database migrations,
+and omit raw untrusted text unless the caller opts in with
+`include_untrusted: true`.
 
 The older `workgraph bridge install` and `workgraph bridge doctor` commands are
 compatibility aliases that operate on this same broader plugin.

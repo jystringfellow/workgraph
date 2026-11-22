@@ -61,6 +61,7 @@ var publicCommandPaths = []string{
 	"connectors validate",
 	"doctor",
 	"events",
+	"events query",
 	"events today",
 	"git",
 	"git capture",

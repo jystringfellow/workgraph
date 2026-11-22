@@ -61,7 +61,7 @@ var helpTopics = map[string]helpTopic{
 	"bridge drain":            {"workgraph bridge drain --client <codex|claude-code|copilot|agy> [options]", "Drain active daemon requests through a signed-in reference client."},
 	"bridge login":            {"workgraph bridge login --client <codex|claude-code|copilot> [options]", "Sign a bridge worker's client back in with its stored config dir."},
 	"bridge install":          {"workgraph bridge install --client <codex|claude-code|copilot|agy> [--model <model> | --clear-model] [options]", "Compatibility alias for plugin install."},
-	"bridge mcp":              {"workgraph bridge mcp [status|stop] [options]", "Serve, inspect, or stop local bridge tools over stdio MCP."},
+	"bridge mcp":              {"workgraph bridge mcp [status|stop] [--memory <path>] [options]", "Serve, inspect, or stop local bridge and read-only work intelligence tools over stdio MCP."},
 	"calendar":                {"workgraph calendar <subcommand>", "Connect, capture, or disconnect calendar providers."},
 	"calendar capture":        {"workgraph calendar capture [options]", "Capture normalized calendar events from a provider or JSON export."},
 	"calendar connect":        {"workgraph calendar connect <google|microsoft> [options]", "Connect a calendar provider with OAuth."},
@@ -84,7 +84,8 @@ var helpTopics = map[string]helpTopic{
 	"connectors validate":     {"workgraph connectors validate <connector> [options]", "Validate a connector's local setup."},
 	"doctor":                  {"workgraph doctor [options]", "Diagnose local workgraph readiness without contacting providers."},
 	"events":                  {"workgraph events <subcommand>", "Inspect captured source events."},
-	"events today":            {"workgraph events today [--type <event-type>] [--actor <actor>] [--involvement <kind>] [--limit <count>] [options]", "List detailed events captured during the current local day."},
+	"events query":            {"workgraph events query [--since <time>] [--until <time>] [--source <source>] [--type <event-type>] [--project <project>] [--actor <actor>] [--involvement <kind>] [--query <text>] [--limit <count>] [--format text|json] [options]", "Query captured events across a time range with optional filters."},
+	"events today":            {"workgraph events today [--type <event-type>] [--project <project>] [--actor <actor>] [--involvement <kind>] [--query <text>] [--limit <count>] [--format text|json] [options]", "List detailed events captured during the current local day."},
 	"git":                     {"workgraph git <subcommand>", "Connect and capture local Git activity."},
 	"git capture":             {"workgraph git capture [--max-commits <count>] [options]", "Capture recent commits from configured watch roots."},
 	"git connect":             {"workgraph git connect [options]", "Discover Git repositories from configured watch roots."},
@@ -213,6 +214,10 @@ var helpExamples = map[string][]string{
 	"connectors connect": {
 		"workgraph connectors connect slack --mode bridged --params-json '{\"channels\":[\"C0DEMO123\"],\"include_dms\":false}'",
 		"workgraph connectors connect azure.boards --mode bridged --params-json '{\"organization\":\"example-org\",\"project\":\"Demo\",\"area_path\":\"Demo\"}'",
+	},
+	"events query": {
+		"workgraph events query --since 7d --project workgraph",
+		"workgraph events query --since 2026-06-01 --until 2026-06-08 --type 'git.*' --query migration --format json",
 	},
 	"llm verify-backlog": {
 		"workgraph llm verify-backlog --dry-run",
