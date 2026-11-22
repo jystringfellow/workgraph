@@ -504,4 +504,7 @@ func TestEventsQueryCLIFiltersRangeAndOutputsJSON(t *testing.T) {
 	if invalidOut, err := runworkgraph(t, repoRoot(t), "events", "query", "--home", homeDir, "--since", "not-a-time"); err == nil {
 		t.Fatalf("expected invalid --since to fail, got:\n%s", invalidOut)
 	}
+	if overflowOut, err := runworkgraph(t, repoRoot(t), "events", "query", "--home", homeDir, "--since", "106752d"); err == nil {
+		t.Fatalf("expected overflowing --since 106752d to fail, got:\n%s", overflowOut)
+	}
 }

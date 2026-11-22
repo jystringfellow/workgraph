@@ -304,9 +304,10 @@ workgraph events query --since 2026-06-01 --until 2026-06-08 --format json
 
 `workgraph events today` is the current-day drill-down view: it shows complete
 stored event labels, event IDs, actor metadata, and involvement classification,
-and can be narrowed by exact actor, involvement, event type (exact or trailing
-`*` prefix), project, case-insensitive text query, or recent result count, and
-rendered as `text` or `json`. `workgraph events query` runs the same filters
+and can be narrowed by exact actor, involvement, event type (exact or
+`<prefix>.*` wildcard), project, case-insensitive text query, or recent result
+count, and rendered as `text` or `json`. `workgraph events query` runs the same
+filters
 across multi-day time ranges using `--since` (RFC3339, `YYYY-MM-DD`, or a
 positive duration such as `24h` or `7d`) and `--until` (exclusive RFC3339 or
 `YYYY-MM-DD`), plus `--source`. The compact overview supports exact actor and

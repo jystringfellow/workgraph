@@ -197,7 +197,7 @@ lifecycle contract.
 directly without hiding indirect evidence:
 
 - `workgraph events today` restricts results to the current local day and
-  supports `--type` (exact or trailing `*` prefix), `--project`, `--actor`,
+  supports `--type` (exact or `<prefix>.*` wildcard), `--project`, `--actor`,
   `--involvement`, `--query` (case-insensitive substring match against summary,
   path, label, and project), `--limit` (keeping the most recent matching
   events), and `--format text|json`.

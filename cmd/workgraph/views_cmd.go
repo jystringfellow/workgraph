@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"strconv"
@@ -393,7 +394,7 @@ func runEventsQuery(args []string, stdout io.Writer, stderr io.Writer) int {
 	sinceRaw := flags.String("since", "", "Inclusive lower bound (RFC3339, YYYY-MM-DD, or relative like 24h or 7d)")
 	untilRaw := flags.String("until", "", "Exclusive upper bound (RFC3339 or YYYY-MM-DD)")
 	source := flags.String("source", "", "Exact event source to include")
-	eventType := flags.String("type", "", "Event type or trailing wildcard prefix (e.g. git.*)")
+	eventType := flags.String("type", "", "Event type or <prefix>.* wildcard (e.g. git.*)")
 	project := flags.String("project", "", "Exact event project to include")
 	actor := flags.String("actor", "", "Exact event actor to include")
 	involvement := flags.String("involvement", "", "Exact user involvement to include")
@@ -456,7 +457,8 @@ func parseEventQueryTime(raw string, now time.Time, allowRelative bool) (time.Ti
 	}
 	if allowRelative {
 		if strings.HasSuffix(trimmed, "d") && len(trimmed) > 1 {
-			if days, err := strconv.Atoi(trimmed[:len(trimmed)-1]); err == nil && days > 0 {
+			const maxRelativeDays = math.MaxInt64 / int64(24*time.Hour)
+			if days, err := strconv.ParseInt(trimmed[:len(trimmed)-1], 10, 64); err == nil && days > 0 && days <= maxRelativeDays {
 				return now.Add(-time.Duration(days) * 24 * time.Hour), nil
 			}
 		}
