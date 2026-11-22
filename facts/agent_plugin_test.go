@@ -78,8 +78,8 @@ func TestAgentPluginInstallPackagesEveryCanonicalSkillForEveryClient(t *testing.
 			if client == "agy" {
 				versionMarker = "+agy."
 			}
-			if !strings.Contains(manifest.Version, versionMarker) {
-				t.Fatalf("installed %s plugin version %q lacks update cachebuster %q", client, manifest.Version, versionMarker)
+			if !strings.HasPrefix(manifest.Version, "0.3.0"+versionMarker) {
+				t.Fatalf("installed %s plugin version %q lacks 0.3.0 update cachebuster %q", client, manifest.Version, versionMarker)
 			}
 
 			canonicalFiles := []string{

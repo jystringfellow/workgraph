@@ -382,3 +382,126 @@ func TestQueryEventsOrdersAndBoundsFractionalRFC3339NanoTimestamps(t *testing.T)
 		t.Fatalf("expected Limit:1 to keep newest event ts-half, got %+v", limited.Events)
 	}
 }
+
+func TestEventsQueryCLIFiltersRangeAndOutputsJSON(t *testing.T) {
+	homeDir := filepath.Join(t.TempDir(), ".workgraph")
+	initRes, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+
+	now := localTodayAnchor(time.Now())
+	insertEvent(t, initRes.DatabasePath, storedEvent{
+		ID:          "cli-range-old",
+		Source:      "git",
+		Type:        "git.commit",
+		Timestamp:   now.AddDate(0, 0, -5),
+		Project:     "workgraph",
+		Actor:       "alice",
+		Involvement: `["authored"]`,
+		Summary:     "Prepare release checklist",
+		Payload:     `{"commit":"1111111","branch":"main","subject":"Prepare release checklist"}`,
+	})
+	insertEvent(t, initRes.DatabasePath, storedEvent{
+		ID:          "cli-range-today",
+		Source:      "git",
+		Type:        "git.commit",
+		Timestamp:   now.Add(-time.Hour),
+		Project:     "workgraph",
+		Actor:       "alice",
+		Involvement: `["authored"]`,
+		Summary:     "Polish release CLI flags",
+		Payload:     `{"commit":"2222222","branch":"main","subject":"Polish release CLI flags"}`,
+	})
+	insertEvent(t, initRes.DatabasePath, storedEvent{
+		ID:          "cli-range-ancient",
+		Source:      "git",
+		Type:        "git.commit",
+		Timestamp:   now.AddDate(0, 0, -40),
+		Project:     "workgraph",
+		Actor:       "alice",
+		Involvement: `["authored"]`,
+		Summary:     "Ancient release note",
+		Payload:     `{"commit":"3333333","branch":"main","subject":"Ancient release note"}`,
+	})
+
+	queryOut, err := runworkgraph(t, repoRoot(t),
+		"events", "query",
+		"--home", homeDir,
+		"--database", initRes.DatabasePath,
+		"--since", "7d",
+		"--source", "git",
+		"--type", "git.*",
+		"--project", "workgraph",
+		"--actor", "alice",
+		"--involvement", "authored",
+		"--query", "release",
+		"--format", "json",
+	)
+	if err != nil {
+		t.Fatalf("workgraph events query failed: %v\n%s", err, queryOut)
+	}
+	var parsedQuery struct {
+		Events []struct {
+			ID string `json:"id"`
+		} `json:"events"`
+	}
+	if err := json.Unmarshal(queryOut, &parsedQuery); err != nil {
+		t.Fatalf("unmarshal events query JSON: %v\n%s", err, queryOut)
+	}
+	if len(parsedQuery.Events) != 2 || parsedQuery.Events[0].ID != "cli-range-old" || parsedQuery.Events[1].ID != "cli-range-today" {
+		t.Fatalf("expected [cli-range-old, cli-range-today] from --since 7d, got %+v", parsedQuery.Events)
+	}
+
+	sinceDate := now.AddDate(0, 0, -6).Format("2006-01-02")
+	untilDate := now.AddDate(0, 0, -4).Format("2006-01-02")
+	dateOut, err := runworkgraph(t, repoRoot(t),
+		"events", "query",
+		"--home", homeDir,
+		"--database", initRes.DatabasePath,
+		"--since", sinceDate,
+		"--until", untilDate,
+		"--format", "json",
+	)
+	if err != nil {
+		t.Fatalf("workgraph events query date window failed: %v\n%s", err, dateOut)
+	}
+	var parsedDate struct {
+		Events []struct {
+			ID string `json:"id"`
+		} `json:"events"`
+	}
+	if err := json.Unmarshal(dateOut, &parsedDate); err != nil {
+		t.Fatalf("unmarshal date window JSON: %v\n%s", err, dateOut)
+	}
+	if len(parsedDate.Events) != 1 || parsedDate.Events[0].ID != "cli-range-old" {
+		t.Fatalf("expected only cli-range-old in [%s, %s), got %+v", sinceDate, untilDate, parsedDate.Events)
+	}
+
+	todayOut, err := runworkgraph(t, repoRoot(t),
+		"events", "today",
+		"--home", homeDir,
+		"--database", initRes.DatabasePath,
+		"--project", "workgraph",
+		"--query", "polish",
+		"--format", "json",
+	)
+	if err != nil {
+		t.Fatalf("workgraph events today --format json failed: %v\n%s", err, todayOut)
+	}
+	var parsedToday struct {
+		Events []struct {
+			ID string `json:"id"`
+		} `json:"events"`
+	}
+	if err := json.Unmarshal(todayOut, &parsedToday); err != nil {
+		t.Fatalf("unmarshal events today JSON: %v\n%s", err, todayOut)
+	}
+	if len(parsedToday.Events) != 1 || parsedToday.Events[0].ID != "cli-range-today" {
+		t.Fatalf("expected only cli-range-today from events today JSON, got %+v", parsedToday.Events)
+	}
+
+	if invalidOut, err := runworkgraph(t, repoRoot(t), "events", "query", "--home", homeDir, "--since", "not-a-time"); err == nil {
+		t.Fatalf("expected invalid --since to fail, got:\n%s", invalidOut)
+	}
+}

@@ -5,7 +5,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
+	"time"
 
 	workgraph "github.com/jystringfellow/workgraph"
 )
@@ -291,12 +293,14 @@ func runSuggestionsDismiss(args []string, stdout io.Writer, stderr io.Writer) in
 
 func runEvents(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: workgraph events <today>")
+		fmt.Fprintln(stderr, "usage: workgraph events <today|query>")
 		return 2
 	}
 	switch args[0] {
 	case "today":
 		return runEventsToday(args[1:], stdout, stderr)
+	case "query":
+		return runEventsQuery(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown events command: %s\n", args[0])
 		return 2
@@ -378,6 +382,90 @@ func runEventsToday(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 	fmt.Fprintln(stdout, result.Message)
 	return 0
+}
+
+func runEventsQuery(args []string, stdout io.Writer, stderr io.Writer) int {
+	flags := flag.NewFlagSet("events query", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	homeDir := flags.String("home", "", "workgraph home directory")
+	databasePath := flags.String("database", "", "workgraph SQLite database path")
+	sinceRaw := flags.String("since", "", "Inclusive lower bound (RFC3339, YYYY-MM-DD, or relative like 24h or 7d)")
+	untilRaw := flags.String("until", "", "Exclusive upper bound (RFC3339 or YYYY-MM-DD)")
+	source := flags.String("source", "", "Exact event source to include")
+	eventType := flags.String("type", "", "Event type or trailing wildcard prefix (e.g. git.*)")
+	project := flags.String("project", "", "Exact event project to include")
+	actor := flags.String("actor", "", "Exact event actor to include")
+	involvement := flags.String("involvement", "", "Exact user involvement to include")
+	query := flags.String("query", "", "Case-insensitive text substring to match")
+	limit := flags.Int("limit", 0, "Maximum number of most recent matching events to show")
+	format := flags.String("format", "text", "Output format: text or json")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "usage: workgraph events query [--since <time>] [--until <time>] [--source <source>] [--type <type>] [--project <project>] [--actor <actor>] [--involvement <kind>] [--query <text>] [--limit <count>] [--format text|json]")
+		return 2
+	}
+
+	now := time.Now()
+	since, err := parseEventQueryTime(*sinceRaw, now, true)
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph events query: invalid --since: %v\n", err)
+		return 2
+	}
+	until, err := parseEventQueryTime(*untilRaw, now, false)
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph events query: invalid --until: %v\n", err)
+		return 2
+	}
+
+	result, err := workgraph.QueryEvents(workgraph.EventsQueryConfig{
+		HomeDir:      *homeDir,
+		DatabasePath: *databasePath,
+		Since:        since,
+		Until:        until,
+		Source:       *source,
+		Type:         *eventType,
+		Project:      *project,
+		Actor:        *actor,
+		Involvement:  *involvement,
+		Query:        *query,
+		Limit:        *limit,
+		Format:       *format,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "workgraph events query: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, result.Message)
+	return 0
+}
+
+func parseEventQueryTime(raw string, now time.Time, allowRelative bool) (time.Time, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return time.Time{}, nil
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, trimmed); err == nil {
+		return parsed, nil
+	}
+	if parsed, err := time.ParseInLocation("2006-01-02", trimmed, now.Location()); err == nil {
+		return parsed, nil
+	}
+	if allowRelative {
+		if strings.HasSuffix(trimmed, "d") && len(trimmed) > 1 {
+			if days, err := strconv.Atoi(trimmed[:len(trimmed)-1]); err == nil && days > 0 {
+				return now.Add(-time.Duration(days) * 24 * time.Hour), nil
+			}
+		}
+		if d, err := time.ParseDuration(trimmed); err == nil && d > 0 {
+			return now.Add(-d), nil
+		}
+		return time.Time{}, fmt.Errorf("%q (expected RFC3339, YYYY-MM-DD, or positive duration like 24h or 7d)", raw)
+	}
+	return time.Time{}, fmt.Errorf("%q (expected RFC3339 or YYYY-MM-DD)", raw)
 }
 
 func runMemory(args []string, stdout io.Writer, stderr io.Writer) int {

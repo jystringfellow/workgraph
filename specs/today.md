@@ -190,3 +190,20 @@ and writes one stderr warning that snoozed suggestions could not be
 refreshed.
 See `specs/event-associations.md` for the full evaluator, scoring, and
 lifecycle contract.
+
+## Event Drill-Down and Range Queries
+
+`workgraph events today` and `workgraph events query` inspect captured events
+directly without hiding indirect evidence:
+
+- `workgraph events today` restricts results to the current local day and
+  supports `--type` (exact or trailing `*` prefix), `--project`, `--actor`,
+  `--involvement`, `--query` (case-insensitive substring match against summary,
+  path, label, and project), `--limit` (keeping the most recent matching
+  events), and `--format text|json`.
+- `workgraph events query` supports the same filters plus `--source`,
+  `--since` (inclusive lower bound: RFC3339, local `YYYY-MM-DD`, or positive
+  relative duration such as `24h` or `7d`), and `--until` (exclusive upper
+  bound: RFC3339 or local `YYYY-MM-DD`).
+- Matching events are bounded and ordered chronologically by parsed timestamp
+  before applying `--limit`.
