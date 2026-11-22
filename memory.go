@@ -185,10 +185,21 @@ func loadProjectMemory(memoryDir string, project string) (*MemoryDoc, string, er
 	if !ok {
 		return nil, "", nil
 	}
+	slug := projectSlug(project)
+	relPath := filepath.Join(projectMemoryDirName, slug+".md")
 
-	info, err := os.Stat(path)
+	root, err := os.OpenRoot(memoryDir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, path, nil
+		}
+		return nil, path, fmt.Errorf("open memory root: %w", err)
+	}
+	defer root.Close()
+
+	info, err := root.Stat(relPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, path, nil
 		}
 		return nil, path, fmt.Errorf("check project memory: %w", err)
@@ -197,7 +208,7 @@ func loadProjectMemory(memoryDir string, project string) (*MemoryDoc, string, er
 		return nil, path, fmt.Errorf("project memory %q is a directory", path)
 	}
 
-	content, err := os.ReadFile(path)
+	content, err := root.ReadFile(relPath)
 	if err != nil {
 		return nil, path, fmt.Errorf("read project memory: %w", err)
 	}
@@ -209,6 +220,10 @@ func loadProjectMemory(memoryDir string, project string) (*MemoryDoc, string, er
 		Content:   string(content),
 		UpdatedAt: info.ModTime(),
 	}, path, nil
+}
+
+func isRootEscapeError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "escapes from parent")
 }
 
 func SuggestMemoryUpdates(config MemorySuggestConfig) (MemorySuggestResult, error) {

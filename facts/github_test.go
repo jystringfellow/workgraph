@@ -1098,7 +1098,88 @@ func githubEvent(t *testing.T, dbPath, eventType, repository string, number int)
 }
 
 func TestGitHubPollFailsVisiblyWhenRateLimitCheckFails(t *testing.T) {
-	t.Skip("TBD: a failing gh api rate_limit records a github poll error and increments consecutive_failures instead of a successful empty poll")
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	codeDir := filepath.Join(tempDir, "Code")
+	if err := os.MkdirAll(codeDir, 0o755); err != nil {
+		t.Fatalf("create code dir: %v", err)
+	}
+	ghPath := filepath.Join(tempDir, "gh")
+	script := `#!/bin/sh
+echo "$@" >> "` + filepath.Join(tempDir, "gh.log") + `"
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+  printf 'github.com\n  Logged in\n'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "rate_limit" ]; then
+  printf 'HTTP 502: rate_limit endpoint unavailable\n' >&2
+  exit 1
+fi
+printf 'unexpected gh args: %s\n' "$*" >&2
+exit 1
+`
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tempDir, "gh.log"), nil, 0o644); err != nil {
+		t.Fatalf("write gh log: %v", err)
+	}
+	initResult, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir})
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	connectGitHubForTest(t, homeDir, ghPath)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	capture, err := workgraph.StartRun(workgraph.RunConfig{
+		HomeDir:               homeDir,
+		DatabasePath:          initResult.DatabasePath,
+		WatchDirs:             []string{codeDir},
+		GitHubPollInterval:    20 * time.Millisecond,
+		GitHubCommand:         ghPath,
+		ConnectorRetryInitial: 10 * time.Millisecond,
+		ConnectorRetryMax:     20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("run start failed: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- capture.Run(ctx) }()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		status, err := workgraph.StatusConnectors(workgraph.ConnectorListConfig{HomeDir: homeDir})
+		if err != nil {
+			t.Fatalf("connector status: %v", err)
+		}
+		var github workgraph.ConnectorStatus
+		for _, candidate := range status.Connectors {
+			if candidate.ID == "github" {
+				github = candidate
+			}
+		}
+		if github.ConsecutiveFailures > 0 && strings.Contains(github.LastError, "rate_limit") {
+			if github.LastSuccess != "" {
+				t.Fatalf("expected failing rate_limit check not to record last_success_at, got %q", github.LastSuccess)
+			}
+			if github.SetupState != "ready" {
+				t.Fatalf("expected non-auth rate_limit failure to keep setup ready, got %q", github.SetupState)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected failing gh api rate_limit to record a poll error and increment consecutive_failures, got %#v", github)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	if searches := len(searchInvocationLines(readGHLog(t, tempDir))); searches != 0 {
+		t.Fatalf("expected failing rate_limit check to skip gh search, got %d searches", searches)
+	}
 }
 
 func TestGitHubPollTreatsGHBadCredentialsAsAuthFailure(t *testing.T) {
@@ -1180,9 +1261,372 @@ exit 1
 }
 
 func TestGitHubPollGatesOnSearchRateLimitBucket(t *testing.T) {
-	t.Skip("TBD: resources.search.remaining below the poll search count plus 2 with high core skips gh search; search remaining 30 with core 0 polls")
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	dbPath := filepath.Join(homeDir, "workgraph.db")
+
+	writeSearchRateLimitGH := func(coreRemaining, searchRemaining int) string {
+		t.Helper()
+		ghPath := filepath.Join(tempDir, "gh")
+		script := `#!/bin/sh
+echo "$@" >> "` + filepath.Join(tempDir, "gh.log") + `"
+if [ "$1" = "api" ] && [ "$2" = "rate_limit" ]; then
+  printf '{"resources":{"core":{"remaining":` + fmtInt(coreRemaining) + `},"search":{"remaining":` + fmtInt(searchRemaining) + `}}}'
+  exit 0
+fi
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+  printf 'github.com\n  Logged in\n'
+  exit 0
+fi
+if [ "$1" = "search" ] && [ "$2" = "prs" ]; then
+  printf '[{"number":42,"url":"https://github.com/jystringfellow/Cupcake/pull/42","state":"open","author":{"login":"octocat"},"title":"Add cupcake API","updatedAt":"2026-05-20T14:30:00Z","repository":{"nameWithOwner":"jystringfellow/Cupcake"}}]'
+  exit 0
+fi
+if [ "$1" = "search" ] && [ "$2" = "issues" ]; then
+  printf '[]'
+  exit 0
+fi
+printf 'unexpected gh args: %s\n' "$*" >&2
+exit 1
+`
+		if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+			t.Fatalf("write fake gh: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(tempDir, "gh.log"), nil, 0o644); err != nil {
+			t.Fatalf("reset gh log: %v", err)
+		}
+		return ghPath
+	}
+
+	lowSearchGH := writeSearchRateLimitGH(5000, 4)
+	connectGitHubForTest(t, homeDir, lowSearchGH)
+	if _, err := workgraph.CaptureGitHubFromGH(workgraph.GitHubCaptureConfig{
+		HomeDir: homeDir, DatabasePath: dbPath, GitHubCommand: lowSearchGH,
+	}); err != nil {
+		t.Fatalf("github capture with low search budget failed: %v", err)
+	}
+	if searches := len(searchInvocationLines(readGHLog(t, tempDir))); searches != 0 {
+		t.Fatalf("expected search remaining 4 (< 3+2) with core 5000 to skip gh search, got %d searches", searches)
+	}
+	if count := githubEventCount(t, dbPath); count != 0 {
+		t.Fatalf("expected no stored events when search bucket is low, got %d", count)
+	}
+
+	paramsWithAlways := `{"scope":"participant","identity":"@me","include":["involves","review_requested"],"always_repositories":["jystringfellow/Alpha"],"bootstrap_lookback":"168h"}`
+	lowForAlwaysGH := writeSearchRateLimitGH(5000, 6)
+	connectGitHubForTestWithParams(t, homeDir, lowForAlwaysGH, paramsWithAlways)
+	if _, err := workgraph.CaptureGitHubFromGH(workgraph.GitHubCaptureConfig{
+		HomeDir: homeDir, DatabasePath: dbPath, GitHubCommand: lowForAlwaysGH,
+	}); err != nil {
+		t.Fatalf("github capture with always_repositories and search remaining 6 failed: %v", err)
+	}
+	if searches := len(searchInvocationLines(readGHLog(t, tempDir))); searches != 0 {
+		t.Fatalf("expected search remaining 6 (< 5+2) to skip gh search, got %d searches", searches)
+	}
+
+	highSearchZeroCoreGH := writeSearchRateLimitGH(0, 30)
+	connectGitHubForTest(t, homeDir, highSearchZeroCoreGH)
+	if _, err := workgraph.CaptureGitHubFromGH(workgraph.GitHubCaptureConfig{
+		HomeDir: homeDir, DatabasePath: dbPath, GitHubCommand: highSearchZeroCoreGH,
+	}); err != nil {
+		t.Fatalf("github capture with search 30 and core 0 failed: %v", err)
+	}
+	if searches := len(searchInvocationLines(readGHLog(t, tempDir))); searches != 3 {
+		t.Fatalf("expected search remaining 30 with core 0 to run 3 base searches, got %d", searches)
+	}
+	if count := githubEventCount(t, dbPath); count != 1 {
+		t.Fatalf("expected 1 stored event after polling with search remaining 30, got %d", count)
+	}
 }
 
 func TestGitHubBridgedAndDirectCaptureShareOnePullRequestIdentity(t *testing.T) {
-	t.Skip("TBD: two bridged revisions plus a direct capture of one PR leave exactly one github.pull_request row with the newest state, repository, and branch")
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	dbPath := filepath.Join(homeDir, "workgraph.db")
+	params := `{"scope":"participant","identity":"@me","include":["involves","review_requested"],"always_repositories":[],"bootstrap_lookback":"168h"}`
+	if _, err := workgraph.ConfigureBridgedConnector(workgraph.ConnectorBridgeConfig{
+		HomeDir: homeDir, ID: "github", BridgeParams: json.RawMessage(params),
+	}); err != nil {
+		t.Fatalf("configure bridged github: %v", err)
+	}
+
+	bridgedInput := strings.Join([]string{
+		`{"type":"github.pull_request","timestamp":"2026-05-20T14:00:00Z","external_id":"jystringfellow/Cupcake#pr:42:2026-05-20T14:00:00Z","project":"Cupcake","actor":"octocat","summary":"Add cupcake API","payload":{"repo":"jystringfellow/Cupcake","number":42,"state":"open","title":"Add cupcake API","author":"octocat","url":"https://github.com/jystringfellow/Cupcake/pull/42","head":"feature/cupcake-v1","base":"main","updated_at":"2026-05-20T14:00:00Z"}}`,
+		`{"type":"github.pull_request","timestamp":"2026-05-20T14:15:00Z","external_id":"jystringfellow/Cupcake#pr:42:2026-05-20T14:15:00Z","project":"Cupcake","actor":"octocat","summary":"Add cupcake API","payload":{"repo":"jystringfellow/Cupcake","number":42,"state":"open","title":"Add cupcake API","author":"octocat","url":"https://github.com/jystringfellow/Cupcake/pull/42","head":"feature/cupcake-api","base":"main","updated_at":"2026-05-20T14:15:00Z"}}`,
+	}, "\n") + "\n"
+	if _, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{
+		HomeDir: homeDir, DatabasePath: dbPath, Source: "github", Input: strings.NewReader(bridgedInput),
+	}); err != nil {
+		t.Fatalf("ingest bridged github revisions: %v", err)
+	}
+	if count := githubEventCount(t, dbPath); count != 1 {
+		t.Fatalf("expected two bridged revisions of one PR to share one row, got %d", count)
+	}
+
+	ghPath := filepath.Join(tempDir, "gh")
+	script := `#!/bin/sh
+if [ "$1" = "api" ] && [ "$2" = "rate_limit" ]; then
+  printf '{"resources":{"core":{"remaining":5000},"search":{"remaining":30}}}'
+  exit 0
+fi
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+  printf 'github.com\n  Logged in\n'
+  exit 0
+fi
+if [ "$1" = "search" ] && [ "$2" = "prs" ]; then
+  case "$*" in
+    *--review-requested*)
+      printf '[]'
+      ;;
+    *)
+      printf '[{"number":42,"url":"https://github.com/jystringfellow/Cupcake/pull/42","state":"closed","author":{"login":"octocat"},"title":"Add cupcake API","updatedAt":"2026-05-20T14:30:00Z","repository":{"nameWithOwner":"jystringfellow/Cupcake"}}]'
+      ;;
+  esac
+  exit 0
+fi
+if [ "$1" = "search" ] && [ "$2" = "issues" ]; then
+  printf '[]'
+  exit 0
+fi
+exit 1
+`
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	connectGitHubForTestWithParams(t, homeDir, ghPath, params)
+	if _, err := workgraph.CaptureGitHubFromGH(workgraph.GitHubCaptureConfig{
+		HomeDir: homeDir, DatabasePath: dbPath, GitHubCommand: ghPath,
+	}); err != nil {
+		t.Fatalf("direct github capture failed: %v", err)
+	}
+
+	if count := githubEventCount(t, dbPath); count != 1 {
+		t.Fatalf("expected bridged and direct capture of one PR to leave one row, got %d", count)
+	}
+	event := githubEvent(t, dbPath, "github.pull_request", "jystringfellow/Cupcake", 42)
+	for _, expected := range []string{
+		`"repository":"jystringfellow/Cupcake"`,
+		`"number":42`,
+		`"state":"closed"`,
+		`"branch":"feature/cupcake-api"`,
+	} {
+		if !strings.Contains(event.PayloadJSON, expected) {
+			t.Fatalf("expected unified PR payload to contain %s, got %s", expected, event.PayloadJSON)
+		}
+	}
+}
+
+func TestLegacyHashedBridgedGitHubSnapshotReconcilesAndPreservesReferences(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	dbPath := filepath.Join(homeDir, "workgraph.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	legacyID := "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+	canonicalID := "github.pull_request:jystringfellow/Cupcake:42"
+	if _, err := db.Exec(`PRAGMA user_version = 4`); err != nil {
+		t.Fatalf("set legacy user_version: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO events (id, source, type, timestamp, payload_json, project, actor, summary, created_at)
+		VALUES (?, 'github', 'github.pull_request', '2026-05-20T14:00:00Z', '{"repo":"jystringfellow/Cupcake","number":42,"state":"open","title":"Add cupcake API","author":"octocat","url":"https://github.com/jystringfellow/Cupcake/pull/42","head":"feature/legacy-cupcake"}', 'Cupcake', 'octocat', 'Add cupcake API', '2026-05-20T14:00:00Z')`,
+		legacyID); err != nil {
+		t.Fatalf("insert legacy hashed github snapshot: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO memory_links (id, memory_doc_path, event_id, relation, created_at)
+		VALUES ('ml-legacy-1', '/memory/projects/cupcake.md', ?, 'evidence', '2026-05-20T14:05:00Z')`, legacyID); err != nil {
+		t.Fatalf("insert memory_links reference: %v", err)
+	}
+	legacyPattern := `pair:["` + legacyID + `","slack.message:C1:1"]`
+	canonicalPattern := `pair:["` + canonicalID + `","slack.message:C1:1"]`
+	if _, err := db.Exec(`INSERT INTO suggestions (id, type, pattern_key, title, reason, confidence, lane, status, evidence_json, created_at, updated_at)
+		VALUES ('sug-legacy-1', 'association', ?, 'Related PR and Slack', 'Shared URL', 'high', 'baseline', 'proposed', ?, '2026-05-20T14:05:00Z', '2026-05-20T14:05:00Z')`,
+		legacyPattern, `{"event_ids":["`+legacyID+`","slack.message:C1:1"]}`); err != nil {
+		t.Fatalf("insert suggestion reference: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS project_links (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		unit_id TEXT NOT NULL,
+		unit_kind TEXT NOT NULL,
+		container TEXT NOT NULL,
+		target TEXT NOT NULL,
+		project TEXT NOT NULL DEFAULT '',
+		proposed_project_json TEXT NOT NULL DEFAULT '',
+		source TEXT NOT NULL,
+		kind TEXT NOT NULL DEFAULT '',
+		summary TEXT NOT NULL DEFAULT '',
+		confidence REAL NOT NULL,
+		evidence_json TEXT NOT NULL,
+		state TEXT NOT NULL,
+		auto INTEGER NOT NULL DEFAULT 0,
+		rule TEXT NOT NULL DEFAULT '',
+		profile TEXT NOT NULL DEFAULT '',
+		run_id TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		decided_at TEXT NOT NULL DEFAULT '',
+		decision TEXT NOT NULL DEFAULT ''
+	)`); err != nil {
+		t.Fatalf("create project_links: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO project_links (unit_id, unit_kind, container, target, project, source, confidence, evidence_json, state, created_at)
+		VALUES ('github.pr:jystringfellow/cupcake#42', 'github.pr', 'Cupcake', 'project', 'cupcake', 'user', 1, ?, 'applied', '2026-05-20T14:05:00Z')`,
+		`["`+legacyID+`"]`); err != nil {
+		t.Fatalf("insert project_links reference: %v", err)
+	}
+
+	params := `{"scope":"participant","identity":"@me","include":["involves"],"always_repositories":[],"bootstrap_lookback":"168h"}`
+	if _, err := workgraph.ConfigureBridgedConnector(workgraph.ConnectorBridgeConfig{
+		HomeDir: homeDir, ID: "github", BridgeParams: json.RawMessage(params),
+	}); err != nil {
+		t.Fatalf("configure bridged github: %v", err)
+	}
+	bridgedUpdate := `{"type":"github.pull_request","timestamp":"2026-05-20T14:30:00Z","external_id":"jystringfellow/Cupcake#pr:42:2026-05-20T14:30:00Z","project":"Cupcake","actor":"octocat","summary":"Add cupcake API","payload":{"repo":"jystringfellow/Cupcake","number":42,"state":"closed","title":"Add cupcake API","author":"octocat","url":"https://github.com/jystringfellow/Cupcake/pull/42","updated_at":"2026-05-20T14:30:00Z"}}` + "\n"
+	if _, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{
+		HomeDir: homeDir, DatabasePath: dbPath, Source: "github", Input: strings.NewReader(bridgedUpdate),
+	}); err != nil {
+		t.Fatalf("ingest bridged update after legacy row: %v", err)
+	}
+
+	if count := githubEventCount(t, dbPath); count != 1 {
+		t.Fatalf("expected legacy hashed row and new capture to reconcile into 1 row, got %d", count)
+	}
+	event := githubEvent(t, dbPath, "github.pull_request", "jystringfellow/Cupcake", 42)
+	for _, expected := range []string{`"repository":"jystringfellow/Cupcake"`, `"state":"closed"`, `"branch":"feature/legacy-cupcake"`} {
+		if !strings.Contains(event.PayloadJSON, expected) {
+			t.Fatalf("expected reconciled snapshot payload to contain %s, got %s", expected, event.PayloadJSON)
+		}
+	}
+
+	var linkedEventID string
+	if err := db.QueryRow(`SELECT event_id FROM memory_links WHERE id = 'ml-legacy-1'`).Scan(&linkedEventID); err != nil {
+		t.Fatalf("query memory_links: %v", err)
+	}
+	if linkedEventID != canonicalID {
+		t.Fatalf("expected memory_links.event_id rewritten to %q, got %q", canonicalID, linkedEventID)
+	}
+
+	var projectEvidence string
+	if err := db.QueryRow(`SELECT evidence_json FROM project_links WHERE unit_id = 'github.pr:jystringfellow/cupcake#42'`).Scan(&projectEvidence); err != nil {
+		t.Fatalf("query project_links: %v", err)
+	}
+	if !strings.Contains(projectEvidence, canonicalID) || strings.Contains(projectEvidence, legacyID) {
+		t.Fatalf("expected project_links.evidence_json rewritten to %q, got %s", canonicalID, projectEvidence)
+	}
+
+	var suggestionPattern, suggestionEvidence string
+	if err := db.QueryRow(`SELECT pattern_key, evidence_json FROM suggestions WHERE id = 'sug-legacy-1'`).Scan(&suggestionPattern, &suggestionEvidence); err != nil {
+		t.Fatalf("query suggestions: %v", err)
+	}
+	if !strings.Contains(suggestionEvidence, canonicalID) || strings.Contains(suggestionEvidence, legacyID) {
+		t.Fatalf("expected suggestions.evidence_json rewritten to %q, got %s", canonicalID, suggestionEvidence)
+	}
+	if suggestionPattern != canonicalPattern {
+		t.Fatalf("expected suggestions.pattern_key rewritten to %q, got %q", canonicalPattern, suggestionPattern)
+	}
+}
+
+func TestLegacyHashedBridgedGitHubSnapshotPreservesSuppressionsLifecycleAndFeedback(t *testing.T) {
+	tempDir := t.TempDir()
+	homeDir := filepath.Join(tempDir, ".workgraph")
+	if _, err := workgraph.Init(workgraph.InitConfig{HomeDir: homeDir}); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	dbPath := filepath.Join(homeDir, "workgraph.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	legacyID := "11223344556677889900aabbccddeeff"
+	canonicalID := "github.pull_request:jystringfellow/Cupcake:77"
+	otherID := "calendar.event:google:primary:evt-77"
+	legacyPattern := `pair:["` + legacyID + `","` + otherID + `"]`
+	canonicalPattern := `pair:["` + otherID + `","` + canonicalID + `"]`
+
+	if _, err := db.Exec(`PRAGMA user_version = 4`); err != nil {
+		t.Fatalf("set user_version=4: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO events (id, source, type, timestamp, payload_json, project, actor, summary, created_at)
+		VALUES (?, 'github', 'github.pull_request', '2026-05-20T14:00:00Z', '{"repo":"jystringfellow/Cupcake","number":77,"state":"open","title":"PR 77","author":"octocat","head":"feature/pr-77"}', 'Cupcake', 'octocat', 'PR 77', '2026-05-20T14:00:00Z')`,
+		legacyID); err != nil {
+		t.Fatalf("insert legacy github row: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO suggestions (id, type, pattern_key, title, reason, confidence, lane, status, evidence_json, created_at, updated_at, resolved_at)
+		VALUES ('sug-legacy-dismissed', 'association', ?, 'Related PR and Slack', 'Shared URL', 'high', 'baseline', 'dismissed', ?, '2026-05-20T14:05:00Z', '2026-05-20T14:10:00Z', '2026-05-20T14:10:00Z')`,
+		legacyPattern, `{"event_ids":["`+legacyID+`","`+otherID+`"]}`); err != nil {
+		t.Fatalf("insert dismissed legacy suggestion: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO suggestion_feedback (id, suggestion_id, action, reason_code, note, created_at)
+		VALUES ('fb-legacy-dismiss', 'sug-legacy-dismissed', 'dismissed', 'unrelated', 'Different thread', '2026-05-20T14:10:00Z')`); err != nil {
+		t.Fatalf("insert legacy feedback: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO suggestion_suppressions (id, type, pattern_key, reason, until_at, created_at)
+		VALUES ('sup-legacy-assoc', 'association', ?, 'unrelated', NULL, '2026-05-20T14:10:00Z')`,
+		legacyPattern); err != nil {
+		t.Fatalf("insert legacy suppression: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO suggestions (id, type, pattern_key, title, reason, confidence, lane, status, evidence_json, created_at, updated_at)
+		VALUES ('sug-canonical-proposed', 'association', ?, 'Related PR and Slack', 'Shared URL', 'high', 'baseline', 'proposed', ?, '2026-05-20T14:15:00Z', '2026-05-20T14:15:00Z')`,
+		canonicalPattern, `{"event_ids":["`+canonicalID+`","`+otherID+`"]}`); err != nil {
+		t.Fatalf("insert conflicting proposed canonical suggestion: %v", err)
+	}
+
+	params := `{"scope":"participant","identity":"@me","include":["involves"],"always_repositories":[],"bootstrap_lookback":"168h"}`
+	if _, err := workgraph.ConfigureBridgedConnector(workgraph.ConnectorBridgeConfig{
+		HomeDir: homeDir, ID: "github", BridgeParams: json.RawMessage(params),
+	}); err != nil {
+		t.Fatalf("configure bridged github: %v", err)
+	}
+	bridgedUpdate := `{"type":"github.pull_request","timestamp":"2026-05-20T14:30:00Z","external_id":"jystringfellow/Cupcake#pr:77:2026-05-20T14:30:00Z","project":"Cupcake","actor":"octocat","summary":"PR 77","payload":{"repo":"jystringfellow/Cupcake","number":77,"state":"open","title":"PR 77","author":"octocat","updated_at":"2026-05-20T14:30:00Z"}}` + "\n"
+	if _, err := workgraph.IngestBridgedCapture(workgraph.BridgedIngestConfig{
+		HomeDir: homeDir, DatabasePath: dbPath, Source: "github", Input: strings.NewReader(bridgedUpdate),
+	}); err != nil {
+		t.Fatalf("ingest bridged update: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM suggestions WHERE type = 'association'`).Scan(&count); err != nil {
+		t.Fatalf("count association suggestions: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 converged association suggestion, got %d", count)
+	}
+	var survivingID, status, patternKey string
+	var resolvedAt sql.NullString
+	if err := db.QueryRow(`SELECT id, status, pattern_key, resolved_at FROM suggestions WHERE type = 'association'`).Scan(&survivingID, &status, &patternKey, &resolvedAt); err != nil {
+		t.Fatalf("read surviving suggestion: %v", err)
+	}
+	if status != "dismissed" || patternKey != canonicalPattern || !resolvedAt.Valid || resolvedAt.String == "" {
+		t.Fatalf("expected surviving suggestion to preserve dismissed lifecycle at canonical pattern, got id=%q status=%q pattern=%q resolved_at=%v", survivingID, status, patternKey, resolvedAt)
+	}
+
+	var feedbackSuggestionID string
+	if err := db.QueryRow(`SELECT suggestion_id FROM suggestion_feedback WHERE id = 'fb-legacy-dismiss'`).Scan(&feedbackSuggestionID); err != nil {
+		t.Fatalf("read preserved feedback: %v", err)
+	}
+	if feedbackSuggestionID != survivingID {
+		t.Fatalf("expected feedback to point to surviving suggestion %q, got %q", survivingID, feedbackSuggestionID)
+	}
+
+	var suppressionPattern string
+	var suppressionUntil sql.NullString
+	if err := db.QueryRow(`SELECT pattern_key, until_at FROM suggestion_suppressions WHERE type = 'association'`).Scan(&suppressionPattern, &suppressionUntil); err != nil {
+		t.Fatalf("read rewritten suppression: %v", err)
+	}
+	if suppressionPattern != canonicalPattern || suppressionUntil.Valid {
+		t.Fatalf("expected permanent suppression rewritten to %q, got pattern=%q until=%v", canonicalPattern, suppressionPattern, suppressionUntil)
+	}
 }

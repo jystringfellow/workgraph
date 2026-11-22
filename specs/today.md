@@ -98,9 +98,32 @@ by container.
 
 Compaction is presentation-only. `today` does not rewrite event summaries or
 payloads in SQLite. `workgraph events today` remains the detailed inspection
-path and renders the complete stored label, with optional `--type` and `--limit`
-filters. Detailed output also renders stored actor metadata when present.
-Checkpoint labels in `workgraph events today` remain unchanged.
+path and renders the complete stored label, with optional `--type`, `--project`,
+`--actor`, `--involvement`, `--query`, `--limit`, and `--format` (`text` or
+`json`) controls. Detailed output also renders stored actor metadata when
+present. Checkpoint labels in `workgraph events today` remain unchanged.
+
+## Detailed Event Inspection and Range Queries
+
+`EventsToday` and `QueryEvents` inspect stored events directly from SQLite:
+
+- `EventsToday` inspects today's stored events with optional `Type` (exact or
+  `<prefix>.*`), `Project` (exact match), `Actor` (exact match), `Involvement`
+  (exact kind), `Query` (case-insensitive substring match against event
+  `Summary`, `ID`, `Type`, `Project`, `Actor`, `Path`, or rendered label),
+  `Limit` (keeps the most recent `Limit` matching events), and `Format` (`""` or
+  `"text"` for plain text; `"json"` for deterministic indented JSON output).
+- `QueryEvents` inspects stored events across an arbitrary time range (`Since`
+  inclusive, `Until` exclusive when non-zero) with `Source`, `Type`, `Project`,
+  `Actor`, `Involvement`, `Query`, `Limit`, and `Format` (`text` or `json`)
+  filters, using the indexed `timestamp`, `source`, `type`, and `project`
+  columns where applicable and returning structured `[]TodayEvent` alongside a
+  deterministic formatted `Message`.
+- JSON output (`Format: "json"`) encodes a deterministic indented JSON object
+  with active filter fields (`date` or `since`/`until`, `source`, `type`,
+  `project`, `actor`, `involvement`, `query`) and an `events` array containing
+  each event's `id`, `source`, `type`, `timestamp`, `project`, `actor`,
+  `involvement`, `path`, `summary`, and `label`.
 
 ## Sessions
 

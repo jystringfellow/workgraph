@@ -53,24 +53,47 @@ func LoadProjectCatalog(memoryDir string) (ProjectCatalog, error) {
 	if err != nil {
 		return ProjectCatalog{}, err
 	}
-	dir := projectMemoryDir(memoryDir)
-	entries, err := os.ReadDir(dir)
-	if os.IsNotExist(err) {
-		return ProjectCatalog{}, nil
+	root, err := os.OpenRoot(memoryDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ProjectCatalog{}, nil
+		}
+		return ProjectCatalog{}, fmt.Errorf("open memory root: %w", err)
 	}
+	defer root.Close()
+
+	projectsDirHandle, err := root.Open(projectMemoryDirName)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ProjectCatalog{}, nil
+		}
+		return ProjectCatalog{}, fmt.Errorf("read project memory: %w", err)
+	}
+	defer projectsDirHandle.Close()
+
+	entries, err := projectsDirHandle.ReadDir(-1)
 	if err != nil {
 		return ProjectCatalog{}, fmt.Errorf("read project memory: %w", err)
 	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name() < entries[j].Name()
+	})
+
+	dir := projectMemoryDir(memoryDir)
 	catalog := ProjectCatalog{}
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
 			continue
 		}
-		path := filepath.Join(dir, entry.Name())
-		content, err := os.ReadFile(path)
+		relPath := filepath.Join(projectMemoryDirName, entry.Name())
+		content, err := root.ReadFile(relPath)
 		if err != nil {
+			if isRootEscapeError(err) {
+				continue
+			}
 			return ProjectCatalog{}, fmt.Errorf("read project memory: %w", err)
 		}
+		path := filepath.Join(dir, entry.Name())
 		project, problem := parseProjectCatalogEntry(strings.TrimSuffix(entry.Name(), ".md"), path, string(content))
 		catalog.Projects = append(catalog.Projects, project)
 		if problem != "" {

@@ -39,6 +39,7 @@ type ResumeConfig struct {
 	Now            time.Time
 	MaxEvents      int
 	AllProjects    bool
+	ReadOnly       bool
 	GitEmails      []string
 	GitHubLogins   []string
 	DebugRelevance bool
@@ -120,7 +121,7 @@ func Resume(config ResumeConfig) (ResumeResult, error) {
 	nextWarning := ""
 	bridgeWarning := ""
 	if homeDir, err := resolveHomeDir(config.HomeDir); err == nil {
-		bridgeWarning = bridgeStallWarning(homeDir, dbPath, now)
+		bridgeWarning = bridgeStallWarningWithReadOnly(homeDir, dbPath, now, config.ReadOnly)
 	}
 	if !config.AllProjects && !config.DebugRelevance {
 		next, nextErr := Next(NextConfig{HomeDir: config.HomeDir, DatabasePath: dbPath, Project: project, Now: now})

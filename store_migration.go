@@ -58,6 +58,25 @@ func createSchema(db *sql.DB) error {
 	return createSchemaContext(context.Background(), db)
 }
 
+func createSchemaWithBackfills(db *sql.DB) error {
+	path, err := mainDatabaseFile(db)
+	if err != nil {
+		return err
+	}
+	release, err := lockDatabaseMigration(context.Background(), path)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if err := prepareSchemaLocked(db, path); err != nil {
+		return err
+	}
+	if err := migrateBackfills(db); err != nil {
+		return err
+	}
+	return migrateLegacyGitHubSnapshots(db)
+}
+
 func createSchemaContext(ctx context.Context, db *sql.DB) error {
 	path, err := mainDatabaseFile(db)
 	if err != nil {

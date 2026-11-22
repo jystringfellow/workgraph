@@ -13,26 +13,33 @@ support a behavior slice, so facts continue to drive the shape of the code.
 
 ## CLI Command Boundaries
 
-`cmd/workgraph/main.go` should remain a small command router over time.
+`cmd/workgraph/main.go` remains a small command router and shared flag-value
+definitions.
 
-As command groups grow, move parsing and rendering into files grouped by
-surface area, such as:
+Command parsing and rendering live in focused per-domain files under
+`cmd/workgraph/`:
 
-- `cmd/workgraph/resume.go`
-- `cmd/workgraph/connectors.go`
-- `cmd/workgraph/llm.go`
-- `cmd/workgraph/settings.go`
+- `cmd/workgraph/connectors_cmd.go` (`connectors`, `capture`, `bridge`, `plugin`)
+- `cmd/workgraph/providers_cmd.go` (`slack`, `notion`, `github`, `git`, `calendar`, `mail`, `azure`)
+- `cmd/workgraph/llm_cmd.go` and `cmd/workgraph/llm_associate.go` (`llm`)
+- `cmd/workgraph/settings_cmd.go` (`init`, `settings`, `doctor`, `security`, `network`, `start`, `status`, `stop`)
+- `cmd/workgraph/views_cmd.go` (`today`, `events`, `resume`, `memory`, `suggestions`, `associations`, `review`)
+- `cmd/workgraph/ai.go`, `cmd/workgraph/next.go`, `cmd/workgraph/projects.go`, `cmd/workgraph/projects_review.go`, `cmd/workgraph/service.go`, `cmd/workgraph/help.go`, `cmd/workgraph/version.go`
 
-The command package should keep CLI-only concerns such as flags, usage text,
-stdout/stderr rendering, and exit codes. Core behavior should remain in the
+The command package keeps CLI-only concerns such as flags, usage text,
+stdout/stderr rendering, and exit codes. Core behavior remains in the
 root package behind testable config/result structs.
 
 ## Connector Policy And Runtime
 
-Connector governance currently spans managed settings, connector runtime state,
-provider setup functions, and `workgraph start` polling. Future connector
-security work should consolidate policy decisions behind a small internal
-surface before adding more connector controls.
+Connector governance spans managed settings (`managed_settings.go`), the
+connector registry (`connector_registry.go`), connector runtime state
+(`connector.go`), provider setup functions, and `workgraph start` polling.
+Current enforcement evaluates managed policy (`enforceConnectorManagedSettings`,
+`connectorAllowedByManagedPolicy`, and `enforceSlackDMManagedSettings`) before
+provider setup, enablement, and polling. Future connector security work can
+consolidate policy decisions behind a small internal surface when adding more
+connector controls.
 
 Target shape:
 
@@ -42,12 +49,12 @@ connectorPolicy.CanEnable(id)
 connectorPolicy.CanPoll(id)
 ```
 
-The policy layer should answer whether an action is allowed and provide the
-human-readable reason. Provider setup functions should ask policy before OAuth,
-manual-token validation, or local credential writes. Runtime polling should ask
+The policy layer answers whether an action is allowed and provides the
+human-readable reason. Provider setup functions check policy before OAuth,
+manual-token validation, or local credential writes. Runtime polling checks
 policy before both explicit one-shot polling and unattended daemon polling.
 
-Provider-specific high-risk options should remain explicit when the semantics
+Provider-specific high-risk options remain explicit when the semantics
 are provider-specific. For example, Slack DM capture is not just another
 connector id because it changes requested OAuth scopes and capture behavior
 inside an otherwise allowed Slack connector.
@@ -149,12 +156,9 @@ stable shape.
 
 ## Database Indices And Query Performance
 
-The `events` table has no secondary indices. As captured event volume grows,
-queries against `timestamp`, `project`, `source`, and `type` columns degrade
-to full table scans. `today.go` already filters events in Go after loading a
-broad time window, which compounds this.
-
-Add indices when landing the first behavior slice that exposes latency:
+`migrateSchema` in `init.go` ensures secondary indices on `events` (`timestamp`,
+`project`, `source`, `type`) via `ensureIndex`, plus targeted partial indices
+for active capture requests and Slack container repairs:
 
 ```sql
 CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events (timestamp);
@@ -163,22 +167,24 @@ CREATE INDEX IF NOT EXISTS idx_events_source    ON events (source);
 CREATE INDEX IF NOT EXISTS idx_events_type      ON events (type);
 ```
 
-Drive the index addition through `createSchema` so it runs on `init` for new
-installs and through `ensureIndex` (parallel to `ensureColumn`) for upgrades.
-Write a fact that verifies the indices exist after `init`.
+Indices run through `createSchema` on `init` for new installs and on database
+open for upgrades.
 
 ## Schema Evolution Strategy
 
-The current `ensureColumn()` shim works for additive column changes but has no
-version tracking and no story for destructive or reordering changes. Before
-adding a third call to `ensureColumn`, consider:
+Schema initialization and upgrades run under an exclusive file lock
+(`store_migration.go`) via `createSchema` and `migrateSchema` in `init.go`,
+using `CREATE TABLE IF NOT EXISTS`, `ensureColumn`, `ensureIndex`, and
+idempotent data backfills. This additive shim has no version tracking and no
+story for destructive or reordering changes. When a future slice requires
+ordered or non-additive migrations, consider:
 
 - Store a `user_version` integer in the SQLite pragma (`PRAGMA user_version`).
 - Apply numbered migrations in order, gated on the current version number.
 - Keep migrations in a `[]migration` slice in `init.go` so they are easy to
   audit and facts can assert that schema versions advance correctly.
 
-This does not need to land before the next feature slice, but each new
+This does not need to land before a feature slice requires it, but each new
 `ensureColumn` call adds future migration debt.
 
 ## HTTP Client Timeouts In Connector Polling

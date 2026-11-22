@@ -424,3 +424,131 @@ func TestEndpointSecurityReviewGuideStatesControlsAndKnownGaps(t *testing.T) {
 		}
 	}
 }
+
+func TestConnectorPolicyConsolidatesSetupEnablePollAndSlackDMDecisions(t *testing.T) {
+	tempDir := t.TempDir()
+	managedPath := filepath.Join(tempDir, "managed-settings.json")
+
+	restoreManagedSettings := workgraph.SetManagedSettingsPathForTest(managedPath)
+	defer restoreManagedSettings()
+
+	unmanagedPolicy, err := workgraph.LoadConnectorPolicy()
+	if err != nil {
+		t.Fatalf("load unmanaged connector policy: %v", err)
+	}
+	for _, action := range []struct {
+		name  string
+		check func(string) (bool, string)
+	}{
+		{name: "CanSetup", check: unmanagedPolicy.CanSetup},
+		{name: "CanEnable", check: unmanagedPolicy.CanEnable},
+		{name: "CanPoll", check: unmanagedPolicy.CanPoll},
+	} {
+		allowed, reason := action.check("slack")
+		if !allowed || reason != "" {
+			t.Fatalf("expected unmanaged %s(slack) allowed with empty reason, got allowed=%v reason=%q", action.name, allowed, reason)
+		}
+	}
+	if allowed, reason := unmanagedPolicy.CanCaptureSlackDMs(true); !allowed || reason != "" {
+		t.Fatalf("expected unmanaged CanCaptureSlackDMs(true) allowed with empty reason, got allowed=%v reason=%q", allowed, reason)
+	}
+
+	if err := os.WriteFile(managedPath, []byte(`{
+  "version": 1,
+  "connectors": {
+    "allowed_ids": {
+      "value": ["git", "slack", "github"],
+      "locked": true
+    },
+    "disabled_ids": {
+      "value": ["github"],
+      "locked": true
+    },
+    "slack": {
+      "include_dms": {
+        "value": false,
+        "locked": true
+      }
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write managed settings: %v", err)
+	}
+
+	policy, err := workgraph.LoadConnectorPolicy()
+	if err != nil {
+		t.Fatalf("load managed connector policy: %v", err)
+	}
+
+	cases := []struct {
+		id         string
+		wantAllow  bool
+		wantReason string
+	}{
+		{
+			id:         " Slack ",
+			wantAllow:  true,
+			wantReason: "",
+		},
+		{
+			id:         "GITHUB",
+			wantAllow:  false,
+			wantReason: "connector github is disabled by managed settings",
+		},
+		{
+			id:         "notion",
+			wantAllow:  false,
+			wantReason: "connector notion is not allowed by managed settings",
+		},
+		{
+			id:         "calendar",
+			wantAllow:  false,
+			wantReason: `connector "calendar" is ambiguous: use calendar.google or calendar.microsoft`,
+		},
+		{
+			id:         "unknown.provider",
+			wantAllow:  false,
+			wantReason: `unknown connector "unknown.provider"`,
+		},
+	}
+
+	for _, tc := range cases {
+		for _, action := range []struct {
+			name    string
+			check   func(string) (bool, string)
+			enforce func(string) error
+		}{
+			{name: "Setup", check: policy.CanSetup, enforce: policy.EnforceSetup},
+			{name: "Enable", check: policy.CanEnable, enforce: policy.EnforceEnable},
+			{name: "Poll", check: policy.CanPoll, enforce: policy.EnforcePoll},
+		} {
+			allowed, reason := action.check(tc.id)
+			if allowed != tc.wantAllow || reason != tc.wantReason {
+				t.Fatalf("%s(%q) = (%v, %q), want (%v, %q)", action.name, tc.id, allowed, reason, tc.wantAllow, tc.wantReason)
+			}
+			err := action.enforce(tc.id)
+			if tc.wantAllow && err != nil {
+				t.Fatalf("Enforce%s(%q) unexpected error: %v", action.name, tc.id, err)
+			}
+			if !tc.wantAllow && (err == nil || err.Error() != tc.wantReason) {
+				t.Fatalf("Enforce%s(%q) error = %v, want %q", action.name, tc.id, err, tc.wantReason)
+			}
+		}
+	}
+
+	if allowed, reason := policy.CanCaptureSlackDMs(false); !allowed || reason != "" {
+		t.Fatalf("expected CanCaptureSlackDMs(false) allowed, got (%v, %q)", allowed, reason)
+	}
+	if err := policy.EnforceSlackDMs(false); err != nil {
+		t.Fatalf("expected EnforceSlackDMs(false) nil, got %v", err)
+	}
+
+	const wantSlackDMReason = "Slack DM capture is disabled by managed settings"
+	if allowed, reason := policy.CanCaptureSlackDMs(true); allowed || reason != wantSlackDMReason {
+		t.Fatalf("CanCaptureSlackDMs(true) = (%v, %q), want (false, %q)", allowed, reason, wantSlackDMReason)
+	}
+	if err := policy.EnforceSlackDMs(true); err == nil || err.Error() != wantSlackDMReason {
+		t.Fatalf("EnforceSlackDMs(true) = %v, want %q", err, wantSlackDMReason)
+	}
+}

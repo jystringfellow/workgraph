@@ -466,13 +466,16 @@ func linesContaining(lines []string, value string) []string {
 
 func TestGitHubPRWatchBotPRInBothRolesRendersOnceOnYourBehalf(t *testing.T) {
 	h := reviewerHarness(t, `{"roles":["author","reviewer"]}`)
+	now := time.Now().UTC()
+	updatedAt := now.Add(-30 * time.Minute).Format(time.RFC3339)
 	copilot := watchActor("copilot-swe-agent", true)
 	authored := watchPR().node()
 	authored["author"] = copilot
 	requested := requestedPR(watchPRNodeID, watchIdentity)
 	requested["author"] = copilot
-	question := commentFixture{ID: "PRRC_q", Author: "alice", Body: "Why this default?", CreatedAt: watchTime(-time.Hour)}
-	h.mustPoll(watchBase, reviewerStatus(t, authored),
+	authored["updatedAt"], requested["updatedAt"] = updatedAt, updatedAt
+	question := commentFixture{ID: "PRRC_q", Author: "alice", Body: "Why this default?", CreatedAt: now.Add(-time.Hour).Format(time.RFC3339)}
+	h.mustPoll(now, reviewerStatus(t, authored),
 		detailResponse(t, detailFixture{ID: watchPRNodeID, Threads: []threadFixture{{ID: "PRRT_one", Path: "settings.go", Line: 18, Comments: []commentFixture{question}}}}),
 		reviewerStatus(t, requested))
 	for _, role := range []string{"author", "reviewer"} {
@@ -481,7 +484,7 @@ func TestGitHubPRWatchBotPRInBothRolesRendersOnceOnYourBehalf(t *testing.T) {
 			t.Fatalf("%s observation did not record the bot author: %#v", role, observation)
 		}
 	}
-	result, err := workgraph.Next(workgraph.NextConfig{HomeDir: h.homeDir, DatabasePath: h.dbPath, Now: watchBase.Add(time.Minute)})
+	result, err := workgraph.Next(workgraph.NextConfig{HomeDir: h.homeDir, DatabasePath: h.dbPath, Now: now.Add(time.Minute)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -515,9 +518,12 @@ func TestGitHubPRWatchBotPRInBothRolesRendersOnceOnYourBehalf(t *testing.T) {
 }
 
 func TestGitHubPRWatchBotReviewRequestsAreTaggedAndIgnorable(t *testing.T) {
+	now := time.Now().UTC()
+	updatedAt := now.Add(-30 * time.Minute).Format(time.RFC3339)
 	dependabot := func() map[string]any {
 		node := requestedPR("PR_dependabot", "acme/platform")
 		node["author"] = watchActor("dependabot", true)
+		node["updatedAt"] = updatedAt
 		node["number"], node["title"] = 7, "Bump lodash"
 		node["repository"] = map[string]any{"nameWithOwner": "acme/api"}
 		node["url"] = "https://github.com/acme/api/pull/7"
@@ -525,13 +531,14 @@ func TestGitHubPRWatchBotReviewRequestsAreTaggedAndIgnorable(t *testing.T) {
 	}
 	human := func() map[string]any {
 		node := requestedPR("PR_human", watchIdentity)
+		node["updatedAt"] = updatedAt
 		node["repository"] = map[string]any{"nameWithOwner": "acme/web"}
 		node["url"] = "https://github.com/acme/web/pull/42"
 		return node
 	}
 
 	h := reviewerHarness(t, reviewerParams)
-	h.mustPoll(watchBase, reviewerStatus(t, dependabot(), human()))
+	h.mustPoll(now, reviewerStatus(t, dependabot(), human()))
 	lines := nextTextLines(t, h)
 	bot := linesContaining(lines, "acme/api#7")
 	if len(bot) != 1 || !strings.Contains(bot[0], "Bump lodash") || !strings.Contains(bot[0], "[bot]") {
@@ -545,7 +552,7 @@ func TestGitHubPRWatchBotReviewRequestsAreTaggedAndIgnorable(t *testing.T) {
 	for _, ignore := range []string{`"ignore_authors":["bots"]`, `"ignore_authors":["app/dependabot"]`, `"ignore_repositories":["acme/api"]`} {
 		t.Run(ignore, func(t *testing.T) {
 			h := reviewerHarness(t, `{"roles":["reviewer"],`+ignore+`}`)
-			h.mustPoll(watchBase, reviewerStatus(t, dependabot(), human()))
+			h.mustPoll(now, reviewerStatus(t, dependabot(), human()))
 			if h.observationCount() != 1 || h.observationForRole("PR_human", "reviewer") == nil {
 				t.Fatalf("expected only the human review request to be watched, got %d observations", h.observationCount())
 			}
@@ -585,8 +592,11 @@ func TestGitHubPRWatchIgnoredRepositoriesApplyToBothRoles(t *testing.T) {
 }
 
 func TestGitHubPRWatchTruncatedReviewRequestsStayListed(t *testing.T) {
+	now := time.Now().UTC()
+	updatedAt := now.Add(-30 * time.Minute).Format(time.RFC3339)
 	located := func(node map[string]any, repository string, number int) map[string]any {
 		node["number"] = number
+		node["updatedAt"] = updatedAt
 		node["repository"] = map[string]any{"nameWithOwner": repository}
 		node["url"] = fmt.Sprintf("https://github.com/%s/pull/%d", repository, number)
 		return node
@@ -596,7 +606,7 @@ func TestGitHubPRWatchTruncatedReviewRequestsStayListed(t *testing.T) {
 	complete := located(requestedPR("PR_complete", "acme/platform"), "acme/web", 8)
 
 	h := reviewerHarness(t, reviewerParams)
-	h.mustPoll(watchBase, reviewerStatus(t, truncated, complete))
+	h.mustPoll(now, reviewerStatus(t, truncated, complete))
 	request := h.observationForRole("PR_truncated", "reviewer")["review_request"].(map[string]any)
 	if request["incomplete"] != true || request["direct"] != false {
 		t.Fatalf("expected the truncated request recorded as incomplete, got %#v", request)
@@ -613,7 +623,7 @@ func TestGitHubPRWatchTruncatedReviewRequestsStayListed(t *testing.T) {
 	if listed < 0 || summary < 0 || listed > summary || strings.Index(output[summary:], "acme/api#7") >= 0 {
 		t.Fatalf("expected the truncated request listed under Waiting on you and only the complete one summarized: %s", output)
 	}
-	today, err := workgraph.Today(workgraph.TodayConfig{HomeDir: h.homeDir, Now: watchBase.Add(time.Minute)})
+	today, err := workgraph.Today(workgraph.TodayConfig{HomeDir: h.homeDir, Now: now.Add(time.Minute)})
 	if err != nil {
 		t.Fatal(err)
 	}

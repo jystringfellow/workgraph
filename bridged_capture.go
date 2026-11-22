@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -76,6 +77,7 @@ type CaptureRequestListConfig struct {
 	DatabasePath string
 	ConnectorID  string
 	Now          time.Time
+	ReadOnly     bool
 }
 
 type CaptureRequestCapabilityConfig struct {
@@ -113,9 +115,20 @@ func ListCaptureRequests(config CaptureRequestListConfig) ([]CaptureRequest, err
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
-	preparing := createSchemaUnlessUpgrading(db)
-	if preparing != nil && !errors.Is(preparing, ErrDatabaseUpgradeInProgress) {
-		return nil, fmt.Errorf("prepare capture outbox: %w", preparing)
+	var preparing error
+	if config.ReadOnly {
+		var name string
+		if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'capture_requests'`).Scan(&name); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("check capture outbox: %w", err)
+		}
+	} else {
+		preparing = createSchemaUnlessUpgrading(db)
+		if preparing != nil && !errors.Is(preparing, ErrDatabaseUpgradeInProgress) {
+			return nil, fmt.Errorf("prepare capture outbox: %w", preparing)
+		}
 	}
 	query := `SELECT ` + captureRequestColumns + ` FROM capture_requests`
 	args := []any{}
@@ -902,6 +915,9 @@ type preparedBridgedEvent struct {
 	InvolvementJSON    *string
 	Summary            string
 	WeakDedupe         bool
+	GitHubSnapshot     bool
+	GitHubRepository   string
+	GitHubNumber       int
 	SnapshotKey        string
 	SnapshotRevision   string
 	SnapshotExternalID string
@@ -1085,13 +1101,35 @@ func IngestBridgedCapture(config BridgedIngestConfig) (BridgedIngestResult, erro
 				event.ID = slackListRevisionEventID(event.SnapshotExternalID + ":after:" + previous.eventID)
 			}
 		}
-		insert, err := tx.Exec(`INSERT OR IGNORE INTO events (
-			id, source, type, timestamp, payload_json, project, actor, involvement_json, summary, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			event.ID, source, event.Type, event.Timestamp, event.PayloadJSON,
-			emptyStringAsNull(event.Project), emptyStringAsNull(event.Actor),
-			event.InvolvementJSON, emptyStringAsNull(event.Summary), createdAt,
-		)
+		var insert sql.Result
+		if event.GitHubSnapshot {
+			if err := enrichBridgedGitHubPullRequestHead(tx, &event); err != nil {
+				return BridgedIngestResult{}, fmt.Errorf("prepare event %s: %w", event.ID, err)
+			}
+			insert, err = tx.Exec(`INSERT INTO events (
+				id, source, type, timestamp, payload_json, project, actor, involvement_json, summary, created_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(id) DO UPDATE SET
+				timestamp = excluded.timestamp,
+				payload_json = excluded.payload_json,
+				project = COALESCE(excluded.project, events.project),
+				actor = COALESCE(excluded.actor, events.actor),
+				involvement_json = COALESCE(excluded.involvement_json, events.involvement_json),
+				summary = COALESCE(excluded.summary, events.summary)
+			WHERE excluded.timestamp > events.timestamp`,
+				event.ID, source, event.Type, event.Timestamp, event.PayloadJSON,
+				emptyStringAsNull(event.Project), emptyStringAsNull(event.Actor),
+				event.InvolvementJSON, emptyStringAsNull(event.Summary), createdAt,
+			)
+		} else {
+			insert, err = tx.Exec(`INSERT OR IGNORE INTO events (
+				id, source, type, timestamp, payload_json, project, actor, involvement_json, summary, created_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				event.ID, source, event.Type, event.Timestamp, event.PayloadJSON,
+				emptyStringAsNull(event.Project), emptyStringAsNull(event.Actor),
+				event.InvolvementJSON, emptyStringAsNull(event.Summary), createdAt,
+			)
+		}
 		if err != nil {
 			return BridgedIngestResult{}, fmt.Errorf("store event %s: %w", event.ID, err)
 		}
@@ -1341,7 +1379,760 @@ func prepareBridgedEvent(source string, envelope bridgedEventEnvelope) (prepared
 		}
 		event.Project = storedSlackContainer(event.Project, event.PayloadJSON)
 	}
+	if source == "github" && (eventType == "github.pull_request" || eventType == "github.issue") {
+		if err := normalizeBridgedGitHubSnapshot(&event); err != nil {
+			return preparedBridgedEvent{}, fmt.Errorf("payload: %w", err)
+		}
+	}
 	return event, nil
+}
+
+func normalizeBridgedGitHubSnapshot(event *preparedBridgedEvent) error {
+	var payload map[string]any
+	decoder := json.NewDecoder(strings.NewReader(event.PayloadJSON))
+	decoder.UseNumber()
+	if err := decoder.Decode(&payload); err != nil {
+		return err
+	}
+	repository := snapshotFieldText(payload["repository"])
+	if repositoryMap, ok := payload["repository"].(map[string]any); ok {
+		repository = snapshotFieldText(repositoryMap["nameWithOwner"])
+	}
+	if repository == "" {
+		repository = snapshotFieldText(payload["repo"])
+	}
+	delete(payload, "repo")
+	if repository != "" {
+		payload["repository"] = repository
+	}
+	number, _ := strconv.Atoi(snapshotFieldText(payload["number"]))
+	if number > 0 {
+		payload["number"] = number
+	}
+	if state := snapshotFieldText(payload["state"]); state != "" {
+		payload["state"] = strings.ToLower(state)
+	}
+	if event.Type == "github.pull_request" {
+		branch := snapshotFieldText(payload["branch"])
+		if branch == "" {
+			if headMap, ok := payload["head"].(map[string]any); ok {
+				branch = snapshotFieldText(headMap["ref"])
+				if snapshotFieldText(payload["commit"]) == "" {
+					if sha := snapshotFieldText(headMap["sha"]); sha != "" {
+						payload["commit"] = sha
+					}
+				}
+			} else {
+				branch = snapshotFieldText(payload["head"])
+			}
+		}
+		delete(payload, "head")
+		if branch != "" {
+			payload["branch"] = branch
+		}
+	}
+	actor := snapshotFieldText(payload["actor"])
+	if actor == "" {
+		if authorMap, ok := payload["author"].(map[string]any); ok {
+			actor = snapshotFieldText(authorMap["login"])
+		} else {
+			actor = snapshotFieldText(payload["author"])
+		}
+	}
+	if event.Actor == "" && actor != "" {
+		event.Actor = actor
+	}
+	if actor == "" && event.Actor != "" {
+		actor = event.Actor
+	}
+	if actor != "" {
+		payload["actor"] = actor
+	}
+	title := snapshotFieldText(payload["title"])
+	if event.Summary == "" && title != "" {
+		event.Summary = title
+	}
+	if title == "" && event.Summary != "" {
+		payload["title"] = event.Summary
+	}
+	if event.Project == "" && repository != "" {
+		parts := strings.Split(repository, "/")
+		if len(parts) == 2 && parts[1] != "" {
+			event.Project = parts[1]
+		} else {
+			event.Project = repository
+		}
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("encode canonical JSON: %w", err)
+	}
+	event.PayloadJSON = string(encoded)
+	if repository != "" && number > 0 {
+		event.ID = fmt.Sprintf("%s:%s:%d", event.Type, repository, number)
+		event.WeakDedupe = false
+		event.GitHubSnapshot = true
+		event.GitHubRepository = repository
+		event.GitHubNumber = number
+	}
+	return nil
+}
+
+func enrichBridgedGitHubPullRequestHead(db githubExecQueryRower, event *preparedBridgedEvent) error {
+	if event.Type != "github.pull_request" {
+		return nil
+	}
+	var payload map[string]any
+	decoder := json.NewDecoder(strings.NewReader(event.PayloadJSON))
+	decoder.UseNumber()
+	if err := decoder.Decode(&payload); err != nil {
+		return err
+	}
+	branch := snapshotFieldText(payload["branch"])
+	commit := snapshotFieldText(payload["commit"])
+	if branch != "" && commit != "" {
+		return nil
+	}
+	knownBranch, knownCommit := knownGitHubPullRequestHead(db, event.ID, event.GitHubRepository, event.GitHubNumber)
+	changed := false
+	if branch == "" && knownBranch != "" {
+		payload["branch"] = knownBranch
+		changed = true
+	}
+	if commit == "" && knownCommit != "" {
+		payload["commit"] = knownCommit
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("encode canonical JSON: %w", err)
+	}
+	event.PayloadJSON = string(encoded)
+	return nil
+}
+
+type legacyGitHubSnapshotRow struct {
+	ID              string
+	Type            string
+	Timestamp       string
+	ParsedTime      time.Time
+	PayloadJSON     string
+	Project         sql.NullString
+	Actor           sql.NullString
+	InvolvementJSON sql.NullString
+	Summary         sql.NullString
+	CreatedAt       string
+	CanonicalID     string
+	Repository      string
+	Number          int
+	Branch          string
+	Commit          string
+	IsCanonical     bool
+}
+
+func migrateLegacyGitHubSnapshots(db *sql.DB) error {
+	rows, err := db.Query(`SELECT id, type, timestamp, payload_json, project, actor, involvement_json, summary, created_at
+		FROM events
+		WHERE source = 'github' AND type IN ('github.pull_request', 'github.issue') AND id NOT LIKE type || ':%'`)
+	if err != nil {
+		return fmt.Errorf("query legacy github snapshots: %w", err)
+	}
+	var legacy []legacyGitHubSnapshotRow
+	for rows.Next() {
+		var row legacyGitHubSnapshotRow
+		if err := rows.Scan(&row.ID, &row.Type, &row.Timestamp, &row.PayloadJSON, &row.Project, &row.Actor, &row.InvolvementJSON, &row.Summary, &row.CreatedAt); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan legacy github snapshot: %w", err)
+		}
+		prepared := preparedBridgedEvent{
+			ID:          row.ID,
+			Type:        row.Type,
+			Timestamp:   row.Timestamp,
+			PayloadJSON: row.PayloadJSON,
+			Project:     row.Project.String,
+			Actor:       row.Actor.String,
+			Summary:     row.Summary.String,
+		}
+		if err := normalizeBridgedGitHubSnapshot(&prepared); err != nil || !prepared.GitHubSnapshot {
+			continue
+		}
+		row.CanonicalID = prepared.ID
+		row.PayloadJSON = prepared.PayloadJSON
+		row.Repository = prepared.GitHubRepository
+		row.Number = prepared.GitHubNumber
+		if prepared.Project != "" {
+			row.Project = sql.NullString{String: prepared.Project, Valid: true}
+		}
+		if prepared.Actor != "" {
+			row.Actor = sql.NullString{String: prepared.Actor, Valid: true}
+		}
+		if prepared.Summary != "" {
+			row.Summary = sql.NullString{String: prepared.Summary, Valid: true}
+		}
+		row.Branch, row.Commit = githubPayloadHead(prepared.PayloadJSON)
+		row.ParsedTime, _ = time.Parse(time.RFC3339Nano, row.Timestamp)
+		legacy = append(legacy, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterate legacy github snapshots: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if len(legacy) == 0 {
+		return nil
+	}
+
+	groups := map[string][]legacyGitHubSnapshotRow{}
+	for _, row := range legacy {
+		groups[row.CanonicalID] = append(groups[row.CanonicalID], row)
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin legacy github snapshot migration: %w", err)
+	}
+	defer tx.Rollback()
+
+	canonicalIDs := make([]string, 0, len(groups))
+	for canonicalID := range groups {
+		canonicalIDs = append(canonicalIDs, canonicalID)
+	}
+	sort.Strings(canonicalIDs)
+
+	hasProjectLinks := sqliteTableExists(tx, "project_links")
+	hasMemoryLinks := sqliteTableExists(tx, "memory_links")
+	hasSuggestions := sqliteTableExists(tx, "suggestions")
+
+	for _, canonicalID := range canonicalIDs {
+		group := groups[canonicalID]
+		var existing legacyGitHubSnapshotRow
+		err := tx.QueryRow(`SELECT id, type, timestamp, payload_json, project, actor, involvement_json, summary, created_at FROM events WHERE id = ?`, canonicalID).
+			Scan(&existing.ID, &existing.Type, &existing.Timestamp, &existing.PayloadJSON, &existing.Project, &existing.Actor, &existing.InvolvementJSON, &existing.Summary, &existing.CreatedAt)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("read canonical github snapshot %s: %w", canonicalID, err)
+		}
+		if err == nil {
+			existing.CanonicalID = canonicalID
+			existing.IsCanonical = true
+			existing.Branch, existing.Commit = githubPayloadHead(existing.PayloadJSON)
+			existing.ParsedTime, _ = time.Parse(time.RFC3339Nano, existing.Timestamp)
+			group = append(group, existing)
+		}
+
+		sort.Slice(group, func(i, j int) bool {
+			if !group[i].ParsedTime.Equal(group[j].ParsedTime) {
+				return group[i].ParsedTime.After(group[j].ParsedTime)
+			}
+			if group[i].IsCanonical != group[j].IsCanonical {
+				return group[i].IsCanonical
+			}
+			return group[i].ID < group[j].ID
+		})
+		winner := group[0]
+		branch, commit := winner.Branch, winner.Commit
+		for _, candidate := range group[1:] {
+			if branch == "" && candidate.Branch != "" {
+				branch = candidate.Branch
+			}
+			if commit == "" && candidate.Commit != "" {
+				commit = candidate.Commit
+			}
+			if !winner.Project.Valid && candidate.Project.Valid {
+				winner.Project = candidate.Project
+			}
+			if !winner.Actor.Valid && candidate.Actor.Valid {
+				winner.Actor = candidate.Actor
+			}
+			if !winner.InvolvementJSON.Valid && candidate.InvolvementJSON.Valid {
+				winner.InvolvementJSON = candidate.InvolvementJSON
+			}
+			if !winner.Summary.Valid && candidate.Summary.Valid {
+				winner.Summary = candidate.Summary
+			}
+		}
+		if winner.Type == "github.pull_request" && (branch != winner.Branch || commit != winner.Commit) {
+			if updated, mergeErr := mergeGitHubPayloadHead(winner.PayloadJSON, branch, commit); mergeErr == nil {
+				winner.PayloadJSON = updated
+			}
+		}
+
+		if _, err := tx.Exec(`INSERT INTO events (
+			id, source, type, timestamp, payload_json, project, actor, involvement_json, summary, created_at
+		) VALUES (?, 'github', ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			timestamp = excluded.timestamp,
+			payload_json = excluded.payload_json,
+			project = COALESCE(excluded.project, events.project),
+			actor = COALESCE(excluded.actor, events.actor),
+			involvement_json = COALESCE(excluded.involvement_json, events.involvement_json),
+			summary = COALESCE(excluded.summary, events.summary)`,
+			canonicalID, winner.Type, winner.Timestamp, winner.PayloadJSON,
+			winner.Project, winner.Actor, winner.InvolvementJSON, winner.Summary, winner.CreatedAt,
+		); err != nil {
+			return fmt.Errorf("upsert canonical github snapshot %s: %w", canonicalID, err)
+		}
+
+		for _, member := range group {
+			if member.IsCanonical {
+				continue
+			}
+			if hasMemoryLinks {
+				if err := rewriteMemoryLinksEventID(tx, member.ID, canonicalID); err != nil {
+					return err
+				}
+			}
+			if hasProjectLinks {
+				if err := rewriteProjectLinksEventID(tx, member.ID, canonicalID); err != nil {
+					return err
+				}
+			}
+			if hasSuggestions {
+				if err := rewriteSuggestionsEventID(tx, member.ID, canonicalID); err != nil {
+					return err
+				}
+			}
+			if _, err := tx.Exec(`DELETE FROM events WHERE id = ?`, member.ID); err != nil {
+				return fmt.Errorf("delete legacy github snapshot %s: %w", member.ID, err)
+			}
+		}
+	}
+
+	return tx.Commit()
+}
+
+func githubPayloadHead(payloadJSON string) (string, string) {
+	var payload struct {
+		Branch string `json:"branch"`
+		Commit string `json:"commit"`
+	}
+	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+		return "", ""
+	}
+	return strings.TrimSpace(payload.Branch), strings.TrimSpace(payload.Commit)
+}
+
+func mergeGitHubPayloadHead(payloadJSON string, branch string, commit string) (string, error) {
+	var payload map[string]any
+	decoder := json.NewDecoder(strings.NewReader(payloadJSON))
+	decoder.UseNumber()
+	if err := decoder.Decode(&payload); err != nil {
+		return payloadJSON, err
+	}
+	if branch != "" {
+		payload["branch"] = branch
+	}
+	if commit != "" {
+		payload["commit"] = commit
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return payloadJSON, err
+	}
+	return string(encoded), nil
+}
+
+func sqliteTableExists(tx *sql.Tx, table string) bool {
+	var name string
+	err := tx.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name)
+	return err == nil && name == table
+}
+
+func rewriteMemoryLinksEventID(tx *sql.Tx, oldID string, newID string) error {
+	rows, err := tx.Query(`SELECT id, memory_doc_path, relation, created_at FROM memory_links WHERE event_id = ?`, oldID)
+	if err != nil {
+		return fmt.Errorf("query memory_links for %s: %w", oldID, err)
+	}
+	type linkRow struct {
+		id, path, relation, createdAt string
+	}
+	var links []linkRow
+	for rows.Next() {
+		var row linkRow
+		if err := rows.Scan(&row.id, &row.path, &row.relation, &row.createdAt); err != nil {
+			rows.Close()
+			return err
+		}
+		links = append(links, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, link := range links {
+		var duplicate int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM memory_links WHERE memory_doc_path = ? AND event_id = ? AND relation = ?`, link.path, newID, link.relation).Scan(&duplicate); err != nil {
+			return err
+		}
+		if duplicate > 0 {
+			if _, err := tx.Exec(`DELETE FROM memory_links WHERE id = ?`, link.id); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := tx.Exec(`UPDATE memory_links SET event_id = ? WHERE id = ?`, newID, link.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rewriteProjectLinksEventID(tx *sql.Tx, oldID string, newID string) error {
+	rows, err := tx.Query(`SELECT id, evidence_json FROM project_links WHERE evidence_json LIKE ?`, "%"+oldID+"%")
+	if err != nil {
+		return fmt.Errorf("query project_links for %s: %w", oldID, err)
+	}
+	type linkRow struct {
+		id       int64
+		evidence string
+	}
+	var links []linkRow
+	for rows.Next() {
+		var row linkRow
+		if err := rows.Scan(&row.id, &row.evidence); err != nil {
+			rows.Close()
+			return err
+		}
+		links = append(links, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, link := range links {
+		var ids []string
+		if err := json.Unmarshal([]byte(link.evidence), &ids); err != nil {
+			continue
+		}
+		rewritten, changed := replaceStringSliceValue(ids, oldID, newID)
+		if !changed {
+			continue
+		}
+		encoded, err := json.Marshal(rewritten)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE project_links SET evidence_json = ? WHERE id = ?`, string(encoded), link.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rewriteSuggestionsEventID(tx *sql.Tx, oldID string, newID string) error {
+	if sqliteTableExists(tx, "suggestion_suppressions") {
+		if err := rewriteSuggestionSuppressionsEventID(tx, oldID, newID); err != nil {
+			return err
+		}
+	}
+	hasFeedback := sqliteTableExists(tx, "suggestion_feedback")
+
+	rows, err := tx.Query(`SELECT id, type, COALESCE(pattern_key, ''), status, evidence_json, updated_at, COALESCE(resolved_at, '')
+		FROM suggestions WHERE evidence_json LIKE ? OR pattern_key LIKE ?`, "%"+oldID+"%", "%"+oldID+"%")
+	if err != nil {
+		return fmt.Errorf("query suggestions for %s: %w", oldID, err)
+	}
+	type sugRow struct {
+		id, typ, patternKey, status, evidence, updatedAt, resolvedAt string
+	}
+	var suggestions []sugRow
+	for rows.Next() {
+		var row sugRow
+		if err := rows.Scan(&row.id, &row.typ, &row.patternKey, &row.status, &row.evidence, &row.updatedAt, &row.resolvedAt); err != nil {
+			rows.Close()
+			return err
+		}
+		suggestions = append(suggestions, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, sug := range suggestions {
+		newEvidence := rewriteSuggestionEvidenceEventID(sug.evidence, oldID, newID)
+		newPattern := rewriteSuggestionPatternKey(sug.patternKey, oldID, newID)
+
+		if newEvidence == sug.evidence && newPattern == sug.patternKey {
+			continue
+		}
+		if newPattern != sug.patternKey {
+			var existing sugRow
+			err := tx.QueryRow(`SELECT id, type, COALESCE(pattern_key, ''), status, evidence_json, updated_at, COALESCE(resolved_at, '')
+				FROM suggestions WHERE type = ? AND pattern_key = ? AND id <> ?`, sug.typ, newPattern, sug.id).
+				Scan(&existing.id, &existing.typ, &existing.patternKey, &existing.status, &existing.evidence, &existing.updatedAt, &existing.resolvedAt)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			if err == nil {
+				mergedStatus, mergedUpdated, mergedResolved := mergeSuggestionLifecycle(
+					existing.status, existing.updatedAt, existing.resolvedAt,
+					sug.status, sug.updatedAt, sug.resolvedAt,
+				)
+				mergedEvidence := mergeSuggestionEvidenceJSON(existing.evidence, newEvidence)
+				if _, err := tx.Exec(`UPDATE suggestions SET status = ?, evidence_json = ?, updated_at = ?, resolved_at = ? WHERE id = ?`,
+					mergedStatus, mergedEvidence, mergedUpdated, nullableString(mergedResolved), existing.id); err != nil {
+					return err
+				}
+				if hasFeedback {
+					if _, err := tx.Exec(`UPDATE suggestion_feedback SET suggestion_id = ? WHERE suggestion_id = ?`, existing.id, sug.id); err != nil {
+						return err
+					}
+				}
+				if _, err := tx.Exec(`DELETE FROM suggestions WHERE id = ?`, sug.id); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+		if _, err := tx.Exec(`UPDATE suggestions SET pattern_key = ?, evidence_json = ? WHERE id = ?`, nullableString(newPattern), newEvidence, sug.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rewriteSuggestionSuppressionsEventID(tx *sql.Tx, oldID string, newID string) error {
+	rows, err := tx.Query(`SELECT id, type, pattern_key, COALESCE(reason, ''), COALESCE(until_at, '')
+		FROM suggestion_suppressions WHERE pattern_key LIKE ?`, "%"+oldID+"%")
+	if err != nil {
+		return fmt.Errorf("query suggestion_suppressions for %s: %w", oldID, err)
+	}
+	type supRow struct {
+		id, typ, patternKey, reason, untilAt string
+	}
+	var suppressions []supRow
+	for rows.Next() {
+		var row supRow
+		if err := rows.Scan(&row.id, &row.typ, &row.patternKey, &row.reason, &row.untilAt); err != nil {
+			rows.Close()
+			return err
+		}
+		suppressions = append(suppressions, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, sup := range suppressions {
+		newPattern := rewriteSuggestionPatternKey(sup.patternKey, oldID, newID)
+		if newPattern == sup.patternKey {
+			continue
+		}
+		var existing supRow
+		err := tx.QueryRow(`SELECT id, type, pattern_key, COALESCE(reason, ''), COALESCE(until_at, '')
+			FROM suggestion_suppressions WHERE type = ? AND pattern_key = ? AND id <> ?`, sup.typ, newPattern, sup.id).
+			Scan(&existing.id, &existing.typ, &existing.patternKey, &existing.reason, &existing.untilAt)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if err == nil {
+			mergedReason := existing.reason
+			if mergedReason == "" {
+				mergedReason = sup.reason
+			}
+			mergedUntil := mergeSuppressionUntil(existing.untilAt, sup.untilAt)
+			if _, err := tx.Exec(`UPDATE suggestion_suppressions SET reason = ?, until_at = ? WHERE id = ?`,
+				nullableString(mergedReason), nullableString(mergedUntil), existing.id); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`DELETE FROM suggestion_suppressions WHERE id = ?`, sup.id); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := tx.Exec(`UPDATE suggestion_suppressions SET pattern_key = ? WHERE id = ?`, newPattern, sup.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rewriteSuggestionPatternKey(pattern string, oldID string, newID string) string {
+	if !strings.Contains(pattern, oldID) {
+		return pattern
+	}
+	if rawPair, ok := strings.CutPrefix(pattern, "pair:"); ok {
+		var ids []string
+		if err := json.Unmarshal([]byte(rawPair), &ids); err == nil {
+			rewritten, changed := replaceStringSliceValue(ids, oldID, newID)
+			if !changed {
+				return pattern
+			}
+			sort.Strings(rewritten)
+			return associationPatternKey(rewritten)
+		}
+	}
+	if pattern == oldID {
+		return newID
+	}
+	return pattern
+}
+
+func rewriteSuggestionEvidenceEventID(evidence string, oldID string, newID string) string {
+	var evidenceObj map[string]any
+	if err := json.Unmarshal([]byte(evidence), &evidenceObj); err != nil {
+		return evidence
+	}
+	rawIDs, ok := evidenceObj["event_ids"].([]any)
+	if !ok {
+		return evidence
+	}
+	ids := make([]string, 0, len(rawIDs))
+	for _, item := range rawIDs {
+		if text, ok := item.(string); ok {
+			ids = append(ids, text)
+		}
+	}
+	rewritten, changed := replaceStringSliceValue(ids, oldID, newID)
+	if !changed {
+		return evidence
+	}
+	evidenceObj["event_ids"] = rewritten
+	encoded, err := json.Marshal(evidenceObj)
+	if err != nil {
+		return evidence
+	}
+	return string(encoded)
+}
+
+func mergeSuggestionEvidenceJSON(primary string, secondary string) string {
+	var primaryObj, secondaryObj map[string]any
+	if err := json.Unmarshal([]byte(primary), &primaryObj); err != nil {
+		return primary
+	}
+	if err := json.Unmarshal([]byte(secondary), &secondaryObj); err != nil {
+		return primary
+	}
+	seen := map[string]bool{}
+	var merged []string
+	appendIDs := func(obj map[string]any) {
+		rawIDs, ok := obj["event_ids"].([]any)
+		if !ok {
+			return
+		}
+		for _, item := range rawIDs {
+			text, ok := item.(string)
+			if !ok || seen[text] {
+				continue
+			}
+			seen[text] = true
+			merged = append(merged, text)
+		}
+	}
+	appendIDs(primaryObj)
+	appendIDs(secondaryObj)
+	if len(merged) == 0 {
+		return primary
+	}
+	primaryObj["event_ids"] = merged
+	encoded, err := json.Marshal(primaryObj)
+	if err != nil {
+		return primary
+	}
+	return string(encoded)
+}
+
+func suggestionStatusPriority(status string) int {
+	switch status {
+	case "acted":
+		return 4
+	case "approved", "dismissed":
+		return 3
+	case "snoozed":
+		return 2
+	case "reviewed":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func mergeSuggestionLifecycle(statusA, updatedA, resolvedA, statusB, updatedB, resolvedB string) (string, string, string) {
+	prioA := suggestionStatusPriority(statusA)
+	prioB := suggestionStatusPriority(statusB)
+	updated := newerRFC3339(updatedA, updatedB)
+	if prioB > prioA {
+		return statusB, updated, resolvedB
+	}
+	if prioA > prioB {
+		return statusA, updated, resolvedA
+	}
+	if isNewerRFC3339(resolvedB, resolvedA) || (resolvedA == "" && resolvedB != "") {
+		return statusB, updated, resolvedB
+	}
+	if resolvedA == "" && resolvedB == "" && isNewerRFC3339(updatedB, updatedA) {
+		return statusB, updated, resolvedB
+	}
+	return statusA, updated, resolvedA
+}
+
+func mergeSuppressionUntil(untilA, untilB string) string {
+	if strings.TrimSpace(untilA) == "" || strings.TrimSpace(untilB) == "" {
+		return ""
+	}
+	if isNewerRFC3339(untilB, untilA) {
+		return untilB
+	}
+	return untilA
+}
+
+func newerRFC3339(a, b string) string {
+	if isNewerRFC3339(b, a) {
+		return b
+	}
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+func isNewerRFC3339(candidate, current string) bool {
+	if candidate == "" {
+		return false
+	}
+	if current == "" {
+		return true
+	}
+	tCand, errCand := time.Parse(time.RFC3339Nano, candidate)
+	tCurr, errCurr := time.Parse(time.RFC3339Nano, current)
+	if errCand != nil || errCurr != nil {
+		return candidate > current
+	}
+	return tCand.After(tCurr)
+}
+
+func replaceStringSliceValue(values []string, oldValue string, newValue string) ([]string, bool) {
+	seen := make(map[string]bool, len(values))
+	out := make([]string, 0, len(values))
+	changed := false
+	for _, value := range values {
+		if value == oldValue {
+			value = newValue
+			changed = true
+		}
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out, changed
 }
 
 func stripBridgedSlackChannelKindPrefix(payloadJSON string) (string, error) {

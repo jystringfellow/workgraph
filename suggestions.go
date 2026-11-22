@@ -480,6 +480,10 @@ func ApproveSuggestion(config SuggestionStatusUpdate) (Suggestion, error) {
 		if _, err := AddIgnoreName(SettingsIgnoreConfig{HomeDir: config.HomeDir, Name: suggestion.PatternKey}); err != nil {
 			return Suggestion{}, err
 		}
+	case "watch_root":
+		if _, err := AddWatchDir(SettingsWatchConfig{HomeDir: config.HomeDir, Path: suggestion.PatternKey}); err != nil {
+			return Suggestion{}, err
+		}
 	case "association":
 	default:
 		return Suggestion{}, fmt.Errorf("approval is not implemented for suggestion type %q", suggestion.Type)

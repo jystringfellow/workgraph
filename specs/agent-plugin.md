@@ -30,10 +30,32 @@ The canonical skills live under `.agents/skills/`. Installation copies those
 directories into the selected host package so safety rules do not drift between
 Codex, Claude Code, Copilot, and repository-local use.
 
-The MCP is currently limited to bridge capture and configuration tools. Bundling
-it in the broader plugin does not silently expose model execution, provider
-credentials, arbitrary database access, or future workgraph capabilities.
-Additional MCP tools require their own specs and facts.
+The MCP exposes read-only local work intelligence tools (`next_items`,
+`today_overview`, `resume_project`, and `projects_list`) alongside bridge
+capture and configuration tools. Bundling it in the broader plugin does not
+silently expose model execution, provider credentials, arbitrary database
+access, or future workgraph capabilities. Additional MCP tools require their
+own specs and facts.
+
+## Read-only work intelligence MCP tools
+
+Interactive coding clients with the `workgraph` plugin installed can inspect
+local work context through read-only MCP tools without contacting external
+providers or mutating check-in state:
+
+- `next_items` (`project`, `reason`, `include_untrusted`): returns open local
+  attention items and their evidence (`items`).
+- `today_overview` (`actor`, `involvement`, `include_untrusted`): returns
+  today's local work overview (`date`, `events`, `projects`, `sessions`,
+  `associations`, `message`) read-only without mutating suggestion state or
+  exposing raw captured payloads unless `include_untrusted` is set.
+- `resume_project` (`project`, `all`, `include_untrusted`): returns local
+  resume context, recent activity, resumable projects, and project memory
+  from the server-configured memory root without recording a check-in or
+  exposing raw captured payloads unless `include_untrusted` is set.
+- `projects_list` (`{}`): returns declared projects, workstreams, mapped
+  containers, applied unit counts, and formatted summary from the
+  server-configured project memory root and mappings.
 
 ## Command surface
 
@@ -221,4 +243,7 @@ session. Each skill retains its own approval and safety boundaries.
 - `plugin doctor` fails when any required skill is absent and succeeds without
   contacting a provider when the complete package is present.
 - Bridge install/doctor aliases operate on the same `workgraph` package.
+- The local MCP server advertises and serves read-only work intelligence tools
+  (`next_items`, `today_overview`, `resume_project`, `projects_list`) over
+  captured local state without mutating check-ins or contacting providers.
 - Help and user documentation show the plugin-first setup path for every host.

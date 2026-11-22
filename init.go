@@ -75,7 +75,7 @@ func Init(config InitConfig) (InitResult, error) {
 		return InitResult{}, fmt.Errorf("initialize database: %w", err)
 	}
 
-	if err := createSchema(db); err != nil {
+	if err := createSchemaWithBackfills(db); err != nil {
 		return InitResult{}, fmt.Errorf("create database schema: %w", err)
 	}
 	if err := ensureUserOnlyFile(dbPath); err != nil {
@@ -265,7 +265,86 @@ func initMessage(result InitResult, fileWatchingOff bool) string {
 	return strings.Join(lines, "\n")
 }
 
+const CurrentSchemaVersion = 5
+
+type migration struct {
+	version int
+	apply   func(db *sql.DB) error
+}
+
+var schemaMigrations = []migration{
+	{version: 1, apply: migrateBaseTables},
+	{version: 2, apply: migrateAdditiveColumns},
+	{version: 3, apply: migrateIndices},
+	{version: 4, apply: migrateBackfills},
+	{version: 5, apply: migrateLegacyGitHubSnapshots},
+}
+
 func migrateSchema(db *sql.DB) error {
+	var userVersion int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&userVersion); err != nil {
+		return fmt.Errorf("read schema version: %w", err)
+	}
+
+	if userVersion >= CurrentSchemaVersion && schemaCoreUpToDate(db) {
+		_, err := db.Exec(slackListSnapshotChunksAbandonedSweep)
+		return err
+	}
+
+	if err := migrateBaseTables(db); err != nil {
+		return err
+	}
+	if err := migrateAdditiveColumns(db); err != nil {
+		return err
+	}
+	if err := migrateIndices(db); err != nil {
+		return err
+	}
+
+	for _, step := range schemaMigrations {
+		if userVersion >= step.version {
+			continue
+		}
+		if step.version >= 4 {
+			if err := step.apply(db); err != nil {
+				return err
+			}
+		}
+		if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", step.version)); err != nil {
+			return fmt.Errorf("set schema version %d: %w", step.version, err)
+		}
+		userVersion = step.version
+	}
+	return nil
+}
+
+func schemaCoreUpToDate(db *sql.DB) bool {
+	hasColumn := func(table, column string) bool {
+		rows, err := db.Query("PRAGMA table_info(" + table + ")")
+		if err != nil {
+			return false
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var cid, notNull, pk int
+			var name, colType string
+			var def any
+			if err := rows.Scan(&cid, &name, &colType, &notNull, &def, &pk); err != nil {
+				return false
+			}
+			if name == column {
+				return true
+			}
+		}
+		return false
+	}
+	return hasColumn("capture_requests", "kind") &&
+		hasColumn("events", "involvement_json") &&
+		hasColumn("github_pr_watch_state", "reviewer_polled") &&
+		hasColumn("notion_index", "content_synced_at")
+}
+
+func migrateBaseTables(db *sql.DB) error {
 	statements := []string{
 		`CREATE TABLE IF NOT EXISTS events (
 			id TEXT PRIMARY KEY,
@@ -397,12 +476,13 @@ func migrateSchema(db *sql.DB) error {
 			return err
 		}
 	}
-	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_capture_requests_active_connector
+	_, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_capture_requests_active_connector
 		ON capture_requests (connector_id)
-		WHERE status IN ('pending', 'claimed')`); err != nil {
-		return err
-	}
+		WHERE status IN ('pending', 'claimed')`)
+	return err
+}
 
+func migrateAdditiveColumns(db *sql.DB) error {
 	if err := ensureColumn(db, "github_pr_watch_state", "reviewer_polled", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
@@ -415,10 +495,10 @@ func migrateSchema(db *sql.DB) error {
 	if err := ensureColumn(db, "capture_requests", "kind", "TEXT NOT NULL DEFAULT 'capture' CHECK (kind IN ('capture', 'llm_task'))"); err != nil {
 		return err
 	}
-	if err := ensureColumn(db, "events", "involvement_json", "TEXT CHECK (involvement_json IS NULL OR json_valid(involvement_json))"); err != nil {
-		return err
-	}
+	return ensureColumn(db, "events", "involvement_json", "TEXT CHECK (involvement_json IS NULL OR json_valid(involvement_json))")
+}
 
+func migrateIndices(db *sql.DB) error {
 	indices := []struct{ name, table, column string }{
 		{"idx_events_timestamp", "events", "timestamp"},
 		{"idx_events_project", "events", "project"},
@@ -439,7 +519,10 @@ func migrateSchema(db *sql.DB) error {
 			return err
 		}
 	}
+	return nil
+}
 
+func migrateBackfills(db *sql.DB) error {
 	if err := backfillBridgedSummaries(db); err != nil {
 		return err
 	}

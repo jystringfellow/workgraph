@@ -17,6 +17,7 @@ import (
 type BridgeMCPConfig struct {
 	HomeDir      string
 	DatabasePath string
+	MemoryDir    string
 	Input        io.Reader
 	Output       io.Writer
 	Context      context.Context
@@ -283,7 +284,10 @@ func bridgeMCPTools() []bridgeMCPTool {
 		map[string]any{"required": []string{"request_id", "claim_token", "list_id", "snapshot_csv"}},
 	}
 	return []bridgeMCPTool{
-		{"next_items", "Read local attention items and their evidence. This tool does not change items or contact providers.", object(map[string]any{"project": str, "reason": str, "include_untrusted": map[string]any{"type": "boolean"}})},
+		{"next_items", "Read local attention items and their evidence. This tool does not change items or contact providers.", object(map[string]any{"project": str, "reason": str, "include_untrusted": boolean})},
+		{"today_overview", "Read today's local work overview, projects, sessions, and high-confidence associations without mutating state or contacting providers.", object(map[string]any{"actor": str, "involvement": str, "include_untrusted": boolean})},
+		{"resume_project", "Read local resume context, recent activity, and project memory without recording a check-in or contacting providers.", object(map[string]any{"project": str, "all": boolean, "include_untrusted": boolean})},
+		{"projects_list", "List declared projects, workstreams, and mapped containers from local project memory and mappings.", object(map[string]any{})},
 		{"capture_requests_list", "List non-secret bridged capture outbox metadata.", object(map[string]any{"connector": str})},
 		{"capture_requests_claim", "Atomically claim daemon-scheduled capture work. Filter with connector. Without kind only capture requests are claimed; kind llm_task claims categorization work that returns a task to answer and submit with llm_task_submit. Every claim must end in capture_ingest, llm_task_submit, or capture_request_fail with a reason; never abandon it.", object(map[string]any{"connector": str, "kind": map[string]any{"type": "string", "enum": []string{"capture", "llm_task"}}, "worker": str, "max": integer}, "worker")},
 		{"capture_request_renew", "Renew an unexpired capture claim.", object(map[string]any{"request_id": str, "claim_token": str}, "request_id", "claim_token")},
@@ -345,6 +349,88 @@ func callBridgeMCPTool(config BridgeMCPConfig, name string, raw json.RawMessage)
 		_ = json.Unmarshal(args["include_untrusted"], &includeUntrusted)
 		result, err := Next(NextConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, Project: stringArg("project"), Reason: stringArg("reason"), IncludeUntrusted: includeUntrusted})
 		return map[string]any{"items": result.Items}, err
+	case "today_overview":
+		var includeUntrusted bool
+		_ = json.Unmarshal(args["include_untrusted"], &includeUntrusted)
+		result, err := Today(TodayConfig{
+			HomeDir:      config.HomeDir,
+			DatabasePath: config.DatabasePath,
+			MemoryDir:    config.MemoryDir,
+			Actor:        stringArg("actor"),
+			Involvement:  stringArg("involvement"),
+			ReadOnly:     true,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"date":         result.Date,
+			"events":       bridgeMCPTodayEvents(result.Events, includeUntrusted),
+			"projects":     todayProjectCounts(result.Events),
+			"sessions":     bridgeMCPTodaySessions(result.Sessions, includeUntrusted),
+			"associations": result.Associations,
+			"message":      result.Message,
+		}, nil
+	case "resume_project":
+		var all bool
+		_ = json.Unmarshal(args["all"], &all)
+		var includeUntrusted bool
+		_ = json.Unmarshal(args["include_untrusted"], &includeUntrusted)
+		result, err := Resume(ResumeConfig{
+			HomeDir:      config.HomeDir,
+			DatabasePath: config.DatabasePath,
+			MemoryDir:    config.MemoryDir,
+			Project:      stringArg("project"),
+			AllProjects:  all,
+			ReadOnly:     true,
+		})
+		if err != nil {
+			return nil, err
+		}
+		nextItems := result.NextItems
+		if includeUntrusted && !all {
+			if nextResult, nextErr := Next(NextConfig{
+				HomeDir:          config.HomeDir,
+				DatabasePath:     config.DatabasePath,
+				Project:          stringArg("project"),
+				IncludeUntrusted: true,
+			}); nextErr == nil {
+				nextItems = nextResult.Items
+			}
+		}
+		return map[string]any{
+			"project":       result.Project,
+			"workstream":    result.Workstream,
+			"members":       result.Members,
+			"projects":      result.Projects,
+			"more_projects": result.MoreProjects,
+			"last_work":     bridgeMCPResumeEvents(result.LastWork, includeUntrusted),
+			"next_items":    nextItems,
+			"events":        bridgeMCPResumeEvents(result.Events, includeUntrusted),
+			"files":         result.Files,
+			"github":        bridgeMCPResumeEvents(result.GitHub, includeUntrusted),
+			"memory":        bridgeMCPMemoryDoc(result.Memory),
+			"memory_path":   result.MemoryPath,
+			"omitted":       result.Omitted,
+			"message":       result.Message,
+		}, nil
+	case "projects_list":
+		result, err := ListProjects(ProjectsListConfig{
+			HomeDir:      config.HomeDir,
+			DatabasePath: config.DatabasePath,
+			MemoryDir:    config.MemoryDir,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"projects":      result.Catalog.Projects,
+			"workstreams":   projectCatalogWorkstreams(result.Catalog, result.Mappings),
+			"mappings":      result.Mappings,
+			"applied_units": result.AppliedUnits,
+			"problems":      result.Catalog.Problems,
+			"message":       result.Message,
+		}, nil
 	case "capture_requests_list":
 		base.ConnectorID = stringArg("connector")
 		requests, err := ListCaptureRequests(base)
@@ -468,4 +554,126 @@ func emptyBridgeMCPEvents(events json.RawMessage) bool {
 	}
 	var list []json.RawMessage
 	return json.Unmarshal(events, &list) == nil && len(list) == 0
+}
+
+type bridgeMCPUntrustedPayload struct {
+	Trust       string `json:"trust"`
+	PayloadJSON string `json:"payload_json"`
+}
+
+type bridgeMCPTodayEvent struct {
+	ID          string                     `json:"id"`
+	Source      string                     `json:"source"`
+	Type        string                     `json:"type"`
+	Timestamp   time.Time                  `json:"timestamp"`
+	Project     string                     `json:"project,omitempty"`
+	Actor       string                     `json:"actor,omitempty"`
+	Involvement []string                   `json:"involvement,omitempty"`
+	Summary     string                     `json:"summary,omitempty"`
+	Label       string                     `json:"label"`
+	Untrusted   *bridgeMCPUntrustedPayload `json:"untrusted,omitempty"`
+}
+
+type bridgeMCPTodaySession struct {
+	StartedAt time.Time             `json:"started_at"`
+	EndedAt   time.Time             `json:"ended_at"`
+	Project   string                `json:"project,omitempty"`
+	Events    []bridgeMCPTodayEvent `json:"events"`
+}
+
+type bridgeMCPResumeEvent struct {
+	ID          string                     `json:"id"`
+	Source      string                     `json:"source"`
+	Type        string                     `json:"type"`
+	Timestamp   time.Time                  `json:"timestamp"`
+	Project     string                     `json:"project,omitempty"`
+	Summary     string                     `json:"summary,omitempty"`
+	Label       string                     `json:"label"`
+	CapturedAt  time.Time                  `json:"captured_at,omitempty"`
+	Involvement []string                   `json:"involvement,omitempty"`
+	Untrusted   *bridgeMCPUntrustedPayload `json:"untrusted,omitempty"`
+}
+
+type bridgeMCPMemoryDocument struct {
+	ID        string    `json:"id"`
+	Path      string    `json:"path"`
+	Kind      string    `json:"kind"`
+	Content   string    `json:"content"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func bridgeMCPTodayEvents(events []TodayEvent, includeUntrusted bool) []bridgeMCPTodayEvent {
+	out := make([]bridgeMCPTodayEvent, 0, len(events))
+	for _, event := range events {
+		item := bridgeMCPTodayEvent{
+			ID:          event.ID,
+			Source:      event.Source,
+			Type:        event.Type,
+			Timestamp:   event.Timestamp,
+			Project:     event.Project,
+			Actor:       event.Actor,
+			Involvement: event.Involvement,
+			Summary:     event.Summary,
+			Label:       todayEventLabel(event),
+		}
+		if includeUntrusted && event.Payload != "" {
+			item.Untrusted = &bridgeMCPUntrustedPayload{
+				Trust:       "untrusted",
+				PayloadJSON: event.Payload,
+			}
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func bridgeMCPTodaySessions(sessions []TodaySession, includeUntrusted bool) []bridgeMCPTodaySession {
+	out := make([]bridgeMCPTodaySession, 0, len(sessions))
+	for _, session := range sessions {
+		out = append(out, bridgeMCPTodaySession{
+			StartedAt: session.StartedAt,
+			EndedAt:   session.EndedAt,
+			Project:   session.Project,
+			Events:    bridgeMCPTodayEvents(session.Events, includeUntrusted),
+		})
+	}
+	return out
+}
+
+func bridgeMCPResumeEvents(events []ResumeEvent, includeUntrusted bool) []bridgeMCPResumeEvent {
+	out := make([]bridgeMCPResumeEvent, 0, len(events))
+	for _, event := range events {
+		item := bridgeMCPResumeEvent{
+			ID:          event.ID,
+			Source:      event.Source,
+			Type:        event.Type,
+			Timestamp:   event.Timestamp,
+			Project:     event.Project,
+			Summary:     event.Summary,
+			Label:       resumeEventLabel(event),
+			CapturedAt:  event.CapturedAt,
+			Involvement: event.Involvement,
+		}
+		if includeUntrusted && event.Payload != "" {
+			item.Untrusted = &bridgeMCPUntrustedPayload{
+				Trust:       "untrusted",
+				PayloadJSON: event.Payload,
+			}
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func bridgeMCPMemoryDoc(doc *MemoryDoc) *bridgeMCPMemoryDocument {
+	if doc == nil {
+		return nil
+	}
+	return &bridgeMCPMemoryDocument{
+		ID:        doc.ID,
+		Path:      doc.Path,
+		Kind:      doc.Kind,
+		Content:   doc.Content,
+		UpdatedAt: doc.UpdatedAt,
+	}
 }

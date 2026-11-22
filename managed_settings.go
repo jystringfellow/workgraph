@@ -172,17 +172,11 @@ func enforceSlackDMManagedSettings(includeDMs bool) error {
 	if !includeDMs {
 		return nil
 	}
-	settings, _, present, err := readManagedSettings()
+	policy, err := LoadConnectorPolicy()
 	if err != nil {
 		return err
 	}
-	if !present {
-		return nil
-	}
-	if managedBoolLockedFalse(settings.Connectors.Slack.IncludeDMs) {
-		return errors.New("Slack DM capture is disabled by managed settings")
-	}
-	return nil
+	return policy.EnforceSlackDMs(includeDMs)
 }
 
 func enforceConnectorManagedSettings(id string) error {
@@ -190,32 +184,19 @@ func enforceConnectorManagedSettings(id string) error {
 	if err != nil {
 		return err
 	}
-	settings, _, present, err := readManagedSettings()
+	policy, err := LoadConnectorPolicy()
 	if err != nil {
 		return err
 	}
-	return connectorManagedPolicyError(settings, present, id)
+	return policy.EnforceSetup(id)
 }
 
 func connectorManagedPolicyError(settings managedSettingsFile, present bool, id string) error {
-	allowed, reason := connectorAllowedByManagedPolicy(settings, present, id)
-	if allowed {
-		return nil
-	}
-	return fmt.Errorf("connector %s %s by managed settings", id, reason)
+	return newConnectorPolicy(settings, present).EnforcePoll(id)
 }
 
 func connectorAllowedByManagedPolicy(settings managedSettingsFile, present bool, id string) (bool, string) {
-	if !present {
-		return true, ""
-	}
-	if stringAllowedFold(id, settings.Connectors.DisabledIDs.Value) {
-		return false, "is disabled"
-	}
-	if len(settings.Connectors.AllowedIDs.Value) > 0 && !stringAllowedFold(id, settings.Connectors.AllowedIDs.Value) {
-		return false, "is not allowed"
-	}
-	return true, ""
+	return newConnectorPolicy(settings, present).CanPoll(id)
 }
 
 func managedBoolLockedFalse(setting managedBoolSetting) bool {
