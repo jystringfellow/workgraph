@@ -1,0 +1,33 @@
+description = "Full loop with a live tonmeister tester after gate approval; use for CLI UX, daemon, MCP stdio, SQLite migration, or plugin install changes that should be exercised live."
+gate_when = "all"
+
+[sections.leads.chairs.planner]
+part = "planner"
+agents = ["claude"]
+
+[sections.leads.chairs.implementer]
+part = "implementer"
+agents = ["codex", "claude"]
+
+[sections.review.chairs.correctness]
+part = "reviewer"
+agents = ["copilot", "claude"]
+focus = "Correctness, SQLite and migration invariants, edge cases, and facts-first coverage (spec -> failing fact -> minimal implementation); verify no test was weakened."
+
+[sections.review.chairs.boundaries]
+part = "reviewer"
+agents = ["agy", "claude@large"]
+focus = "Local-first privacy, read-only boundaries (no hidden writes or migrations on read paths), untrusted-content gating, path containment, and CLI/help/docs parity."
+
+[sections.leads.chairs.gate]
+part = "gate"
+agents = ["claude"]
+
+[sections.leads.chairs.classifier]
+part = "classifier"
+agents = ["claude"]
+
+[sections.leads.chairs.tonmeister]
+part = "tester"
+agents = ["claude"]
+focus = "Exercise the built workgraph binary live in a temporary --home and --memory directory covering the changed CLI, MCP, daemon, or migration paths without touching the user's real ~/.workgraph."

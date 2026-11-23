@@ -1,0 +1,3 @@
+- Check that schema-migration facts construct fixtures with the exact serialized key and row formats produced by production code rather than simplified test-only encodings.
+- Trace read-only MCP and overview call chains end-to-end (including helpers like stall warnings and snooze expiration) to confirm they perform no hidden writes or schema migrations.
+- Check relative-duration and range-bound parsing in CLI commands for integer or `time.Duration` overflow and exclusive-bound off-by-one errors.

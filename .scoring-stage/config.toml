@@ -1,0 +1,8 @@
+agents = ["agy", "claude", "codex", "copilot"]
+books = ["go", "kapellmeister"]
+takes = [
+    "~/.claude/projects",
+    "~/.codex/sessions",
+    "~/.copilot/session-state",
+    "~/.gemini/antigravity-cli/brain",
+]
