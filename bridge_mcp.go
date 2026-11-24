@@ -288,6 +288,7 @@ func bridgeMCPTools() []bridgeMCPTool {
 		{"today_overview", "Read today's local work overview, projects, sessions, and high-confidence associations without mutating state or contacting providers.", object(map[string]any{"actor": str, "involvement": str, "include_untrusted": boolean})},
 		{"resume_project", "Read local resume context, recent activity, and project memory without recording a check-in or contacting providers.", object(map[string]any{"project": str, "all": boolean, "include_untrusted": boolean})},
 		{"projects_list", "List declared projects, workstreams, and mapped containers from local project memory and mappings.", object(map[string]any{})},
+		{"events_query", "Read local captured events by time range and filters without changing state or contacting providers. Limit defaults to 100; raw payloads require include_untrusted.", object(map[string]any{"since": str, "until": str, "source": str, "type": str, "project": str, "actor": str, "involvement": str, "query": str, "limit": integer, "include_untrusted": boolean})},
 		{"capture_requests_list", "List non-secret bridged capture outbox metadata.", object(map[string]any{"connector": str})},
 		{"capture_requests_claim", "Atomically claim daemon-scheduled capture work. Filter with connector. Without kind only capture requests are claimed; kind llm_task claims categorization work that returns a task to answer and submit with llm_task_submit. Every claim must end in capture_ingest, llm_task_submit, or capture_request_fail with a reason; never abandon it.", object(map[string]any{"connector": str, "kind": map[string]any{"type": "string", "enum": []string{"capture", "llm_task"}}, "worker": str, "max": integer}, "worker")},
 		{"capture_request_renew", "Renew an unexpired capture claim.", object(map[string]any{"request_id": str, "claim_token": str}, "request_id", "claim_token")},
@@ -431,6 +432,8 @@ func callBridgeMCPTool(config BridgeMCPConfig, name string, raw json.RawMessage)
 			"problems":      result.Catalog.Problems,
 			"message":       result.Message,
 		}, nil
+	case "events_query":
+		return bridgeMCPEventsQuery(config, args)
 	case "capture_requests_list":
 		base.ConnectorID = stringArg("connector")
 		requests, err := ListCaptureRequests(base)
@@ -676,4 +679,52 @@ func bridgeMCPMemoryDoc(doc *MemoryDoc) *bridgeMCPMemoryDocument {
 		Content:   doc.Content,
 		UpdatedAt: doc.UpdatedAt,
 	}
+}
+
+func bridgeMCPEventsQuery(config BridgeMCPConfig, args map[string]json.RawMessage) (any, error) {
+	values := make(map[string]string)
+	for _, key := range []string{"since", "until", "source", "type", "project", "actor", "involvement", "query"} {
+		if raw, ok := args[key]; ok {
+			var value string
+			if string(raw) == "null" {
+				return nil, fmt.Errorf("invalid %s: expected string", key)
+			}
+			if err := json.Unmarshal(raw, &value); err != nil {
+				return nil, fmt.Errorf("invalid %s: %w", key, err)
+			}
+			values[key] = strings.TrimSpace(value)
+		}
+	}
+	limit := 100
+	if raw, ok := args["limit"]; ok {
+		if string(raw) == "null" {
+			return nil, fmt.Errorf("invalid limit: expected integer from 1 to 100")
+		}
+		if err := json.Unmarshal(raw, &limit); err != nil || limit < 1 || limit > 100 {
+			return nil, fmt.Errorf("invalid limit: expected integer from 1 to 100")
+		}
+	}
+	var includeUntrusted bool
+	if raw, ok := args["include_untrusted"]; ok {
+		if string(raw) == "null" {
+			return nil, fmt.Errorf("invalid include_untrusted: expected boolean")
+		}
+		if err := json.Unmarshal(raw, &includeUntrusted); err != nil {
+			return nil, fmt.Errorf("invalid include_untrusted: %w", err)
+		}
+	}
+	now := time.Now()
+	since, err := ParseEventQueryTime(values["since"], now, true)
+	if err != nil {
+		return nil, fmt.Errorf("invalid since: %w", err)
+	}
+	until, err := ParseEventQueryTime(values["until"], now, false)
+	if err != nil {
+		return nil, fmt.Errorf("invalid until: %w", err)
+	}
+	result, err := QueryEvents(EventsQueryConfig{HomeDir: config.HomeDir, DatabasePath: config.DatabasePath, Since: since, Until: until, Source: values["source"], Type: values["type"], Project: values["project"], Actor: values["actor"], Involvement: values["involvement"], Query: values["query"], Limit: limit})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"events": bridgeMCPTodayEvents(result.Events, includeUntrusted)}, nil
 }

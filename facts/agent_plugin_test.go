@@ -3,6 +3,7 @@ package facts
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -292,6 +293,12 @@ func TestBridgeMCPExposesReadOnlyWorkIntelligenceTools(t *testing.T) {
 		t.Fatalf("insert test event: %v", err)
 	}
 
+	older := now.Add(-48 * time.Hour).Format(time.RFC3339Nano)
+	if _, err := db.Exec(`INSERT INTO events (id, source, type, timestamp, created_at, project, actor, summary, payload_json, involvement_json)
+		VALUES ('git.commit:mcp-2', 'git', 'git.commit', ?, ?, 'other-project', 'someone', 'Older event', '{}', '[]')`, older, older); err != nil {
+		t.Fatalf("insert older event: %v", err)
+	}
+
 	expiredUntil := now.Add(-time.Hour).Format(time.RFC3339)
 	if _, err := db.Exec(`INSERT INTO suggestions (id, type, pattern_key, title, reason, confidence, lane, status, evidence_json, created_at, updated_at, resolved_at)
 		VALUES ('sug-snoozed-1', 'ignore_name', '.cache', 'Ignore .cache', 'Repeated generated noise', 'high', 'baseline', 'snoozed', '{"event_ids":["git.commit:mcp-1"]}', ?, ?, ?)`,
@@ -315,6 +322,19 @@ func TestBridgeMCPExposesReadOnlyWorkIntelligenceTools(t *testing.T) {
 		`{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"resume_project","arguments":{"project":"escaped-link"}}}`,
 		`{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"today_overview","arguments":{"actor":"alice@example.com","involvement":"authored","include_untrusted":true}}}`,
 		`{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"resume_project","arguments":{"project":"workgraph-core","include_untrusted":true}}}`,
+		`{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"events_query","arguments":{"project":"workgraph-core","since":"24h","type":"git.*","limit":1}}}`,
+		`{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"events_query","arguments":{"project":"workgraph-core","since":"24h","include_untrusted":true}}}`,
+		`{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"events_query","arguments":{"project":"missing"}}}`,
+		`{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"events_query","arguments":{"since":"not-a-time"}}}`,
+		`{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"events_query","arguments":{"until":"not-a-time"}}}`,
+		`{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"events_query","arguments":{"since":"2025-01-02","until":"2025-01-01"}}}`,
+		`{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"events_query","arguments":{"involvement":"bogus"}}}`,
+		`{"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"events_query","arguments":{"since":"106752d"}}}`,
+		`{"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":"events_query","arguments":{"limit":0}}}`,
+		`{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"events_query","arguments":{"limit":101}}}`,
+		`{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"events_query","arguments":{"since":5}}}`,
+		`{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"events_query","arguments":{"format":"json"}}}`,
+		`{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"events_query","arguments":{"include_untrusted":"yes"}}}`,
 	}
 	var output bytes.Buffer
 	if err := workgraph.ServeBridgeMCP(workgraph.BridgeMCPConfig{
@@ -331,7 +351,7 @@ func TestBridgeMCPExposesReadOnlyWorkIntelligenceTools(t *testing.T) {
 		t.Fatalf("expected %d MCP responses, got %d:\n%s", len(requests), len(lines), output.String())
 	}
 
-	for _, tool := range []string{"next_items", "today_overview", "resume_project", "projects_list"} {
+	for _, tool := range []string{"next_items", "today_overview", "resume_project", "projects_list", "events_query"} {
 		if !strings.Contains(lines[0], `"name":"`+tool+`"`) {
 			t.Fatalf("tools/list omitted %q:\n%s", tool, lines[0])
 		}
@@ -409,8 +429,8 @@ func TestBridgeMCPExposesReadOnlyWorkIntelligenceTools(t *testing.T) {
 	}
 
 	resumeOverview := decodeStructured(lines[3])
-	if resumable, ok := resumeOverview["projects"].([]any); !ok || len(resumable) != 1 {
-		t.Fatalf("expected 1 resumable project in overview, got %#v", resumeOverview["projects"])
+	if resumable, ok := resumeOverview["projects"].([]any); !ok || len(resumable) != 2 {
+		t.Fatalf("expected 2 resumable projects in overview, got %#v", resumeOverview["projects"])
 	}
 
 	var checkInCount int
@@ -451,6 +471,28 @@ func TestBridgeMCPExposesReadOnlyWorkIntelligenceTools(t *testing.T) {
 	}
 	if todayUntrusted["events"] == nil {
 		t.Fatalf("expected events in today_overview with include_untrusted=true")
+	}
+
+	filtered := decodeStructured(lines[10])
+	events, ok := filtered["events"].([]any)
+	if !ok || len(events) != 1 {
+		t.Fatalf("expected one filtered event, got %#v", filtered)
+	}
+	event := events[0].(map[string]any)
+	if event["id"] != "git.commit:mcp-1" || event["project"] != "workgraph-core" || event["label"] == "" || event["summary"] != "Add intelligence tools" || event["untrusted"] != nil || strings.Contains(lines[10], "payload_json") || strings.Contains(lines[10], "RAW-CAPTURED-PAYLOAD-TEXT") {
+		t.Fatalf("unexpected filtered event or payload leak: %s", lines[10])
+	}
+	untrusted := decodeStructured(lines[11])["events"].([]any)[0].(map[string]any)["untrusted"].(map[string]any)
+	if untrusted["trust"] != "untrusted" || !strings.Contains(fmt.Sprint(untrusted["payload_json"]), "RAW-CAPTURED-PAYLOAD-TEXT") {
+		t.Fatalf("missing untrusted payload: %#v", untrusted)
+	}
+	if empty, ok := decodeStructured(lines[12])["events"].([]any); !ok || len(empty) != 0 {
+		t.Fatalf("expected empty events array, got %#v", empty)
+	}
+	for _, line := range lines[13:] {
+		if isErr, _ := decodeResponse(line); !isErr {
+			t.Fatalf("expected invalid events query to fail: %s", line)
+		}
 	}
 
 	resumeUntrusted := decodeStructured(lines[9])
@@ -543,6 +585,8 @@ func TestBridgeMCPReadOnlyToolsDoNotMigrateOlderSchema(t *testing.T) {
 		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"resume_project","arguments":{"all":true}}}`,
 		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"projects_list","arguments":{}}}`,
 		`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"next_items","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"events_query","arguments":{"project":"widget"}}}`,
+		`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"events_query","arguments":{"project":"widget","include_untrusted":true}}}`,
 	}
 	var output bytes.Buffer
 	if err := workgraph.ServeBridgeMCP(workgraph.BridgeMCPConfig{
@@ -552,6 +596,22 @@ func TestBridgeMCPReadOnlyToolsDoNotMigrateOlderSchema(t *testing.T) {
 		Output:    &output,
 	}); err != nil {
 		t.Fatalf("serve bridge MCP: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+	if len(lines) != len(requests) {
+		t.Fatalf("expected %d responses, got %d", len(requests), len(lines))
+	}
+	for _, line := range lines[5:] {
+		if strings.Contains(line, `"isError":true`) || !strings.Contains(line, legacyID) {
+			t.Fatalf("events_query did not return the legacy event: %s", line)
+		}
+	}
+	for table, expected := range map[string]int{"events": 1, "suggestions": 0} {
+		var count int
+		if err := db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil || count != expected {
+			t.Fatalf("unexpected %s row count %d: %v", table, count, err)
+		}
 	}
 
 	var version int

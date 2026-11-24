@@ -31,7 +31,7 @@ directories into the selected host package so safety rules do not drift between
 Codex, Claude Code, Copilot, and repository-local use.
 
 The MCP exposes read-only local work intelligence tools (`next_items`,
-`today_overview`, `resume_project`, and `projects_list`) alongside bridge
+`today_overview`, `resume_project`, `projects_list`, and `events_query`) alongside bridge
 capture and configuration tools. Bundling it in the broader plugin does not
 silently expose model execution, provider credentials, arbitrary database
 access, or future workgraph capabilities. Additional MCP tools require their
@@ -56,6 +56,17 @@ providers or mutating check-in state:
 - `projects_list` (`{}`): returns declared projects, workstreams, mapped
   containers, applied unit counts, and formatted summary from the
   server-configured project memory root and mappings.
+- `events_query` (`since`, `until`, `source`, `type`, `project`, `actor`,
+  `involvement`, `query`, `limit`, `include_untrusted`): returns matching local
+  `events` with id, source, type, timestamp, project, actor, involvement,
+  summary and label. The inclusive `since` accepts RFC3339, YYYY-MM-DD, or a
+  positive relative duration; the exclusive `until` accepts RFC3339 or
+  YYYY-MM-DD. Type accepts an exact value or `<prefix>.*`. Limit is 1–100,
+  defaulting to 100 most recent events, returned in ascending order. Raw
+  payloads appear only with `include_untrusted`, under an `untrusted` wrapper.
+  Invalid bounds, reversed ranges, unknown involvement, invalid argument types,
+  and unknown arguments return tool errors. This reads local state without
+  migrations, suggestion writes, check-ins, or provider calls.
 
 ## Command surface
 
@@ -244,6 +255,6 @@ session. Each skill retains its own approval and safety boundaries.
   contacting a provider when the complete package is present.
 - Bridge install/doctor aliases operate on the same `workgraph` package.
 - The local MCP server advertises and serves read-only work intelligence tools
-  (`next_items`, `today_overview`, `resume_project`, `projects_list`) over
+  (`next_items`, `today_overview`, `resume_project`, `projects_list`, `events_query`) over
   captured local state without mutating check-ins or contacting providers.
 - Help and user documentation show the plugin-first setup path for every host.

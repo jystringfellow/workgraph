@@ -97,7 +97,8 @@ Feature: Agent plugin installation
   Scenario: Expose read-only work intelligence tools over the local MCP
     Given local events and project memory exist in the workgraph home
     When an interactive client lists and calls the read-only work intelligence MCP tools
-    Then tools/list advertises next_items, today_overview, resume_project, and projects_list
+    Then tools/list advertises next_items, today_overview, resume_project, projects_list, and events_query
     And today_overview returns today's events, projects, sessions, associations, and summary without provider calls
     And resume_project returns project activity and memory without recording a resume check-in
     And projects_list returns declared projects, workstreams, and mapped containers from local memory
+    And events_query returns filtered local events without payload text unless include_untrusted is set, and rejects invalid time ranges
