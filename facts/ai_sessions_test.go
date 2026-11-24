@@ -558,7 +558,11 @@ func installAIInsertFailure(t *testing.T, databasePath string, eventType string)
 
 func initAIFactGitRepo(t *testing.T) string {
 	t.Helper()
-	repository := t.TempDir()
+	return initAIFactGitRepoAt(t, t.TempDir())
+}
+
+func initAIFactGitRepoAt(t *testing.T, repository string) string {
+	t.Helper()
 	for _, args := range [][]string{
 		{"init", "-q", repository},
 		{"-C", repository, "config", "user.email", "facts@example.invalid"},
@@ -682,13 +686,19 @@ func TestAISessionsListsEndedSessionsFromEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init workgraph: %v", err)
 	}
-	runWorkgraphCommand(t, nil,
+	checkout := initAIFactGitRepoAt(t, filepath.Join(t.TempDir(), "listed-project"))
+	command := exec.Command(workgraphFactsBinary,
 		"ai", "run", "--home", homeDir, "--database", initialized.DatabasePath,
 		"--", workgraphFactsBinary, "doctor", "--home", homeDir,
 	)
+	command.Dir = checkout
+	command.Env = daemonCommandEnv(nil)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("record AI session: %v\n%s", err, output)
+	}
 
 	output := runWorkgraphCommand(t, nil, "ai", "sessions", "--home", homeDir, "--database", initialized.DatabasePath)
-	for _, expected := range []string{"AI sessions", "workgraph", "ended", "project: workgraph", "started:", "checkpoint: -", "latest event:"} {
+	for _, expected := range []string{"AI sessions", "workgraph", "ended", "project: listed-project", "started:", "checkpoint: -", "latest event:"} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("expected sessions output to contain %q, got:\n%s", expected, output)
 		}
