@@ -764,7 +764,9 @@ start a new client session after reinstalling the plugin.
 
 The local stdio MCP server (`workgraph bridge mcp [--memory <path>]`) also
 exposes read-only work intelligence tools (`next_items`, `today_overview`,
-`resume_project`, and `projects_list`) alongside bridged capture tools. They
+`resume_project`, `projects_list`, and `events_query`) alongside bridged capture tools.
+`events_query` filters local events by time, source, type, project, actor,
+involvement, and text, with a limit of 1–100 (default 100). These tools
 read local state without mutating suggestions or running database migrations,
 and omit raw untrusted text unless the caller opts in with
 `include_untrusted: true`.
