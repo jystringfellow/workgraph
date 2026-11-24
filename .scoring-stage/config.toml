@@ -1,5 +1,8 @@
 agents = ["agy", "claude", "codex", "copilot"]
-books = ["go", "kapellmeister"]
+books = [
+    "github.com/jystringfellow/scoring-stage//books/go@v0.0.1-rc.6",
+    "github.com/jystringfellow/kapellmeister//book@v0.0.1-rc.6",
+]
 takes = [
     "~/.claude/projects",
     "~/.codex/sessions",
