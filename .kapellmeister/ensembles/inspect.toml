@@ -1,0 +1,21 @@
+description = "Dual-angle review and gate over an existing uncommitted change in a worktree without modifying code; use for pre-ship audits and PR reviews."
+score = "review"
+gate_when = "all"
+
+[sections.review.chairs.correctness]
+part = "reviewer"
+agents = ["copilot", "claude"]
+focus = "Correctness, SQLite and migration invariants, edge cases, and facts-first coverage; confirm every new or changed fact would fail without the change."
+
+[sections.review.chairs.boundaries]
+part = "reviewer"
+agents = ["agy", "claude@large"]
+focus = "Local-first privacy, read-only boundaries (no hidden writes or migrations on read paths), untrusted-content gating, path containment, secret hygiene, and CLI/help/docs parity."
+
+[sections.leads.chairs.gate]
+part = "gate"
+agents = ["claude"]
+
+[sections.leads.chairs.classifier]
+part = "classifier"
+agents = ["claude"]

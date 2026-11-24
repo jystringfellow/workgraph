@@ -1,0 +1,11 @@
+[[book]]
+ref = "github.com/jystringfellow/kapellmeister//book@v0.0.1-rc.6"
+commit = "f3503fc0a99b2484cf8785206eb97c1136f7b679"
+sha256 = "caed799b8bb640dfee618656686f3d1f108d86850fc415ea690d6cdbac97deaa"
+scheme = "book-tree/1"
+
+[[book]]
+ref = "github.com/jystringfellow/scoring-stage//books/go@v0.0.1-rc.6"
+commit = "5192cd0cc3950dfd2b762d93e19845be798b9a75"
+sha256 = "1dc56afe9d382bc4a9f339f5fdd823ebc969c2c69a277827fdfb3038ec85753f"
+scheme = "book-tree/1"

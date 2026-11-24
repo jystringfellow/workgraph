@@ -1,0 +1,4 @@
+- After changing shared SQLite schema, migration, or capture-request paths, run the full `./facts` suite (`scripts/verify`) rather than only name-filtered tests; steady-state capture tests depend on schema-preparation side effects.
+- Keep read-only MCP and overview query paths free of schema preparation and suggestion writes; verify an older database's `user_version` and legacy rows remain unchanged.
+- Build migration fixtures using production helpers or exact serialized key formats (such as `pair:[...]`), never simplified test-only separators.
+- When adding a public CLI subcommand, update `cmd/workgraph/help.go`, `facts/cli_help_test.go` (`publicCommandPaths`), and `docs/commands.md` together.

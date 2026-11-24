@@ -1,3 +1,7 @@
 [test]
 verify = "scripts/verify"
 check = "scripts/check {args}"
+
+[run]
+base = "main"
+lessons = true
