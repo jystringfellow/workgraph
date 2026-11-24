@@ -1,7 +1,7 @@
 [[book]]
-ref = "github.com/jystringfellow/kapellmeister//book@v0.0.1-rc.6"
-commit = "f3503fc0a99b2484cf8785206eb97c1136f7b679"
-sha256 = "caed799b8bb640dfee618656686f3d1f108d86850fc415ea690d6cdbac97deaa"
+ref = "github.com/jystringfellow/kapellmeister//book@v0.1.0"
+commit = "5822a0e7ed8d776f8a247662e3faa1b484a1599a"
+sha256 = "e83a9729b55af00c06c39657f4bc7f72ec778afad85aa20c1f4bd040aff7d2bb"
 scheme = "book-tree/1"
 
 [[book]]
