@@ -75,7 +75,6 @@ func TestReleaseWorkflowBuildsNativeArchivesAndChecksums(t *testing.T) {
 		"checksums.txt",
 		"gh release create",
 		"workgraph.rb",
-		"HOMEBREW_TAP_TOKEN",
 	} {
 		if !strings.Contains(workflow, expected) {
 			t.Fatalf("release workflow is missing %q:\n%s", expected, workflow)
@@ -83,6 +82,44 @@ func TestReleaseWorkflowBuildsNativeArchivesAndChecksums(t *testing.T) {
 	}
 	if strings.Contains(workflow, "curl") && strings.Contains(workflow, "| sh") {
 		t.Fatalf("release workflow includes a network-to-shell installation path:\n%s", workflow)
+	}
+}
+
+func TestReleaseWorkflowPublishesHomebrewFormulaWithShortLivedPublisherAppToken(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join(repoRoot(t), ".github", "workflows", "release.yaml"))
+	if err != nil {
+		t.Fatalf("read release workflow: %v", err)
+	}
+	workflow := string(contents)
+	_, homebrewJob, found := strings.Cut(workflow, "\n  homebrew:\n")
+	if !found {
+		t.Fatalf("release workflow has no homebrew job:\n%s", workflow)
+	}
+	for _, expected := range []string{
+		"uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0",
+		"client-id: ${{ vars.PUBLISHER_APP_CLIENT_ID }}",
+		"private-key: ${{ secrets.PUBLISHER_APP_PRIVATE_KEY }}",
+		"owner: ${{ github.repository_owner }}",
+		"repositories: homebrew-tap",
+		"permission-contents: write",
+		"skipping tap publication",
+		"steps.tap-token.outputs.app-slug",
+		`gh api "/users/${bot}"`,
+	} {
+		if !strings.Contains(homebrewJob, expected) {
+			t.Fatalf("homebrew job is missing %q:\n%s", expected, homebrewJob)
+		}
+	}
+	if count := strings.Count(homebrewJob, "permission-"); count != 1 {
+		t.Fatalf("homebrew App token must request only contents write, found %d permission inputs:\n%s", count, homebrewJob)
+	}
+	if count := strings.Count(homebrewJob, "steps.tap-token.outputs.token"); count != 1 {
+		t.Fatalf("homebrew App token must reach only the publishing step, found %d references:\n%s", count, homebrewJob)
+	}
+	for _, forbidden := range []string{"HOMEBREW_TAP_TOKEN", "app-id:", "github-actions[bot]"} {
+		if strings.Contains(homebrewJob, forbidden) {
+			t.Fatalf("homebrew job still contains %q:\n%s", forbidden, homebrewJob)
+		}
 	}
 }
 

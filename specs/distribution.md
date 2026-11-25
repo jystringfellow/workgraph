@@ -83,12 +83,16 @@ workgraph executable, and verifies `workgraph version` in its test block. The
 formula relies on Homebrew to infer the release version from the archive URL and
 must not duplicate that value with an explicit `version` declaration.
 
-Publishing the generated formula to `jystringfellow/homebrew-tap` requires an
-explicitly configured `HOMEBREW_TAP_TOKEN` Actions secret with contents write
-access to that separate repository. If the secret is absent, the GitHub release
-still succeeds and retains `workgraph.rb` as a release asset; the workflow
-reports that tap publication was skipped. The release workflow must never log
-the token or place it in an artifact.
+Publishing the generated formula to `jystringfellow/homebrew-tap` uses a
+short-lived token minted from the publisher GitHub App, configured as the
+`PUBLISHER_APP_CLIENT_ID` Actions variable and the `PUBLISHER_APP_PRIVATE_KEY`
+Actions secret. The token is scoped to the `homebrew-tap` repository with only
+contents write permission, reaches only the step that pushes the formula, and
+commits as the App's bot identity. If the variable or the secret is absent, the
+GitHub release still succeeds and retains `workgraph.rb` as a release asset;
+the workflow reports that tap publication was skipped. The tap's `main` branch
+requires pull requests, so the App must be a bypass actor on that ruleset. The
+release workflow must never log the token or place it in an artifact.
 
 Once the tap is active, install and upgrade commands are:
 

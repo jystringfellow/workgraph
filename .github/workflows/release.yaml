@@ -210,16 +210,38 @@ jobs:
           name: homebrew-formula
           path: formula
 
-      - name: Publish formula when the tap token is configured
+      - name: Check publisher App credentials
+        id: credentials
         shell: bash
         env:
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          PUBLISHER_APP_CLIENT_ID: ${{ vars.PUBLISHER_APP_CLIENT_ID }}
+          PUBLISHER_APP_PRIVATE_KEY: ${{ secrets.PUBLISHER_APP_PRIVATE_KEY }}
         run: |
-          if [[ -z "$HOMEBREW_TAP_TOKEN" ]]; then
-            echo "HOMEBREW_TAP_TOKEN is not configured; skipping tap publication."
-            exit 0
+          if [[ -z "$PUBLISHER_APP_CLIENT_ID" || -z "$PUBLISHER_APP_PRIVATE_KEY" ]]; then
+            echo "PUBLISHER_APP_CLIENT_ID or PUBLISHER_APP_PRIVATE_KEY is not configured; skipping tap publication."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
           fi
-          export GH_TOKEN="$HOMEBREW_TAP_TOKEN"
+
+      - name: Create tap token
+        id: tap-token
+        if: steps.credentials.outputs.enabled == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.PUBLISHER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PUBLISHER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: homebrew-tap
+          permission-contents: write
+
+      - name: Publish formula to the tap
+        if: steps.credentials.outputs.enabled == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.tap-token.outputs.token }}
+          APP_SLUG: ${{ steps.tap-token.outputs.app-slug }}
+        run: |
           gh auth setup-git
           gh repo clone jystringfellow/homebrew-tap tap
           mkdir -p tap/Formula
@@ -228,8 +250,10 @@ jobs:
             echo "Homebrew formula is already current."
             exit 0
           fi
-          git -C tap config user.name "github-actions[bot]"
-          git -C tap config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          bot="${APP_SLUG}[bot]"
+          bot_id="$(gh api "/users/${bot}" --jq .id)"
+          git -C tap config user.name "$bot"
+          git -C tap config user.email "${bot_id}+${bot}@users.noreply.github.com"
           git -C tap add Formula/workgraph.rb
           git -C tap commit -m "workgraph $GITHUB_REF_NAME"
           git -C tap push

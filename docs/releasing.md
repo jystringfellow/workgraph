@@ -6,14 +6,20 @@ check for updates or replace itself.
 ## One-time Homebrew setup
 
 Create the `jystringfellow/homebrew-tap` repository with a `Formula/`
-directory. Add a fine-grained `HOMEBREW_TAP_TOKEN` Actions secret to the
-workgraph repository. Scope that token to the tap repository with contents
-write access; it does not need access to captured workgraph data or any local
-installation.
+directory. Install the publisher GitHub App on both the workgraph repository
+and the tap, then add its client ID as the `PUBLISHER_APP_CLIENT_ID` Actions
+variable and its private key as the `PUBLISHER_APP_PRIVATE_KEY` Actions secret
+on the workgraph repository. Each release mints a short-lived App token scoped
+to the tap with contents write access only, and commits the formula as the
+App's bot user. The token does not need access to captured workgraph data or
+any local installation.
 
-Without this secret, release archives, checksums, and the generated
-`workgraph.rb` release asset are still published. Only the tap update is
-skipped.
+The tap's `main` branch requires pull requests, so add the App as a bypass
+actor (mode "Always") on that ruleset; without it the formula push is refused.
+
+Without the variable or the secret, release archives, checksums, and the
+generated `workgraph.rb` release asset are still published. Only the tap update
+is skipped.
 
 ## Create a release
 
